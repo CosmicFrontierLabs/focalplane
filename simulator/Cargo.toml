@@ -12,8 +12,9 @@ ephemeris = { path = "../ephemeris" }
 nalgebra = "0.32"     # Linear algebra
 image = "0.24"        # Image processing
 rand = "0.8"          # Random number generation
-ndarray = "0.15"      # Multidimensional arrays
+ndarray = { version = "0.15", features = ["rayon"] }  # Multidimensional arrays with parallel computing
 rayon = "1.7"         # Parallel computing
+num-traits = "0.2"    # Numeric traits for generic math
 
 [dev-dependencies]
 criterion = "0.5"     # Benchmarking

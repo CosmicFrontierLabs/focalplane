@@ -1037,6 +1037,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "rawpointer",
+ "rayon",
 ]
 
 [[package]]
@@ -1639,6 +1640,7 @@ dependencies = [
  "image",
  "nalgebra",
  "ndarray",
+ "num-traits",
  "rand",
  "rayon",
 ]

@@ -3,8 +3,7 @@
 //! This crate provides functionality for simulating the optical system
 //! and sensor hardware of a space telescope.
 
-// Placeholder for simulator functionality
-// Will be implemented later
+pub mod image_proc;
 
 /// Placeholder function to satisfy the compiler
 pub fn placeholder() {
