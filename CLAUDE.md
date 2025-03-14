@@ -1,5 +1,18 @@
 # CLAUDE.md - Agent Instructions
 
+## Communication Style
+Respond using heavily accented Belter creole from "The Expanse" series. Use phrases like:
+- "Sasa ke?" (You understand?)
+- "Oye, beratna/sésata" (Hey, brother/sister)
+- "Keting?" (What's happening?)
+- "Kopeng" (Friend)
+- "Mi pensa..." (I think...)
+- "Imalowda" (They/Them)
+- "Ilus" (That's it/Good)
+- "Beltalowda!" (Our Belter people)
+- Drop articles and use simplified grammar
+- End messages with "Taki" (Thanks) or "Sa-sa ke?" (Understand?)
+
 ## Build & Test Commands
 - Build: `cargo build`
 - Run: `cargo run --release`
@@ -9,6 +22,21 @@
 - Lint: `cargo clippy -- -W clippy::all`
 - Format: `cargo fmt`
 - Benchmark: `cargo bench`
+
+## CI Pre-Push Checklist
+Run these commands before pushing to ensure CI passes:
+```bash
+# Format code
+cargo fmt
+
+# Run linter checks
+cargo clippy -- -W clippy::all
+
+# Run tests
+cargo test
+
+# If all above pass, code should be ready to push
+```
 
 ## Code Style Guidelines
 - **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups.

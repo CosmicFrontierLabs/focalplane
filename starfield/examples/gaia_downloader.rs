@@ -18,12 +18,12 @@ use starfield::data::{download_gaia_catalog, download_gaia_file, list_cached_gai
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    
+
     // Parse command-line arguments
     let mut download_count: Option<usize> = None;
     let mut list_files = false;
     let mut specific_file: Option<String> = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -34,11 +34,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     return Err("Missing value for --download".into());
                 }
-            },
+            }
             "--list" => {
                 list_files = true;
                 i += 1;
-            },
+            }
             "--file" => {
                 if i + 1 < args.len() {
                     specific_file = Some(args[i + 1].clone());
@@ -46,19 +46,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     return Err("Missing value for --file".into());
                 }
-            },
+            }
             _ => {
                 println!("Unknown argument: {}", args[i]);
                 i += 1;
             }
         }
     }
-    
+
     // Handle command options
     if list_files {
         println!("Listing cached Gaia catalog files:");
         let files = list_cached_gaia_files()?;
-        
+
         if files.is_empty() {
             println!("No files found in cache.");
         } else {
@@ -75,12 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Downloading Gaia catalog files");
         let downloaded = download_gaia_catalog(download_count)?;
         println!("Successfully downloaded {} files", downloaded.len());
-        
+
         // Print the list of downloaded files
         for (i, path) in downloaded.iter().enumerate() {
             println!("  {}. {}", i + 1, path.display());
         }
     }
-    
+
     Ok(())
 }

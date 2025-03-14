@@ -2,16 +2,16 @@
 //!
 //! This module provides functionality for loading and using the Hipparcos star catalog.
 
+use nalgebra as na;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use nalgebra as na;
-use serde::{Deserialize, Serialize};
 
-use crate::StarfieldError;
-use crate::Result;
 use super::StarCatalog;
+use crate::Result;
+use crate::StarfieldError;
 
 /// Struct representing an entry in the Hipparcos catalog
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ impl HipparcosEntry {
         // Convert degrees to radians
         let ra_rad = self.ra.to_radians();
         let dec_rad = self.dec.to_radians();
-        
+
         // Create unit vector
         na::Vector3::new(
             dec_rad.cos() * ra_rad.cos(),
@@ -48,7 +48,7 @@ impl HipparcosEntry {
             dec_rad.sin(),
         )
     }
-    
+
     /// Calculate cartesian position in parsecs
     pub fn cartesian_position(&self) -> Option<na::Vector3<f64>> {
         self.parallax.filter(|&p| p > 0.0).map(|parallax| {
@@ -76,29 +76,29 @@ impl HipparcosCatalog {
             mag_limit: f64::MAX,
         }
     }
-    
+
     /// Load from the Hipparcos .dat file
     pub fn from_dat_file<P: AsRef<Path>>(path: P, mag_limit: f64) -> Result<Self> {
-        let file = File::open(&path).map_err(|e| {
-            StarfieldError::IoError(e)
-        })?;
-        
+        let file = File::open(&path).map_err(StarfieldError::IoError)?;
+
         // Check if the file is empty
         let metadata = file.metadata().map_err(StarfieldError::IoError)?;
         if metadata.len() == 0 {
-            return Err(StarfieldError::DataError("Hipparcos data file is empty".to_string()));
+            return Err(StarfieldError::DataError(
+                "Hipparcos data file is empty".to_string(),
+            ));
         }
-        
+
         let reader = BufReader::new(file);
         let mut catalog = Self {
             stars: HashMap::new(),
             mag_limit,
         };
-        
+
         let mut line_count = 0;
         let mut skipped_lines = 0;
         let mut accepted_stars = 0;
-        
+
         // Process each line in the Hipparcos .dat file
         for line in reader.lines() {
             let line = match line {
@@ -109,22 +109,23 @@ impl HipparcosCatalog {
                     continue;
                 }
             };
-            
+
             line_count += 1;
-            
+
             // Skip empty lines
             if line.trim().is_empty() {
                 skipped_lines += 1;
                 continue;
             }
-            
+
             // Hipparcos fixed width format parsing
             // Check if line is long enough to contain the required fields
-            if line.len() < 110 { // We only need up to column 103 as minimum
+            if line.len() < 110 {
+                // We only need up to column 103 as minimum
                 skipped_lines += 1;
                 continue; // Skip short lines
             }
-            
+
             // Extract HIP number (columns 1-6)
             let hip = match line.get(0..6).and_then(|s| s.trim().parse::<usize>().ok()) {
                 Some(hip) => hip,
@@ -133,7 +134,7 @@ impl HipparcosCatalog {
                     continue; // Skip if HIP number is invalid
                 }
             };
-            
+
             // Extract magnitude (columns 42-46)
             let mag = match line.get(41..46).and_then(|s| s.trim().parse::<f64>().ok()) {
                 Some(mag) => mag,
@@ -142,12 +143,12 @@ impl HipparcosCatalog {
                     continue; // Skip if magnitude is invalid
                 }
             };
-            
+
             // Skip stars fainter than magnitude limit
             if mag > mag_limit {
                 continue; // Not counting these as skipped since they're filtered by design
             }
-            
+
             // Extract RA in degrees (columns 52-63)
             let ra = match line.get(51..63).and_then(|s| s.trim().parse::<f64>().ok()) {
                 Some(ra) => ra,
@@ -156,7 +157,7 @@ impl HipparcosCatalog {
                     continue; // Skip if RA is invalid
                 }
             };
-            
+
             // Extract Dec in degrees (columns 64-74)
             let dec = match line.get(63..74).and_then(|s| s.trim().parse::<f64>().ok()) {
                 Some(dec) => dec,
@@ -165,24 +166,25 @@ impl HipparcosCatalog {
                     continue; // Skip if Dec is invalid
                 }
             };
-            
+
             // Extract optional fields - these can be missing
             // Parallax in mas (columns 80-86)
             let parallax = line.get(79..86).and_then(|s| s.trim().parse::<f64>().ok());
-            
+
             // Proper motion in RA in mas/year (columns 88-95)
             let pm_ra = line.get(87..95).and_then(|s| s.trim().parse::<f64>().ok());
-            
+
             // Proper motion in Dec in mas/year (columns 96-103)
             let pm_dec = line.get(95..103).and_then(|s| s.trim().parse::<f64>().ok());
-            
+
             // B-V color index (if available)
             let b_v = if line.len() >= 251 {
-                line.get(245..251).and_then(|s| s.trim().parse::<f64>().ok())
+                line.get(245..251)
+                    .and_then(|s| s.trim().parse::<f64>().ok())
             } else {
                 None
             };
-            
+
             let entry = HipparcosEntry {
                 hip,
                 ra,
@@ -193,15 +195,15 @@ impl HipparcosCatalog {
                 pm_dec,
                 parallax,
             };
-            
+
             catalog.stars.insert(hip, entry);
             accepted_stars += 1;
         }
-        
+
         if catalog.stars.is_empty() {
             if line_count == 0 {
                 return Err(StarfieldError::DataError(
-                    "Hipparcos data file appears to be empty or corrupted".to_string()
+                    "Hipparcos data file appears to be empty or corrupted".to_string(),
                 ));
             } else {
                 return Err(StarfieldError::DataError(
@@ -210,19 +212,20 @@ impl HipparcosCatalog {
                 ));
             }
         }
-        
+
         println!("Loaded {} stars from Hipparcos catalog (read {} lines, skipped {} lines, accepted {} stars within magnitude limit)",
                  catalog.stars.len(), line_count, skipped_lines, accepted_stars);
         Ok(catalog)
     }
-    
+
     /// Get stars brighter than a given magnitude
     pub fn brighter_than(&self, magnitude: f64) -> Vec<&HipparcosEntry> {
-        self.stars.values()
+        self.stars
+            .values()
             .filter(|star| star.mag <= magnitude)
             .collect()
     }
-    
+
     /// Get the magnitude limit used when loading this catalog
     pub fn mag_limit(&self) -> f64 {
         self.mag_limit
@@ -242,123 +245,144 @@ impl HipparcosCatalog {
             stars: HashMap::new(),
             mag_limit: 10.0,
         };
-        
+
         // Add some well-known stars
-        
+
         // Sirius (Alpha Canis Majoris)
-        catalog.stars.insert(32349, HipparcosEntry {
-            hip: 32349,
-            ra: 101.2874,
-            dec: -16.7161,
-            mag: -1.46,
-            b_v: Some(0.00),
-            pm_ra: Some(-546.05),
-            pm_dec: Some(-1223.14),
-            parallax: Some(379.21),
-        });
-        
+        catalog.stars.insert(
+            32349,
+            HipparcosEntry {
+                hip: 32349,
+                ra: 101.2874,
+                dec: -16.7161,
+                mag: -1.46,
+                b_v: Some(0.00),
+                pm_ra: Some(-546.05),
+                pm_dec: Some(-1223.14),
+                parallax: Some(379.21),
+            },
+        );
+
         // Vega (Alpha Lyrae)
-        catalog.stars.insert(91262, HipparcosEntry {
-            hip: 91262,
-            ra: 279.2347,
-            dec: 38.7837,
-            mag: 0.03,
-            b_v: Some(0.00),
-            pm_ra: Some(200.94),
-            pm_dec: Some(286.23),
-            parallax: Some(130.23),
-        });
-        
+        catalog.stars.insert(
+            91262,
+            HipparcosEntry {
+                hip: 91262,
+                ra: 279.2347,
+                dec: 38.7837,
+                mag: 0.03,
+                b_v: Some(0.00),
+                pm_ra: Some(200.94),
+                pm_dec: Some(286.23),
+                parallax: Some(130.23),
+            },
+        );
+
         // Betelgeuse (Alpha Orionis)
-        catalog.stars.insert(27989, HipparcosEntry {
-            hip: 27989,
-            ra: 88.7929,
-            dec: 7.4070,
-            mag: 0.42,
-            b_v: Some(1.85),
-            pm_ra: Some(26.40),
-            pm_dec: Some(9.56),
-            parallax: Some(5.95),
-        });
-        
+        catalog.stars.insert(
+            27989,
+            HipparcosEntry {
+                hip: 27989,
+                ra: 88.7929,
+                dec: 7.4070,
+                mag: 0.42,
+                b_v: Some(1.85),
+                pm_ra: Some(26.40),
+                pm_dec: Some(9.56),
+                parallax: Some(5.95),
+            },
+        );
+
         // Add stars in Orion's belt
         // Alnitak (Zeta Orionis)
-        catalog.stars.insert(26727, HipparcosEntry {
-            hip: 26727,
-            ra: 84.0533,
-            dec: -1.9426,
-            mag: 1.74,
-            b_v: Some(-0.21),
-            pm_ra: Some(3.19),
-            pm_dec: Some(2.03),
-            parallax: Some(3.99),
-        });
-        
+        catalog.stars.insert(
+            26727,
+            HipparcosEntry {
+                hip: 26727,
+                ra: 84.0533,
+                dec: -1.9426,
+                mag: 1.74,
+                b_v: Some(-0.21),
+                pm_ra: Some(3.19),
+                pm_dec: Some(2.03),
+                parallax: Some(3.99),
+            },
+        );
+
         // Alnilam (Epsilon Orionis)
-        catalog.stars.insert(26311, HipparcosEntry {
-            hip: 26311,
-            ra: 84.0533,
-            dec: -1.2019,
-            mag: 1.69,
-            b_v: Some(-0.18),
-            pm_ra: Some(1.49),
-            pm_dec: Some(-1.06),
-            parallax: Some(2.43),
-        });
-        
+        catalog.stars.insert(
+            26311,
+            HipparcosEntry {
+                hip: 26311,
+                ra: 84.0533,
+                dec: -1.2019,
+                mag: 1.69,
+                b_v: Some(-0.18),
+                pm_ra: Some(1.49),
+                pm_dec: Some(-1.06),
+                parallax: Some(2.43),
+            },
+        );
+
         // Mintaka (Delta Orionis)
-        catalog.stars.insert(25930, HipparcosEntry {
-            hip: 25930,
-            ra: 82.0310,
-            dec: -0.2993,
-            mag: 2.25,
-            b_v: Some(-0.22),
-            pm_ra: Some(0.92),
-            pm_dec: Some(-1.20),
-            parallax: Some(3.56),
-        });
-        
+        catalog.stars.insert(
+            25930,
+            HipparcosEntry {
+                hip: 25930,
+                ra: 82.0310,
+                dec: -0.2993,
+                mag: 2.25,
+                b_v: Some(-0.22),
+                pm_ra: Some(0.92),
+                pm_dec: Some(-1.20),
+                parallax: Some(3.56),
+            },
+        );
+
         // Add 2000 random stars to simulate a larger catalog
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        
+
         for i in 1..2000 {
             let hip = 100000 + i;
             let ra = rng.gen_range(0.0..360.0);
             let dec = rng.gen_range(-90.0..90.0);
             let mag = rng.gen_range(3.0..10.0);
-            
-            catalog.stars.insert(hip, HipparcosEntry {
+
+            catalog.stars.insert(
                 hip,
-                ra,
-                dec,
-                mag,
-                b_v: Some(rng.gen_range(-0.5..2.0)),
-                pm_ra: Some(rng.gen_range(-100.0..100.0)),
-                pm_dec: Some(rng.gen_range(-100.0..100.0)),
-                parallax: Some(rng.gen_range(1.0..1000.0)),
-            });
+                HipparcosEntry {
+                    hip,
+                    ra,
+                    dec,
+                    mag,
+                    b_v: Some(rng.gen_range(-0.5..2.0)),
+                    pm_ra: Some(rng.gen_range(-100.0..100.0)),
+                    pm_dec: Some(rng.gen_range(-100.0..100.0)),
+                    parallax: Some(rng.gen_range(1.0..1000.0)),
+                },
+            );
         }
-        
+
         catalog
     }
 }
 
 impl StarCatalog for HipparcosCatalog {
     type Star = HipparcosEntry;
-    
+
     fn get_star(&self, id: usize) -> Option<&Self::Star> {
         self.stars.get(&id)
     }
-    
+
     fn stars(&self) -> impl Iterator<Item = &Self::Star> {
         self.stars.values()
     }
-    
+
     fn len(&self) -> usize {
         self.stars.len()
     }
-    
+
     fn filter<F>(&self, predicate: F) -> Vec<&Self::Star>
     where
         F: Fn(&Self::Star) -> bool,
@@ -370,20 +394,20 @@ impl StarCatalog for HipparcosCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_unit_vector() {
         let star = HipparcosEntry {
             hip: 1,
-            ra: 0.0,   // RA = 0 degrees
-            dec: 0.0,  // Dec = 0 degrees
+            ra: 0.0,  // RA = 0 degrees
+            dec: 0.0, // Dec = 0 degrees
             mag: 0.0,
             b_v: None,
             pm_ra: None,
             pm_dec: None,
             parallax: None,
         };
-        
+
         let vec = star.unit_vector();
         assert!((vec.x - 1.0).abs() < 1e-10);
         assert!(vec.y.abs() < 1e-10);

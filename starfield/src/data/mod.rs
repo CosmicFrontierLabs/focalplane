@@ -6,6 +6,8 @@
 mod downloader;
 mod gaia_downloader;
 
-pub use downloader::{download_hipparcos, get_cache_dir, ensure_cache_dir};
-pub use gaia_downloader::{download_gaia_catalog, get_gaia_cache_dir, ensure_gaia_cache_dir, 
-                          list_cached_gaia_files, download_gaia_file};
+pub use downloader::{download_hipparcos, ensure_cache_dir, get_cache_dir};
+pub use gaia_downloader::{
+    download_gaia_catalog, download_gaia_file, ensure_gaia_cache_dir, get_gaia_cache_dir,
+    list_cached_gaia_files,
+};

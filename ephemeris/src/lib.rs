@@ -1,11 +1,10 @@
 //! Ephemeris calculation library for astronomical bodies
-//! 
+//!
 //! This crate provides functionality for calculating positions of celestial bodies
 //! including stars, planets, and other astronomical objects.
 
-use nalgebra as na;
-use time::OffsetDateTime;
 use thiserror::Error;
+use time::OffsetDateTime;
 
 pub mod celestial;
 pub mod coordinates;
@@ -25,10 +24,10 @@ pub struct CelestialCoordinate {
 pub enum EphemerisError {
     #[error("Invalid time: {0}")]
     InvalidTime(String),
-    
+
     #[error("Object not found: {0}")]
     ObjectNotFound(String),
-    
+
     #[error("Calculation error: {0}")]
     CalculationError(String),
 }
