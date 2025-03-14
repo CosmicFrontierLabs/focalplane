@@ -26,7 +26,7 @@ Respond using heavily accented Belter creole from "The Expanse" series. Use phra
 ## CI Pre-Push Checklist
 Run these commands before pushing to ensure CI passes:
 ```bash
-# Format code
+# Format code (REQUIRED: Always run before committing)
 cargo fmt
 
 # Run linter checks
@@ -37,6 +37,8 @@ cargo test
 
 # If all above pass, code should be ready to push
 ```
+
+IMPORTANT: Always run `cargo fmt` before committing any code changes!
 
 ## Code Style Guidelines
 - **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups.

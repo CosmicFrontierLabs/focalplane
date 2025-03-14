@@ -4,7 +4,9 @@
 //! with different kernels and options.
 
 use ndarray::{Array2, Axis};
-use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode};
+use simulator::image_proc::convolve2d::{
+    convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions,
+};
 
 fn main() {
     println!("2D Convolution Example");

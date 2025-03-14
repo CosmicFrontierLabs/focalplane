@@ -5,7 +5,7 @@
 use ndarray::Array2;
 use simulator::image_proc::{
     centroid::detect_stars,
-    convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode},
+    convolve2d::{convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions},
     thresholding::otsu_threshold,
 };
 
@@ -71,7 +71,7 @@ fn main() {
     } else {
         0.0
     };
-    
+
     let recall = if true_positives + false_negatives > 0 {
         true_positives as f64 / (true_positives + false_negatives) as f64
     } else {
@@ -80,13 +80,13 @@ fn main() {
 
     println!("Precision: {:.2}", precision);
     println!("Recall: {:.2}", recall);
-    
+
     let f1 = if precision + recall > 0.0 {
         2.0 * precision * recall / (precision + recall)
     } else {
         0.0
     };
-    
+
     println!("F1 score: {:.2}", f1);
 }
 
