@@ -1917,6 +1917,8 @@ dependencies = [
  "log",
  "nalgebra",
  "ndarray",
+ "rand",
+ "rand_chacha",
  "simulator",
  "thiserror",
 ]

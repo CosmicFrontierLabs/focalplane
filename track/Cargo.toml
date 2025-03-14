@@ -20,3 +20,5 @@ log = "0.4"           # Logging
 [dev-dependencies]
 criterion = "0.5"     # Benchmarking
 approx = "0.5"        # Approximate equality assertions
+rand = "0.8"          # Random number generation
+rand_chacha = "0.3"   # ChaCha RNG implementation
