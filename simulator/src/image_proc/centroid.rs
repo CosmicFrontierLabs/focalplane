@@ -37,13 +37,13 @@ pub struct StarDetection {
 /// # Returns
 /// * `StarDetection` containing centroid position and shape information
 pub fn calculate_star_centroid(
-    image: &ArrayView2<f64>, 
-    labeled: &ArrayView2<usize>, 
+    image: &ArrayView2<f64>,
+    labeled: &ArrayView2<usize>,
     label: usize,
-    bbox: (usize, usize, usize, usize)
+    bbox: (usize, usize, usize, usize),
 ) -> StarDetection {
     let (min_row, min_col, max_row, max_col) = bbox;
-    
+
     // Initialize moments
     let mut m00 = 0.0; // Total mass/intensity
     let mut m10 = 0.0; // First moment in x
@@ -51,13 +51,13 @@ pub fn calculate_star_centroid(
     let mut m20 = 0.0; // Second moment in x
     let mut m02 = 0.0; // Second moment in y
     let mut m11 = 0.0; // Cross moment
-    
+
     // Calculate raw moments
     for row in min_row..=max_row {
         for col in min_col..=max_col {
             if row < labeled.nrows() && col < labeled.ncols() && labeled[[row, col]] == label {
                 let intensity = image[[row, col]];
-                
+
                 // Use intensity as weight
                 m00 += intensity;
                 m10 += col as f64 * intensity;
@@ -68,7 +68,7 @@ pub fn calculate_star_centroid(
             }
         }
     }
-    
+
     // Avoid division by zero
     if m00 < f64::EPSILON {
         return StarDetection {
@@ -82,35 +82,35 @@ pub fn calculate_star_centroid(
             is_valid: false,
         };
     }
-    
+
     // Calculate centroid
     let x_centroid = m10 / m00;
     let y_centroid = m01 / m00;
-    
+
     // Calculate central moments (relative to centroid)
     let mu20 = m20 / m00 - x_centroid.powi(2);
     let mu02 = m02 / m00 - y_centroid.powi(2);
     let mu11 = m11 / m00 - x_centroid * y_centroid;
-    
+
     // Calculate aspect ratio using eigenvalues of the covariance matrix
     let sum = mu20 + mu02;
     let diff = mu20 - mu02;
     let discriminant = (4.0 * mu11.powi(2) + diff.powi(2)).sqrt();
-    
+
     let lambda1 = (sum + discriminant) / 2.0;
     let lambda2 = (sum - discriminant) / 2.0;
-    
+
     // Larger eigenvalue divided by smaller eigenvalue
     let aspect_ratio = if lambda2 > f64::EPSILON {
         (lambda1 / lambda2).abs()
     } else {
         f64::INFINITY
     };
-    
+
     // Stars should have aspect ratio close to 1.0 (circular PSF)
     // Use 2.5 as a threshold, which allows for some PSF distortion
     let is_valid = aspect_ratio < 2.5;
-    
+
     StarDetection {
         x: x_centroid,
         y: y_centroid,
@@ -132,28 +132,30 @@ pub fn calculate_star_centroid(
 /// # Returns
 /// * Vector of StarDetection objects
 pub fn detect_stars(image: &ArrayView2<f64>, threshold: Option<f64>) -> Vec<StarDetection> {
-    use super::thresholding::{otsu_threshold, apply_threshold, connected_components, get_bounding_boxes};
-    
+    use super::thresholding::{
+        apply_threshold, connected_components, get_bounding_boxes, otsu_threshold,
+    };
+
     // Apply threshold using Otsu's method if threshold not provided
     let thresh = threshold.unwrap_or_else(|| otsu_threshold(image));
     let binary = apply_threshold(image, thresh);
-    
+
     // Perform connected components labeling
     let labeled = connected_components(&binary.view());
-    
+
     // Get bounding boxes for all regions
     let bboxes = get_bounding_boxes(&labeled.view());
-    
+
     // Calculate centroids and moments for each region
     let mut stars = Vec::with_capacity(bboxes.len());
-    
+
     for (i, bbox) in bboxes.iter().enumerate() {
         // Labels start at 1
         let label = i + 1;
         let star = calculate_star_centroid(image, &labeled.view(), label, *bbox);
         stars.push(star);
     }
-    
+
     // Filter out non-star objects
     stars.into_iter().filter(|star| star.is_valid).collect()
 }
@@ -173,7 +175,7 @@ pub fn get_centroids(stars: &[StarDetection]) -> Vec<(f64, f64)> {
 mod tests {
     use super::*;
     use ndarray::Array2;
-    
+
     #[test]
     fn test_simple_centroid() {
         // Create a simple 5x5 image with a single star
@@ -183,7 +185,7 @@ mod tests {
         image[[2, 1]] = 0.5;
         image[[3, 2]] = 0.5;
         image[[2, 3]] = 0.5;
-        
+
         // Create a labeled image
         let mut labeled = Array2::<usize>::zeros((5, 5));
         labeled[[1, 2]] = 1;
@@ -191,18 +193,18 @@ mod tests {
         labeled[[2, 2]] = 1;
         labeled[[3, 2]] = 1;
         labeled[[2, 3]] = 1;
-        
+
         let bbox = (1, 1, 3, 3);
-        
+
         let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
-        
+
         // Star centroid should be at (2.0, 2.0)
         assert!((star.x - 2.0).abs() < 1e-10);
         assert!((star.y - 2.0).abs() < 1e-10);
-        
+
         // Star should be valid (circular)
         assert!(star.is_valid);
-        
+
         // Moments should indicate a circular object
         assert!((star.aspect_ratio - 1.0).abs() < 0.1);
     }
