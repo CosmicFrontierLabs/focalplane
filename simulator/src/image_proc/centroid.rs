@@ -217,4 +217,490 @@ mod tests {
         // Moments should indicate a circular object
         assert!((star.aspect_ratio - 1.0).abs() < 0.1);
     }
+
+    /// Test centroiding with a perfectly symmetric 5x5 pattern
+    #[test]
+    fn test_symmetric_cross_5x5() {
+        // Create a 5x5 image with a symmetric cross pattern
+        // This is the exact same pattern from test_simple_centroid
+        let mut image = Array2::<f64>::zeros((5, 5));
+        image[[2, 2]] = 1.0; // Center pixel
+        image[[1, 2]] = 0.5; // North
+        image[[2, 1]] = 0.5; // West
+        image[[3, 2]] = 0.5; // South
+        image[[2, 3]] = 0.5; // East
+
+        // Label the entire pattern
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        labeled[[2, 2]] = 1;
+        labeled[[1, 2]] = 1;
+        labeled[[2, 1]] = 1;
+        labeled[[3, 2]] = 1;
+        labeled[[2, 3]] = 1;
+
+        let bbox = (1, 1, 3, 3);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // Verify exact centroid position - should be exactly (2,2)
+        println!("5x5 cross centroid: ({}, {})", star.x, star.y);
+        assert!(
+            (star.x - 2.0).abs() < 1e-10,
+            "X-centroid error: {}",
+            star.x - 2.0
+        );
+        assert!(
+            (star.y - 2.0).abs() < 1e-10,
+            "Y-centroid error: {}",
+            star.y - 2.0
+        );
+    }
+
+    /// Test centroiding with a symmetric 3x3 pattern
+    #[test]
+    fn test_symmetric_3x3() {
+        // Create a 5x5 image with a symmetric 3x3 pattern:
+        //   0.25 0.5 0.25
+        //   0.5  1.0 0.5
+        //   0.25 0.5 0.25
+        let mut image = Array2::<f64>::zeros((5, 5));
+        image[[1, 1]] = 0.25; // NW
+        image[[1, 2]] = 0.5; // N
+        image[[1, 3]] = 0.25; // NE
+        image[[2, 1]] = 0.5; // W
+        image[[2, 2]] = 1.0; // Center
+        image[[2, 3]] = 0.5; // E
+        image[[3, 1]] = 0.25; // SW
+        image[[3, 2]] = 0.5; // S
+        image[[3, 3]] = 0.25; // SE
+
+        // Label the entire pattern
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        for i in 1..=3 {
+            for j in 1..=3 {
+                labeled[[i, j]] = 1;
+            }
+        }
+
+        let bbox = (1, 1, 3, 3);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // Verify exact centroid position - should be exactly (2,2)
+        println!("3x3 pattern centroid: ({}, {})", star.x, star.y);
+        assert!(
+            (star.x - 2.0).abs() < 1e-10,
+            "X-centroid error: {}",
+            star.x - 2.0
+        );
+        assert!(
+            (star.y - 2.0).abs() < 1e-10,
+            "Y-centroid error: {}",
+            star.y - 2.0
+        );
+    }
+
+    /// Test centroiding with a pattern biased in the X-direction
+    #[test]
+    fn test_x_biased_pattern() {
+        // Create a 5x5 image with a pattern that's intentionally biased in X
+        let mut image = Array2::<f64>::zeros((5, 5));
+        image[[2, 1]] = 0.4; // West pixels
+        image[[2, 2]] = 1.0; // Center pixel
+        image[[2, 3]] = 0.6; // East pixel (intentionally brighter)
+
+        // Label the entire pattern
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        labeled[[2, 1]] = 1;
+        labeled[[2, 2]] = 1;
+        labeled[[2, 3]] = 1;
+
+        let bbox = (2, 1, 2, 3);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // With the east pixel brighter than west, centroid should be > 2.0
+        println!("X-biased pattern centroid: ({}, {})", star.x, star.y);
+        assert!(star.x > 2.0, "X-centroid should be > 2.0 but is {}", star.x);
+
+        // Y-centroid should still be exactly 2.0
+        assert!(
+            (star.y - 2.0).abs() < 1e-10,
+            "Y-centroid error: {}",
+            star.y - 2.0
+        );
+    }
+
+    /// Test centroiding with a pattern biased in the Y-direction
+    #[test]
+    fn test_y_biased_pattern() {
+        // Create a 5x5 image with a pattern that's intentionally biased in Y
+        let mut image = Array2::<f64>::zeros((5, 5));
+        image[[1, 2]] = 0.4; // North pixel
+        image[[2, 2]] = 1.0; // Center pixel
+        image[[3, 2]] = 0.6; // South pixel (intentionally brighter)
+
+        // Label the entire pattern
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        labeled[[1, 2]] = 1;
+        labeled[[2, 2]] = 1;
+        labeled[[3, 2]] = 1;
+
+        let bbox = (1, 2, 3, 2);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // With the south pixel brighter than north, centroid should be > 2.0
+        println!("Y-biased pattern centroid: ({}, {})", star.x, star.y);
+        assert!(star.y > 2.0, "Y-centroid should be > 2.0 but is {}", star.y);
+
+        // X-centroid should still be exactly 2.0
+        assert!(
+            (star.x - 2.0).abs() < 1e-10,
+            "X-centroid error: {}",
+            star.x - 2.0
+        );
+    }
+
+    /// Test even-sized pattern centroiding (6x6)
+    #[test]
+    fn test_even_sized_pattern() {
+        // Create a 6x6 image with a symmetric pattern centered between pixels
+        // The true center should be at (2.5, 2.5)
+        let mut image = Array2::<f64>::zeros((6, 6));
+
+        // 2x2 center pixels all with equal weight
+        image[[2, 2]] = 1.0;
+        image[[2, 3]] = 1.0;
+        image[[3, 2]] = 1.0;
+        image[[3, 3]] = 1.0;
+
+        // Surrounding symmetrical pixels
+        image[[1, 2]] = 0.5;
+        image[[1, 3]] = 0.5;
+        image[[2, 1]] = 0.5;
+        image[[3, 1]] = 0.5;
+        image[[4, 2]] = 0.5;
+        image[[4, 3]] = 0.5;
+        image[[2, 4]] = 0.5;
+        image[[3, 4]] = 0.5;
+
+        // Label the pattern
+        let mut labeled = Array2::<usize>::zeros((6, 6));
+        for i in 1..=4 {
+            for j in 1..=4 {
+                if image[[i, j]] > 0.0 {
+                    labeled[[i, j]] = 1;
+                }
+            }
+        }
+
+        let bbox = (1, 1, 4, 4);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // Verify exact centroid position - should be exactly (2.5, 2.5)
+        println!("6x6 pattern centroid: ({}, {})", star.x, star.y);
+        assert!(
+            (star.x - 2.5).abs() < 1e-10,
+            "X-centroid error: {}",
+            star.x - 2.5
+        );
+        assert!(
+            (star.y - 2.5).abs() < 1e-10,
+            "Y-centroid error: {}",
+            star.y - 2.5
+        );
+    }
+
+    /// Test sub-pixel position with 2x2 pattern
+    #[test]
+    fn test_subpixel_simple() {
+        // Create a pattern at a specific sub-pixel position (2.75, 2.75)
+        let mut image = Array2::<f64>::zeros((5, 5));
+
+        // 2x2 grid with brightness weighted to simulate a sub-pixel center
+        // After calculation, the centroid seems to end up at (2.75, 2.75)
+        image[[2, 2]] = 0.25 * 0.25; // Top-left (furthest)
+        image[[2, 3]] = 0.25 * 0.75; // Top-right (closer to center in X)
+        image[[3, 2]] = 0.75 * 0.25; // Bottom-left (closer to center in Y)
+        image[[3, 3]] = 0.75 * 0.75; // Bottom-right (closest to center)
+
+        // Label the entire pattern
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        labeled[[2, 2]] = 1;
+        labeled[[2, 3]] = 1;
+        labeled[[3, 2]] = 1;
+        labeled[[3, 3]] = 1;
+
+        let bbox = (2, 2, 3, 3);
+
+        // Calculate centroid
+        let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // Verify sub-pixel centroid position
+        println!("Subpixel pattern centroid: ({}, {})", star.x, star.y);
+        assert!(
+            (star.x - 2.75).abs() < 0.05,
+            "X-centroid error: {}",
+            star.x - 2.75
+        );
+        assert!(
+            (star.y - 2.75).abs() < 0.05,
+            "Y-centroid error: {}",
+            star.y - 2.75
+        );
+    }
+
+    /// Test swapping X and Y to see if bias changes
+    #[test]
+    fn test_xy_swap() {
+        // Create a pattern with intentional asymmetry
+        let mut image = Array2::<f64>::zeros((5, 5));
+        image[[2, 1]] = 0.3; // Low west
+        image[[2, 2]] = 1.0; // Center
+        image[[2, 3]] = 0.7; // High east - should bias centroid to the right
+
+        let mut labeled = Array2::<usize>::zeros((5, 5));
+        labeled[[2, 1]] = 1;
+        labeled[[2, 2]] = 1;
+        labeled[[2, 3]] = 1;
+
+        let bbox = (2, 1, 2, 3);
+
+        // Calculate centroid normally
+        let star_normal = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
+
+        // Now create a transposed pattern
+        let mut image_swapped = Array2::<f64>::zeros((5, 5));
+        image_swapped[[1, 2]] = 0.3; // Low north
+        image_swapped[[2, 2]] = 1.0; // Center
+        image_swapped[[3, 2]] = 0.7; // High south - should bias centroid downward
+
+        let mut labeled_swapped = Array2::<usize>::zeros((5, 5));
+        labeled_swapped[[1, 2]] = 1;
+        labeled_swapped[[2, 2]] = 1;
+        labeled_swapped[[3, 2]] = 1;
+
+        let bbox_swapped = (1, 2, 3, 2);
+
+        // Calculate centroid for swapped pattern
+        let star_swapped = calculate_star_centroid(
+            &image_swapped.view(),
+            &labeled_swapped.view(),
+            1,
+            bbox_swapped,
+        );
+
+        // Normal image should have X bias but no Y bias
+        println!(
+            "Normal pattern centroid: ({}, {})",
+            star_normal.x, star_normal.y
+        );
+        println!(
+            "Swapped pattern centroid: ({}, {})",
+            star_swapped.x, star_swapped.y
+        );
+
+        // The X-centered normal pattern should have x > 2.0
+        assert!(
+            star_normal.x > 2.0,
+            "X-centroid should be > 2.0 but is {}",
+            star_normal.x
+        );
+
+        // The Y-centered swapped pattern should have y > 2.0
+        assert!(
+            star_swapped.y > 2.0,
+            "Y-centroid should be > 2.0 but is {}",
+            star_swapped.y
+        );
+
+        // The X bias in normal pattern should match the Y bias in the swapped pattern
+        let x_bias = star_normal.x - 2.0;
+        let y_bias = star_swapped.y - 2.0;
+        assert!(
+            (x_bias - y_bias).abs() < 0.01,
+            "X bias ({}) should match Y bias ({})",
+            x_bias,
+            y_bias
+        );
+    }
+
+    /// Generate a 2D Gaussian PSF with specified parameters
+    fn create_gaussian(
+        image: &mut Array2<f64>,
+        center_x: f64,
+        center_y: f64,
+        amplitude: f64,
+        sigma: f64,
+    ) {
+        let (height, width) = image.dim();
+
+        // Compute values for a window around the center
+        let x_min = (center_x - 4.0 * sigma).max(0.0) as usize;
+        let x_max = (center_x + 4.0 * sigma).min(width as f64 - 1.0) as usize;
+        let y_min = (center_y - 4.0 * sigma).max(0.0) as usize;
+        let y_max = (center_y + 4.0 * sigma).min(height as f64 - 1.0) as usize;
+
+        for y in y_min..=y_max {
+            for x in x_min..=x_max {
+                let dx = x as f64 - center_x;
+                let dy = y as f64 - center_y;
+                let exponent = -(dx * dx + dy * dy) / (2.0 * sigma * sigma);
+                image[[y, x]] = amplitude * exponent.exp();
+            }
+        }
+    }
+
+    #[test]
+    fn test_subpixel_centroid_accuracy() {
+        use super::super::thresholding::{
+            apply_threshold, connected_components, get_bounding_boxes,
+        };
+
+        // Test parameters
+        let image_size = 64; // Smaller size for faster tests
+        let sigma = 1.0;
+        let center_x = image_size as f64 / 2.0;
+        let center_y = image_size as f64 / 2.0;
+        let threshold = 0.1;
+
+        // Test points at different sub-pixel positions
+        let test_positions = [
+            (0.0, 0.0),   // Integer position
+            (0.5, 0.5),   // Half-pixel position
+            (0.25, 0.75), // Quarter-pixel positions
+            (0.33, 0.67), // Sub-pixel position
+        ];
+
+        for (offset_x, offset_y) in test_positions.iter() {
+            // Create position with sub-pixel offset
+            let position_x = center_x + offset_x;
+            let position_y = center_y + offset_y;
+
+            // Create an empty image
+            let mut image = Array2::<f64>::zeros((image_size, image_size));
+
+            // Generate a Gaussian star
+            create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
+
+            // Process the image
+            let binary = apply_threshold(&image.view(), threshold);
+            let labeled = connected_components(&binary.view());
+            let bboxes = get_bounding_boxes(&labeled.view());
+
+            // Skip if no detection (shouldn't happen with these parameters)
+            if bboxes.is_empty() {
+                continue;
+            }
+
+            // Calculate centroid
+            let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bboxes[0]);
+
+            // Calculate error
+            let error = ((position_x - star.x).powi(2) + (position_y - star.y).powi(2)).sqrt();
+
+            // Check accuracy based on position
+            if *offset_x == 0.5 && *offset_y == 0.5 {
+                // Half-pixel positions should be very accurate
+                assert!(
+                    error < 0.05,
+                    "Centroid error too large at half-pixel position ({}, {}): {}",
+                    offset_x,
+                    offset_y,
+                    error
+                );
+            } else {
+                // For other positions, error should be within acceptable range
+                // Integer positions can actually have higher error in some implementations
+                assert!(
+                    error < 0.5,
+                    "Centroid error too large at position ({}, {}): {}",
+                    offset_x,
+                    offset_y,
+                    error
+                );
+            }
+
+            // Star should be valid
+            assert!(
+                star.is_valid,
+                "Star at ({}, {}) was marked invalid with aspect_ratio={}",
+                offset_x, offset_y, star.aspect_ratio
+            );
+
+            // Aspect ratio should be reasonable for a Gaussian PSF
+            assert!(
+                star.aspect_ratio < 2.5,
+                "Aspect ratio too high at position ({}, {}): {}",
+                offset_x,
+                offset_y,
+                star.aspect_ratio
+            );
+        }
+    }
+
+    #[test]
+    fn test_centroid_with_different_psf_widths() {
+        use super::super::thresholding::{
+            apply_threshold, connected_components, get_bounding_boxes,
+        };
+
+        // Test parameters
+        let image_size = 64;
+        let center_x = image_size as f64 / 2.0;
+        let center_y = image_size as f64 / 2.0;
+        let position_x = center_x + 0.5; // Half-pixel offset for better accuracy
+        let position_y = center_y + 0.5;
+        let threshold = 0.1;
+
+        // Test a range of sigma values
+        let sigma_values = [0.75, 1.0, 1.5, 2.0];
+
+        for &sigma in sigma_values.iter() {
+            // Create an empty image
+            let mut image = Array2::<f64>::zeros((image_size, image_size));
+
+            // Generate a Gaussian star
+            create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
+
+            // Process the image
+            let binary = apply_threshold(&image.view(), threshold);
+            let labeled = connected_components(&binary.view());
+            let bboxes = get_bounding_boxes(&labeled.view());
+
+            // Skip if no detection
+            if bboxes.is_empty() {
+                continue;
+            }
+
+            // Calculate centroid
+            let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bboxes[0]);
+
+            // Calculate error
+            let error = ((position_x - star.x).powi(2) + (position_y - star.y).powi(2)).sqrt();
+
+            // Check accuracy based on PSF width
+            // A wider PSF (larger sigma) should still give reasonable results
+            assert!(
+                error < 1.0 * sigma,
+                "Centroid error too large with sigma={}: {}",
+                sigma,
+                error
+            );
+
+            // Star should be valid
+            assert!(
+                star.is_valid,
+                "Star with sigma={} was marked invalid with aspect_ratio={}",
+                sigma, star.aspect_ratio
+            );
+        }
+    }
 }

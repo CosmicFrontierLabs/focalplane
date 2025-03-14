@@ -4,12 +4,14 @@
 //! including convolution, filtering, thresholding, centroid calculation, and
 //! other operations needed for realistic image generation and analysis.
 
+pub mod aabb;
 pub mod centroid;
 pub mod convolve2d;
 pub mod overlay;
 pub mod thresholding;
 
 // Re-export key functionality for easier access
+pub use aabb::{aabbs_to_tuples, merge_overlapping_aabbs, tuples_to_aabbs, union_aabbs, AABB};
 pub use centroid::{detect_stars, get_centroids, StarDetection};
 pub use convolve2d::{convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions};
 pub use overlay::{

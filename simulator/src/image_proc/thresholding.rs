@@ -3,6 +3,7 @@
 //! This module provides functions for image segmentation using Otsu's method
 //! and connected components labeling.
 
+use crate::image_proc::aabb::AABB;
 use ndarray::{Array2, ArrayView2};
 
 /// Computes Otsu's threshold for a grayscale image
@@ -82,7 +83,55 @@ pub fn apply_threshold(image: &ArrayView2<f64>, threshold: f64) -> Array2<f64> {
     binary
 }
 
-/// Connected component labeling for binary images
+/// Find the root label in a disjoint-set (union-find) data structure
+///
+/// # Arguments
+/// * `labels` - The array of label parent pointers
+/// * `label` - The label to find the root for
+///
+/// # Returns
+/// * The root label
+fn find_root(labels: &mut [usize], label: usize) -> usize {
+    let mut current = label;
+
+    // Find the root label (path compression)
+    while current != labels[current] {
+        // Path compression - make the parent point to the grandparent
+        labels[current] = labels[labels[current]];
+        current = labels[current];
+    }
+
+    current
+}
+
+/// Union two labels in a disjoint-set data structure
+///
+/// # Arguments
+/// * `labels` - The array of label parent pointers
+/// * `label1` - First label
+/// * `label2` - Second label
+///
+/// # Returns
+/// * The root label of the merged set
+fn union_labels(labels: &mut [usize], label1: usize, label2: usize) -> usize {
+    let root1 = find_root(labels, label1);
+    let root2 = find_root(labels, label2);
+
+    if root1 != root2 {
+        // Make smaller label the parent (canonical form)
+        if root1 < root2 {
+            labels[root2] = root1;
+            root1
+        } else {
+            labels[root1] = root2;
+            root2
+        }
+    } else {
+        root1 // Already in the same set
+    }
+}
+
+/// Connected component labeling for binary images using a two-pass algorithm
 ///
 /// # Arguments
 /// * `binary_image` - Binary image where non-zero values represent objects
@@ -94,29 +143,70 @@ pub fn connected_components(binary_image: &ArrayView2<f64>) -> Array2<usize> {
     let mut labels = Array2::zeros((height, width));
     let mut label_count = 0;
 
-    // First pass: assign initial labels
+    // First pass: assign initial labels and build equivalence classes
+    // We need space for label_count + 1 entries (label 0 is background)
+    let mut parent_table = vec![0]; // Will grow as we add labels
+
     for i in 0..height {
         for j in 0..width {
             if binary_image[[i, j]] > 0.0 {
-                // Check neighbors (4-connectivity)
-                let mut neighbors = Vec::new();
+                // Check 4-connected neighbors (up and left)
+                let mut neighbor_labels = Vec::new();
 
                 if i > 0 && labels[[i - 1, j]] > 0 {
-                    neighbors.push(labels[[i - 1, j]]);
+                    neighbor_labels.push(labels[[i - 1, j]]);
                 }
 
                 if j > 0 && labels[[i, j - 1]] > 0 {
-                    neighbors.push(labels[[i, j - 1]]);
+                    neighbor_labels.push(labels[[i, j - 1]]);
                 }
 
-                if neighbors.is_empty() {
-                    // New label
+                if neighbor_labels.is_empty() {
+                    // No neighbors with labels, create a new label
                     label_count += 1;
                     labels[[i, j]] = label_count;
+
+                    // Initialize parent pointer to self (each label starts as its own root)
+                    parent_table.push(label_count);
                 } else {
-                    // Use minimum of neighbor labels
-                    labels[[i, j]] = *neighbors.iter().min().unwrap();
+                    // Use the smallest neighbor label
+                    let min_label = *neighbor_labels.iter().min().unwrap();
+                    labels[[i, j]] = min_label;
+
+                    // Set label equivalences for all neighbors
+                    for &neighbor_label in &neighbor_labels {
+                        if neighbor_label != min_label {
+                            union_labels(&mut parent_table, min_label, neighbor_label);
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    // Flatten the parent_table (path compression)
+    for i in 1..parent_table.len() {
+        find_root(&mut parent_table, i);
+    }
+
+    // Create a mapping from old labels to new consecutive labels
+    let mut relabel_map = vec![0; parent_table.len()];
+    let mut next_label = 1;
+
+    for i in 1..parent_table.len() {
+        let root = parent_table[i];
+        if relabel_map[root] == 0 {
+            relabel_map[root] = next_label;
+            next_label += 1;
+        }
+        relabel_map[i] = relabel_map[root];
+    }
+
+    // Second pass: relabel the image
+    for i in 0..height {
+        for j in 0..width {
+            if labels[[i, j]] > 0 {
+                labels[[i, j]] = relabel_map[labels[[i, j]]];
             }
         }
     }
@@ -133,29 +223,19 @@ pub fn connected_components(binary_image: &ArrayView2<f64>) -> Array2<usize> {
 /// * Vector of bounding boxes (min_row, min_col, max_row, max_col) for each label
 pub fn get_bounding_boxes(labeled_image: &ArrayView2<usize>) -> Vec<(usize, usize, usize, usize)> {
     let max_label = labeled_image.iter().copied().max().unwrap_or(0);
-    let mut bboxes = vec![(usize::MAX, usize::MAX, 0, 0); max_label + 1];
-
-    // Skip label 0 (background) and initialize all bboxes
-    for bbox in bboxes.iter_mut().skip(1).take(max_label) {
-        *bbox = (usize::MAX, usize::MAX, 0, 0);
-    }
+    let mut bboxes = vec![AABB::new(); max_label + 1];
 
     for ((row, col), &label) in labeled_image.indexed_iter() {
         if label > 0 {
-            let (min_row, min_col, max_row, max_col) = bboxes[label];
-            bboxes[label] = (
-                min_row.min(row),
-                min_col.min(col),
-                max_row.max(row),
-                max_col.max(col),
-            );
+            bboxes[label].expand_to_include(row, col);
         }
     }
 
     // Remove background (label 0)
     bboxes.remove(0);
 
-    bboxes
+    // Convert to tuples for backward compatibility
+    crate::image_proc::aabb::aabbs_to_tuples(&bboxes)
 }
 
 /// Merge overlapping bounding boxes
@@ -190,79 +270,457 @@ pub fn get_bounding_boxes(labeled_image: &ArrayView2<usize>) -> Vec<(usize, usiz
 /// // The first merged box should encompass both original overlapping boxes
 /// assert_eq!(merged[0], (10, 10, 25, 25));
 /// ```
+/// @deprecated Use crate::image_proc::aabb::merge_overlapping_aabbs instead
 pub fn merge_overlapping_boxes(
     bboxes: &[(usize, usize, usize, usize)],
     padding: Option<usize>,
 ) -> Vec<(usize, usize, usize, usize)> {
+    // This function is just a wrapper around the AABB version for backward compatibility
     if bboxes.is_empty() {
         return Vec::new();
     }
 
-    let padding = padding.unwrap_or(0);
+    // Use the AABB utility functions
+    use crate::image_proc::aabb::{aabbs_to_tuples, merge_overlapping_aabbs, tuples_to_aabbs};
 
-    // Create a copy of the input boxes
-    let boxes = bboxes.to_vec();
+    // Convert, merge, and convert back
+    let boxes = tuples_to_aabbs(bboxes);
+    let merged_boxes = merge_overlapping_aabbs(&boxes, padding);
+    aabbs_to_tuples(&merged_boxes)
+}
 
-    // Track which boxes have been merged
-    let mut merged = vec![false; boxes.len()];
-    let mut result = Vec::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    for i in 0..boxes.len() {
-        // Skip if this box was already merged
-        if merged[i] {
-            continue;
-        }
+    #[test]
+    fn test_merge_overlapping_boxes() {
+        // Create some test boxes
+        let boxes = vec![(10, 10, 20, 20), (15, 15, 25, 25), (50, 50, 60, 60)];
 
-        // Start with the current box
-        let mut current_box = boxes[i];
-        merged[i] = true;
+        // Merge overlapping boxes with no padding
+        let merged = merge_overlapping_boxes(&boxes, None);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0], (10, 10, 25, 25)); // First two boxes merged
+        assert_eq!(merged[1], (50, 50, 60, 60)); // Third box unchanged
+    }
 
-        // Flag to track if any merge happened in this iteration
-        let mut merge_happened = true;
+    /// Creates a binary test image from a 2D array of 1s and 0s
+    /// The formatting of the array makes it easy to see the pattern visually
+    fn create_test_image(pattern: &[&[i32]]) -> Array2<f64> {
+        let height = pattern.len();
+        let width = pattern[0].len();
 
-        // Keep merging boxes until no more overlaps are found
-        while merge_happened {
-            merge_happened = false;
+        let mut image = Array2::zeros((height, width));
 
-            for j in 0..boxes.len() {
-                // Skip if box already merged or is the current box
-                if merged[j] || i == j {
-                    continue;
-                }
-
-                // Check for overlap with padding
-                let (min_row_a, min_col_a, max_row_a, max_col_a) = current_box;
-                let (min_row_b, min_col_b, max_row_b, max_col_b) = boxes[j];
-
-                // Apply padding for overlap check
-                let min_row_a_padded = min_row_a.saturating_sub(padding);
-                let min_col_a_padded = min_col_a.saturating_sub(padding);
-                let max_row_a_padded = max_row_a + padding;
-                let max_col_a_padded = max_col_a + padding;
-
-                // Check if the padded boxes overlap
-                if min_row_a_padded <= max_row_b
-                    && max_row_a_padded >= min_row_b
-                    && min_col_a_padded <= max_col_b
-                    && max_col_a_padded >= min_col_b
-                {
-                    // Merge the boxes
-                    current_box = (
-                        min_row_a.min(min_row_b),
-                        min_col_a.min(min_col_b),
-                        max_row_a.max(max_row_b),
-                        max_col_a.max(max_col_b),
-                    );
-
-                    merged[j] = true;
-                    merge_happened = true;
-                }
+        for (i, row) in pattern.iter().enumerate() {
+            for (j, &value) in row.iter().enumerate() {
+                image[[i, j]] = value as f64;
             }
         }
 
-        // Add the merged box to the result
-        result.push(current_box);
+        image
     }
 
-    result
+    /// Helper function to check if labeled image matches expected labels
+    fn assert_labels_match(labeled: &Array2<usize>, expected: &[&[i32]]) {
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &value) in row.iter().enumerate() {
+                let expected_value = value as usize;
+                assert_eq!(
+                    labeled[[i, j]],
+                    expected_value,
+                    "Mismatch at position [{}, {}]: expected {}, got {}",
+                    i,
+                    j,
+                    expected_value,
+                    labeled[[i, j]]
+                );
+            }
+        }
+    }
+
+    /// Test empty image (all zeros)
+    #[test]
+    fn test_empty_image() {
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: all zeros (no components)
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test simple single component (square)
+    #[test]
+    fn test_single_component() {
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: single component labeled as 1
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test two separate components
+    #[test]
+    fn test_two_components() {
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 0, 0, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: two components labeled as 1 and 2
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 1, 1, 0, 0],
+            &[0, 0, 0, 2, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test L-shaped component
+    #[test]
+    fn test_l_shape() {
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 0],
+            &[0, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: single L-shaped component
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 0],
+            &[0, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test U-shaped component (tests label equivalence)
+    #[test]
+    fn test_u_shape() {
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: single U-shaped component with label 1
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test complex equivalence cases
+    #[test]
+    fn test_complex_equivalence() {
+        // This pattern has multiple merge points that require
+        // proper label equivalence handling
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 1, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 1, 0, 1, 0],
+            &[0, 1, 0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: should all be one component since they connect
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 0, 1, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 1, 0, 1, 0],
+            &[0, 1, 0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test diagonal components (not connected in 4-connectivity)
+    #[test]
+    fn test_diagonal_components() {
+        // Diagonal pixels are not considered connected in 4-connectivity
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 1, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: four separate components
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0],
+            &[0, 1, 0, 2, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 3, 0, 4, 0],
+            &[0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test spiral shape (complex connectivity)
+    #[test]
+    fn test_spiral() {
+        // This spiral shape tests the ability to follow a long path
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 1, 1, 1, 0],
+            &[0, 1, 0, 1, 0, 0, 0],
+            &[0, 1, 1, 1, 0, 0, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: single component (spiral)
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 1, 1, 1, 0],
+            &[0, 1, 0, 1, 0, 0, 0],
+            &[0, 1, 1, 1, 0, 0, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test for handling border components correctly
+    #[test]
+    fn test_border_components() {
+        // Components on the image borders
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[1, 1, 0, 0, 1],
+            &[1, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[1, 0, 0, 1, 1],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // Expected: three separate components
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[1, 1, 0, 0, 2],
+            &[1, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[3, 0, 0, 4, 4],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Test the special challenge case that causes problems in many implementations
+    #[test]
+    fn test_tricky_equivalence() {
+        // This pattern forms a specific challenge for union-find approaches
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 1, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // All should be a single component
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 1, 1, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 1, 0, 0, 0],
+            &[0, 1, 0, 0, 1, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    /// Tests the specific case that was fixed
+    #[test]
+    fn test_union_find_correctness() {
+        // This specific pattern should be a single component but broke
+        // in the original implementation
+        // fmt-ignore
+        let pattern: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        let image = create_test_image(pattern);
+        let labeled = connected_components(&image.view());
+
+        // All non-zero elements should be in one component
+        // fmt-ignore
+        let expected: &[&[i32]] = &[
+            &[0, 0, 0, 0, 0, 0, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 0, 0, 0, 1, 0],
+            &[0, 1, 1, 1, 1, 1, 0],
+            &[0, 0, 0, 0, 0, 0, 0],
+        ];
+
+        assert_labels_match(&labeled, expected);
+    }
+
+    #[test]
+    fn test_find_root() {
+        let mut labels = vec![0, 1, 2, 3, 4, 5];
+        labels[2] = 1;
+        labels[3] = 2;
+        labels[4] = 2;
+        assert_eq!(find_root(&mut labels, 4), 1);
+    }
+
+    #[test]
+    fn test_union_labels() {
+        let mut labels = vec![0, 1, 2, 3, 4, 5];
+        union_labels(&mut labels, 2, 3);
+        assert_eq!(find_root(&mut labels, 2), find_root(&mut labels, 3));
+    }
+
+    #[test]
+    fn test_path_compression() {
+        // Create a long chain of labels pointing to the next
+        let mut labels = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        // Make a chain: 10->9->8->...->2->1
+        for i in (2..=10).rev() {
+            labels[i] = i - 1;
+        }
+
+        // Find the root of 10, should compress the path
+        assert_eq!(find_root(&mut labels, 10), 1);
+
+        // After path compression, 10 should point closer to root
+        // (exact behavior depends on implementation, but should be more efficient)
+        assert!(labels[10] < 9, "Path compression not working effectively");
+    }
+
+    #[test]
+    fn test_disjoint_set_operations() {
+        let mut labels = vec![0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+        // Union some sets
+        union_labels(&mut labels, 1, 2);
+        union_labels(&mut labels, 3, 4);
+        union_labels(&mut labels, 5, 6);
+        union_labels(&mut labels, 7, 8);
+
+        // Union the unions
+        union_labels(&mut labels, 1, 3);
+        union_labels(&mut labels, 5, 7);
+
+        // Union all together
+        union_labels(&mut labels, 1, 5);
+
+        // All should have same root now
+        let root = find_root(&mut labels, 1);
+        for i in 1..=8 {
+            assert_eq!(find_root(&mut labels, i), root);
+        }
+    }
 }
