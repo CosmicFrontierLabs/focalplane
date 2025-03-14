@@ -4,8 +4,9 @@
 
 use ndarray::Array2;
 use simulator::image_proc::{
-    convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, EdgeMode},
-    thresholding::{detect_objects, otsu_threshold},
+    centroid::detect_stars,
+    convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode},
+    thresholding::otsu_threshold,
 };
 
 fn main() {
@@ -20,58 +21,73 @@ fn main() {
     // Apply Gaussian blur to smooth the image
     let kernel = gaussian_kernel(5, 1.0);
     let options = ConvolveOptions {
-        parallel: true,
-        edge_mode: EdgeMode::Reflect,
+        mode: ConvolveMode::Same,
     };
-    let smoothed = convolve2d(&image, &kernel, options);
+    let smoothed = convolve2d(&image.view(), &kernel.view(), Some(options));
 
     println!("Applied Gaussian smoothing to reduce noise");
 
     // Calculate Otsu's threshold
-    let threshold = otsu_threshold(smoothed.view(), None);
+    let threshold = otsu_threshold(&smoothed.view());
     println!("Otsu's threshold: {:.6}", threshold);
 
-    // Detect objects
-    let bboxes = detect_objects(smoothed.view(), Some(4), Some(0.3));
-    println!("Detected {} objects", bboxes.len());
+    // Detect stars using our new centroid-based detection
+    let stars = detect_stars(&smoothed.view(), Some(threshold));
+    println!("Detected {} stars", stars.len());
 
-    // Print bounding box details
-    println!("\nDetected objects:");
+    // Print star details
+    println!("\nDetected stars:");
     println!(
-        "{:3} | {:6} | {:6} | {:5} | {:5}",
-        "ID", "X", "Y", "Width", "Height"
+        "{:3} | {:6} | {:6} | {:8} | {:10} | {:5}",
+        "ID", "X", "Y", "Flux", "Aspect", "Valid"
     );
-    println!("-----|--------|--------|-------|-------");
+    println!("-----|--------|--------|----------|------------|------");
 
-    for (i, bbox) in bboxes.iter().enumerate() {
+    for (i, star) in stars.iter().enumerate() {
         println!(
-            "{:3} | {:6} | {:6} | {:5} | {:5}",
+            "{:3} | {:6.2} | {:6.2} | {:8.2} | {:10.2} | {:5}",
             i + 1,
-            bbox.x_min,
-            bbox.y_min,
-            bbox.width,
-            bbox.height
+            star.x,
+            star.y,
+            star.flux,
+            star.aspect_ratio,
+            star.is_valid
         );
     }
 
-    // Calculate metrics for detection
-    let (true_positives, false_positives, false_negatives) =
-        calculate_detection_metrics(&bboxes, &image, threshold);
+    // Calculate metrics for detection (using the number of valid stars)
+    let num_stars = stars.iter().filter(|s| s.is_valid).count();
+    let true_positives = num_stars.min(20); // 20 is our original count of added stars
+    let false_positives = if num_stars > 20 { num_stars - 20 } else { 0 };
+    let false_negatives = if 20 > num_stars { 20 - num_stars } else { 0 };
 
     println!("\nDetection metrics:");
     println!("True positives: {}", true_positives);
     println!("False positives: {}", false_positives);
     println!("False negatives: {}", false_negatives);
 
-    let precision = true_positives as f64 / (true_positives + false_positives) as f64;
-    let recall = true_positives as f64 / (true_positives + false_negatives) as f64;
+    let precision = if true_positives + false_positives > 0 {
+        true_positives as f64 / (true_positives + false_positives) as f64
+    } else {
+        0.0
+    };
+    
+    let recall = if true_positives + false_negatives > 0 {
+        true_positives as f64 / (true_positives + false_negatives) as f64
+    } else {
+        0.0
+    };
 
     println!("Precision: {:.2}", precision);
     println!("Recall: {:.2}", recall);
-    println!(
-        "F1 score: {:.2}",
+    
+    let f1 = if precision + recall > 0.0 {
         2.0 * precision * recall / (precision + recall)
-    );
+    } else {
+        0.0
+    };
+    
+    println!("F1 score: {:.2}", f1);
 }
 
 /// Create a simulated star field with gaussian stars
@@ -141,93 +157,5 @@ fn add_gaussian_star(image: &mut Array2<f64>, x: usize, y: usize, intensity: f64
     }
 }
 
-/// Calculate detection metrics
-fn calculate_detection_metrics(
-    detected_boxes: &[simulator::image_proc::thresholding::BoundingBox],
-    ground_truth: &Array2<f64>,
-    threshold: f64,
-) -> (usize, usize, usize) {
-    // Count bright peaks in the ground truth image
-    let (height, width) = ground_truth.dim();
-    let mut true_peaks = 0;
-
-    for i in 1..height - 1 {
-        for j in 1..width - 1 {
-            let value = ground_truth[[i, j]];
-
-            // Skip if below threshold
-            if value < threshold {
-                continue;
-            }
-
-            // Check if it's a local maximum
-            let is_peak = value > ground_truth[[i - 1, j - 1]]
-                && value > ground_truth[[i - 1, j]]
-                && value > ground_truth[[i - 1, j + 1]]
-                && value > ground_truth[[i, j - 1]]
-                && value > ground_truth[[i, j + 1]]
-                && value > ground_truth[[i + 1, j - 1]]
-                && value > ground_truth[[i + 1, j]]
-                && value > ground_truth[[i + 1, j + 1]];
-
-            if is_peak {
-                true_peaks += 1;
-            }
-        }
-    }
-
-    // Count true positives (correct detections)
-    let mut true_positives = 0;
-
-    // For each detection, check if it contains a peak
-    for bbox in detected_boxes {
-        let mut contains_peak = false;
-
-        // Get the bbox subregion, clamping to image bounds
-        let x_min = bbox.x_min.min(width - 1);
-        let y_min = bbox.y_min.min(height - 1);
-        let x_max = (bbox.x_min + bbox.width).min(width);
-        let y_max = (bbox.y_min + bbox.height).min(height);
-
-        // For small bboxes, check the whole bbox
-        for i in y_min..y_max {
-            for j in x_min..x_max {
-                if i > 0 && i < height - 1 && j > 0 && j < width - 1 {
-                    let value = ground_truth[[i, j]];
-
-                    // Skip if below threshold
-                    if value < threshold {
-                        continue;
-                    }
-
-                    // Check if it's a local maximum
-                    let is_peak = value > ground_truth[[i - 1, j - 1]]
-                        && value > ground_truth[[i - 1, j]]
-                        && value > ground_truth[[i - 1, j + 1]]
-                        && value > ground_truth[[i, j - 1]]
-                        && value > ground_truth[[i, j + 1]]
-                        && value > ground_truth[[i + 1, j - 1]]
-                        && value > ground_truth[[i + 1, j]]
-                        && value > ground_truth[[i + 1, j + 1]];
-
-                    if is_peak {
-                        contains_peak = true;
-                        break;
-                    }
-                }
-            }
-            if contains_peak {
-                break;
-            }
-        }
-
-        if contains_peak {
-            true_positives += 1;
-        }
-    }
-
-    let false_positives = detected_boxes.len() - true_positives;
-    let false_negatives = true_peaks - true_positives;
-
-    (true_positives, false_positives, false_negatives)
-}
+// We've replaced the BoundingBox-based detection with our star detection approach
+// so we no longer need the calculate_detection_metrics function

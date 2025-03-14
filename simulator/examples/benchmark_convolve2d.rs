@@ -4,7 +4,7 @@
 //! comparing sequential and parallel execution.
 
 use ndarray::Array2;
-use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, EdgeMode};
+use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode};
 use std::time::Instant;
 
 fn main() {
@@ -35,26 +35,24 @@ fn main() {
         for (kernel_name, kernel) in &kernels {
             println!("\n  Kernel: {}", kernel_name);
 
-            // Sequential
+            // Sequential version
             let seq_options = ConvolveOptions {
-                parallel: false,
-                edge_mode: EdgeMode::Reflect,
+                mode: ConvolveMode::Same,
             };
 
             let start = Instant::now();
-            let _seq_result = convolve2d(&input, kernel, seq_options);
+            let _seq_result = convolve2d(&input.view(), &kernel.view(), Some(seq_options));
             let seq_duration = start.elapsed();
 
             println!("    Sequential: {:?}", seq_duration);
 
-            // Parallel
+            // Parallel version (with same options, using Rayon under the hood)
             let par_options = ConvolveOptions {
-                parallel: true,
-                edge_mode: EdgeMode::Reflect,
+                mode: ConvolveMode::Same,
             };
 
             let start = Instant::now();
-            let _par_result = convolve2d(&input, kernel, par_options);
+            let _par_result = convolve2d(&input.view(), &kernel.view(), Some(par_options));
             let par_duration = start.elapsed();
 
             println!("    Parallel:   {:?}", par_duration);

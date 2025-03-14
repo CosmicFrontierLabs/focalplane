@@ -4,7 +4,7 @@
 //! with different kernels and options.
 
 use ndarray::{Array2, Axis};
-use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, EdgeMode};
+use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode};
 
 fn main() {
     println!("2D Convolution Example");
@@ -34,37 +34,34 @@ fn main() {
 
     // Perform convolution with different options
     let options = ConvolveOptions {
-        parallel: true,
-        edge_mode: EdgeMode::Constant(0.0),
+        mode: ConvolveMode::Same,
     };
 
-    println!("\nConvolution with constant edge mode (0.0):");
-    let result1 = convolve2d(&input, &kernel, options);
+    println!("\nConvolution with Same mode:");
+    let result1 = convolve2d(&input.view(), &kernel.view(), Some(options));
     print_array(&result1);
 
     let options = ConvolveOptions {
-        parallel: true,
-        edge_mode: EdgeMode::Reflect,
+        mode: ConvolveMode::Valid,
     };
 
-    println!("\nConvolution with reflect edge mode:");
-    let result2 = convolve2d(&input, &kernel, options);
+    println!("\nConvolution with Valid mode:");
+    let result2 = convolve2d(&input.view(), &kernel.view(), Some(options));
     print_array(&result2);
 
     // Compare edge behaviors
-    println!("\nEdge behavior comparison (first row):");
+    println!("\nMode comparison (first row):");
     println!("Original: {:?}", input.index_axis(Axis(0), 0));
-    println!("Constant: {:?}", result1.index_axis(Axis(0), 0));
-    println!("Reflect:  {:?}", result2.index_axis(Axis(0), 0));
+    println!("Same:     {:?}", result1.index_axis(Axis(0), 0));
+    println!("Valid:    {:?}", result2.index_axis(Axis(0), 0));
 
     // Example of image smoothing with larger kernel
     println!("\nImage smoothing with larger kernel (5x5):");
     let large_kernel = gaussian_kernel(5, 2.0);
     let options = ConvolveOptions {
-        parallel: true,
-        edge_mode: EdgeMode::Reflect,
+        mode: ConvolveMode::Same,
     };
-    let smoothed = convolve2d(&input, &large_kernel, options);
+    let smoothed = convolve2d(&input.view(), &large_kernel.view(), Some(options));
     print_array(&smoothed);
 }
 
