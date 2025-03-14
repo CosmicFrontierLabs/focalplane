@@ -4,6 +4,7 @@ members = [
     "simulator",
     "track",
     "starfield",
+    "test_helpers",
 ]
 resolver = "2"
 

@@ -12,6 +12,7 @@ license.workspace = true
 nalgebra = "0.32"  # Linear algebra
 time = "0.3"       # Time handling
 thiserror = "1.0"  # Error handling
+test_helpers = { path = "../test_helpers" }
 
 [dev-dependencies]
 criterion = "0.5"  # Benchmarking

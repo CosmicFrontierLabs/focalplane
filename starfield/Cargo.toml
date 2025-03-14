@@ -29,6 +29,7 @@ regex = "1.10"              # Regular expressions for parsing
 thiserror = "1.0"
 log = "0.4"
 term_size = "0.3"      # Terminal dimensions detection
+test_helpers = { path = "../test_helpers" }
 
 [dev-dependencies]
 criterion = "0.5"           # Benchmarking

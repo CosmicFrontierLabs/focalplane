@@ -157,3 +157,112 @@ pub fn get_bounding_boxes(labeled_image: &ArrayView2<usize>) -> Vec<(usize, usiz
 
     bboxes
 }
+
+/// Merge overlapping bounding boxes
+///
+/// This function combines bounding boxes that overlap into larger boxes that encompass all
+/// the original overlapping regions. This is useful for consolidating detection results
+/// and removing duplicate or fragmented detections of the same object.
+///
+/// # Arguments
+/// * `bboxes` - Vector of bounding boxes (min_row, min_col, max_row, max_col)
+/// * `padding` - Optional padding to add around each box when checking for overlap.
+///   This is useful for merging boxes that are close but not directly overlapping.
+///
+/// # Returns
+/// * Vector of merged bounding boxes
+///
+/// # Example
+/// ```
+/// use simulator::image_proc::merge_overlapping_boxes;
+///
+/// // Create some overlapping bounding boxes
+/// let boxes = vec![
+///     (10, 10, 20, 20),  // (min_row, min_col, max_row, max_col)
+///     (15, 15, 25, 25),  // Overlaps with first box
+///     (50, 50, 60, 60),  // No overlap with others
+/// ];
+///
+/// // Merge the overlapping boxes with 0 padding
+/// let merged = merge_overlapping_boxes(&boxes, None);
+/// assert_eq!(merged.len(), 2); // Should have 2 boxes after merging
+///
+/// // The first merged box should encompass both original overlapping boxes
+/// assert_eq!(merged[0], (10, 10, 25, 25));
+/// ```
+pub fn merge_overlapping_boxes(
+    bboxes: &[(usize, usize, usize, usize)],
+    padding: Option<usize>,
+) -> Vec<(usize, usize, usize, usize)> {
+    if bboxes.is_empty() {
+        return Vec::new();
+    }
+
+    let padding = padding.unwrap_or(0);
+
+    // Create a copy of the input boxes
+    let boxes = bboxes.to_vec();
+
+    // Track which boxes have been merged
+    let mut merged = vec![false; boxes.len()];
+    let mut result = Vec::new();
+
+    for i in 0..boxes.len() {
+        // Skip if this box was already merged
+        if merged[i] {
+            continue;
+        }
+
+        // Start with the current box
+        let mut current_box = boxes[i];
+        merged[i] = true;
+
+        // Flag to track if any merge happened in this iteration
+        let mut merge_happened = true;
+
+        // Keep merging boxes until no more overlaps are found
+        while merge_happened {
+            merge_happened = false;
+
+            for j in 0..boxes.len() {
+                // Skip if box already merged or is the current box
+                if merged[j] || i == j {
+                    continue;
+                }
+
+                // Check for overlap with padding
+                let (min_row_a, min_col_a, max_row_a, max_col_a) = current_box;
+                let (min_row_b, min_col_b, max_row_b, max_col_b) = boxes[j];
+
+                // Apply padding for overlap check
+                let min_row_a_padded = min_row_a.saturating_sub(padding);
+                let min_col_a_padded = min_col_a.saturating_sub(padding);
+                let max_row_a_padded = max_row_a + padding;
+                let max_col_a_padded = max_col_a + padding;
+
+                // Check if the padded boxes overlap
+                if min_row_a_padded <= max_row_b
+                    && max_row_a_padded >= min_row_b
+                    && min_col_a_padded <= max_col_b
+                    && max_col_a_padded >= min_col_b
+                {
+                    // Merge the boxes
+                    current_box = (
+                        min_row_a.min(min_row_b),
+                        min_col_a.min(min_col_b),
+                        max_row_a.max(max_row_b),
+                        max_col_a.max(max_col_b),
+                    );
+
+                    merged[j] = true;
+                    merge_happened = true;
+                }
+            }
+        }
+
+        // Add the merged box to the result
+        result.push(current_box);
+    }
+
+    result
+}

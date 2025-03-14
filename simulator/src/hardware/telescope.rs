@@ -16,6 +16,8 @@ pub struct TelescopeConfig {
     pub name: String,
 }
 
+const MAS_PER_RAD: f64 = 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0);
+
 impl TelescopeConfig {
     /// Create a new telescope configuration
     pub fn new(
@@ -71,7 +73,7 @@ impl TelescopeConfig {
         let radius_rad = 1.22 * wavelength_m / self.aperture_m;
 
         // Convert to milliarcseconds (1 radian = 206,264,806.247 mas)
-        radius_rad * 206_264_806.247 * 1.0e-3
+        radius_rad * MAS_PER_RAD
     }
 
     /// Calculate the diffraction-limited resolution in milliarcseconds at given wavelength
@@ -115,7 +117,9 @@ mod tests {
 
         // Calculate expected values
         let expected_radius_um = 1.22 * wavelength_nm * 1e-9 * 4.0 / 0.5 * 1e6;
-        let expected_radius_mas = 1.22 * wavelength_nm * 1e-9 / 0.5 * 206_264_806.247 * 1e-3;
+        // Updated to match actual MAS_PER_RAD constant implementation
+        let expected_radius_mas =
+            1.22 * wavelength_nm * 1e-9 / 0.5 * 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0);
 
         assert!(approx_eq!(
             f64,
@@ -197,7 +201,6 @@ pub mod models {
 #[cfg(test)]
 mod model_tests {
     use super::*;
-    use float_cmp::approx_eq;
 
     #[test]
     fn test_predefined_telescopes() {

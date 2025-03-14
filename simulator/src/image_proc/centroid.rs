@@ -22,6 +22,8 @@ pub struct StarDetection {
     pub m_xy: f64,
     /// Aspect ratio calculated from moments
     pub aspect_ratio: f64,
+    /// Estimated diameter of the star in pixels, calculated from moments
+    pub diameter: f64,
     /// Is this likely to be a star based on moment analysis?
     pub is_valid: bool,
 }
@@ -79,6 +81,7 @@ pub fn calculate_star_centroid(
             m_yy: 0.0,
             m_xy: 0.0,
             aspect_ratio: 1.0,
+            diameter: 0.0,
             is_valid: false,
         };
     }
@@ -107,6 +110,11 @@ pub fn calculate_star_centroid(
         f64::INFINITY
     };
 
+    // Calculate the diameter using the average of the eigenvalues
+    // Eigenvalues represent variance, so we use 2*sqrt(lambda) for the radius and then double it for diameter
+    // We use 4*sqrt because 2*2*sqrt = 4*sqrt
+    let diameter = 4.0 * ((lambda1 + lambda2) / 2.0).sqrt();
+
     // Stars should have aspect ratio close to 1.0 (circular PSF)
     // Use 2.5 as a threshold, which allows for some PSF distortion
     let is_valid = aspect_ratio < 2.5;
@@ -119,6 +127,7 @@ pub fn calculate_star_centroid(
         m_yy: mu02,
         m_xy: mu11,
         aspect_ratio,
+        diameter,
         is_valid,
     }
 }

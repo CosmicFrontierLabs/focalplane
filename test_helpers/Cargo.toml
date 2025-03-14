@@ -1,0 +1,12 @@
+[package]
+name = "test_helpers"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Test helpers for meter-sim"
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+once_cell = "1.19"      # Lazy static initialization
+thiserror = "1.0"       # Error handling
