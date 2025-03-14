@@ -50,6 +50,7 @@ cargo test
 
 ## Git Commits
 - Do NOT include attribution in commit messages
+- Do NOT include "Created with Claude Code" or any Claude attribution in commit messages or PR descriptions
 - Follow the project commit style: short subject line, blank line, body with bullet points
 - Focus on explaining the WHY (purpose) not just the WHAT (changes)
 - Prefer shorter, more focused commits over large monolithic ones
