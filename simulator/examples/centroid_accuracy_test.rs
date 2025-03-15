@@ -247,58 +247,43 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
     }
 }
 
-/// Print a simple ASCII histogram with consistent +/- signs
+/// Print a histogram using the viz module
 fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val: f64) {
+    // Format title with consistent styling
     println!("\n{}", title);
     println!("-----------------------------------------------------------");
 
-    // Calculate histogram bins
-    let bin_width = (max_val - min_val) / bins as f64;
-    let mut counts = vec![0; bins];
-    let mut out_of_range = 0;
+    use viz::histogram::{Histogram, HistogramConfig};
 
-    // Count values in each bin
-    for &value in data {
-        if value < min_val || value > max_val {
-            out_of_range += 1;
-            continue;
+    // Create histogram with the specified bins and range
+    if let Ok(mut hist) = Histogram::new_equal_bins(min_val..max_val, bins) {
+        // Configure histogram display options
+        let mut config = HistogramConfig::default();
+        config.max_bar_width = 40;
+        config.bar_char = '#';
+        config.show_empty_bins = false;
+        hist = hist.with_config(config);
+
+        // Add data to histogram
+        hist.add_all(data.iter().copied());
+
+        // Print the formatted histogram
+        if let Ok(formatted) = hist.format() {
+            println!("{}", formatted);
         }
 
-        let bin_index = ((value - min_val) / bin_width).floor() as usize;
-        let bin_index = bin_index.min(bins - 1); // Ensure we don't exceed the last bin
-        counts[bin_index] += 1;
+        // Print out of range count
+        let total_in_hist = hist.total_count();
+        let out_of_range = data.len() as u64 - total_in_hist;
+
+        if out_of_range > 0 {
+            println!("Out of range: {} values", out_of_range);
+        }
+    } else {
+        println!("Error creating histogram");
     }
 
-    // Find maximum count for scaling
-    let max_count = *counts.iter().max().unwrap_or(&1);
-    let scale_factor = 40.0 / max_count as f64; // Scale to 40 characters width
-
-    // Print histogram
-    for i in 0..bins {
-        let bin_min = min_val + i as f64 * bin_width;
-        let bin_max = bin_min + bin_width;
-        let count = counts[i];
-
-        let bar_width = (count as f64 * scale_factor).round() as usize;
-        let bar = if count > 0 {
-            "#".repeat(bar_width)
-        } else {
-            "".to_string()
-        };
-
-        // Format with consistent +/- signs
-        let bin_min_str = format_with_sign(bin_min);
-        let bin_max_str = format_with_sign(bin_max);
-
-        println!("[{}, {}) | {:4} | {}", bin_min_str, bin_max_str, count, bar);
-    }
-
-    // Print out of range count if any
-    if out_of_range > 0 {
-        println!("Out of range: {} values", out_of_range);
-    }
-
-    // Print statistics
+    // Print statistics that aren't included in the default histogram
     let mean = data.iter().sum::<f64>() / data.len() as f64;
 
     // Calculate standard deviation

@@ -30,6 +30,7 @@ thiserror = "1.0"
 log = "0.4"
 term_size = "0.3"      # Terminal dimensions detection
 test_helpers = { path = "../test_helpers" }
+viz = { path = "../viz" }
 
 [dev-dependencies]
 criterion = "0.5"           # Benchmarking

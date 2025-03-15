@@ -5,6 +5,7 @@ members = [
     "track",
     "starfield",
     "test_helpers",
+    "viz",
 ]
 resolver = "2"
 
