@@ -165,6 +165,56 @@ pub mod models {
     pub static HWK4123: Lazy<SensorConfig> = Lazy::new(|| {
         SensorConfig::new("HWK4123", create_flat_qe(0.91), 4096, 2300, 4.6, 0.25, 0.1)
     });
+
+    /// Sony IMX455 Full-frame BSI CMOS sensor
+    /// Data from: "Characterization of Sony IMX455 sensor for astronomical applications"
+    /// https://arxiv.org/pdf/2207.13052
+    pub static IMX455: Lazy<SensorConfig> = Lazy::new(|| {
+        // QE curve from manufacturer data
+        let mut qe = HashMap::new();
+        qe.insert(300, 0.05);
+        qe.insert(320, 0.05);
+        qe.insert(340, 0.12);
+        qe.insert(360, 0.22);
+        qe.insert(380, 0.35);
+        qe.insert(400, 0.52);
+        qe.insert(420, 0.68);
+        qe.insert(440, 0.82);
+        qe.insert(460, 0.90);
+        qe.insert(480, 0.94);
+        qe.insert(500, 0.94);
+        qe.insert(520, 0.92);
+        qe.insert(540, 0.86);
+        qe.insert(560, 0.80);
+        qe.insert(580, 0.72);
+        qe.insert(600, 0.64);
+        qe.insert(620, 0.56);
+        qe.insert(640, 0.48);
+        qe.insert(660, 0.42);
+        qe.insert(680, 0.36);
+        qe.insert(700, 0.30);
+        qe.insert(720, 0.25);
+        qe.insert(740, 0.22);
+        qe.insert(760, 0.18);
+        qe.insert(780, 0.16);
+        qe.insert(800, 0.14);
+        qe.insert(820, 0.12);
+        qe.insert(840, 0.10);
+        qe.insert(860, 0.09);
+        qe.insert(880, 0.08);
+        qe.insert(900, 0.06);
+        qe.insert(920, 0.05);
+        qe.insert(940, 0.04);
+        qe.insert(960, 0.03);
+        qe.insert(980, 0.02);
+        qe.insert(1000, 0.02);
+
+        SensorConfig::new(
+            "IMX455", qe, 9568, 6380, 3.75,  // Pixel pitch in microns
+            2.67,  // Read noise in electrons (from arxiv paper)
+            0.002, // Dark current in e-/px/s at -20°C (from arxiv paper)
+        )
+    });
 }
 
 #[cfg(test)]
@@ -190,5 +240,16 @@ mod model_tests {
         assert_eq!(models::HWK4123.read_noise_e, 0.25);
         assert_eq!(models::HWK4123.dark_current_e_p_s, 0.1);
         assert_eq!(models::HWK4123.qe_at_wavelength(550), 0.91);
+
+        // Check IMX455 properties
+        assert_eq!(models::IMX455.name, "IMX455");
+        assert_eq!(models::IMX455.width_px, 9568);
+        assert_eq!(models::IMX455.height_px, 6380);
+        assert_eq!(models::IMX455.pixel_size_um, 3.75);
+        assert_eq!(models::IMX455.read_noise_e, 2.67);
+        assert_eq!(models::IMX455.dark_current_e_p_s, 0.002);
+        assert_eq!(models::IMX455.qe_at_wavelength(400), 0.52);
+        assert_eq!(models::IMX455.qe_at_wavelength(500), 0.94);
+        assert_eq!(models::IMX455.qe_at_wavelength(700), 0.30);
     }
 }
