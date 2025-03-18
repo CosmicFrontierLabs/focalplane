@@ -6,10 +6,15 @@
 pub mod binary_catalog;
 mod gaia;
 pub mod hipparcos;
+pub mod synthetic;
 
 pub use binary_catalog::{BinaryCatalog, MinimalStar};
 pub use gaia::{GaiaCatalog, GaiaEntry};
 pub use hipparcos::{HipparcosCatalog, HipparcosEntry};
+pub use synthetic::{
+    create_fov_catalog, create_synthetic_catalog, MagnitudeDistribution, SpatialDistribution,
+    SyntheticCatalogConfig,
+};
 
 /// Trait for accessing star position data
 pub trait StarPosition {

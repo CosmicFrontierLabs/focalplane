@@ -271,15 +271,15 @@ pub fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
     let font_count = fontdb.len();
     println!("Found {} fonts in the database", font_count);
 
-    // Create options with the font database (convert to Arc)
-    let mut options = Options::default();
-    options.fontdb = std::sync::Arc::new(fontdb);
-    options.font_family = "DejaVu Sans".to_string(); // Widely available on Linux
-
-    // Set high quality rendering options
-    options.text_rendering = usvg::TextRendering::GeometricPrecision;
-    options.shape_rendering = usvg::ShapeRendering::GeometricPrecision;
-    options.image_rendering = usvg::ImageRendering::OptimizeQuality;
+    // Create options with the font database and high quality rendering settings
+    let options = Options {
+        fontdb: std::sync::Arc::new(fontdb),
+        font_family: "DejaVu Sans".to_string(), // Widely available on Linux
+        text_rendering: usvg::TextRendering::GeometricPrecision,
+        shape_rendering: usvg::ShapeRendering::GeometricPrecision,
+        image_rendering: usvg::ImageRendering::OptimizeQuality,
+        ..Default::default()
+    };
 
     // Parse SVG with our custom options
     let svg_tree = match Tree::from_str(svg_data, &options) {

@@ -23,7 +23,7 @@ use starfield::Loader;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 /// Print a simple progress bar
-fn print_progress(progress: f64, width: usize) {
+fn _print_progress(progress: f64, width: usize) {
     let filled_width = (progress * width as f64).round() as usize;
     let empty_width = width - filled_width;
 
@@ -97,7 +97,7 @@ fn create_density_map(stars: &[StarData], width: usize, height: usize, chars: &s
 fn process_gaia_file(
     file_path: &PathBuf,
     mag_histogram: &mut Histogram<f64>,
-    density_grid: &mut Vec<Vec<u32>>,
+    density_grid: &mut [Vec<u32>],
     grid_width: usize,
     grid_height: usize,
     magnitude_limit: f64,
@@ -215,7 +215,7 @@ fn print_help() {
     println!("Star Catalog Statistics Tool");
     println!("===========================");
     println!("Usage: cargo run --bin star_catalog_stats -- [OPTIONS]");
-    println!("");
+    println!();
     println!("Options:");
     println!("  -t, --type TYPE       Catalog type: hipparcos, gaia, or binary (required)");
     println!("  -f, --file PATH       Input file path (for binary catalog or specific file)");
@@ -313,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Set default magnitude limits based on catalog type
-    let magnitude_limit = magnitude_limit.unwrap_or_else(|| match catalog_type.as_str() {
+    let magnitude_limit = magnitude_limit.unwrap_or(match catalog_type.as_str() {
         "hipparcos" => 6.0,        // Default for Hipparcos (naked eye visibility)
         "gaia" | "binary" => 20.0, // Default for Gaia and binary
         _ => 10.0,
@@ -333,10 +333,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mag_histogram = Histogram::new_equal_bins(min_mag..max_mag, histogram_bins)?;
 
     // Configure histogram display
-    let mut config = HistogramConfig::default();
-    config.title = Some(format!("{} Star Magnitude Distribution", catalog_type));
-    config.max_bar_width = 40;
-    config.show_empty_bins = true;
+    let config = HistogramConfig {
+        title: Some(format!("{} Star Magnitude Distribution", catalog_type)),
+        max_bar_width: 40,
+        show_empty_bins: true,
+        ..Default::default()
+    };
     mag_histogram = mag_histogram.with_config(config);
 
     // Create density grid for the sky map
@@ -475,7 +477,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Find brightest star
             if let Some(brightest) = catalog
                 .stars()
-                .into_iter()
+                .iter()
                 .min_by(|a, b| a.magnitude.partial_cmp(&b.magnitude).unwrap())
             {
                 println!(
@@ -500,20 +502,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", mag_histogram.format()?);
 
     // Print log-scaled magnitude histogram
-    let mut log_config = HistogramConfig::default();
-    log_config.title = Some(format!(
-        "{} Magnitude Distribution (Log Scale)",
-        catalog_type
-    ));
-    log_config.scale = Scale::Log10;
-    log_config.max_bar_width = 40;
-    log_config.show_empty_bins = true;
+    let log_config = HistogramConfig {
+        title: Some(format!(
+            "{} Magnitude Distribution (Log Scale)",
+            catalog_type
+        )),
+        scale: Scale::Log10,
+        max_bar_width: 40,
+        show_empty_bins: true,
+        ..Default::default()
+    };
 
     let log_hist = mag_histogram.with_config(log_config);
     println!("\n{}", log_hist.format()?);
 
     // Create and print density map
-    let density_map = create_density_map(
+    let _density_map = create_density_map(
         &[StarData::new(0, 0.0, 0.0, 0.0, None)], // placeholder to make type inference work
         density_width,
         density_height,

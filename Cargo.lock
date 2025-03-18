@@ -1926,6 +1926,7 @@ dependencies = [
  "rand",
  "rayon",
  "resvg",
+ "starfield",
  "test_helpers",
  "tiny-skia",
  "usvg",
