@@ -5,6 +5,7 @@
 //! 2. Converting star magnitudes to flux values
 //! 3. Applying appropriate PSF (Point Spread Function) based on telescope parameters
 //! 4. Rendering stars to a final image
+//! 5. Generating a histogram of star magnitudes in the field
 
 use ndarray::Array2;
 use rand::rngs::StdRng;
@@ -14,6 +15,7 @@ use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig
 use simulator::image_proc::convolve2d::{
     convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions,
 };
+use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 /// Main function to render a simulated star field
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -19,4 +19,5 @@ pub enum VizError {
 /// Result type for visualization operations
 pub type Result<T> = std::result::Result<T, VizError>;
 
+pub mod density_map;
 pub mod histogram;

@@ -2,13 +2,16 @@
 //!
 //! This module provides functionality for loading and using star catalogs,
 //! including efficient binary formats for optimized storage and loading.
+//! It also provides an index of interesting astronomical features for targeting simulations.
 
 pub mod binary_catalog;
+pub mod features;
 mod gaia;
 pub mod hipparcos;
 pub mod synthetic;
 
 pub use binary_catalog::{BinaryCatalog, MinimalStar};
+pub use features::{FeatureCatalog, FeatureType, SkyFeature};
 pub use gaia::{GaiaCatalog, GaiaEntry};
 pub use hipparcos::{HipparcosCatalog, HipparcosEntry};
 pub use synthetic::{

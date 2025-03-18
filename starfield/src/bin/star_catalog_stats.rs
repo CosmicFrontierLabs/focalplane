@@ -17,9 +17,10 @@ use std::time::Instant;
 
 use flate2::read::GzDecoder;
 
-use starfield::catalogs::{BinaryCatalog, StarCatalog, StarData};
+use starfield::catalogs::{BinaryCatalog, StarCatalog};
 use starfield::data::list_cached_gaia_files;
 use starfield::Loader;
+use viz::density_map;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 /// Print a simple progress bar
@@ -38,60 +39,7 @@ fn _print_progress(progress: f64, width: usize) {
     io::stdout().flush().unwrap();
 }
 
-/// Create a density map visualization (ASCII art) of star positions
-fn create_density_map(stars: &[StarData], width: usize, height: usize, chars: &str) -> String {
-    // Create a 2D histogram of star positions
-    let mut grid = vec![vec![0u32; width]; height];
-    let mut max_count = 0;
-
-    for star in stars {
-        // Map RA (0-360) to x (0-width)
-        let x = ((star.ra / 360.0) * width as f64) as usize % width;
-
-        // Map Dec (-90 to +90) to y (height-1 to 0) - Southern hemisphere at bottom
-        let y = ((90.0 - star.dec) / 180.0 * height as f64) as usize;
-        let y = y.min(height - 1);
-
-        // Count stars in each grid cell
-        grid[y][x] += 1;
-        max_count = max_count.max(grid[y][x]);
-    }
-
-    // Now render the density map
-    let mut output = String::new();
-    output.push_str("Star Density Map (RA vs Dec)\n");
-    output.push_str(&format!("North Pole{}\n", " ".repeat(width - 15)));
-
-    // Choose characters for density representation based on max count
-    let char_count = chars.chars().count();
-
-    // Draw the grid with borders
-    output.push_str(&format!("  {}\n", "-".repeat(width + 2)));
-    for row in &grid {
-        output.push_str("  |");
-        for &count in row {
-            // Map count to character index
-            let char_idx = if max_count > 0 {
-                ((count as f64 / max_count as f64) * (char_count - 1) as f64).round() as usize
-            } else {
-                0
-            };
-            let c = chars.chars().nth(char_idx).unwrap_or(' ');
-            output.push(c);
-        }
-        output.push_str("|\n");
-    }
-    output.push_str(&format!("  {}\n", "-".repeat(width + 2)));
-    output.push_str(&format!("South Pole{}\n", " ".repeat(width - 15)));
-    output.push_str("  RA increases left to right (0° to 360°)\n");
-    output.push_str(&format!(
-        "  Legend: '{}' = no stars, '{}' = highest density\n",
-        chars.chars().next().unwrap_or(' '),
-        chars.chars().last().unwrap_or('#')
-    ));
-
-    output
-}
+// Implementation moved to the viz::density_map module
 
 /// Process a Gaia catalog file directly, streaming through it
 fn process_gaia_file(
@@ -326,6 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref path) = file_path {
         println!("Input file: {}", path);
     }
+    println!();
 
     // Create histogram for magnitude distribution
     let min_mag = -2.0;
@@ -516,48 +465,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_hist = mag_histogram.with_config(log_config);
     println!("\n{}", log_hist.format()?);
 
-    // Create and print density map
-    let _density_map = create_density_map(
-        &[StarData::new(0, 0.0, 0.0, 0.0, None)], // placeholder to make type inference work
+    // Get all RA/Dec coordinates for the density map
+    let mut ra_dec_points = Vec::new();
+
+    // Process data based on catalog type to extract RA/Dec
+    match catalog_type.as_str() {
+        "hipparcos" => {
+            // Get RA/Dec from Hipparcos data
+            let catalog = Loader::new().load_hipparcos_catalog(magnitude_limit)?;
+            ra_dec_points = catalog.stars().map(|star| (star.ra, star.dec)).collect();
+        }
+        "gaia" | "binary" => {
+            // Extract RA/Dec from the already processed density grid
+            for (y, row) in density_grid.iter().enumerate() {
+                for (x, &count) in row.iter().enumerate() {
+                    if count > 0 {
+                        // Map from density grid to celestial coordinates
+                        let ra = (x as f64 / density_width as f64) * 360.0;
+                        let dec = 90.0 - ((y as f64 / density_height as f64) * 180.0);
+
+                        // Add the point count times (to preserve density)
+                        for _ in 0..count {
+                            ra_dec_points.push((ra, dec));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // Create and print density map using the viz module
+    if let Ok(density_map_str) = density_map::create_celestial_density_map(
+        &ra_dec_points,
         density_width,
         density_height,
-        " .:+*#@", // Density characters from low to high
-    );
-
-    // Find maximum density for normalization
-    let max_density = density_grid
-        .iter()
-        .flat_map(|row| row.iter().copied())
-        .max()
-        .unwrap_or(0);
-
-    // Display ASCII density map
-    println!("\nStar Density Map (RA vs Dec)");
-    println!("North Pole{}", " ".repeat(density_width - 15));
-
-    // Draw the grid with borders
-    println!("  {}", "-".repeat(density_width + 2));
-    for row in &density_grid {
-        print!("  |");
-        for &count in row {
-            // Map count to character
-            let char_idx = if max_density > 0 {
-                ((count as f64 / max_density as f64) * 6.0).round() as usize
-            } else {
-                0
-            };
-            let c = " .:+*#@".chars().nth(char_idx.min(6)).unwrap_or(' ');
-            print!("{}", c);
-        }
-        println!("|");
+        " .:+*#@",
+    ) {
+        println!("\n{}", density_map_str);
     }
-    println!("  {}", "-".repeat(density_width + 2));
-    println!("South Pole{}", " ".repeat(density_width - 15));
-    println!("  RA increases left to right (0° to 360°)");
-    println!(
-        "  Legend: ' ' = no stars, '@' = highest density ({} stars)",
-        max_density
-    );
 
     let elapsed = start_time.elapsed();
     println!(

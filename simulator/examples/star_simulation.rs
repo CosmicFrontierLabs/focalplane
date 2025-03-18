@@ -4,12 +4,14 @@
 //! 1. Computing the diameter of a telescope/sensor pair field of view
 //! 2. Collecting stars within the field from a catalog
 //! 3. Computing the flux from stars collected by the telescope
+//! 4. Generating a histogram of star magnitudes in the field
 
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models as telescope_models;
 use simulator::{field_diameter, filter_stars_in_field, magnitude_to_photon_flux};
 use starfield::catalogs::{BinaryCatalog, StarCatalog};
 use std::path::PathBuf;
+use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
@@ -200,6 +202,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .fold(f64::NEG_INFINITY, f64::max);
 
             println!("Magnitude range: {:.2} to {:.2}", min_mag, max_mag);
+
+            // Create magnitude histogram
+            println!("\nMagnitude Histogram:");
+
+            // Extract magnitudes for histogram
+            let magnitudes: Vec<f64> = stars_with_flux
+                .iter()
+                .map(|(star, _)| star.magnitude)
+                .collect();
+
+            // Round min/max to create nice histogram boundaries
+            let hist_min = (min_mag.floor() - 1.0).max(-1.0);
+            let hist_max = (max_mag.ceil() + 1.0).min(25.0);
+            let bin_size = 0.5; // 0.5 magnitude bins
+            let num_bins = ((hist_max - hist_min) / bin_size).ceil() as usize;
+
+            // Create the histogram
+            let mut hist = Histogram::new_equal_bins(hist_min..hist_max, num_bins)?;
+
+            // Configure histogram display
+            let mut config = HistogramConfig::default();
+            config.title = Some(format!(
+                "Star Magnitude Distribution (Field center: RA={:.2}°, Dec={:.2}°)",
+                ra_deg, dec_deg
+            ));
+            config.max_bar_width = 50;
+            config.show_empty_bins = true;
+            hist = hist.with_config(config);
+
+            // Add values to histogram
+            hist.add_all(magnitudes);
+
+            // Display standard histogram
+            println!("{}", hist.format()?);
+
+            // Also show log-scaled version for better visibility of distribution
+            let mut log_config = HistogramConfig::default();
+            log_config.title = Some(format!(
+                "Star Magnitude Distribution - Log Scale (Field center: RA={:.2}°, Dec={:.2}°)",
+                ra_deg, dec_deg
+            ));
+            log_config.scale = Scale::Log10;
+            log_config.max_bar_width = 50;
+            log_config.show_empty_bins = true;
+
+            let log_hist = hist.with_config(log_config);
+            println!("\n{}", log_hist.format()?);
         }
     } else {
         println!("No catalog provided. Use --catalog to specify a binary catalog file.");
