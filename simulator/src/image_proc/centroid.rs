@@ -218,6 +218,147 @@ mod tests {
         assert!((star.aspect_ratio - 1.0).abs() < 0.1);
     }
 
+    /// Run a centroid accuracy test on a grid of sub-pixel positions
+    ///
+    /// # Arguments
+    /// * `image_size` - Size of the test image (square)
+    /// * `grid_size` - Number of grid points per pixel side (grid_size^2 total points)
+    /// * `sigma` - Standard deviation of the Gaussian PSF
+    /// * `threshold` - Threshold for binary segmentation
+    ///
+    /// # Returns
+    /// * Tuple containing (average_error, max_error, errors_x, errors_y, errors_magnitude, number_of_valid_tests)
+    ///   where errors_x, errors_y, and errors_magnitude are vectors of errors for each test position
+    pub fn run_subpixel_position_grid_test(
+        image_size: usize,
+        grid_size: usize,
+        sigma: f64,
+        threshold: f64,
+    ) -> (f64, f64, Vec<f64>, Vec<f64>, Vec<f64>, usize) {
+        use crate::image_proc::thresholding::{
+            apply_threshold, connected_components, get_bounding_boxes,
+        };
+
+        let center_x = image_size as f64 / 2.0;
+        let center_y = image_size as f64 / 2.0;
+
+        let mut total_error = 0.0;
+        let mut max_error: f64 = 0.0;
+        let mut count = 0;
+
+        // Collect errors for analysis
+        let mut errors_x = Vec::with_capacity(grid_size * grid_size);
+        let mut errors_y = Vec::with_capacity(grid_size * grid_size);
+        let mut errors_magnitude = Vec::with_capacity(grid_size * grid_size);
+
+        for i in 0..grid_size {
+            for j in 0..grid_size {
+                let sub_x = i as f64 / grid_size as f64;
+                let sub_y = j as f64 / grid_size as f64;
+
+                let position_x = center_x + sub_x;
+                let position_y = center_y + sub_y;
+
+                // Create an empty image
+                let mut image = Array2::<f64>::zeros((image_size, image_size));
+
+                // Generate a Gaussian star at this sub-pixel position
+                create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
+
+                // Process the image
+                let binary = apply_threshold(&image.view(), threshold);
+                let labeled = connected_components(&binary.view());
+                let bboxes = get_bounding_boxes(&labeled.view());
+
+                // Skip if no detection (shouldn't happen with these parameters)
+                if bboxes.is_empty() {
+                    continue;
+                }
+
+                // Calculate centroid
+                let star = calculate_star_centroid(
+                    &image.view(),
+                    &labeled.view(),
+                    1,
+                    bboxes[0].to_tuple(),
+                );
+
+                // Calculate errors
+                let error_x = position_x - star.x;
+                let error_y = position_y - star.y;
+                let error = (error_x.powi(2) + error_y.powi(2)).sqrt();
+
+                // Store errors for analysis
+                errors_x.push(error_x);
+                errors_y.push(error_y);
+                errors_magnitude.push(error);
+
+                // Update statistics
+                total_error += error;
+                max_error = max_error.max(error);
+                count += 1;
+            }
+        }
+
+        // Calculate average error
+        let avg_error = if count > 0 {
+            total_error / count as f64
+        } else {
+            0.0
+        };
+
+        (
+            avg_error,
+            max_error,
+            errors_x,
+            errors_y,
+            errors_magnitude,
+            count,
+        )
+    }
+
+    /// Test the centroid accuracy on a dense grid of sub-pixel positions
+    #[test]
+    fn test_subpixel_position_grid() {
+        // Test parameters for unit test (small grid for speed)
+        let image_size = 32;
+        let grid_size = 5;
+        let sigma = 1.0;
+        let threshold = 0.1;
+
+        // Run the grid test
+        let (avg_error, max_error, errors_x, errors_y, errors_magnitude, count) =
+            run_subpixel_position_grid_test(image_size, grid_size, sigma, threshold);
+
+        // Verify we had valid tests
+        assert!(count > 0, "No valid test positions detected");
+
+        // Verify each error is within acceptable limits
+        for (i, &error) in errors_magnitude.iter().enumerate() {
+            assert!(
+                error < 0.1,
+                "Centroid error too large at test position {}: {}, X error: {}, Y error: {}",
+                i,
+                error,
+                errors_x[i],
+                errors_y[i]
+            );
+        }
+
+        // Overall statistics check
+        assert!(
+            avg_error < 0.05,
+            "Average centroid error too large: {}",
+            avg_error
+        );
+
+        assert!(
+            max_error < 0.1,
+            "Maximum centroid error too large: {}",
+            max_error
+        );
+    }
+
     /// Test centroiding with a perfectly symmetric 5x5 pattern
     #[test]
     fn test_symmetric_cross_5x5() {

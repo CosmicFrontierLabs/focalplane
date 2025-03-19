@@ -1,9 +1,19 @@
-//! Precision test for centroid calculation with Gaussian PSFs
+//! Precision benchmark for centroid calculation with Gaussian PSFs
 //!
-//! This example creates synthetic images with Gaussian PSFs at known sub-pixel locations
-//! and tests the accuracy of the moment-based centroid calculation.
+//! This example benchmarks the accuracy of moment-based centroid calculations
+//! using a dense grid of sub-pixel positions (50x50 = 2500 test cases).
+//!
+//! For unit testing with smaller grids, see the test_subpixel_position_grid
+//! test in the centroid.rs module.
+//!
+//! Key metrics calculated:
+//! - Mean centroid error (across all test positions)
+//! - Maximum centroid error
+//! - Error distribution histograms (in X, Y, and total magnitude)
+//! - Success rate for different precision thresholds
+//! - Analysis of any systematic bias in X or Y directions
 
-use ndarray::{Array2, ArrayView2};
+use ndarray::Array2;
 use simulator::image_proc::centroid::calculate_star_centroid;
 use simulator::image_proc::thresholding::{
     apply_threshold, connected_components, get_bounding_boxes,
@@ -35,29 +45,6 @@ fn create_gaussian(
     }
 }
 
-/// Calculate centroid directly from image using moments
-fn calculate_direct_centroid(image: &ArrayView2<f64>) -> (f64, f64) {
-    let (height, width) = image.dim();
-    let mut m00 = 0.0; // Total mass/intensity
-    let mut m10 = 0.0; // First moment in x
-    let mut m01 = 0.0; // First moment in y
-
-    for y in 0..height {
-        for x in 0..width {
-            let intensity = image[[y, x]];
-            m00 += intensity;
-            m10 += x as f64 * intensity;
-            m01 += y as f64 * intensity;
-        }
-    }
-
-    if m00 < f64::EPSILON {
-        return (0.0, 0.0);
-    }
-
-    (m10 / m00, m01 / m00)
-}
-
 fn run_single_star_test(image_size: usize, position_x: f64, position_y: f64, sigma: f64) {
     // Create an empty image
     let mut image = Array2::<f64>::zeros((image_size, image_size));
@@ -81,17 +68,12 @@ fn run_single_star_test(image_size: usize, position_x: f64, position_y: f64, sig
     let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
 
     // Also calculate direct centroid for comparison
-    let direct_centroid = calculate_direct_centroid(&image.view());
-
     // Calculate errors
     let detected_x = star.x;
     let detected_y = star.y;
-    let direct_x = direct_centroid.0;
-    let direct_y = direct_centroid.1;
 
     let error_detected =
         ((position_x - detected_x).powi(2) + (position_y - detected_y).powi(2)).sqrt();
-    let error_direct = ((position_x - direct_x).powi(2) + (position_y - direct_y).powi(2)).sqrt();
 
     println!(
         "Single Star Test (Image Size: {}, Sigma: {})",
@@ -103,10 +85,6 @@ fn run_single_star_test(image_size: usize, position_x: f64, position_y: f64, sig
         detected_x, detected_y, error_detected
     );
     println!(
-        "Direct Centroid: ({:.3}, {:.3}), Error: {:.6} pixels",
-        direct_x, direct_y, error_direct
-    );
-    println!(
         "Star Properties: flux={:.2}, aspect_ratio={:.2}, valid={}",
         star.flux, star.aspect_ratio, star.is_valid
     );
@@ -114,16 +92,19 @@ fn run_single_star_test(image_size: usize, position_x: f64, position_y: f64, sig
 
 /// Run a large number of sub-pixel positions to evaluate centroid accuracy
 fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
-    // Focus on a single pixel
-    let center_x = image_size as f64 / 2.0;
-    let center_y = image_size as f64 / 2.0;
-    let grid_size = 50; // 50x50 grid for higher resolution = 2500 test cases
+    // Use a large grid size for benchmarking (50x50 = 2500 positions)
+    let grid_size = 50;
+    let threshold = 0.1;
 
     println!(
         "=== Testing sub-pixel accuracy on a {}x{} grid within a single pixel ===",
         grid_size, grid_size
     );
     println!("Running {} test cases...", grid_size * grid_size);
+
+    // Implementation of grid test
+    let center_x = image_size as f64 / 2.0;
+    let center_y = image_size as f64 / 2.0;
 
     let mut total_error = 0.0;
     let mut max_error: f64 = 0.0;
@@ -147,15 +128,15 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
             // Create an empty image
             let mut image = Array2::<f64>::zeros((image_size, image_size));
 
-            // Generate a single star
+            // Generate a Gaussian star at this sub-pixel position
             create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
 
-            // Run detection
-            let threshold = 0.1;
+            // Process the image
             let binary = apply_threshold(&image.view(), threshold);
             let labeled = connected_components(&binary.view());
             let bboxes = get_bounding_boxes(&labeled.view());
 
+            // Skip if no detection (shouldn't happen with these parameters)
             if bboxes.is_empty() {
                 failed_detections += 1;
                 continue;
@@ -165,15 +146,10 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
             let bbox = bboxes[0].to_tuple();
             let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
 
-            // Also calculate direct centroid for comparison
-            let (direct_x, direct_y) = calculate_direct_centroid(&image.view());
-
             // Calculate errors
             let error_x = position_x - star.x;
             let error_y = position_y - star.y;
             let error_detected = (error_x.powi(2) + error_y.powi(2)).sqrt();
-            let error_direct =
-                ((position_x - direct_x).powi(2) + (position_y - direct_y).powi(2)).sqrt();
 
             // Store errors for histogram
             errors_magnitude.push(error_detected);
@@ -187,9 +163,15 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
         }
     }
 
+    // Calculate average error
+    let avg_error = if total_tests > 0 {
+        total_error / total_tests as f64
+    } else {
+        0.0
+    };
+
     // Print summary
     if total_tests > 0 {
-        let avg_error = total_error / total_tests as f64;
         println!("\nSummary:");
         println!("Average Error: {:.6} pixels", avg_error);
         println!("Maximum Error: {:.6} pixels", max_error);
@@ -206,8 +188,8 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64) {
             0.0,
             0.5,
         );
-        print_histogram("Error X Distribution (pixels)", &errors_x, 40, -0.5, 0.5);
-        print_histogram("Error Y Distribution (pixels)", &errors_y, 40, -0.5, 0.5);
+        print_histogram("Error X Distribution (pixels)", &errors_x, 100, -0.5, 0.5);
+        print_histogram("Error Y Distribution (pixels)", &errors_y, 100, -0.5, 0.5);
 
         // Additional analysis
         println!("\nPrecision Analysis:");
@@ -262,6 +244,8 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
         config.max_bar_width = 40;
         config.bar_char = '#';
         config.show_empty_bins = false;
+        config.title = Some(title.to_string());
+
         hist = hist.with_config(config);
 
         // Add data to histogram
@@ -279,20 +263,56 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
         if out_of_range > 0 {
             println!("Out of range: {} values", out_of_range);
         }
+
+        // Print statistics summary using the new statistical methods
+        println!("\nStatistical Analysis:");
+        println!("-----------------------------------------------------------");
+
+        // Get statistical measures with proper sign formatting for mean-based values
+        let mean = hist.mean().unwrap_or(0.0);
+        let std_dev = hist.std_dev().unwrap_or(0.0);
+        let median = hist.median().unwrap_or(0.0);
+        let skewness = hist.skewness().unwrap_or(0.0);
+        let kurtosis = hist.kurtosis().unwrap_or(0.0);
+
+        // Format mean and median with consistent +/- sign
+        let mean_str = format_with_sign(mean);
+        let median_str = format_with_sign(median);
+
+        println!("Mean: {}, Median: {}", mean_str, median_str);
+        println!("Std. Deviation: {:.6}", std_dev);
+
+        // Only print skewness/kurtosis if we have enough data
+        if data.len() >= 4 {
+            println!(
+                "Skewness: {:.4} ({})",
+                skewness,
+                if skewness.abs() < 0.5 {
+                    "approximately symmetric"
+                } else if skewness > 0.0 {
+                    "right-skewed"
+                } else {
+                    "left-skewed"
+                }
+            );
+
+            println!(
+                "Kurtosis: {:.4} ({})",
+                kurtosis,
+                if kurtosis.abs() < 0.5 {
+                    "normal-like tails"
+                } else if kurtosis > 0.0 {
+                    "heavy tails"
+                } else {
+                    "light tails"
+                }
+            );
+        }
+
+        println!("Sample size: {}", hist.total_count());
     } else {
         println!("Error creating histogram");
     }
-
-    // Print statistics that aren't included in the default histogram
-    let mean = data.iter().sum::<f64>() / data.len() as f64;
-
-    // Calculate standard deviation
-    let variance = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
-    let std_dev = variance.sqrt();
-
-    // Format mean with sign
-    let mean_str = format_with_sign(mean);
-    println!("Mean: {}, Std. Deviation: {:.6}", mean_str, std_dev);
 }
 
 /// Format a floating-point value with a consistent +/- sign
@@ -339,13 +359,8 @@ fn test_sigma_effect(image_size: usize) {
         let bbox = bboxes[0].to_tuple();
         let star = calculate_star_centroid(&image.view(), &labeled.view(), 1, bbox);
 
-        // Also calculate direct centroid
-        let (direct_x, direct_y) = calculate_direct_centroid(&image.view());
-
         // Calculate errors
         let error_detected = ((position_x - star.x).powi(2) + (position_y - star.y).powi(2)).sqrt();
-        let error_direct =
-            ((position_x - direct_x).powi(2) + (position_y - direct_y).powi(2)).sqrt();
 
         // Print results
         println!(

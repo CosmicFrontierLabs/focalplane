@@ -157,7 +157,7 @@ pub fn gaussian_kernel(size: usize, sigma: f64) -> Array2<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
+    use ndarray::{array, Array2, Axis};
 
     #[test]
     fn test_convolve2d_valid() {
@@ -179,6 +179,26 @@ mod tests {
     }
 
     #[test]
+    fn test_convolve2d_same() {
+        let image = array![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+
+        let kernel = array![[0.25, 0.25], [0.25, 0.25]]; // Simple 2x2 averaging kernel
+
+        let options = ConvolveOptions {
+            mode: ConvolveMode::Same,
+        };
+
+        let result = convolve2d(&image.view(), &kernel.view(), Some(options));
+
+        // Check dimensions match the input
+        assert_eq!(result.dim(), image.dim());
+
+        // For a 3x3 image with 2x2 kernel in SAME mode, corners should involve fewer elements
+        // Top-left corner only has one value contributing (itself)
+        assert!((result[[0, 0]] - 0.25 * image[[0, 0]]).abs() < 1e-10);
+    }
+
+    #[test]
     fn test_gaussian_kernel() {
         let kernel = gaussian_kernel(3, 1.0);
 
@@ -195,5 +215,88 @@ mod tests {
         assert!(kernel[[1, 1]] > kernel[[2, 0]]);
         assert!(kernel[[1, 1]] > kernel[[2, 1]]);
         assert!(kernel[[1, 1]] > kernel[[2, 2]]);
+    }
+
+    #[test]
+    fn test_convolve2d_modes_comparison() {
+        // Create a test input array with a simple pattern
+        let mut input = Array2::zeros((10, 10));
+        for i in 0..10 {
+            for j in 0..10 {
+                input[[i, j]] = (i * 10 + j) as f64;
+            }
+        }
+
+        // Create a Gaussian kernel
+        let kernel_size = 3;
+        let sigma = 1.0;
+        let kernel = gaussian_kernel(kernel_size, sigma);
+
+        // Test Same mode
+        let options_same = ConvolveOptions {
+            mode: ConvolveMode::Same,
+        };
+        let result_same = convolve2d(&input.view(), &kernel.view(), Some(options_same));
+
+        // Test Valid mode
+        let options_valid = ConvolveOptions {
+            mode: ConvolveMode::Valid,
+        };
+        let result_valid = convolve2d(&input.view(), &kernel.view(), Some(options_valid));
+
+        // Check dimensions
+        assert_eq!(result_same.dim(), input.dim());
+        assert_eq!(
+            result_valid.dim(),
+            (
+                input.dim().0 - kernel.dim().0 + 1,
+                input.dim().1 - kernel.dim().1 + 1
+            )
+        );
+
+        // Compare edge behavior - first row of result_same should be different from input
+        // due to convolution with the Gaussian kernel
+        let first_row_input = input.index_axis(Axis(0), 0);
+        let first_row_same = result_same.index_axis(Axis(0), 0);
+
+        // Check that values are different (convolution has had an effect)
+        let mut all_same = true;
+        for i in 0..first_row_input.len() {
+            if (first_row_input[i] - first_row_same[i]).abs() > 1e-10 {
+                all_same = false;
+                break;
+            }
+        }
+        assert!(!all_same, "Convolution with Same mode should change values");
+
+        // Test with larger kernel
+        let large_kernel = gaussian_kernel(5, 2.0);
+        let options = ConvolveOptions {
+            mode: ConvolveMode::Same,
+        };
+        let smoothed = convolve2d(&input.view(), &large_kernel.view(), Some(options));
+
+        // Check that smoothing has an effect - variance should be lower
+        let input_variance = calculate_variance(&input);
+        let smoothed_variance = calculate_variance(&smoothed);
+        assert!(
+            smoothed_variance < input_variance,
+            "Smoothing should reduce variance"
+        );
+    }
+
+    // Helper function to calculate variance of a 2D array
+    fn calculate_variance(arr: &Array2<f64>) -> f64 {
+        let mean = arr.mean().unwrap();
+        let mut sum_squared_diff = 0.0;
+        let (rows, cols) = arr.dim();
+
+        for i in 0..rows {
+            for j in 0..cols {
+                sum_squared_diff += (arr[[i, j]] - mean).powi(2);
+            }
+        }
+
+        sum_squared_diff / (rows * cols) as f64
     }
 }

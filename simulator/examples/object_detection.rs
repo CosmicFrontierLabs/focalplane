@@ -1,6 +1,25 @@
 //! Example demonstrating object detection with Otsu's thresholding
 //!
 //! This example shows how to detect stars in a simulated astronomical image.
+//! It demonstrates a complete star detection pipeline:
+//!
+//! 1. Image simulation - Creates a synthetic star field with Gaussian PSFs and noise
+//! 2. Image preprocessing - Applies Gaussian smoothing to reduce noise
+//! 3. Thresholding - Uses Otsu's method to automatically determine threshold level
+//! 4. Star detection - Identifies and characterizes stars using centroid detection
+//! 5. Performance metrics - Calculates precision, recall and F1 score for the detection
+//!
+//! This pipeline mimics real-world astronomical image processing where stars need
+//! to be accurately located against a noisy background. The centroid detection
+//! provides sub-pixel accuracy for star positions, which is critical for astrometry.
+//!
+//! Key components demonstrated:
+//! - Simulating realistic star fields with Gaussian PSFs
+//! - Noise reduction with Gaussian filtering
+//! - Automatic threshold selection with Otsu's method
+//! - Star detection with moment-based centroid calculation
+//! - Star characterization (position, flux, aspect ratio)
+//! - Detection performance metrics
 
 use ndarray::Array2;
 use simulator::image_proc::{
@@ -91,6 +110,25 @@ fn main() {
 }
 
 /// Create a simulated star field with gaussian stars
+///
+/// # Arguments
+/// * `width` - Width of the image in pixels
+/// * `height` - Height of the image in pixels
+/// * `num_stars` - Number of stars to generate
+/// * `noise_level` - Noise level as a percentage (e.g., 5.0 means 5% noise)
+///
+/// # Returns
+/// * 2D array containing the simulated star field with Gaussian PSFs and noise
+///
+/// This function creates a realistic astronomical image simulation by:
+/// 1. Generating a uniform background noise at the specified level
+/// 2. Adding a specified number of stars with Gaussian point spread functions (PSFs)
+/// 3. Randomly distributing stars across the image with varying intensities
+/// 4. Using varying PSF widths to simulate different seeing conditions or focus
+///
+/// The noise uses a uniform distribution, while the star intensities follow
+/// a uniform distribution (a more realistic simulation might use a log-normal
+/// distribution to better match the stellar luminosity function).
 fn create_star_field(
     width: usize,
     height: usize,
@@ -112,11 +150,13 @@ fn create_star_field(
         }
     }
 
-    // Position distribution
+    // Position distribution - keep stars away from edges to avoid truncation
     let x_dist = Uniform::from(5..width - 5);
     let y_dist = Uniform::from(5..height - 5);
 
-    // Intensity distribution (log-normal to simulate star magnitudes)
+    // Intensity distribution (uniform in this simple example)
+    // A more realistic simulation would use a log-normal distribution
+    // to better match the stellar luminosity function
     let intensity_dist = Uniform::from(0.5..1.0);
 
     // Add stars
@@ -125,7 +165,8 @@ fn create_star_field(
         let y = y_dist.sample(&mut rng);
         let intensity = intensity_dist.sample(&mut rng);
 
-        // Add a Gaussian-shaped star
+        // Add a Gaussian-shaped star with random sigma (PSF width)
+        // This simulates different seeing conditions or focus
         add_gaussian_star(&mut image, x, y, intensity, rng.gen_range(1.0..2.5));
     }
 
@@ -133,8 +174,25 @@ fn create_star_field(
 }
 
 /// Add a gaussian-shaped star to the image
+///
+/// # Arguments
+/// * `image` - The image array to modify
+/// * `x` - X-coordinate of the star center
+/// * `y` - Y-coordinate of the star center
+/// * `intensity` - Peak intensity of the star
+/// * `sigma` - Standard deviation of the Gaussian PSF
+///
+/// This function adds a star with a Gaussian point spread function (PSF)
+/// to the image at the specified position. The star's brightness profile
+/// follows a 2D Gaussian distribution:
+///
+/// I(r) = intensity * exp(-r² / (2*sigma²))
+///
+/// where r is the distance from the center. The function calculates
+/// this distribution for each pixel within 3*sigma radius.
 fn add_gaussian_star(image: &mut Array2<f64>, x: usize, y: usize, intensity: f64, sigma: f64) {
     let (height, width) = image.dim();
+    // Use 3*sigma as the radius to include ~99.7% of the Gaussian's energy
     let radius = (3.0 * sigma).ceil() as i32;
 
     for dy in -radius..=radius {
@@ -147,11 +205,11 @@ fn add_gaussian_star(image: &mut Array2<f64>, x: usize, y: usize, intensity: f64
                 continue;
             }
 
-            // Calculate Gaussian intensity
+            // Calculate Gaussian intensity using the 2D Gaussian formula
             let distance_sq = (dx * dx + dy * dy) as f64;
             let value = intensity * (-(distance_sq) / (2.0 * sigma * sigma)).exp();
 
-            // Add to image
+            // Add to image (additive because stars can overlap)
             image[[py as usize, px as usize]] += value;
         }
     }
