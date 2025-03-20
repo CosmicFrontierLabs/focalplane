@@ -41,7 +41,9 @@ cargo test
 IMPORTANT: Always run `cargo fmt` before committing any code changes!
 
 ## Code Style Guidelines
-- **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups.
+- **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups. 
+  - Avoid using wildcard imports like `use crate::*` - always be explicit.
+  - Example format: `use crate::utils::{self, helpers, types::TypeName};`
 - **Formatting**: Follow rustfmt with 100 char line limit. Use trailing commas in multi-line structures.
 - **Types**: Strong typing with descriptive names. Use f64 for astronomical calculations.
 - **Naming**: snake_case for variables/functions, CamelCase for types/traits, SCREAMING_SNAKE_CASE for constants.

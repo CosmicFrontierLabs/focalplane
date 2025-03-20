@@ -70,22 +70,34 @@ pub fn magnitude_to_photon_flux(
     sensor: &SensorConfig,
     wavelength_nm: f64,
 ) -> f64 {
+    // From wikipedia:
+    //  "The zero point of the apparent bolometric magnitude scale is based on the definition
+    //   that an apparent bolometric magnitude of 0 mag is equivalent to a received irradiance
+    //   of 2.518×10−8 watts per square metre (W·m−2).[16]"
+    let irradiance_mag0 = 2.518e-8; // [J/s/m²] = [W/m²]
+    let power_at_aperture = irradiance_mag0 * telescope.effective_collecting_area_m2(); // [J/s] = [W]
+                                                                                        // Convert to photons using E = h * c / λ
+                                                                                        // h = Planck's constant, c = speed of light
+                                                                                        // λ = wavelength in meters
+                                                                                        // E = energy per photon in joules
+                                                                                        // photons = energy / energy_per_photon
+    let energy_per_photon = 6.626e-34 * 3.0e8 / (wavelength_nm * 1.0e-9); // [J/photon]
+
+    let photon_rate_mag0 = power_at_aperture / energy_per_photon; // [photons/s]
+
+    // This formula gives us photon flux at magnitude 0
+    // We scale by magnitude_factor which incorporates the actual magnitude
     // Base conversion from magnitude to relative flux
     // Pogson equation: flux = 10^(-0.4 * magnitude)
-    let relative_flux = 10.0_f64.powf(-0.4 * magnitude);
+    let magnitude_factor = 10.0_f64.powf(-0.4 * magnitude); // [dimensionless]
+    let photon_rate_actual = photon_rate_mag0 * magnitude_factor; // [photons/s]
+    let photons_collected = photon_rate_actual * exposure_time; // [photons]
 
-    // Reference values: magnitude 0 star produces about 10^10 photons/m²/s
-    // in the visible spectrum (rough approximation)
-    let photons_per_m2_per_s = 1.0e10 * relative_flux;
-
-    // Calculate effective collecting area
-    let effective_area = telescope.effective_collecting_area_m2();
-
-    // Get quantum efficiency at the specified wavelength
+    // Apply quantum efficiency of the sensor at this wavelength
     let qe = sensor.qe_at_wavelength(wavelength_nm as u32);
+    let detected_photons = photons_collected * qe; // [detected photons]
 
-    // Calculate total photons collected
-    photons_per_m2_per_s * effective_area * qe * exposure_time
+    detected_photons // [detected photons]
 }
 
 /// Filter stars that would be visible in the field of view
@@ -264,5 +276,103 @@ mod tests {
         let flux_2s = magnitude_to_photon_flux(2.0, 2.0, &telescope, &sensor, 550.0);
 
         assert!(approx_eq!(f64, flux_2s / flux_1s, 2.0, epsilon = 1e-6));
+    }
+
+    #[test]
+    fn test_magnitude_to_photon_flux_zero_point() {
+        let telescope = telescope_models::FINAL_1M.clone();
+        let sensor = sensor_models::GSENSE4040BSI.clone();
+        let wavelength_nm = 550.0;
+
+        // Calculate expected flux for magnitude 0
+        let magnitude_factor = 10.0_f64.powf(-0.4 * 0.0); // 1.0 for mag 0
+        let energy_per_photon = 6.626e-34 * 3.0e8 / (wavelength_nm * 1.0e-9);
+        let irradiance_mag0 = 2.518e-8; // Same as in the function
+        let power_at_aperture = irradiance_mag0 * telescope.effective_collecting_area_m2();
+        let photon_rate_mag0 = power_at_aperture / energy_per_photon;
+        let photon_rate_actual = photon_rate_mag0 * magnitude_factor;
+        let photons_collected = photon_rate_actual * 1.0; // 1 second exposure
+        let quantum_efficiency = sensor.qe_at_wavelength(wavelength_nm as u32);
+        let expected_flux = photons_collected * quantum_efficiency;
+
+        let calculated_flux =
+            magnitude_to_photon_flux(0.0, 1.0, &telescope, &sensor, wavelength_nm);
+
+        assert!(approx_eq!(
+            f64,
+            calculated_flux,
+            expected_flux,
+            epsilon = 1e-6
+        ));
+    }
+
+    #[test]
+    fn test_magnitude_to_photon_flux_with_different_wavelengths() {
+        let telescope = telescope_models::FINAL_1M.clone();
+        let sensor = sensor_models::IMX455.clone();
+        let magnitude = 3.0;
+        let exposure_time = 1.0;
+
+        // Test two different wavelengths with known QE differences
+        let flux_400nm =
+            magnitude_to_photon_flux(magnitude, exposure_time, &telescope, &sensor, 400.0);
+        let flux_500nm =
+            magnitude_to_photon_flux(magnitude, exposure_time, &telescope, &sensor, 500.0);
+
+        // Get actual QE values from sensor configuration
+        let qe_400nm = sensor.qe_at_wavelength(400);
+        let qe_500nm = sensor.qe_at_wavelength(500);
+        let qe_ratio = qe_500nm / qe_400nm;
+
+        // In our updated implementation, energy per photon is directly included in the calculation
+        // The actual ratio we expect is influenced by both QE and wavelength (energy per photon)
+        // E = h*c/λ, so energy ratio = λ₁/λ₂
+        let energy_ratio = 500.0 / 400.0; // Longer wavelength = less energy per photon
+
+        // Our expected ratio combines both QE and wavelength effects
+        // More photons detected both from better QE and lower energy per photon (more photons for same power)
+        let expected_ratio = qe_ratio * energy_ratio;
+
+        println!(
+            "QE 400nm: {}, QE 500nm: {}, QE Ratio: {}",
+            qe_400nm, qe_500nm, qe_ratio
+        );
+        println!("Energy ratio (500nm/400nm): {}", energy_ratio);
+        println!(
+            "Flux 400nm: {}, Flux 500nm: {}, Ratio: {}",
+            flux_400nm,
+            flux_500nm,
+            flux_500nm / flux_400nm
+        );
+        println!("Expected ratio: {}", expected_ratio);
+
+        assert!(approx_eq!(
+            f64,
+            flux_500nm / flux_400nm,
+            expected_ratio,
+            epsilon = 1e-6
+        ));
+    }
+
+    #[test]
+    fn test_magnitude_to_photon_flux_different_telescopes() {
+        let small_telescope = telescope_models::DEMO_50CM.clone();
+        let large_telescope = telescope_models::FINAL_1M.clone();
+        let sensor = sensor_models::GSENSE4040BSI.clone();
+
+        let flux_small = magnitude_to_photon_flux(2.0, 1.0, &small_telescope, &sensor, 550.0);
+        let flux_large = magnitude_to_photon_flux(2.0, 1.0, &large_telescope, &sensor, 550.0);
+
+        // Aperture ratio squared: 1.0^2 / 0.5^2 = 4.0
+        // But also need to consider light efficiency differences
+        let expected_ratio = (large_telescope.aperture_m / small_telescope.aperture_m).powi(2)
+            * (large_telescope.light_efficiency / small_telescope.light_efficiency);
+
+        assert!(approx_eq!(
+            f64,
+            flux_large / flux_small,
+            expected_ratio,
+            epsilon = 1e-6
+        ));
     }
 }

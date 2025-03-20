@@ -18,6 +18,11 @@ The project is organized as a Rust workspace with multiple packages:
 - Simulate telescope optics and sensor behavior
 - Implement real-time star tracking algorithms
 
+## Interesting Reference Implementations
+
+- ROMAN Telescope Simulation Project: https://github.com/spacetelescope/romanisim
+- Pandora Telescope Simulator: https://github.com/PandoraMission/pandora-sim
+
 ## Getting Started
 
 ```bash

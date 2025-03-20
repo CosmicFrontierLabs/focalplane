@@ -13,6 +13,7 @@ pub use hardware::star_projection::{
     field_diameter, filter_stars_in_field, magnitude_to_photon_flux, pixel_scale,
 };
 pub use hardware::telescope::TelescopeConfig;
+pub use image_proc::histogram_stretch::stretch_histogram;
 pub use starfield::catalogs::StarPosition;
 
 #[cfg(test)]

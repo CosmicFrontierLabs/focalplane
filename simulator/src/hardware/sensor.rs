@@ -23,6 +23,8 @@ pub struct SensorConfig {
     pub dark_current_e_p_s: f64,
     /// Name/model of the sensor
     pub name: String,
+    /// Bit depth of the sensor
+    pub bit_depth: u8,
 }
 
 impl SensorConfig {
@@ -35,6 +37,7 @@ impl SensorConfig {
         pixel_size_um: f64,
         read_noise_e: f64,
         dark_current_e_p_s: f64,
+        bit_depth: u8,
     ) -> Self {
         Self {
             name: name.into(),
@@ -44,6 +47,7 @@ impl SensorConfig {
             pixel_size_um,
             read_noise_e,
             dark_current_e_p_s,
+            bit_depth,
         }
     }
 
@@ -93,6 +97,21 @@ impl SensorConfig {
             self.height_px as f64 * self.pixel_size_um,
         )
     }
+
+    /// Estimate DN (Digital Numbers) per electron based on sensor characteristics
+    ///
+    /// This is an approximation that assumes the ADC bit depth is sufficient to
+    /// capture the read noise with at least 2 bits of precision. In practice,
+    /// the relationship between electrons and DN depends on gain settings and
+    /// other factors specific to the camera implementation.
+    pub fn dn_per_electron_guesstimate(&self) -> f64 {
+        // We assume the full well capacity in DN equals the maximum value representable
+        // with the sensor's bit depth
+        let full_well_dn = 2.0f64.powf(self.bit_depth as f64);
+
+        // Estimate by assuming our read noise should be representable in the ADC's range
+        full_well_dn / self.read_noise_e
+    }
 }
 
 #[cfg(test)]
@@ -106,7 +125,7 @@ mod tests {
         qe.insert(500, 0.6);
         qe.insert(600, 0.5);
 
-        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01);
+        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01, 8);
 
         // Exact matches
         assert_eq!(sensor.qe_at_wavelength(400), 0.4);
@@ -127,11 +146,38 @@ mod tests {
         let mut qe = HashMap::new();
         qe.insert(500, 0.5);
 
-        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01);
+        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01, 8);
         let (width_um, height_um) = sensor.dimensions_um();
 
         assert_eq!(width_um, 1024.0 * 5.5);
         assert_eq!(height_um, 768.0 * 5.5);
+    }
+
+    #[test]
+    fn test_dn_per_electron_guesstimate() {
+        let mut qe = HashMap::new();
+        qe.insert(500, 0.5);
+
+        // Test with 8-bit sensor
+        let sensor_8bit = SensorConfig::new("Test8", qe.clone(), 1024, 768, 5.5, 2.0, 0.01, 8);
+        let dn_per_e_8bit = sensor_8bit.dn_per_electron_guesstimate();
+
+        // For 8-bit, max DN is 256, with read noise 2.0, expect around 128 DN/e
+        assert_eq!(dn_per_e_8bit, 256.0 / 2.0);
+
+        // Test with 12-bit sensor
+        let sensor_12bit = SensorConfig::new("Test12", qe.clone(), 1024, 768, 5.5, 1.5, 0.01, 12);
+        let dn_per_e_12bit = sensor_12bit.dn_per_electron_guesstimate();
+
+        // For 12-bit, max DN is 4096, with read noise 1.5, expect 4096/1.5 DN/e
+        assert_eq!(dn_per_e_12bit, 4096.0 / 1.5);
+
+        // Test with 16-bit sensor
+        let sensor_16bit = SensorConfig::new("Test16", qe, 1024, 768, 5.5, 3.0, 0.01, 16);
+        let dn_per_e_16bit = sensor_16bit.dn_per_electron_guesstimate();
+
+        // For 16-bit, max DN is 65536, with read noise 3.0, expect 65536/3.0 DN/e
+        assert_eq!(dn_per_e_16bit, 65536.0 / 3.0);
     }
 }
 
@@ -158,12 +204,22 @@ pub mod models {
             9.0,
             2.3,
             0.04,
+            12,
         )
     });
 
     /// HWK4123 CMOS sensor
     pub static HWK4123: Lazy<SensorConfig> = Lazy::new(|| {
-        SensorConfig::new("HWK4123", create_flat_qe(0.91), 4096, 2300, 4.6, 0.25, 0.1)
+        SensorConfig::new(
+            "HWK4123",
+            create_flat_qe(0.91),
+            4096,
+            2300,
+            4.6,
+            0.25,
+            0.1,
+            12,
+        )
     });
 
     /// Sony IMX455 Full-frame BSI CMOS sensor
@@ -213,6 +269,7 @@ pub mod models {
             "IMX455", qe, 9568, 6380, 3.75,  // Pixel pitch in microns
             2.67,  // Read noise in electrons (from arxiv paper)
             0.002, // Dark current in e-/px/s at -20°C (from arxiv paper)
+            16,
         )
     });
 }
