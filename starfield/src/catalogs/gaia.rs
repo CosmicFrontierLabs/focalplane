@@ -2,6 +2,7 @@
 //!
 //! This module provides functionality for loading and using the Gaia star catalog.
 
+use ephemeris::RaDec;
 use nalgebra as na;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -605,13 +606,13 @@ impl StarCatalog for GaiaCatalog {
     fn star_data(&self) -> impl Iterator<Item = StarData> + '_ {
         self.stars.values().map(|star| {
             // Gaia doesn't have B-V color index, so we'll leave it as None
-            StarData {
-                id: star.source_id,
-                ra: star.ra,
-                dec: star.dec,
-                magnitude: star.phot_g_mean_mag,
-                b_v: None,
-            }
+            StarData::new(
+                star.source_id,
+                star.ra,
+                star.dec,
+                star.phot_g_mean_mag,
+                None,
+            )
         })
     }
 

@@ -2,6 +2,7 @@
 //!
 //! This module provides functionality for loading and using the Hipparcos star catalog.
 
+use ephemeris::RaDec;
 use nalgebra as na;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,7 +10,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::{StarCatalog, StarData};
+use super::{StarCatalog, StarData, StarPosition};
 use crate::Result;
 use crate::StarfieldError;
 
@@ -56,6 +57,17 @@ impl HipparcosEntry {
             let distance = 1000.0 / parallax;
             self.unit_vector() * distance
         })
+    }
+}
+
+/// Implement StarPosition for HipparcosEntry
+impl StarPosition for HipparcosEntry {
+    fn ra(&self) -> f64 {
+        self.ra
+    }
+
+    fn dec(&self) -> f64 {
+        self.dec
     }
 }
 
@@ -390,13 +402,9 @@ impl StarCatalog for HipparcosCatalog {
     }
 
     fn star_data(&self) -> impl Iterator<Item = StarData> + '_ {
-        self.stars.values().map(|star| StarData {
-            id: star.hip as u64,
-            ra: star.ra,
-            dec: star.dec,
-            magnitude: star.mag,
-            b_v: star.b_v,
-        })
+        self.stars
+            .values()
+            .map(|star| StarData::new(star.hip as u64, star.ra, star.dec, star.mag, star.b_v))
     }
 
     fn filter_star_data<F>(&self, predicate: F) -> Vec<StarData>

@@ -4,6 +4,7 @@
 //! minimal fields (ID, position, magnitude), optimized for size and loading speed.
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use ephemeris::RaDec;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -26,22 +27,28 @@ pub const DESCRIPTION_LENGTH: usize = 128;
 pub struct MinimalStar {
     /// Star identifier (usually from source catalog)
     pub id: u64,
-    /// Right ascension in degrees
-    pub ra: f64,
-    /// Declination in degrees
-    pub dec: f64,
+    /// Position in right ascension and declination
+    pub position: RaDec,
     /// Apparent magnitude
     pub magnitude: f64,
 }
 
 impl MinimalStar {
-    /// Create a new minimal star entry
+    /// Create a new minimal star entry with RA/Dec in degrees
     #[inline]
-    pub fn new(id: u64, ra: f64, dec: f64, magnitude: f64) -> Self {
+    pub fn new(id: u64, ra_deg: f64, dec_deg: f64, magnitude: f64) -> Self {
         Self {
             id,
-            ra,
-            dec,
+            position: RaDec::from_degrees(ra_deg, dec_deg),
+            magnitude,
+        }
+    }
+
+    /// Create from an existing RaDec position
+    pub fn with_position(id: u64, position: RaDec, magnitude: f64) -> Self {
+        Self {
+            id,
+            position,
             magnitude,
         }
     }
@@ -56,8 +63,8 @@ impl MinimalStar {
     #[inline]
     pub fn write_binary<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_u64::<LittleEndian>(self.id)?;
-        writer.write_f64::<LittleEndian>(self.ra)?;
-        writer.write_f64::<LittleEndian>(self.dec)?;
+        writer.write_f64::<LittleEndian>(self.position.ra_degrees())?;
+        writer.write_f64::<LittleEndian>(self.position.dec_degrees())?;
         writer.write_f64::<LittleEndian>(self.magnitude)?;
         Ok(())
     }
@@ -66,14 +73,13 @@ impl MinimalStar {
     #[inline]
     pub fn read_binary<R: Read>(reader: &mut R) -> io::Result<Self> {
         let id = reader.read_u64::<LittleEndian>()?;
-        let ra = reader.read_f64::<LittleEndian>()?;
-        let dec = reader.read_f64::<LittleEndian>()?;
+        let ra_deg = reader.read_f64::<LittleEndian>()?;
+        let dec_deg = reader.read_f64::<LittleEndian>()?;
         let magnitude = reader.read_f64::<LittleEndian>()?;
 
         Ok(MinimalStar {
             id,
-            ra,
-            dec,
+            position: RaDec::from_degrees(ra_deg, dec_deg),
             magnitude,
         })
     }
@@ -81,11 +87,11 @@ impl MinimalStar {
 
 impl StarPosition for MinimalStar {
     fn ra(&self) -> f64 {
-        self.ra
+        self.position.ra_degrees()
     }
 
     fn dec(&self) -> f64 {
-        self.dec
+        self.position.dec_degrees()
     }
 }
 
@@ -338,7 +344,7 @@ impl BinaryCatalog {
         let mut actual_count: u64 = 0;
         for star in stars {
             // Convert StarData to MinimalStar and write directly
-            let minimal_star = MinimalStar::new(star.id, star.ra, star.dec, star.magnitude);
+            let minimal_star = MinimalStar::with_position(star.id, star.position, star.magnitude);
 
             minimal_star.write_binary(&mut writer)?;
             actual_count += 1;
@@ -388,12 +394,13 @@ impl StarCatalog for BinaryCatalog {
     }
 
     fn star_data(&self) -> impl Iterator<Item = StarData> + '_ {
-        self.stars.iter().map(|star| StarData {
-            id: star.id,
-            ra: star.ra,
-            dec: star.dec,
-            magnitude: star.magnitude,
-            b_v: None, // Binary catalog doesn't store B-V color
+        self.stars.iter().map(|star| {
+            StarData::with_position(
+                star.id,
+                star.position,
+                star.magnitude,
+                None, // Binary catalog doesn't store B-V color
+            )
         })
     }
 
@@ -442,8 +449,8 @@ mod tests {
 
         // Compare
         assert_eq!(star.id, read_star.id);
-        assert_eq!(star.ra, read_star.ra);
-        assert_eq!(star.dec, read_star.dec);
+        assert_eq!(star.ra(), read_star.ra());
+        assert_eq!(star.dec(), read_star.dec());
         assert_eq!(star.magnitude, read_star.magnitude);
     }
 
@@ -467,8 +474,8 @@ mod tests {
         // Compare individual stars
         for (orig, loaded) in catalog.stars().iter().zip(loaded_catalog.stars().iter()) {
             assert_eq!(orig.id, loaded.id);
-            assert_eq!(orig.ra, loaded.ra);
-            assert_eq!(orig.dec, loaded.dec);
+            assert_eq!(orig.ra(), loaded.ra());
+            assert_eq!(orig.dec(), loaded.dec());
             assert_eq!(orig.magnitude, loaded.magnitude);
         }
     }
@@ -493,20 +500,23 @@ mod tests {
         let catalog = create_test_catalog();
 
         // Filter stars in northern hemisphere
-        let northern_stars = catalog.filter(|star| star.dec > 0.0);
+        let northern_stars = catalog.filter(|star| star.dec() > 0.0);
         assert_eq!(northern_stars.len(), 3); // Should be 3 stars with positive declination
 
         for star in northern_stars {
-            assert!(star.dec > 0.0, "Expected star to have positive declination");
+            assert!(
+                star.dec() > 0.0,
+                "Expected star to have positive declination"
+            );
         }
 
         // Filter stars in a specific RA range
-        let ra_range_stars = catalog.filter(|star| star.ra >= 100.0 && star.ra <= 200.0);
+        let ra_range_stars = catalog.filter(|star| star.ra() >= 100.0 && star.ra() <= 200.0);
         // Count how many stars are in the 100-200 RA range in our test data
         let expected_count = catalog
             .stars()
             .iter()
-            .filter(|star| star.ra >= 100.0 && star.ra <= 200.0)
+            .filter(|star| star.ra() >= 100.0 && star.ra() <= 200.0)
             .count();
         assert_eq!(ra_range_stars.len(), expected_count);
     }
@@ -662,8 +672,8 @@ mod tests {
         for (i, star) in loaded_catalog.stars().iter().enumerate() {
             let original = &star_data[i];
             assert_eq!(star.id, original.id);
-            assert_eq!(star.ra, original.ra);
-            assert_eq!(star.dec, original.dec);
+            assert_eq!(star.ra(), original.ra());
+            assert_eq!(star.dec(), original.dec());
             assert_eq!(star.magnitude, original.magnitude);
         }
     }

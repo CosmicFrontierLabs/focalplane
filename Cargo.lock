@@ -415,6 +415,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "nalgebra",
+ "serde",
  "test_helpers",
  "thiserror",
  "time",
@@ -1988,6 +1989,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "criterion",
+ "ephemeris",
  "flate2",
  "lazy_static",
  "log",

@@ -20,6 +20,7 @@
 //!
 //! See --help for detailed options.
 
+use ephemeris::RaDec;
 use ndarray::Array2;
 use simulator::hardware::sensor::{models as sensor_models, SensorConfig};
 use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig};
@@ -27,7 +28,7 @@ use simulator::image_proc::convolve2d::gaussian_kernel;
 use simulator::image_proc::histogram_stretch::stretch_histogram;
 use simulator::image_proc::{save_u8_image, u16_to_u8_auto_scale, u16_to_u8_scaled};
 use simulator::{field_diameter, magnitude_to_photon_flux};
-use starfield::catalogs::StarData;
+use starfield::catalogs::{StarData, StarPosition};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -229,16 +230,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Get stars from selected catalog
-    let stars =
-        starfield::catalogs::get_stars_in_window(catalog_source, (ra_deg, dec_deg), fov_deg)?;
+    let stars = starfield::catalogs::get_stars_in_window(
+        catalog_source,
+        RaDec::from_degrees(ra_deg, dec_deg),
+        fov_deg,
+    )?;
 
     // Filter to the ones within the rectangle
     let filtered_stars: Vec<&StarData> = stars
         .iter()
         .filter(|star| {
             let (x, y) = equatorial_to_pixel(
-                star.ra,
-                star.dec,
+                star.ra_deg(),
+                star.dec_deg(),
                 ra_deg,
                 dec_deg,
                 fov_deg,
@@ -450,8 +454,8 @@ fn render_star_field(
     for &star in stars {
         // Convert position to pixel coordinates (sub-pixel precision)
         let (x, y) = equatorial_to_pixel(
-            star.ra,
-            star.dec,
+            star.ra_deg(),
+            star.dec_deg(),
             ra_deg,
             dec_deg,
             fov_deg,
@@ -463,7 +467,11 @@ fn render_star_field(
         if x < 0.0 || y < 0.0 || x >= image_width as f64 || y >= image_height as f64 {
             println!(
                 "Star {} at RA: {}, DEC: {} is outside image bounds (x: {}, y: {})",
-                star.id, star.ra, star.dec, x, y
+                star.id,
+                star.ra_deg(),
+                star.dec_deg(),
+                x,
+                y
             );
             continue;
         }
@@ -648,8 +656,8 @@ fn save_star_list(
     for star in sorted_stars {
         // Calculate pixel coordinates
         let (x, y) = equatorial_to_pixel(
-            star.ra,
-            star.dec,
+            star.ra_deg(),
+            star.dec_deg(),
             ra_deg,
             dec_deg,
             fov_deg,
@@ -667,7 +675,13 @@ fn save_star_list(
         writeln!(
             file,
             "{}, {:.6}, {:.6}, {:.2}, {}, {:.2}, {:.2}",
-            star.id, star.ra, star.dec, star.magnitude, b_v_str, x, y
+            star.id,
+            star.ra_deg(),
+            star.dec_deg(),
+            star.magnitude,
+            b_v_str,
+            x,
+            y
         )?;
     }
 

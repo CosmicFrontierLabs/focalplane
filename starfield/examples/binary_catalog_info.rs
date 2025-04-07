@@ -6,7 +6,7 @@
 use std::env;
 use std::path::Path;
 
-use starfield::catalogs::BinaryCatalog;
+use starfield::catalogs::{BinaryCatalog, StarPosition};
 
 fn print_catalog_info<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
     // Get path as string for later use
@@ -75,7 +75,7 @@ fn print_catalog_info<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error:
 
     for star in catalog.stars() {
         for (i, (min, max, _)) in declination_bands.iter().enumerate() {
-            if star.dec >= *min && star.dec < *max {
+            if star.dec() >= *min && star.dec() < *max {
                 declination_counts[i] += 1;
                 break;
             }
@@ -108,7 +108,7 @@ fn print_catalog_info<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error:
 
     for star in catalog.stars() {
         for (i, (min, max, _)) in ra_bands.iter().enumerate() {
-            if star.ra >= *min && star.ra < *max {
+            if star.ra() >= *min && star.ra() < *max {
                 ra_counts[i] += 1;
                 break;
             }

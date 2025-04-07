@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use flate2::read::GzDecoder;
 
-use starfield::catalogs::{BinaryCatalog, StarCatalog};
+use starfield::catalogs::{BinaryCatalog, StarCatalog, StarPosition};
 use starfield::data::list_cached_gaia_files;
 use starfield::Loader;
 use viz::density_map;
@@ -311,8 +311,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mag_histogram.add(star.mag);
 
                 // Add to density grid
-                let x = ((star.ra / 360.0) * density_width as f64) as usize % density_width;
-                let y = ((90.0 - star.dec) / 180.0 * density_height as f64) as usize;
+                let ra_deg = star.ra(); // Use the trait method instead of direct field access
+                let dec_deg = star.dec();
+                let x = ((ra_deg / 360.0) * density_width as f64) as usize % density_width;
+                let y = ((90.0 - dec_deg) / 180.0 * density_height as f64) as usize;
                 let y = y.min(density_height - 1);
                 density_grid[y][x] += 1;
             }
@@ -417,8 +419,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mag_histogram.add(star.magnitude);
 
                 // Add to density grid
-                let x = ((star.ra / 360.0) * density_width as f64) as usize % density_width;
-                let y = ((90.0 - star.dec) / 180.0 * density_height as f64) as usize;
+                let ra_deg = star.ra(); // Use the trait method instead of direct field access
+                let dec_deg = star.dec();
+                let x = ((ra_deg / 360.0) * density_width as f64) as usize % density_width;
+                let y = ((90.0 - dec_deg) / 180.0 * density_height as f64) as usize;
                 let y = y.min(density_height - 1);
                 density_grid[y][x] += 1;
             }

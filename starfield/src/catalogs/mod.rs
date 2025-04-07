@@ -4,6 +4,8 @@
 //! including efficient binary formats for optimized storage and loading.
 //! It also provides an index of interesting astronomical features for targeting simulations.
 
+use ephemeris::RaDec;
+
 pub mod binary_catalog;
 pub mod features;
 mod gaia;
@@ -39,10 +41,8 @@ pub trait StarPosition {
 pub struct StarData {
     /// Star identifier
     pub id: u64,
-    /// Right ascension in degrees
-    pub ra: f64,
-    /// Declination in degrees
-    pub dec: f64,
+    /// Star position in right ascension and declination (in degrees)
+    pub position: RaDec,
     /// Apparent magnitude (lower is brighter)
     pub magnitude: f64,
     /// Optional B-V color index for rendering
@@ -50,25 +50,44 @@ pub struct StarData {
 }
 
 impl StarData {
-    /// Create a new minimal star data structure
-    pub fn new(id: u64, ra: f64, dec: f64, magnitude: f64, b_v: Option<f64>) -> Self {
+    /// Create a new minimal star data structure with RA/Dec in degrees
+    pub fn new(id: u64, ra_deg: f64, dec_deg: f64, magnitude: f64, b_v: Option<f64>) -> Self {
         Self {
             id,
-            ra,
-            dec,
+            position: RaDec::from_degrees(ra_deg, dec_deg),
             magnitude,
             b_v,
         }
+    }
+
+    /// Create a new star data structure with an existing RaDec position
+    pub fn with_position(id: u64, position: RaDec, magnitude: f64, b_v: Option<f64>) -> Self {
+        Self {
+            id,
+            position,
+            magnitude,
+            b_v,
+        }
+    }
+
+    /// Get right ascension in degrees
+    pub fn ra_deg(&self) -> f64 {
+        self.position.ra_degrees()
+    }
+
+    /// Get declination in degrees
+    pub fn dec_deg(&self) -> f64 {
+        self.position.dec_degrees()
     }
 }
 
 impl StarPosition for StarData {
     fn ra(&self) -> f64 {
-        self.ra
+        self.ra_deg()
     }
 
     fn dec(&self) -> f64 {
-        self.dec
+        self.dec_deg()
     }
 }
 
@@ -112,23 +131,16 @@ pub trait StarCatalog {
 
     /// Get stars within a circular field of view
     fn stars_in_field(&self, ra_deg: f64, dec_deg: f64, fov_deg: f64) -> Vec<StarData> {
-        // Convert to radians
-        let ra_rad = ra_deg.to_radians();
-        let dec_rad = dec_deg.to_radians();
+        let center = RaDec::from_degrees(ra_deg, dec_deg);
         let radius_rad = (fov_deg / 2.0).to_radians();
 
         // Get cosine of the radius for faster checks
         let cos_radius = radius_rad.cos();
 
         self.filter_star_data(|star| {
-            // Convert star position to radians
-            let star_ra_rad = star.ra.to_radians();
-            let star_dec_rad = star.dec.to_radians();
-
-            // Calculate the cosine of the angular distance between the center and the star
-            // Using the spherical law of cosines
-            let cos_dist = dec_rad.sin() * star_dec_rad.sin()
-                + dec_rad.cos() * star_dec_rad.cos() * (ra_rad - star_ra_rad).cos();
+            // Calculate the angular distance between the center and the star
+            let cos_dist = star.position.dec.sin() * center.dec.sin()
+                + star.position.dec.cos() * center.dec.cos() * (star.position.ra - center.ra).cos();
 
             // Star is in the field if cosine of distance is greater than cosine of radius
             // (inverse relationship: cos(small angle) > cos(large angle))
@@ -151,10 +163,11 @@ pub enum CatalogSource {
 /// Get stars from the specified catalog source
 pub fn get_stars_in_window(
     source: CatalogSource,
-    position: (f64, f64),
+    position: RaDec,
     fov_deg: f64,
 ) -> crate::Result<Vec<StarData>> {
-    let (ra_deg, dec_deg) = position;
+    let ra_deg = position.ra_degrees();
+    let dec_deg = position.dec_degrees();
 
     match source {
         CatalogSource::Random { seed, count } => {
@@ -252,13 +265,7 @@ fn generate_synthetic_stars(
             None
         };
 
-        stars.push(StarData {
-            id: id as u64,
-            ra,
-            dec,
-            magnitude,
-            b_v,
-        });
+        stars.push(StarData::new(id as u64, ra, dec, magnitude, b_v));
     }
 
     stars

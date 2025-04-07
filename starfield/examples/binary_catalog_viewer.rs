@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use starfield::catalogs::BinaryCatalog;
+use starfield::catalogs::{BinaryCatalog, StarPosition};
 
 /// Print information about a binary catalog file
 fn view_catalog<P: AsRef<Path>>(catalog_path: P) -> Result<(), Box<dyn std::error::Error>> {
@@ -66,8 +66,8 @@ fn view_catalog<P: AsRef<Path>>(catalog_path: P) -> Result<(), Box<dyn std::erro
                 "  {}. ID: {}, RA: {:.4}°, Dec: {:.4}°, Mag: {:.2}",
                 i + 1,
                 star.id,
-                star.ra,
-                star.dec,
+                star.ra(),
+                star.dec(),
                 star.magnitude
             );
         }
@@ -84,7 +84,10 @@ fn view_catalog<P: AsRef<Path>>(catalog_path: P) -> Result<(), Box<dyn std::erro
         println!("\nBrightest star:");
         println!(
             "  ID: {}, RA: {:.4}°, Dec: {:.4}°, Mag: {:.2}",
-            brightest.id, brightest.ra, brightest.dec, brightest.magnitude
+            brightest.id,
+            brightest.ra(),
+            brightest.dec(),
+            brightest.magnitude
         );
     }
 
@@ -144,7 +147,10 @@ fn convert_to_csv<P: AsRef<Path>, Q: AsRef<Path>>(
         writeln!(
             writer,
             "{},{},{},{}",
-            star.id, star.ra, star.dec, star.magnitude
+            star.id,
+            star.ra(),
+            star.dec(),
+            star.magnitude
         )?;
         stars_written += 1;
     }

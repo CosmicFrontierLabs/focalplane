@@ -501,8 +501,8 @@ fn render_catalog_star_field(
     for star in &visible_stars {
         // Convert position to visualization pixel coordinates
         let (viz_x, viz_y) = equatorial_to_pixel(
-            star.ra,
-            star.dec,
+            star.position.ra_degrees(),
+            star.position.dec_degrees(),
             ra_deg,
             dec_deg,
             visualization_fov_deg,

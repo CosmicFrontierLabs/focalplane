@@ -10,14 +10,8 @@ pub mod celestial;
 pub mod coordinates;
 pub mod time_utils;
 
-/// Represents a point in the celestial sphere
-#[derive(Debug, Clone, Copy)]
-pub struct CelestialCoordinate {
-    /// Right ascension in radians
-    pub ra: f64,
-    /// Declination in radians
-    pub dec: f64,
-}
+// Re-export RaDec for convenient access
+pub use coordinates::RaDec;
 
 /// Error types for ephemeris calculations
 #[derive(Debug, Error)]
@@ -37,7 +31,7 @@ pub type Result<T> = std::result::Result<T, EphemerisError>;
 /// Trait for objects that have a position in the sky
 pub trait CelestialObject {
     /// Get the position of the object at a specific time
-    fn position_at(&self, time: OffsetDateTime) -> Result<CelestialCoordinate>;
+    fn position_at(&self, time: OffsetDateTime) -> Result<RaDec>;
 }
 
 /// Create empty module files that will be filled later

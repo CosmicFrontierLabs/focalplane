@@ -6,6 +6,7 @@
 use image::{DynamicImage, Rgb, RgbImage};
 use simulator::image_proc::overlay::draw_stars_with_x_markers;
 use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
+use starfield::catalogs::StarPosition;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -190,8 +191,8 @@ fn render_starfield_with_reticle(
         let magnitude = star.magnitude;
 
         // Check if star is in field of view (simplified calculation)
-        let ra = star.ra;
-        let dec = star.dec;
+        let ra = star.ra();
+        let dec = star.dec();
 
         // Generous boundary for stars near the field
         if (ra - ra_deg).abs() > fov_deg * 1.2 || (dec - dec_deg).abs() > fov_deg * 1.2 {

@@ -349,6 +349,7 @@ pub fn create_fov_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalogs::StarPosition;
 
     #[test]
     fn test_synthetic_catalog_generation() {
@@ -379,8 +380,8 @@ mod tests {
         let stars = catalog.stars();
         for star in stars {
             // Convert to radians
-            let ra_rad = star.ra.to_radians();
-            let dec_rad = star.dec.to_radians();
+            let ra_rad = star.ra().to_radians();
+            let dec_rad = star.dec().to_radians();
             let center_ra_rad = ra.to_radians();
             let center_dec_rad = dec.to_radians();
             let fov_rad = fov.to_radians();
