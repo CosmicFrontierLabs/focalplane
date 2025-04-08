@@ -410,18 +410,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ephemeris"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "nalgebra",
- "serde",
- "test_helpers",
- "thiserror",
- "time",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1815,7 +1803,6 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "criterion",
- "ephemeris",
  "float-cmp",
  "image",
  "nalgebra",
@@ -2182,7 +2169,6 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "criterion",
- "ephemeris",
  "image",
  "itertools 0.11.0",
  "log",

@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "ephemeris",
     "simulator",
     "track",
     "test_helpers",

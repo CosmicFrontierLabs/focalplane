@@ -8,7 +8,6 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-ephemeris = { path = "../ephemeris" }
 starfield = "0.1.0"  # Star catalog functionality
 nalgebra = "0.32"     # Linear algebra
 image = "0.24"        # Image processing
