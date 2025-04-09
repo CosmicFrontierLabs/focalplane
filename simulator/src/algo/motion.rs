@@ -42,6 +42,75 @@ impl MotionModel for XAxisSpinner {
     }
 }
 
+/// A motion model that simulates high-frequency small amplitude wobble in X-Y plane
+/// This can be used to model telescope jitter, tracking errors, or atmospheric effects
+pub struct XYWobble {
+    /// Amplitude of wobble in radians
+    amplitude_rad: f64,
+    /// Frequency of wobble in Hertz
+    frequency_hz: f64,
+    /// Phase offset for X axis wobble in radians
+    x_phase_offset: f64,
+    /// Phase offset for Y axis wobble in radians
+    y_phase_offset: f64,
+}
+
+impl XYWobble {
+    /// Create a new XYWobble with the given amplitude in arcseconds and frequency in Hz
+    pub fn new(amplitude_arcsec: f64, frequency_hz: f64) -> Self {
+        // Convert arcseconds to radians: arcsec * (π/180) * (1/3600)
+        let amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+
+        // Default phase offset puts X and Y 90 degrees out of phase for elliptical motion
+        Self {
+            amplitude_rad,
+            frequency_hz,
+            x_phase_offset: 0.0,
+            y_phase_offset: PI / 2.0,
+        }
+    }
+
+    /// Create a new XYWobble with custom phase offsets
+    ///
+    /// This allows for more complex wobble patterns:
+    /// - When x_phase_offset == y_phase_offset: linear wobble along a line
+    /// - When x_phase_offset - y_phase_offset == π/2: circular/elliptical wobble
+    /// - Other values create more complex Lissajous patterns
+    pub fn with_phase_offsets(
+        amplitude_arcsec: f64,
+        frequency_hz: f64,
+        x_phase_offset: f64,
+        y_phase_offset: f64,
+    ) -> Self {
+        // Convert arcseconds to radians: arcsec * (π/180) * (1/3600)
+        let amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+
+        Self {
+            amplitude_rad,
+            frequency_hz,
+            x_phase_offset,
+            y_phase_offset,
+        }
+    }
+}
+
+impl MotionModel for XYWobble {
+    fn orientation_at(&self, time_seconds: f64) -> Quaternion {
+        // Calculate the angular position at the given time for each axis
+        let omega = 2.0 * PI * self.frequency_hz;
+        let x_angle = self.amplitude_rad * (omega * time_seconds + self.x_phase_offset).sin();
+        let y_angle = self.amplitude_rad * (omega * time_seconds + self.y_phase_offset).sin();
+
+        // Create rotation quaternions for each axis
+        // For small angles, we can approximate by simple composition
+        let x_rotation = Quaternion::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), y_angle);
+        let y_rotation = Quaternion::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), -x_angle);
+
+        // Combine rotations (apply y rotation first, then x rotation)
+        x_rotation * y_rotation
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +170,109 @@ mod tests {
         assert_relative_eq!(full_turn.x, 0.0, epsilon = 1e-10);
         assert_relative_eq!(full_turn.y, 0.0, epsilon = 1e-10);
         assert_relative_eq!(full_turn.z, 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_xy_wobble_creation() {
+        // Test with 100 milliarcseconds and 3Hz
+        let amplitude_arcsec = 100.0 / 1000.0; // 100 milliarcsec = 0.1 arcsec
+        let frequency_hz = 3.0;
+        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+
+        // Check internal values
+        let expected_amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+        assert_relative_eq!(
+            wobble.amplitude_rad,
+            expected_amplitude_rad,
+            epsilon = 1e-15
+        );
+        assert_relative_eq!(wobble.frequency_hz, frequency_hz, epsilon = 1e-15);
+        assert_relative_eq!(wobble.x_phase_offset, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(wobble.y_phase_offset, PI / 2.0, epsilon = 1e-15);
+    }
+
+    #[test]
+    fn test_xy_wobble_with_phase_offsets() {
+        let amplitude_arcsec = 0.1; // 100 milliarcsec
+        let frequency_hz = 3.0;
+        let x_phase = 0.1;
+        let y_phase = 0.2;
+
+        let wobble = XYWobble::with_phase_offsets(amplitude_arcsec, frequency_hz, x_phase, y_phase);
+
+        assert_relative_eq!(wobble.x_phase_offset, x_phase, epsilon = 1e-15);
+        assert_relative_eq!(wobble.y_phase_offset, y_phase, epsilon = 1e-15);
+    }
+
+    #[test]
+    fn test_xy_wobble_orientation() {
+        let amplitude_arcsec = 0.1; // 100 milliarcsec
+        let frequency_hz = 3.0;
+        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+
+        // Test initial orientation (t=0)
+        let initial = wobble.orientation_at(0.0);
+
+        // At t=0, sin(phase) of X is 0, and sin(π/2) of Y is 1
+        // So we should see a small rotation around X axis of amplitude*sin(π/2)
+        let expected_amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+        let expected_initial =
+            Quaternion::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), expected_amplitude_rad);
+
+        assert_relative_eq!(initial.w, expected_initial.w, epsilon = 1e-10);
+        assert_relative_eq!(initial.x, expected_initial.x, epsilon = 1e-10);
+        assert_relative_eq!(initial.y, expected_initial.y, epsilon = 1e-10);
+        assert_relative_eq!(initial.z, expected_initial.z, epsilon = 1e-10);
+
+        // Test at t = 1/(4*frequency) - quarter period - max X rotation, zero Y rotation
+        let quarter_period = 0.25 / frequency_hz;
+        let quarter_wobble = wobble.orientation_at(quarter_period);
+
+        // Apply to a test vector pointing in Z direction
+        let v = Vector3::new(0.0, 0.0, 1.0);
+        let rotated = quarter_wobble.rotate_vector(&v);
+
+        // Should rotate slightly around Y (shifting Z toward -X)
+        assert!(rotated[0] < 0.0); // X component should be negative
+        assert_relative_eq!(rotated[1], 0.0, epsilon = 1e-10); // Y should be unchanged
+        assert!(rotated[2] < 1.0); // Z should be slightly less than 1
+    }
+
+    #[test]
+    fn test_xy_wobble_circular_path() {
+        let amplitude_arcsec = 1.0; // Use larger amplitude to make test more reliable
+        let frequency_hz = 1.0;
+        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+
+        // Test vector pointing in Z direction
+        let v = Vector3::new(0.0, 0.0, 1.0);
+
+        // Sample multiple points in time over one period
+        let period = 1.0 / frequency_hz;
+        let num_samples = 8;
+
+        let mut positions = Vec::with_capacity(num_samples);
+
+        for i in 0..num_samples {
+            let t = i as f64 * period / num_samples as f64;
+            let orientation = wobble.orientation_at(t);
+            let rotated = orientation.rotate_vector(&v);
+            positions.push((rotated[0], rotated[1]));
+        }
+
+        // Verify that rotated positions trace approximately circular path in X-Y plane
+        // For circular motion, consecutive points should have similar distances from origin
+        let distances: Vec<f64> = positions
+            .iter()
+            .map(|(x, y)| (x * x + y * y).sqrt())
+            .collect();
+
+        // All distances should be approximately equal for circular motion
+        let avg_distance: f64 = distances.iter().sum::<f64>() / distances.len() as f64;
+
+        for &dist in &distances {
+            // Allow some tolerance for numerical approximation
+            assert_relative_eq!(dist, avg_distance, epsilon = 1e-5);
+        }
     }
 }

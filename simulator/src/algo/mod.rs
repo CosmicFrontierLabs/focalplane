@@ -8,5 +8,5 @@ pub mod motion;
 pub mod quaternion;
 
 pub use icp::{iterative_closest_point, ICPResult};
-pub use motion::{MotionModel, XAxisSpinner};
+pub use motion::{MotionModel, XAxisSpinner, XYWobble};
 pub use quaternion::Quaternion;
