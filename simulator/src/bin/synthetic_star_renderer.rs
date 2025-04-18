@@ -3,6 +3,7 @@
 //! This example combines the synthetic star catalog generator with the
 //! enhanced star field renderer to create realistic star field visualizations.
 
+use clap::Parser;
 use image::{DynamicImage, Rgb, RgbImage};
 use ndarray::Array2;
 use rand::{thread_rng, Rng};
@@ -18,135 +19,76 @@ use starfield::catalogs::{
 use std::path::Path;
 use usvg::fontdb;
 
+/// Command line arguments for synthetic star renderer
+#[derive(Parser, Debug)]
+#[command(version, about = "Synthetic Star Field Renderer")]
+struct Args {
+    /// Right ascension in degrees
+    #[arg(long, default_value_t = 100.0)]
+    ra: f64,
+
+    /// Declination in degrees
+    #[arg(long, default_value_t = 45.0)]
+    dec: f64,
+
+    /// Field of view in degrees
+    #[arg(long, default_value_t = 1.0)]
+    fov: f64,
+
+    /// Expansion factor for visualization
+    #[arg(long, default_value_t = 2.0)]
+    expand: f64,
+
+    /// Exposure time in seconds
+    #[arg(long, default_value_t = 1.0)]
+    exposure: f64,
+
+    /// Minimum star magnitude
+    #[arg(long = "min-mag", default_value_t = 3.0)]
+    min_magnitude: f64,
+
+    /// Maximum star magnitude
+    #[arg(long = "max-mag", default_value_t = 9.0)]
+    max_magnitude: f64,
+
+    /// Number of stars to generate
+    #[arg(long, default_value_t = 1000)]
+    stars: usize,
+
+    /// Use cluster mode for star distribution
+    #[arg(long, default_value_t = false)]
+    cluster: bool,
+
+    /// Output file path
+    #[arg(long, default_value = "test_output/synthetic_render.png")]
+    output: String,
+
+    /// Random seed for star generation
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+}
+
 /// Main function to render star fields from synthetic catalogs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments
-    let args: Vec<String> = std::env::args().collect();
-
-    // Default values
-    let mut ra_deg = 100.0;
-    let mut dec_deg = 45.0;
-    let mut fov_deg = 1.0;
-    let mut expansion_factor = 2.0;
-    let mut exposure_seconds = 1.0;
-    let mut min_magnitude = 3.0;
-    let mut max_magnitude = 9.0;
-    let mut star_count = 1000;
-    let mut cluster_mode = false;
-    let mut output_path = "test_output/synthetic_render.png";
-    let mut seed = 42u64;
-
-    // Parse arguments
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--ra" => {
-                if i + 1 < args.len() {
-                    ra_deg = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --ra".into());
-                }
-            }
-            "--dec" => {
-                if i + 1 < args.len() {
-                    dec_deg = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --dec".into());
-                }
-            }
-            "--fov" => {
-                if i + 1 < args.len() {
-                    fov_deg = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --fov".into());
-                }
-            }
-            "--expand" => {
-                if i + 1 < args.len() {
-                    expansion_factor = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --expand".into());
-                }
-            }
-            "--exposure" => {
-                if i + 1 < args.len() {
-                    exposure_seconds = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --exposure".into());
-                }
-            }
-            "--min-mag" => {
-                if i + 1 < args.len() {
-                    min_magnitude = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --min-mag".into());
-                }
-            }
-            "--max-mag" => {
-                if i + 1 < args.len() {
-                    max_magnitude = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --max-mag".into());
-                }
-            }
-            "--stars" => {
-                if i + 1 < args.len() {
-                    star_count = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --stars".into());
-                }
-            }
-            "--cluster" => {
-                cluster_mode = true;
-                i += 1;
-            }
-            "--output" => {
-                if i + 1 < args.len() {
-                    output_path = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --output".into());
-                }
-            }
-            "--seed" => {
-                if i + 1 < args.len() {
-                    seed = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --seed".into());
-                }
-            }
-            _ => {
-                println!("Unknown argument: {}", args[i]);
-                i += 1;
-            }
-        }
-    }
+    // Parse command line arguments using clap
+    let args = Args::parse();
 
     // Show parameters and help
     println!("Synthetic Star Field Renderer");
     println!("============================");
-    println!("RA: {:.4}°", ra_deg);
-    println!("Dec: {:.4}°", dec_deg);
-    println!("FOV: {:.4}°", fov_deg);
-    println!("Expansion factor: {}", expansion_factor);
-    println!("Exposure: {:.2} seconds", exposure_seconds);
+    println!("RA: {:.4}°", args.ra);
+    println!("Dec: {:.4}°", args.dec);
+    println!("FOV: {:.4}°", args.fov);
+    println!("Expansion factor: {}", args.expand);
+    println!("Exposure: {:.2} seconds", args.exposure);
     println!(
         "Magnitude range: {:.1} to {:.1}",
-        min_magnitude, max_magnitude
+        args.min_magnitude, args.max_magnitude
     );
-    println!("Star count: {}", star_count);
-    println!("Cluster mode: {}", cluster_mode);
-    println!("Seed: {}", seed);
-    println!("Output: {}", output_path);
+    println!("Star count: {}", args.stars);
+    println!("Cluster mode: {}", args.cluster);
+    println!("Seed: {}", args.seed);
+    println!("Output: {}", args.output);
 
     // Set up telescope and sensor configurations
     let telescope = telescope_models::FINAL_1M.clone();
@@ -156,45 +98,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor: {}", sensor.name);
 
     // Calculate expanded FOV for visualization
-    let expanded_fov = fov_deg * expansion_factor;
+    let expanded_fov = args.fov * args.expand;
 
     // Generate synthetic catalog based on parameters
     println!("Generating synthetic star catalog...");
 
-    let catalog = if cluster_mode {
+    let catalog = if args.cluster {
         // Generate a cluster catalog centered on the specified coordinates
         let catalog_config = SyntheticCatalogConfig::new()
-            .with_count(star_count)
-            .with_magnitude_range(min_magnitude, max_magnitude)
-            .with_seed(seed)
+            .with_count(args.stars)
+            .with_magnitude_range(args.min_magnitude, args.max_magnitude)
+            .with_seed(args.seed)
             .with_spatial_distribution(SpatialDistribution::Cluster {
-                center_ra: ra_deg,
-                center_dec: dec_deg,
-                radius: fov_deg * 1.5, // Slightly larger than FOV to ensure stars are visible
+                center_ra: args.ra,
+                center_dec: args.dec,
+                radius: args.fov * 1.5, // Slightly larger than FOV to ensure stars are visible
             })
             .with_description(format!(
                 "Synthetic star cluster at RA={:.2}, Dec={:.2}, Mag={:.1}-{:.1}",
-                ra_deg, dec_deg, min_magnitude, max_magnitude
+                args.ra, args.dec, args.min_magnitude, args.max_magnitude
             ));
 
         catalog_config.generate()?
     } else {
         // Generate a field-limited catalog centered on the specified coordinates
         create_fov_catalog(
-            star_count,
-            min_magnitude,
-            max_magnitude,
-            ra_deg,
-            dec_deg,
+            args.stars,
+            args.min_magnitude,
+            args.max_magnitude,
+            args.ra,
+            args.dec,
             expanded_fov,
-            seed,
+            args.seed,
         )?
     };
 
     println!("Generated catalog with {} stars", catalog.len());
 
     // Save the catalog for future use
-    let catalog_path = format!("{}.bin", output_path.replace(".png", ""));
+    let catalog_path = format!("{}.bin", args.output.replace(".png", ""));
     catalog.save(Path::new(&catalog_path))?;
     println!("Saved catalog to {}", catalog_path);
 
@@ -202,18 +144,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Rendering star field visualization...");
     let visualization = render_catalog_star_field(
         &catalog,
-        ra_deg,
-        dec_deg,
-        fov_deg,
+        args.ra,
+        args.dec,
+        args.fov,
         expanded_fov,
         &telescope,
         &sensor,
-        exposure_seconds,
+        args.exposure,
     )?;
 
     // Save the image
-    visualization.save(output_path)?;
-    println!("Visualization saved to: {}", output_path);
+    visualization.save(args.output.as_str())?;
+    println!("Visualization saved to: {}", args.output);
 
     Ok(())
 }

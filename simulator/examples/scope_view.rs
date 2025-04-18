@@ -20,6 +20,7 @@
 //!
 //! See --help for detailed options.
 
+use clap::Parser;
 use ndarray::Array2;
 use simulator::hardware::sensor::{models as sensor_models, SensorConfig};
 use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig};
@@ -34,154 +35,85 @@ use std::io::Write;
 use std::path::PathBuf;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
+/// Command line arguments for telescope view simulation
+#[derive(Parser, Debug)]
+#[command(
+    name = "Telescope View Simulator",
+    about = "Simulates telescope view with star field rendering",
+    long_about = None
+)]
+struct Args {
+    /// Path to binary star catalog
+    #[arg(long)]
+    catalog: Option<PathBuf>,
+
+    /// Right ascension of field center in degrees
+    #[arg(long, default_value_t = 100.0)]
+    ra: f64,
+
+    /// Declination of field center in degrees
+    #[arg(long, default_value_t = 10.0)]
+    dec: f64,
+
+    /// Number of synthetic stars if no catalog
+    #[arg(long, default_value_t = 100)]
+    stars: usize,
+
+    /// Random seed for synthetic stars
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+
+    /// Exposure time in seconds
+    #[arg(long, default_value_t = 1.0)]
+    exposure: f64,
+
+    /// Wavelength in nanometers
+    #[arg(long, default_value_t = 550.0)]
+    wavelength: f64,
+
+    /// Output image path
+    #[arg(long, default_value = "scope_view.png")]
+    output: String,
+
+    /// Histogram stretched output path
+    #[arg(long, default_value = "scope_view_stretched.png")]
+    output_stretched: String,
+
+    /// Star list output path
+    #[arg(long, default_value = "star_list.txt")]
+    star_list: String,
+
+    /// Telescope model (50cm, 1m, 1m Final)
+    #[arg(long, default_value = "1m Final")]
+    telescope: String,
+
+    /// Sensor model (GSENSE4040BSI, GSENSE6510BSI, HWK4123, IMX455)
+    #[arg(long, default_value = "GSENSE4040BSI")]
+    sensor: String,
+
+    /// Use synthetic stars even if catalog is provided
+    #[arg(long)]
+    synthetic: bool,
+}
+
 /// Main function for telescope view simulation
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
-    let args: Vec<String> = std::env::args().collect();
-
-    // Default values
-    let mut catalog_path = None;
-    let mut ra_deg = 100.0;
-    let mut dec_deg = 10.0;
-    let mut num_stars = 100; // Only used for synthetic stars if no catalog
-    let mut seed = 42u64;
-    let mut exposure_time = 1.0;
-    let mut wavelength_nm = 550.0;
-    let mut output_path = "scope_view.png";
-    let mut stretch_output_path = "scope_view_stretched.png";
-    let mut star_list_path = "star_list.txt";
-    let mut telescope_name = "1m Final";
-    let mut sensor_name = "GSENSE4040BSI";
-    let mut use_synthetic = false;
-
-    // Parse arguments
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--catalog" => {
-                if i + 1 < args.len() {
-                    catalog_path = Some(PathBuf::from(&args[i + 1]));
-                    i += 2;
-                } else {
-                    return Err("Missing value for --catalog".into());
-                }
-            }
-            "--ra" => {
-                if i + 1 < args.len() {
-                    ra_deg = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --ra".into());
-                }
-            }
-            "--dec" => {
-                if i + 1 < args.len() {
-                    dec_deg = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --dec".into());
-                }
-            }
-            "--stars" => {
-                if i + 1 < args.len() {
-                    num_stars = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --stars".into());
-                }
-            }
-            "--seed" => {
-                if i + 1 < args.len() {
-                    seed = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --seed".into());
-                }
-            }
-            "--exposure" => {
-                if i + 1 < args.len() {
-                    exposure_time = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --exposure".into());
-                }
-            }
-            "--wavelength" => {
-                if i + 1 < args.len() {
-                    wavelength_nm = args[i + 1].parse()?;
-                    i += 2;
-                } else {
-                    return Err("Missing value for --wavelength".into());
-                }
-            }
-            "--output" => {
-                if i + 1 < args.len() {
-                    output_path = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --output".into());
-                }
-            }
-            "--output-stretched" => {
-                if i + 1 < args.len() {
-                    stretch_output_path = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --output-stretched".into());
-                }
-            }
-            "--star-list" => {
-                if i + 1 < args.len() {
-                    star_list_path = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --star-list".into());
-                }
-            }
-            "--telescope" => {
-                if i + 1 < args.len() {
-                    telescope_name = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --telescope".into());
-                }
-            }
-            "--sensor" => {
-                if i + 1 < args.len() {
-                    sensor_name = &args[i + 1];
-                    i += 2;
-                } else {
-                    return Err("Missing value for --sensor".into());
-                }
-            }
-            "--synthetic" => {
-                use_synthetic = true;
-                i += 1;
-            }
-            "--help" => {
-                show_help();
-                return Ok(());
-            }
-            _ => {
-                println!("Unknown argument: {}", args[i]);
-                i += 1;
-            }
-        }
-    }
+    let args = Args::parse();
 
     // Select telescope and sensor models
-    let telescope = match telescope_name {
+    let telescope = match args.telescope.as_str() {
         "50cm" => telescope_models::DEMO_50CM.clone(),
         "1m" => telescope_models::FINAL_1M.clone(),
-        _ => return Err(format!("Unknown telescope model: {}", telescope_name).into()),
+        _ => return Err(format!("Unknown telescope model: {}", args.telescope).into()),
     };
 
-    let sensor = match sensor_name {
+    let sensor = match args.sensor.as_str() {
         "GSENSE4040BSI" => sensor_models::GSENSE4040BSI.clone(),
         "GSENSE6510BSI" => sensor_models::GSENSE6510BSI.clone(),
         "HWK4123" => sensor_models::HWK4123.clone(),
         "IMX455" => sensor_models::IMX455.clone(),
-        _ => return Err(format!("Unknown sensor model: {}", sensor_name).into()),
+        _ => return Err(format!("Unknown sensor model: {}", args.sensor).into()),
     };
 
     // Get field diameter (either from parameters or calculate from hardware)
@@ -190,11 +122,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Show parameters
     println!("Telescope View Simulator");
     println!("=======================");
-    println!("RA: {:.4}°", ra_deg);
-    println!("Dec: {:.4}°", dec_deg);
+    println!("RA: {:.4}°", args.ra);
+    println!("Dec: {:.4}°", args.dec);
     println!("FOV: {:.4}°", fov_deg);
-    println!("Exposure: {}s", exposure_time);
-    println!("Wavelength: {}nm", wavelength_nm);
+    println!("Exposure: {}s", args.exposure);
+    println!("Wavelength: {}nm", args.wavelength);
     println!(
         "Telescope: {} (aperture: {}m, focal length: {}m)",
         telescope.name, telescope.aperture_m, telescope.focal_length_m
@@ -205,17 +137,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Output paths
-    println!("Output image: {}", output_path);
-    println!("Stretched image: {}", stretch_output_path);
-    println!("Star list: {}", star_list_path);
+    println!("Output image: {}", args.output);
+    println!("Stretched image: {}", args.output_stretched);
+    println!("Star list: {}", args.star_list);
 
     // Determine catalog source
-    let catalog_source = if use_synthetic {
+    let catalog_source = if args.synthetic {
         starfield::catalogs::CatalogSource::Random {
-            count: num_stars,
-            seed,
+            count: args.stars,
+            seed: args.seed,
         }
-    } else if let Some(path) = catalog_path {
+    } else if let Some(path) = args.catalog {
         starfield::catalogs::CatalogSource::Binary(path)
     } else {
         // Default to Hipparcos if present, otherwise synthetic
@@ -224,8 +156,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             println!("No catalog specified, using synthetic stars");
             starfield::catalogs::CatalogSource::Random {
-                count: num_stars,
-                seed,
+                count: args.stars,
+                seed: args.seed,
             }
         }
     };
@@ -233,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get stars from selected catalog
     let stars = starfield::catalogs::get_stars_in_window(
         catalog_source,
-        RaDec::from_degrees(ra_deg, dec_deg),
+        RaDec::from_degrees(args.ra, args.dec),
         fov_deg,
     )?;
 
@@ -244,8 +176,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (x, y) = equatorial_to_pixel(
                 star.ra_deg(),
                 star.dec_deg(),
-                ra_deg,
-                dec_deg,
+                args.ra,
+                args.dec,
                 fov_deg,
                 sensor.width_px as usize,
                 sensor.height_px as usize,
@@ -262,35 +194,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Rendering star field...");
     let image = render_star_field(
         &filtered_stars,
-        ra_deg,
-        dec_deg,
+        args.ra,
+        args.dec,
         fov_deg,
         &telescope,
         &sensor,
-        exposure_time,
-        wavelength_nm,
+        args.exposure,
+        args.wavelength,
     );
 
     // Filter stars visible in the field for star list output
     // Write star list to file
     save_star_list(
         &filtered_stars,
-        ra_deg,
-        dec_deg,
+        args.ra,
+        args.dec,
         fov_deg,
         &telescope,
         &sensor,
-        star_list_path,
+        &args.star_list,
     )?;
-    println!("Star list saved to: {}", star_list_path);
+    println!("Star list saved to: {}", args.star_list);
 
     // Convert u16 image to u8 for saving (normalize by max bit depth value)
     let max_bit_value = (1 << sensor.bit_depth) - 1;
     let u8_image = u16_to_u8_scaled(&image, max_bit_value);
 
     // Save the raw image
-    save_u8_image(&u8_image, output_path)?;
-    println!("Image saved to: {}", output_path);
+    save_u8_image(&u8_image, &args.output)?;
+    println!("Image saved to: {}", args.output);
 
     // Create and save histogram stretched version
     println!("Creating histogram stretched image...");
@@ -298,33 +230,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Convert stretched u16 image to u8 using auto-scaling for best contrast
     let u8_stretched = u16_to_u8_auto_scale(&stretched_image);
-    save_u8_image(&u8_stretched, stretch_output_path)?;
-    println!("Stretched image saved to: {}", stretch_output_path);
+    save_u8_image(&u8_stretched, &args.output_stretched)?;
+    println!("Stretched image saved to: {}", args.output_stretched);
 
     Ok(())
-}
-
-/// Show help message with command line options
-fn show_help() {
-    println!("Telescope View Simulator");
-    println!("=======================");
-    println!("Usage: cargo run --example scope_view -- [OPTIONS]");
-    println!("Options:");
-    println!("  --catalog PATH       Path to binary star catalog");
-    println!("  --ra DEGREES         Right ascension of field center (default: 100.0)");
-    println!("  --dec DEGREES        Declination of field center (default: 10.0)");
-    println!("  --fov DEGREES        Field of view diameter (default: 4.0)");
-    println!("  --stars COUNT        Number of synthetic stars if no catalog (default: 100)");
-    println!("  --seed NUMBER        Random seed for synthetic stars (default: 42)");
-    println!("  --exposure SECONDS   Exposure time in seconds (default: 1.0)");
-    println!("  --wavelength NM      Wavelength in nanometers (default: 550)");
-    println!("  --output PATH        Output image path (default: scope_view.png)");
-    println!("  --output-stretched   Histogram stretched output path (default: scope_view_stretched.png)");
-    println!("  --star-list PATH     Star list output path (default: star_list.txt)");
-    println!("  --telescope NAME     Telescope model (default: '1m Final')");
-    println!("  --sensor NAME        Sensor model (default: 'GSENSE4040BSI')");
-    println!("  --synthetic          Use synthetic stars even if catalog is provided");
-    println!("  --help               Display this help message");
 }
 
 /// Create PSF kernel based on telescope properties
