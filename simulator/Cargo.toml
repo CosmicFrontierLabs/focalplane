@@ -11,7 +11,6 @@ license.workspace = true
 starfield = "0.1.0"  # Star catalog functionality
 nalgebra = "0.32"     # Linear algebra
 image = "0.24"        # Image processing
-rand = "0.8"          # Random number generation
 ndarray = { version = "0.15", features = ["rayon"] }  # Multidimensional arrays with parallel computing
 rayon = "1.7"         # Parallel computing
 num-traits = "0.2"    # Numeric traits for generic math
@@ -24,6 +23,10 @@ thiserror = "1.0"     # Error handling
 clap = { version = "4.5", features = ["derive"] }  # Command line argument parsing
 test_helpers = { path = "../test_helpers" }
 viz = { path = "../viz" }
+
+rand = "0.8"
+rand_core = "0.6"
+rand_distr = "0.4"
 
 [dev-dependencies]
 criterion = "0.5"     # Benchmarking

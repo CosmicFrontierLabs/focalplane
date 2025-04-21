@@ -3,68 +3,102 @@
 //! This module provides functions for generating realistic sensor noise
 //! for astronomical images.
 
+use std::time::Duration;
+
 use ndarray::Array2;
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{thread_rng, RngCore, SeedableRng};
 
-/// Generate sensor noise based on sensor characteristics and exposure settings
+use rand_distr::{Distribution, Normal, Poisson};
+
+use crate::SensorConfig;
+
+// These additional imports will be needed if you want to create and seed your own RNG
+// use rand::SeedableRng;    // For StdRng::seed_from_u64
+// use rand::thread_rng;     // For getting a thread-local RNG
+
+/// Generates a plausible noise field for a sensor with given parameters.
 ///
 /// # Arguments
-/// * `image_shape` - The shape of the image array as (height, width)
-/// * `read_noise` - Read noise in electrons (e-)
-/// * `dark_current` - Dark current in electrons per pixel per second (e-/p/s)
-/// * `exposure_time` - Exposure time in seconds (s)
-/// * `rng_option` - Optional random number generator for reproducible noise
+/// * `width` - Width of the sensor in pixels (x dimension)
+/// * `height` - Height of the sensor in pixels (y dimension)
+/// * `dark_current` - Dark current per pixel in electrons per second
+/// * `read_noise` - Read noise per pixel in electrons (standard deviation)
+/// * `exposure_time` - Exposure time in seconds
+/// * `rng` - Random number generator instance (StdRng)
 ///
 /// # Returns
-/// * `Array2<f64>` - An array of noise values in electrons to be added to the image
-///
-/// The function generates two common types of image noise:
-/// 1. Read noise - applies to all pixels
-/// 2. Dark current noise - proportional to exposure time
-///
-/// Note: Photon shot noise should be applied separately based on signal levels.
+/// * An ndarray::Array2<f64> containing the noise values for each pixel
 pub fn generate_sensor_noise(
-    image_shape: (usize, usize),
-    read_noise: f64,
-    dark_current: f64,
-    exposure_time: f64,
-    mut rng_option: Option<StdRng>,
+    sensor: &SensorConfig,
+    exposure_time: Duration,
+    rng_seed: Option<u64>,
 ) -> Array2<f64> {
-    let (height, width) = image_shape;
-    let mut noise_image: Array2<f64> = Array2::zeros((height, width));
+    // Create a random number generator from the supplied seed
+    let rng_seed = rng_seed.unwrap_or(thread_rng().next_u64());
+    let mut rng = StdRng::seed_from_u64(rng_seed);
 
-    // Calculate dark current noise for the given exposure time
-    let dark_noise = dark_current * exposure_time;
+    // Normal distribution for read noise
+    let read_noise_dist = Normal::new(sensor.read_noise_e, sensor.read_noise_e.sqrt()).unwrap();
 
-    // Get or create new RNG
-    let mut local_rng;
-    let rng = match &mut rng_option {
-        Some(r) => r,
-        None => {
-            // Create a new StdRng seeded from thread RNG if none provided
-            local_rng = StdRng::from_rng(thread_rng()).unwrap();
-            &mut local_rng
-        }
-    };
+    // Calculate expected dark current electrons during exposure
+    let dark_electrons_mean = sensor.dark_current_e_p_s * exposure_time.as_secs_f64();
 
-    for value in noise_image.iter_mut() {
-        // Add read noise (uniform distribution - simplified model)
-        *value += rng.gen_range(-read_noise..read_noise);
+    // Generate noise for each pixel based on the above distributions
+    let mut noise_field =
+        Array2::<f64>::zeros((sensor.height_px as usize, sensor.width_px as usize));
+    noise_field.mapv_inplace(|_| {
+        // For dark_electrons_mean < 0.1, use Gaussian approximation for better numerical stability
+        let dark_noise = if dark_electrons_mean < 0.1 {
+            // Use Gaussian approximation for very low dark current
+            let dark_normal = Normal::new(0.0, dark_electrons_mean.sqrt()).unwrap();
+            dark_normal.sample(&mut rng).max(0.0)
+        } else {
+            // Use Poisson distribution for larger dark current
+            let dark_poisson = Poisson::new(dark_electrons_mean).unwrap();
+            dark_poisson.sample(&mut rng)
+        };
 
-        // Add dark current noise
-        *value += rng.gen_range(0.0..dark_noise * 2.0) - dark_noise;
+        // Generate read noise (follows normal distribution)
+        let read_noise_value = read_noise_dist.sample(&mut rng).max(0.0);
 
-        // Ensure noise doesn't go negative (can't have negative electrons)
-        *value = value.max(0.0);
-    }
+        // Total noise is the sum of dark current and read noise
+        dark_noise + read_noise_value
+    });
 
-    noise_image
+    noise_field
 }
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_relative_eq;
+    use rand::SeedableRng;
+
+    use crate::{photometry::Band, QuantumEfficiency};
+
     use super::*;
+
+    fn make_tiny_test_sensor(
+        size: (usize, usize),
+        dark_current: f64,
+        read_noise: f64,
+    ) -> SensorConfig {
+        let band = Band::new(300.0, 700.0);
+        let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
+
+        SensorConfig::new(
+            "Test Sensor",
+            qe,
+            size.1 as u32,
+            size.0 as u32,
+            5.0,
+            read_noise,
+            dark_current,
+            8,
+            1.0,
+            1.0,
+        )
+    }
 
     #[test]
     fn test_generate_sensor_noise_dimensions() {
@@ -72,9 +106,11 @@ mod tests {
         let shape = (10, 20);
         let read_noise = 2.0;
         let dark_current = 0.1;
-        let exposure_time = 1.0;
 
-        let noise = generate_sensor_noise(shape, read_noise, dark_current, exposure_time, None);
+        let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
+        let exposure_time = Duration::from_secs(1);
+
+        let noise = generate_sensor_noise(&sensor, exposure_time, None);
 
         // Check dimensions
         assert_eq!(noise.dim(), shape);
@@ -91,18 +127,13 @@ mod tests {
         let shape = (5, 5);
         let read_noise = 2.0;
         let dark_current = 0.1;
-        let exposure_time = 1.0;
+        let exposure_time = Duration::from_secs_f64(1.0);
 
-        // Create seeded RNGs with same seed
-        let seed = 42u64; // Answer to the Ultimate Question...
-        let rng1 = StdRng::seed_from_u64(seed);
-        let rng2 = StdRng::seed_from_u64(seed);
+        let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
 
         // Generate noise with both RNGs
-        let noise1 =
-            generate_sensor_noise(shape, read_noise, dark_current, exposure_time, Some(rng1));
-        let noise2 =
-            generate_sensor_noise(shape, read_noise, dark_current, exposure_time, Some(rng2));
+        let noise1 = generate_sensor_noise(&sensor, exposure_time, Some(5));
+        let noise2 = generate_sensor_noise(&sensor, exposure_time, Some(5));
 
         // Check that the noise patterns are identical
         for (v1, v2) in noise1.iter().zip(noise2.iter()) {
@@ -110,9 +141,7 @@ mod tests {
         }
 
         // Check that a different seed produces different noise
-        let rng3 = StdRng::seed_from_u64(seed + 1);
-        let noise3 =
-            generate_sensor_noise(shape, read_noise, dark_current, exposure_time, Some(rng3));
+        let noise3 = generate_sensor_noise(&sensor, exposure_time, Some(6));
 
         // At least one value should be different
         let mut any_different = false;
@@ -126,5 +155,50 @@ mod tests {
             any_different,
             "Noise patterns with different seeds should differ"
         );
+    }
+
+    #[test]
+    fn test_generate_sensor_noise_zero_exposure() {
+        // Test that with zero exposure time, the noise is only read noise
+        let shape = (100, 100); // Use a larger shape for better statistics
+        let read_noise = 5.0;
+        let dark_current = 10.0;
+        let exposure_time = Duration::from_secs_f64(0.0);
+
+        // Create a sensor with the specified parameters
+        let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
+
+        let noise = generate_sensor_noise(&sensor, exposure_time, Some(3));
+
+        // Calculate mean and standard deviation of the noise
+        let mean = noise.mean().unwrap();
+
+        // With zero exposure, the mean should be approximately the read noise
+        assert_relative_eq!(mean, read_noise, epsilon = 0.1);
+    }
+
+    #[test]
+    fn test_generate_sensor_noise_grows_linear() {
+        // Test that with zero exposure time, the noise is only read noise
+        let shape = (100, 100); // Use a larger shape for better statistics
+        let read_noise = 5.0;
+        let dark_current = 10.0;
+
+        // Create a sensor with the specified parameters
+        let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
+
+        let mean_0 = generate_sensor_noise(&sensor, Duration::from_secs(0), Some(7))
+            .mean()
+            .unwrap();
+        let mean_1 = generate_sensor_noise(&sensor, Duration::from_secs(10), Some(8))
+            .mean()
+            .unwrap();
+        let mean_2 = generate_sensor_noise(&sensor, Duration::from_secs(20), Some(9))
+            .mean()
+            .unwrap();
+
+        // With zero exposure, the mean should be approximately the read noise
+        assert_relative_eq!(mean_1 - mean_0, 100.0, epsilon = 0.1);
+        assert_relative_eq!(mean_2 - mean_0, 200.0, epsilon = 0.1);
     }
 }

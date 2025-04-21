@@ -33,6 +33,7 @@ use starfield::RaDec;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 /// Command line arguments for telescope view simulation
@@ -416,12 +417,9 @@ fn render_star_field(
     println!("Adding noise...");
 
     // Generate sensor noise (read noise and dark current)
-    let (height, width) = image.dim();
     let noise = simulator::image_proc::generate_sensor_noise(
-        (height, width),
-        sensor.read_noise_e,
-        sensor.dark_current_e_p_s,
-        exposure_time,
+        &sensor,
+        Duration::from_secs_f64(exposure_time),
         None, // Use random noise
     );
 
