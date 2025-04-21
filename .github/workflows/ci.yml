@@ -23,7 +23,7 @@ jobs:
     - name: Generate cache key
       id: cache-key
       run: |
-        echo "key=$(find . -name "Cargo.toml" -type f | sort | xargs sha256sum | sha256sum | cut -d ' ' -f1)" >> $GITHUB_OUTPUT
+        echo "key=$(find . -name "Cargo.toml" -type f -o -name "CACHE_VERSION" | sort | xargs sha256sum | sha256sum | cut -d ' ' -f1)" >> $GITHUB_OUTPUT
     
     - name: Cache cargo registry
       uses: actions/cache@v3
