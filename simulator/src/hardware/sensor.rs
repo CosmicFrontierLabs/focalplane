@@ -33,6 +33,9 @@ pub struct SensorConfig {
 
     /// DN (Digital Numbers) per electron (typically at the highest gain setting)
     pub dn_per_electron: f64,
+
+    /// Max well depth in electrons
+    pub max_well_depth_e: f64,
 }
 
 impl SensorConfig {
@@ -47,6 +50,7 @@ impl SensorConfig {
         dark_current_e_p_s: f64,
         bit_depth: u8,
         dn_per_electron: f64,
+        max_well_depth_e: f64,
     ) -> Self {
         Self {
             name: name.into(),
@@ -58,6 +62,7 @@ impl SensorConfig {
             dark_current_e_p_s,
             bit_depth,
             dn_per_electron,
+            max_well_depth_e,
         }
     }
 
@@ -99,7 +104,7 @@ mod tests {
         let efficiencies = vec![0.0, 0.4, 0.6, 0.5, 0.0];
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
 
-        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01, 8, 3.0);
+        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01, 8, 3.0, 1e20);
 
         // Exact matches (use approximate comparison for float values)
         assert_relative_eq!(sensor.qe_at_wavelength(400), 0.4, epsilon = 1e-5);
@@ -118,7 +123,7 @@ mod tests {
     #[test]
     fn test_sensor_dimensions() {
         let qe = create_flat_qe(0.5);
-        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01, 8, 3.0);
+        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01, 8, 3.0, 1e20);
         let (width_um, height_um) = sensor.dimensions_um();
 
         assert_eq!(width_um, 1024.0 * 5.5);
@@ -188,7 +193,18 @@ pub mod models {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
             .expect("Failed to create GSENSE4040BSI QE curve");
 
-        SensorConfig::new("GSENSE4040BSI", qe, 4096, 4096, 9.0, 2.3, 0.04, 12, 0.35)
+        SensorConfig::new(
+            "GSENSE4040BSI",
+            qe,
+            4096,
+            4096,
+            9.0,
+            2.3,
+            0.04,
+            12,
+            0.35,
+            39_200.0,
+        )
     });
 
     /// GSENSE6510BSI CMOS sensor with detailed QE curve from manufacturer chart found here
@@ -219,7 +235,18 @@ pub mod models {
             .expect("Failed to create GSENSE6510BSI QE curve");
 
         // NB: Dark current is spec'ed at -10°C
-        SensorConfig::new("GSENSE6510BSI", qe, 3200, 3200, 6.5, 0.7, 0.2, 12, 0.35)
+        SensorConfig::new(
+            "GSENSE6510BSI",
+            qe,
+            3200,
+            3200,
+            6.5,
+            0.7,
+            0.2,
+            12,
+            0.35,
+            21_000.0,
+        )
     });
 
     /// HWK4123 CMOS sensor with detailed QE curve
@@ -249,7 +276,7 @@ pub mod models {
 
         // 7.42 DN/e- at 32x gain
         // 0.242 DN/e- at 1x gain (using 1x gain here)
-        SensorConfig::new("HWK4123", qe, 4096, 2300, 4.6, 0.25, 0.1, 12, 7.42)
+        SensorConfig::new("HWK4123", qe, 4096, 2300, 4.6, 0.25, 0.1, 12, 7.42, 7_500.0)
     });
 
     /// Sony IMX455 Full-frame BSI CMOS sensor
@@ -273,11 +300,14 @@ pub mod models {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
             .expect("Failed to create IMX455 QE curve");
 
+        // Max well depth is from here:
+        // https://player-one-astronomy.com/product/zeus-455m-pro-imx455-usb3-0-mono-cooled-camera/
+
         SensorConfig::new(
             "IMX455", qe, 9568, 6380, 3.75,  // Pixel pitch in microns
             2.67,  // Read noise in electrons (from arxiv paper)
             0.002, // Dark current in e-/px/s at -20°C (from arxiv paper)
-            16, 0.343,
+            16, 0.343, 71_600.0,
         )
     });
 }
