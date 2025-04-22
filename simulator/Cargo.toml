@@ -32,3 +32,4 @@ rand_distr = "0.4"
 criterion = "0.5"     # Benchmarking
 approx = "0.5"        # Approximate floating point comparisons
 plotters = "0.3"      # Plotting library
+tempfile = "3.10"     # Temporary file handling

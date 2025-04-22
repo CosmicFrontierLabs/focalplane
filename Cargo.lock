@@ -2151,6 +2151,7 @@ dependencies = [
  "rayon",
  "resvg",
  "starfield",
+ "tempfile",
  "test_helpers",
  "thiserror",
  "tiny-skia",

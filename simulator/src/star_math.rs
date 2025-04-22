@@ -21,6 +21,8 @@ pub fn equatorial_to_pixel(
     let center_dec_rad = center.dec_degrees().to_radians();
 
     // Calculate projection factors
+    // TODO(meawoppl) handle modulo of ra/dec here to make sure
+    // things work properly across the 0/360 degree boundary and poles
     let x_factor = ra_rad - center_ra_rad;
     let y_factor = dec_rad - center_dec_rad;
 
@@ -34,28 +36,6 @@ pub fn equatorial_to_pixel(
     let y = (y_factor * y_pixels_per_rad) + (image_height as f64 / 2.0);
 
     (x, y)
-}
-
-/// Filter stars to only include those within a rectangular field of view
-pub fn filter_stars_in_rectangle<'a>(
-    stars: &[&'a StarData],
-    center: &RaDec,
-    fov_deg: f64,
-    image_width: usize,
-    image_height: usize,
-) -> Vec<&'a StarData> {
-    stars
-        .iter()
-        .filter(|star| {
-            // Create RaDec for star
-            let star_radec = RaDec::from_degrees(star.ra_deg(), star.dec_deg());
-
-            let (x, y) =
-                equatorial_to_pixel(&star_radec, center, fov_deg, image_width, image_height);
-            x >= 0.0 && y >= 0.0 && x < image_width as f64 && y < image_height as f64
-        })
-        .copied()
-        .collect()
 }
 
 /// Save a text file with visible star information
@@ -124,4 +104,144 @@ pub fn save_star_list(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use tempfile::NamedTempFile;
+
+    /// Create a test star with the given parameters
+    fn create_test_star(id: u64, ra: f64, dec: f64, magnitude: f64) -> StarData {
+        // In the actual implementation, StarData contains a position field with RaDec
+        // and other metadata like magnitude and b_v
+        let position = RaDec::from_degrees(ra, dec);
+        StarData {
+            id,
+            position, // StarData stores position as RaDec
+            magnitude,
+            b_v: None,
+        }
+    }
+
+    /// Check if two floating point values are approximately equal
+    fn approx_eq(a: f64, b: f64, epsilon: f64) -> bool {
+        (a - b).abs() < epsilon
+    }
+
+    #[test]
+    fn test_equatorial_to_pixel_center() {
+        // Test that the center of the field maps to the center of the image
+        let center = RaDec::from_degrees(100.0, 10.0);
+        let position = center.clone(); // Same position as center
+        let fov_deg = 5.0;
+        let image_width = 1000;
+        let image_height = 800;
+
+        let (x, y) = equatorial_to_pixel(&position, &center, fov_deg, image_width, image_height);
+
+        // Center of image is (width/2, height/2)
+        assert!(approx_eq(x, image_width as f64 / 2.0, 1e-6));
+        assert!(approx_eq(y, image_height as f64 / 2.0, 1e-6));
+    }
+
+    #[test]
+    fn test_equatorial_to_pixel_offset() {
+        // Test that positions offset from center map correctly
+        let center = RaDec::from_degrees(100.0, 10.0);
+        let fov_deg = 5.0;
+        let image_width = 1000;
+        let image_height = 800;
+
+        // Position offset by 1 degree in RA (will move in x direction)
+        let position_ra_offset = RaDec::from_degrees(101.0, 10.0);
+        let (x1, _y1) = equatorial_to_pixel(
+            &position_ra_offset,
+            &center,
+            fov_deg,
+            image_width,
+            image_height,
+        );
+
+        // Position offset by 1 degree in Dec (will move in y direction)
+        let position_dec_offset = RaDec::from_degrees(100.0, 11.0);
+        let (_x2, y2) = equatorial_to_pixel(
+            &position_dec_offset,
+            &center,
+            fov_deg,
+            image_width,
+            image_height,
+        );
+
+        // The offsets should move by a significant amount of pixels
+        // Degree offset / FOV * image dimension
+        let expected_x_offset = 1.0 / fov_deg * image_width as f64;
+        let expected_y_offset = 1.0 / fov_deg * image_height as f64;
+
+        assert!(x1 > image_width as f64 / 2.0); // RA increases to the right
+        assert!(approx_eq(
+            x1 - image_width as f64 / 2.0,
+            expected_x_offset,
+            1.0
+        ));
+
+        assert!(y2 > image_height as f64 / 2.0); // Dec increases upward
+        assert!(approx_eq(
+            y2 - image_height as f64 / 2.0,
+            expected_y_offset,
+            1.0
+        ));
+    }
+
+    #[test]
+    fn test_save_star_list() {
+        // Create test stars
+        let star1 = create_test_star(1, 100.0, 10.0, 5.0);
+        let star2 = create_test_star(2, 101.0, 10.0, 6.0);
+        let stars = [&star1, &star2];
+
+        // Create temporary file for the star list
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        let center = RaDec::from_degrees(100.0, 10.0);
+        let fov_deg = 5.0;
+        let telescope_name = "Test Telescope";
+        let sensor_name = "Test Sensor";
+        let image_width = 1000;
+        let image_height = 800;
+
+        // Save the star list
+        save_star_list(
+            &stars,
+            &center,
+            fov_deg,
+            telescope_name,
+            sensor_name,
+            image_width,
+            image_height,
+            path,
+        )
+        .unwrap();
+
+        // Read the file back to verify its contents
+        let file = File::open(path).unwrap();
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader.lines().map(|l| l.unwrap()).collect();
+
+        // Verify header
+        assert!(lines[0].contains("RA=100.0000°, Dec=10.0000°, FOV=5.0000°"));
+        assert!(lines[1].contains("Test Telescope"));
+        assert!(lines[1].contains("Test Sensor"));
+        assert!(lines[2].contains("2")); // 2 stars
+
+        // Verify star entries (sorted by magnitude brightest first)
+        assert!(lines[5].contains("1")); // ID
+        assert!(lines[5].contains("5.00")); // Magnitude
+
+        assert!(lines[6].contains("2")); // ID
+        assert!(lines[6].contains("6.00")); // Magnitude
+    }
 }

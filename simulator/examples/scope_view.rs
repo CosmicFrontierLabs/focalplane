@@ -27,7 +27,7 @@ use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig
 use simulator::image_proc::electron::{add_stars_to_image, StarInFrame};
 use simulator::image_proc::histogram_stretch::stretch_histogram;
 use simulator::image_proc::{save_u8_image, u16_to_u8_auto_scale, u16_to_u8_scaled};
-use simulator::star_math::{equatorial_to_pixel, filter_stars_in_rectangle, save_star_list};
+use simulator::star_math::{equatorial_to_pixel, save_star_list};
 use simulator::{field_diameter, magnitude_to_electrons};
 use starfield::catalogs::StarData;
 use starfield::RaDec;
@@ -177,25 +177,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Convert Vec<StarData> to Vec<&StarData> for filtering
     let star_refs: Vec<&StarData> = stars.iter().collect();
 
-    // Filter to the ones within the rectangle
-    let filtered_stars = filter_stars_in_rectangle(
-        &star_refs,
-        &RaDec::from_degrees(args.ra, args.dec),
-        fov_deg,
-        sensor.width_px as usize,
-        sensor.height_px as usize,
-    );
-    println!(
-        "Filtered to {} stars in field of view rectangle",
-        filtered_stars.len()
-    );
-
     // Print histogram of star magnitudes
-    if filtered_stars.is_empty() {
+    if star_refs.is_empty() {
         println!("No stars available to create histogram");
     } else {
         println!("Creating histogram of star magnitudes...");
-        let star_magnitudes: Vec<f64> = filtered_stars.iter().map(|star| star.magnitude).collect();
+        println!("Note that these stats include stars in the sensor circumcircle");
+        let star_magnitudes: Vec<f64> = star_refs.iter().map(|star| star.magnitude).collect();
 
         // Create a magnitude histogram using the new specialized function
         // This automatically creates bins centered on integer magnitudes with 1.0 width
@@ -203,7 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &star_magnitudes,
             Some(format!(
                 "Star Magnitude Histogram ({} stars)",
-                filtered_stars.len()
+                star_refs.len()
             )),
             false, // Use linear scale
         )
@@ -221,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Render the star field
     println!("Rendering star field...");
     let image = render_star_field(
-        &filtered_stars,
+        &star_refs,
         args.ra,
         args.dec,
         fov_deg,
@@ -234,7 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Filter stars visible in the field for star list output
     // Write star list to file
     save_star_list(
-        &filtered_stars,
+        &star_refs,
         &RaDec::from_degrees(args.ra, args.dec),
         fov_deg,
         &telescope.name,
