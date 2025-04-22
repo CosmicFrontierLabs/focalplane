@@ -240,8 +240,10 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
     // Create histogram with the specified bins and range
     if let Ok(mut hist) = Histogram::new_equal_bins(min_val..max_val, bins) {
         // Configure histogram display options
-        let mut config = HistogramConfig::default();
-        config.max_bar_width = 40;
+        let mut config = HistogramConfig {
+            max_bar_width: 40,
+            ..HistogramConfig::default()
+        };
         config.bar_char = '#';
         config.show_empty_bins = false;
         config.title = Some(title.to_string());

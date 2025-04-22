@@ -1,5 +1,7 @@
 //! Sensor configuration for simulating detector characteristics
 
+#![allow(clippy::approx_constant)]
+
 use once_cell::sync::Lazy;
 
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
@@ -40,6 +42,7 @@ pub struct SensorConfig {
 
 impl SensorConfig {
     /// Create a new sensor configuration
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
         quantum_efficiency: QuantumEfficiency,

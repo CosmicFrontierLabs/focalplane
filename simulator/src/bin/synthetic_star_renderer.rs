@@ -305,8 +305,10 @@ fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
     fontdb.load_system_fonts();
 
     // Create options with the font database
-    let mut options = usvg::Options::default();
-    options.fontdb = std::sync::Arc::new(fontdb);
+    let mut options = usvg::Options {
+        fontdb: std::sync::Arc::new(fontdb),
+        ..usvg::Options::default()
+    };
     options.font_family = "DejaVu Sans".to_string(); // Widely available on Linux
 
     // Parse SVG with our custom options
@@ -377,6 +379,7 @@ fn blend_channel(base: u8, overlay: u8, alpha: u8) -> u8 {
 }
 
 /// Render a star field visualization from catalog data
+#[allow(clippy::too_many_arguments)]
 fn render_catalog_star_field(
     catalog: &BinaryCatalog,
     ra_deg: f64,
