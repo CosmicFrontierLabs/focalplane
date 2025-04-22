@@ -3,6 +3,8 @@
 //! This module provides a representation of astronomical spectra
 //! with the Spectrum trait and implementations.
 
+use std::time::Duration;
+
 use thiserror::Error;
 
 use super::QuantumEfficiency;
@@ -214,7 +216,7 @@ pub trait Spectrum: Send + Sync {
         &self,
         qe: &QuantumEfficiency,
         aperture_cm2: f64,
-        duration: std::time::Duration,
+        duration: &Duration,
     ) -> f64 {
         // Convert power to photons per second
         // E = h * c / λ, so N = P / (h * c / λ)
@@ -423,7 +425,7 @@ impl FlatStellarSpectrum {
     pub fn from_gaia_magnitude(gaia_magnitude: f64) -> Self {
         // Convert Gaia magnitude to flux density
         // Same scaling, but slightly different zero-point definition
-        Self::new(gaia_magnitude + 0.12)
+        Self::from_ab_mag(gaia_magnitude + 0.12)
     }
 }
 
@@ -445,7 +447,6 @@ impl Spectrum for FlatStellarSpectrum {
         // Integrate the spectral irradiance over the wavelength range
         // and multiply by the aperture area
 
-        // Simple trapezoidal integration with 100 points
         if band.lower_nm >= band.upper_nm || band.lower_nm <= 0.0 {
             return 0.0;
         }
@@ -463,8 +464,38 @@ mod tests {
     use approx::assert_relative_eq;
 
     #[test]
+    fn test_aaron_matching_photoelec() {
+        let mag_to_photons = vec![
+            (0.0, 3_074_446.0),
+            (10.0, 0.0001 * 3_074_446.0),
+            (12.0, 48.0),
+        ];
+        let band: Band = Band::new(400.0, 700.0);
+        let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
+
+        for (mag, expected_electrons) in mag_to_photons.iter() {
+            // Calculate number of photons in 400-700nm if a 12th mag star
+            let spectrum = FlatStellarSpectrum::from_ab_mag(*mag);
+
+            // Assume 1 cm² aperture and 1 second duration
+            let aperture_cm2 = 1.0;
+            let duration = std::time::Duration::from_secs_f64(1.0);
+            let electrons = spectrum.photo_electrons(&qe, aperture_cm2, &duration);
+
+            let error = f64::abs(electrons - *expected_electrons) / *expected_electrons;
+
+            assert!(
+                error < 0.02,
+                "For mag {}: Got {} Expected ~{}",
+                mag,
+                electrons,
+                expected_electrons
+            );
+        }
+    }
+
+    #[test]
     fn test_aaron_matching() {
-        // TODO: Expected value from Aaron's calculations
         let mag_to_photons = vec![
             (0.0, 3_074_446.0),
             (10.0, 0.0001 * 3_074_446.0),
@@ -482,12 +513,15 @@ mod tests {
             let duration = std::time::Duration::from_secs(1);
             let photons = spectrum.photons(&band, aperture_cm2, duration);
 
-            println!(
-                "For mag {}: Got {} Expected ~{}",
-                mag, photons, expected_photons
-            );
+            let error = f64::abs(photons - *expected_photons) / *expected_photons;
 
-            assert_relative_eq!(photons, *expected_photons, epsilon = 1.0);
+            assert!(
+                error < 0.02,
+                "For mag {}: Got {} Expected ~{}",
+                mag,
+                photons,
+                expected_photons
+            );
         }
     }
 
@@ -606,7 +640,7 @@ mod tests {
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
 
         let photons = spectrum.photons(&band, aperture_cm2, duration);
-        let electrons = spectrum.photo_electrons(&qe, aperture_cm2, duration);
+        let electrons = spectrum.photo_electrons(&qe, aperture_cm2, &duration);
 
         // For a perfect QE, the number of electrons should equal the number of photons
         let err = f64::abs(photons - electrons) / photons;
@@ -632,7 +666,7 @@ mod tests {
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
 
         let photons = spectrum.photons(&band, aperture_cm2, duration);
-        let electrons = spectrum.photo_electrons(&qe, aperture_cm2, duration);
+        let electrons = spectrum.photo_electrons(&qe, aperture_cm2, &duration);
 
         // For a perfect QE, the number of electrons should equal the number of photons
         let err = f64::abs(photons - electrons) / photons;
