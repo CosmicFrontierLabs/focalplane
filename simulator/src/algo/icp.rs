@@ -4,13 +4,18 @@
 //! for the optimal rigid transformation (rotation and translation) that
 //! aligns them.
 
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
 use ndarray::Array2;
+
+use crate::algo::quaternion::Quaternion;
 
 /// Result of ICP algorithm containing transformation parameters and matching points
 #[derive(Debug, Clone)]
 pub struct ICPResult {
-    /// Rotation matrix component of the transform (2x2)
+    /// Quaternion representing the rotation component of the transform
+    pub rotation_quat: Quaternion,
+
+    /// 2x2 Rotation matrix component of the transform (for compatibility)
     pub rotation: Matrix2<f64>,
 
     /// Translation vector component of the transform (2x1)
@@ -71,12 +76,12 @@ fn calculate_centroid(points: &[Vector2<f64>]) -> Vector2<f64> {
     centroid / points.len() as f64
 }
 
-/// Compute optimal rotation and translation using SVD
+/// Compute optimal rotation (as quaternion) and translation using SVD
 fn compute_optimal_transform(
     source_points: &[Vector2<f64>],
     target_points: &[Vector2<f64>],
     matches: &[(usize, usize)],
-) -> (Matrix2<f64>, Vector2<f64>) {
+) -> (Quaternion, Vector2<f64>) {
     let mut src_matched = Vec::with_capacity(matches.len());
     let mut tgt_matched = Vec::with_capacity(matches.len());
 
@@ -115,10 +120,16 @@ fn compute_optimal_transform(
         r = v_t_fixed.transpose() * u.transpose();
     }
 
+    // Convert 2D rotation matrix to quaternion
+    // For 2D rotation, we only rotate around z-axis
+    let angle = (r[(1, 0)]).atan2(r[(0, 0)]);
+    let axis = Vector3::new(0.0, 0.0, 1.0); // z-axis
+    let q = Quaternion::from_axis_angle(&axis, angle);
+
     // Compute translation
     let t = target_centroid - r * source_centroid;
 
-    (r, t)
+    (q, t)
 }
 
 /// Convert ndarray points to Vector2 points
@@ -198,7 +209,8 @@ fn calculate_error(
 /// let result = iterative_closest_point(&source, &target, 100, 1e-6);
 ///
 /// // Access transformation and matches
-/// println!("Rotation: {:?}", result.rotation);
+/// println!("Rotation quaternion: {:?}", result.rotation_quat);
+/// println!("Rotation matrix: {:?}", result.rotation);
 /// println!("Translation: {:?}", result.translation);
 /// ```
 pub fn iterative_closest_point(
@@ -224,6 +236,7 @@ pub fn iterative_closest_point(
     let target_vec = convert_to_vector2_points(target_points);
 
     // Initialize transformation
+    let mut rotation_quat = Quaternion::identity();
     let mut rotation = Matrix2::identity();
     let mut translation = Vector2::zeros();
 
@@ -243,10 +256,18 @@ pub fn iterative_closest_point(
         matches = find_closest_points(&current_source, &target_vec);
 
         // Compute optimal transformation
-        let (r, t) = compute_optimal_transform(&source_vec, &target_vec, &matches);
+        let (q, t) = compute_optimal_transform(&source_vec, &target_vec, &matches);
 
         // Update transformation
-        rotation = r;
+        rotation_quat = q;
+        // Extract 2x2 rotation matrix from quaternion for 2D operations
+        let full_rotation = q.to_rotation_matrix();
+        rotation = Matrix2::new(
+            full_rotation[(0, 0)],
+            full_rotation[(0, 1)],
+            full_rotation[(1, 0)],
+            full_rotation[(1, 1)],
+        );
         translation = t;
 
         // Apply transformation to original source points
@@ -268,6 +289,7 @@ pub fn iterative_closest_point(
     let final_error = calculate_error(&source_vec, &target_vec, &matches, &rotation, &translation);
 
     ICPResult {
+        rotation_quat,
         rotation,
         translation,
         matches,
@@ -287,6 +309,12 @@ mod tests {
         let cos_a = angle.cos();
         let sin_a = angle.sin();
         Matrix2::new(cos_a, -sin_a, sin_a, cos_a)
+    }
+
+    /// Create a quaternion for rotation around z-axis by the given angle
+    fn z_rotation_quaternion(angle: f64) -> Quaternion {
+        let axis = Vector3::new(0.0, 0.0, 1.0);
+        Quaternion::from_axis_angle(&axis, angle)
     }
 
     /// Helper function to initialize the ICP algorithm with known matching points
@@ -313,8 +341,17 @@ mod tests {
         let target_vec = convert_to_vector2_points(target);
 
         // Compute optimal transformation with known matches
-        let (rotation, translation) =
+        let (rotation_quat, translation) =
             compute_optimal_transform(&source_vec, &target_vec, custom_matches);
+
+        // Extract 2D rotation matrix from quaternion
+        let full_rotation = rotation_quat.to_rotation_matrix();
+        let rotation = Matrix2::new(
+            full_rotation[(0, 0)],
+            full_rotation[(0, 1)],
+            full_rotation[(1, 0)],
+            full_rotation[(1, 1)],
+        );
 
         // Calculate error
         let error = calculate_error(
@@ -326,6 +363,7 @@ mod tests {
         );
 
         ICPResult {
+            rotation_quat,
             rotation,
             translation,
             matches: custom_matches.to_vec(),
@@ -379,6 +417,14 @@ mod tests {
             result.translation
         );
         assert!(result.mean_squared_error < 1e-4);
+
+        // Check quaternion is identity
+        let identity_quat = Quaternion::identity();
+        assert!(
+            (result.rotation_quat.w - identity_quat.w).abs() < 1e-4,
+            "Expected identity quaternion, got: {:?}",
+            result.rotation_quat
+        );
 
         // Now run the full ICP algorithm with many distinct points to ensure it converges properly
         let mut many_source_points = Vec::new();
@@ -436,6 +482,7 @@ mod tests {
         // Create target points (rotated by 30 degrees)
         let angle = PI / 6.0; // 30 degrees
         let rotation = rotation_matrix(angle);
+        let expected_quat = z_rotation_quaternion(angle);
         let mut target = Array2::zeros((5, 2));
 
         // Known point correspondences
@@ -460,6 +507,15 @@ mod tests {
         );
         assert!(result.translation.norm() < 1e-4);
         assert!(result.mean_squared_error < 1e-4);
+
+        // Check quaternion
+        assert!(
+            (result.rotation_quat.w - expected_quat.w).abs() < 1e-4
+                && (result.rotation_quat.z - expected_quat.z).abs() < 1e-4,
+            "Expected quaternion: {:?}, got: {:?}",
+            expected_quat,
+            result.rotation_quat
+        );
 
         // Now run the full ICP algorithm with many distinct points to ensure it converges properly
         let mut many_source_points = Vec::new();
@@ -500,6 +556,14 @@ mod tests {
             full_result.rotation[(1, 0)], full_result.rotation[(1, 1)],
             full_result.translation[0], full_result.translation[1]
         );
+
+        println!(
+            "Quaternion: w={:.6}, x={:.6}, y={:.6}, z={:.6}",
+            full_result.rotation_quat.w,
+            full_result.rotation_quat.x,
+            full_result.rotation_quat.y,
+            full_result.rotation_quat.z
+        );
     }
 
     #[test]
@@ -520,6 +584,7 @@ mod tests {
         // Create target points (rotated and translated)
         let angle = PI / 4.0; // 45 degrees
         let rotation = rotation_matrix(angle);
+        let expected_quat = z_rotation_quaternion(angle);
         let translation = Vector2::new(2.0, 1.0);
         let mut target = Array2::zeros((5, 2));
 
@@ -550,6 +615,15 @@ mod tests {
             result.translation
         );
         assert!(result.mean_squared_error < 1e-4);
+
+        // Check quaternion
+        assert!(
+            (result.rotation_quat.w - expected_quat.w).abs() < 1e-4
+                && (result.rotation_quat.z - expected_quat.z).abs() < 1e-4,
+            "Expected quaternion: {:?}, got: {:?}",
+            expected_quat,
+            result.rotation_quat
+        );
 
         // Now run the full ICP algorithm with many distinct points to ensure it converges properly
         let mut many_source_points = Vec::new();
@@ -589,6 +663,14 @@ mod tests {
             full_result.rotation[(0, 0)], full_result.rotation[(0, 1)],
             full_result.rotation[(1, 0)], full_result.rotation[(1, 1)],
             full_result.translation[0], full_result.translation[1]
+        );
+
+        println!(
+            "Quaternion: w={:.6}, x={:.6}, y={:.6}, z={:.6}",
+            full_result.rotation_quat.w,
+            full_result.rotation_quat.x,
+            full_result.rotation_quat.y,
+            full_result.rotation_quat.z
         );
     }
 
@@ -644,6 +726,14 @@ mod tests {
             result.rotation[(0, 0)], result.rotation[(0, 1)],
             result.rotation[(1, 0)], result.rotation[(1, 1)],
             result.translation[0], result.translation[1]
+        );
+
+        println!(
+            "Quaternion: w={:.6}, x={:.6}, y={:.6}, z={:.6}",
+            result.rotation_quat.w,
+            result.rotation_quat.x,
+            result.rotation_quat.y,
+            result.rotation_quat.z
         );
     }
 }

@@ -8,6 +8,7 @@ pub mod algo;
 pub mod hardware;
 pub mod image_proc;
 pub mod photometry;
+pub mod star_math;
 
 // Re-exports for easier access
 pub use algo::icp::{iterative_closest_point, ICPResult};

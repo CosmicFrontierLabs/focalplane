@@ -27,11 +27,10 @@ use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig
 use simulator::image_proc::electron::{add_stars_to_image, StarInFrame};
 use simulator::image_proc::histogram_stretch::stretch_histogram;
 use simulator::image_proc::{save_u8_image, u16_to_u8_auto_scale, u16_to_u8_scaled};
+use simulator::star_math::{equatorial_to_pixel, filter_stars_in_rectangle, save_star_list};
 use simulator::{field_diameter, magnitude_to_electrons};
 use starfield::catalogs::StarData;
 use starfield::RaDec;
-use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
@@ -175,22 +174,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fov_deg * 2.0, // TODO(meawoppl) fov in catalog source is radius vs diameter?
     )?;
 
+    // Convert Vec<StarData> to Vec<&StarData> for filtering
+    let star_refs: Vec<&StarData> = stars.iter().collect();
+
     // Filter to the ones within the rectangle
-    let filtered_stars: Vec<&StarData> = stars
-        .iter()
-        .filter(|star| {
-            let (x, y) = equatorial_to_pixel(
-                star.ra_deg(),
-                star.dec_deg(),
-                args.ra,
-                args.dec,
-                fov_deg,
-                sensor.width_px as usize,
-                sensor.height_px as usize,
-            );
-            x >= 0.0 && y >= 0.0 && x < sensor.width_px as f64 && y < sensor.height_px as f64
-        })
-        .collect();
+    let filtered_stars = filter_stars_in_rectangle(
+        &star_refs,
+        &RaDec::from_degrees(args.ra, args.dec),
+        fov_deg,
+        sensor.width_px as usize,
+        sensor.height_px as usize,
+    );
     println!(
         "Filtered to {} stars in field of view rectangle",
         filtered_stars.len()
@@ -241,11 +235,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Write star list to file
     save_star_list(
         &filtered_stars,
-        args.ra,
-        args.dec,
+        &RaDec::from_degrees(args.ra, args.dec),
         fov_deg,
-        &telescope,
-        &sensor,
+        &telescope.name,
+        &sensor.name,
+        sensor.width_px as usize,
+        sensor.height_px as usize,
         &args.star_list,
     )?;
     println!("Star list saved to: {}", args.star_list);
@@ -290,38 +285,6 @@ fn approx_airy_pixels(
     airy_radius_px / 1.22
 }
 
-/// Convert equatorial coordinates to pixel coordinates with sub-pixel precision
-fn equatorial_to_pixel(
-    ra: f64,
-    dec: f64,
-    center_ra: f64,
-    center_dec: f64,
-    fov_deg: f64,
-    image_width: usize,
-    image_height: usize,
-) -> (f64, f64) {
-    // Convert to radians
-    let ra_rad = ra.to_radians();
-    let dec_rad = dec.to_radians();
-    let center_ra_rad = center_ra.to_radians();
-    let center_dec_rad = center_dec.to_radians();
-
-    // Calculate projection factors
-    let x_factor = ra_rad - center_ra_rad;
-    let y_factor = dec_rad - center_dec_rad;
-
-    // Scale to pixel coordinates
-    let fov_rad = fov_deg.to_radians();
-    let x_pixels_per_rad = image_width as f64 / fov_rad;
-    let y_pixels_per_rad = image_height as f64 / fov_rad;
-
-    // Convert to pixel coordinates (center of image is at center_ra, center_dec)
-    let x = (x_factor * x_pixels_per_rad) + (image_width as f64 / 2.0);
-    let y = (y_factor * y_pixels_per_rad) + (image_height as f64 / 2.0);
-
-    (x, y)
-}
-
 /// Render a simulated star field based on star data and telescope parameters
 fn render_star_field(
     stars: &Vec<&StarData>,
@@ -349,11 +312,11 @@ fn render_star_field(
     // Add stars with sub-pixel precision
     for &star in stars {
         // Convert position to pixel coordinates (sub-pixel precision)
+        let star_radec = RaDec::from_degrees(star.ra_deg(), star.dec_deg());
+        let center_radec = RaDec::from_degrees(ra_deg, dec_deg);
         let (x, y) = equatorial_to_pixel(
-            star.ra_deg(),
-            star.dec_deg(),
-            ra_deg,
-            dec_deg,
+            &star_radec,
+            &center_radec,
             fov_deg,
             image_width,
             image_height,
@@ -517,77 +480,6 @@ fn display_electron_histogram(
 
     // Print the histograms
     println!("\n{}", full_hist.with_config(full_config).format()?);
-
-    Ok(())
-}
-
-/// Save a text file with visible star information
-fn save_star_list(
-    stars: &[&StarData],
-    ra_deg: f64,
-    dec_deg: f64,
-    fov_deg: f64,
-    telescope: &TelescopeConfig,
-    sensor: &SensorConfig,
-    path: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = File::create(path)?;
-
-    // Write header
-    writeln!(
-        file,
-        "# Star List for field centered at RA={:.4}°, Dec={:.4}°, FOV={:.4}°",
-        ra_deg, dec_deg, fov_deg
-    )?;
-    writeln!(
-        file,
-        "# Telescope: {}, Sensor: {}",
-        telescope.name, sensor.name
-    )?;
-    writeln!(file, "# Total stars in field: {}", stars.len())?;
-    writeln!(file, "#")?;
-    writeln!(file, "# ID, RA(°), Dec(°), Magnitude, B-V, X(px), Y(px)")?;
-
-    // Calculate image dimensions
-    let image_width = sensor.width_px as usize;
-    let image_height = sensor.height_px as usize;
-
-    // Get stars sorted by magnitude (brightest first)
-    let mut sorted_stars = stars.to_vec();
-    sorted_stars.sort_by(|a, b| a.magnitude.partial_cmp(&b.magnitude).unwrap());
-
-    // Write star data
-    for star in sorted_stars {
-        // Calculate pixel coordinates
-        let (x, y) = equatorial_to_pixel(
-            star.ra_deg(),
-            star.dec_deg(),
-            ra_deg,
-            dec_deg,
-            fov_deg,
-            image_width,
-            image_height,
-        );
-
-        // Format B-V value or "N/A" if None
-        let b_v_str = if let Some(b_v) = star.b_v {
-            format!("{:.2}", b_v)
-        } else {
-            "N/A".to_string()
-        };
-
-        writeln!(
-            file,
-            "{}, {:.6}, {:.6}, {:.2}, {}, {:.2}, {:.2}",
-            star.id,
-            star.ra_deg(),
-            star.dec_deg(),
-            star.magnitude,
-            b_v_str,
-            x,
-            y
-        )?;
-    }
 
     Ok(())
 }
