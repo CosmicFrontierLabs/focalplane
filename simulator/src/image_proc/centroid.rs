@@ -5,6 +5,8 @@
 
 use ndarray::ArrayView2;
 
+use crate::algo::icp::Locatable_2D;
+
 /// Star detection result containing position and shape information
 #[derive(Debug, Clone)]
 pub struct StarDetection {
@@ -26,6 +28,16 @@ pub struct StarDetection {
     pub diameter: f64,
     /// Is this likely to be a star based on moment analysis?
     pub is_valid: bool,
+}
+
+impl Locatable_2D for StarDetection {
+    fn x(&self) -> f64 {
+        self.x
+    }
+
+    fn y(&self) -> f64 {
+        self.y
+    }
 }
 
 /// Calculate centroid and moments for a labeled object in the image

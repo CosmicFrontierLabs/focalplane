@@ -83,7 +83,7 @@ pub fn u16_to_u8_auto_scale(image: &Array2<u16>) -> Array2<u8> {
 ///
 /// This function scales the image based on the specified maximum value,
 /// useful when converting data with a known bit depth or range.
-pub fn u16_to_u8_scaled(image: &Array2<u16>, max_value: u16) -> Array2<u8> {
+pub fn u16_to_u8_scaled(image: &Array2<u16>, max_value: u32) -> Array2<u8> {
     if max_value == 0 {
         // Return black image if maximum value is 0
         return Array2::zeros(image.dim());

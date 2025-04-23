@@ -4,15 +4,29 @@ use ndarray::Array2;
 use starfield::{catalogs::StarData, RaDec};
 
 use crate::{
-    magnitude_to_electrons, star_math::equatorial_to_pixel, SensorConfig, TelescopeConfig,
+    algo::icp::Locatable_2D, magnitude_to_electrons, star_math::equatorial_to_pixel, SensorConfig,
+    TelescopeConfig,
 };
 
 use super::generate_sensor_noise;
 
+#[derive(Clone, Debug)]
 pub struct StarInFrame {
     pub x: f64,
     pub y: f64,
     pub flux: f64,
+    pub star: StarData,
+}
+
+// Implement locatable so we can ICP them together with the segmentation results
+impl Locatable_2D for StarInFrame {
+    fn x(&self) -> f64 {
+        self.x
+    }
+
+    fn y(&self) -> f64 {
+        self.y
+    }
 }
 
 pub struct RenderingResult {
@@ -27,8 +41,8 @@ pub struct RenderingResult {
     /// This includes read noise, dark current
     pub noise_image: Array2<f64>,
 
-    /// Pixel coordinates and magnitudes of stars in the image
-    pub pixel_mag: Vec<(f64, f64, f64)>, // x, y, magnitude
+    /// The stars that were rendered in the image (not clipped)
+    pub rendered_stars: Vec<StarInFrame>,
 
     /// Number of pixels that were clipped to maximum well depth
     /// This is useful for understanding saturation effects
@@ -98,6 +112,11 @@ pub fn render_star_field(
 
     let mut xy_mag = Vec::with_capacity(stars.len());
 
+    let psf_pix = approx_airy_pixels(telescope, sensor, wavelength_nm);
+
+    // Padded bounds check
+    let padding = psf_pix * 2.0;
+
     // Add stars with sub-pixel precision
     for &star in stars {
         // Convert position to pixel coordinates (sub-pixel precision)
@@ -111,7 +130,17 @@ pub fn render_star_field(
             image_height,
         );
 
-        xy_mag.push((x, y, star.magnitude));
+        // Check if star is within the image bounds
+        if x < -padding
+            || y < -padding
+            || x >= image_width as f64 + padding
+            || y >= image_height as f64 + padding
+        {
+            continue; // Skip stars outside the image
+        }
+
+        // Post transfrom/selection
+        xy_mag.push((x, y, star.clone()));
 
         // Calculate photon flux using telescope model
         let electrons = magnitude_to_electrons(star.magnitude, exposure, telescope, sensor);
@@ -121,14 +150,14 @@ pub fn render_star_field(
             x,
             y,
             flux: electrons,
+            star: star.clone(),
         });
     }
 
     to_render.sort_by(|a, b| a.flux.partial_cmp(&b.flux).unwrap());
 
     // Create PSF kernel for the given wavelength
-    let psf = approx_airy_pixels(telescope, sensor, wavelength_nm);
-    add_stars_to_image(&mut image, to_render, psf);
+    add_stars_to_image(&mut image, &to_render, psf_pix);
 
     // Generate sensor noise (read noise and dark current)
     let noise = generate_sensor_noise(
@@ -166,8 +195,8 @@ pub fn render_star_field(
         image: quantized,
         electron_image: image,
         noise_image: noise,
-        pixel_mag: xy_mag,
         n_clipped: max_well_clipped,
+        rendered_stars: to_render,
     }
 }
 
@@ -185,12 +214,19 @@ pub fn render_star_field(
 /// ```
 /// use ndarray::Array2;
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
-///
+/// use starfield::catalogs::StarData;
+/// use starfield::RaDec;
+/// let star_data = StarData {
+///     id: 0,
+///     magnitude: 10.0,
+///     position: RaDec::from_degrees(0.0, 0.0),
+///     b_v: None,
+/// };
 /// let mut image = Array2::zeros((100, 100));
-/// let stars = vec![StarInFrame { x: 50.0, y: 50.0, flux: 1000.0 }];
-/// add_stars_to_image(&mut image, stars, 2.0);
+/// let stars = vec![StarInFrame { x: 50.0, y: 50.0, flux: 1000.0, star: star_data }];
+/// add_stars_to_image(&mut image, &stars, 2.0);
 /// ```
-pub fn add_stars_to_image(image: &mut Array2<f64>, stars: Vec<StarInFrame>, sigma_pix: f64) {
+pub fn add_stars_to_image(image: &mut Array2<f64>, stars: &Vec<StarInFrame>, sigma_pix: f64) {
     // 4 std's is a good approximation for the PSF
     let max_pix_dist = (sigma_pix.max(1.0) * 4.0).ceil() as i32;
 
@@ -200,7 +236,7 @@ pub fn add_stars_to_image(image: &mut Array2<f64>, stars: Vec<StarInFrame>, sigm
     let pre_term = 1.0 / (2.0 * sigma_pix * sigma_pix * std::f64::consts::PI);
 
     // Calculate the contribution of all stars to this pixel
-    for star in &stars {
+    for star in stars {
         // Calculate distance from star to pixel
         let xc = star.x.round() as i32;
         let yc = star.y.round() as i32;
@@ -231,6 +267,15 @@ mod tests {
 
     use super::*;
 
+    fn test_star_data() -> StarData {
+        StarData {
+            id: 0,
+            magnitude: 10.0,
+            position: RaDec::from_degrees(0.0, 0.0),
+            b_v: None,
+        }
+    }
+
     #[test]
     fn test_add_star_total_flux() {
         let mut image = Array2::zeros((50, 50));
@@ -241,9 +286,10 @@ mod tests {
             x: 25.0,
             y: 25.0,
             flux: total_flux,
+            star: test_star_data(),
         }];
 
-        add_stars_to_image(&mut image, stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, sigma_pix);
 
         let added_flux = image.sum();
         assert_relative_eq!(added_flux, total_flux, epsilon = 0.1);
@@ -259,9 +305,10 @@ mod tests {
             x: 60.0,
             y: 60.0,
             flux: total_flux,
+            star: test_star_data(),
         }];
 
-        add_stars_to_image(&mut image, stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, sigma_pix);
 
         let added_flux = image.sum();
         assert_relative_eq!(added_flux, 0.0, epsilon = 0.1);
@@ -277,9 +324,10 @@ mod tests {
             x: 0.5,
             y: 10.0,
             flux: total_flux,
+            star: test_star_data(),
         }];
 
-        add_stars_to_image(&mut image, stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, sigma_pix);
 
         let added_flux = image.sum();
 
@@ -303,25 +351,29 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 flux: total_flux,
+                star: test_star_data(),
             },
             StarInFrame {
                 x: 0.0,
                 y: 50.0,
                 flux: total_flux,
+                star: test_star_data(),
             },
             StarInFrame {
                 x: 50.0,
                 y: 0.0,
                 flux: total_flux,
+                star: test_star_data(),
             },
             StarInFrame {
                 x: 50.0,
                 y: 50.0,
                 flux: total_flux,
+                star: test_star_data(),
             },
         ];
 
-        add_stars_to_image(&mut image, stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, sigma_pix);
 
         let added_flux = image.sum();
 
@@ -343,10 +395,11 @@ mod tests {
                 x: rng.gen_range(-50.0..150.0),
                 y: rng.gen_range(-50.0..150.0),
                 flux: total_flux,
+                star: test_star_data(),
             });
         }
 
-        add_stars_to_image(&mut image, stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, sigma_pix);
 
         let added_flux = image.sum();
 
