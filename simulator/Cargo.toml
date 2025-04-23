@@ -29,7 +29,8 @@ rand_core = "0.6"
 rand_distr = "0.4"
 
 [dev-dependencies]
-criterion = "0.5"     # Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }  # Benchmarking
 approx = "0.5"        # Approximate floating point comparisons
 plotters = "0.3"      # Plotting library
 tempfile = "3.10"     # Temporary file handling
+
