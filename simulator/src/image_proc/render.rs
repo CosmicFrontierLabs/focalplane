@@ -4,7 +4,7 @@ use ndarray::Array2;
 use starfield::{catalogs::StarData, RaDec};
 
 use crate::{
-    algo::icp::Locatable_2D, magnitude_to_electrons, star_math::equatorial_to_pixel, SensorConfig,
+    algo::icp::Locatable2d, magnitude_to_electrons, star_math::equatorial_to_pixel, SensorConfig,
     TelescopeConfig,
 };
 
@@ -19,7 +19,7 @@ pub struct StarInFrame {
 }
 
 // Implement locatable so we can ICP them together with the segmentation results
-impl Locatable_2D for StarInFrame {
+impl Locatable2d for StarInFrame {
     fn x(&self) -> f64 {
         self.x
     }
@@ -29,6 +29,7 @@ impl Locatable_2D for StarInFrame {
     }
 }
 
+#[derive(Clone)]
 pub struct RenderingResult {
     /// The final rendered image AU quantized etc (u16)
     pub image: Array2<u16>,
@@ -58,11 +59,6 @@ pub fn approx_airy_pixels(
     // Calculate PSF size based on Airy disk
     let airy_radius_um = telescope.airy_disk_radius_um(wavelength_nm);
     let airy_radius_px = airy_radius_um / sensor.pixel_size_um;
-
-    println!(
-        "Airy disk radius: {:.2} um, {:.2} px",
-        airy_radius_um, airy_radius_px
-    );
 
     // Create a Gaussian approximation of the Airy disk
     // Using sigma ≈ radius/1.22 to approximate Airy disk with Gaussian

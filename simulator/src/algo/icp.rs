@@ -4,7 +4,7 @@
 //! for the optimal rigid transformation (rotation and translation) that
 //! aligns them.
 
-use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
+use nalgebra::{Matrix2, Vector2, Vector3};
 use ndarray::Array2;
 
 use crate::algo::quaternion::Quaternion;
@@ -299,7 +299,7 @@ pub fn iterative_closest_point(
 }
 
 /// Trait for objects that can be located in a 2D Cartesian coordinate system.
-pub trait Locatable_2D {
+pub trait Locatable2d {
     /// Returns the x-coordinate of the object.
     fn x(&self) -> f64;
 
@@ -308,7 +308,7 @@ pub trait Locatable_2D {
 }
 
 /// Implement Locatable for nalgebra::Vector2<f64>
-impl Locatable_2D for Vector2<f64> {
+impl Locatable2d for Vector2<f64> {
     fn x(&self) -> f64 {
         self.x
     }
@@ -318,14 +318,14 @@ impl Locatable_2D for Vector2<f64> {
     }
 }
 
-/// Performs ICP matching between two sets of Locatable_2D objects and returns the matched pairs.
+/// Performs ICP matching between two sets of Locatable2d objects and returns the matched pairs.
 ///
 /// This function converts the input objects into point clouds, runs the ICP algorithm,
 /// and then maps the resulting index pairs back to the original objects.
 ///
 /// # Type Parameters
-/// * `R1`: The type of the source objects, must implement `Locatable_2D` and `Clone`.
-/// * `R2`: The type of the target objects, must implement `Locatable_2D` and `Clone`.
+/// * `R1`: The type of the source objects, must implement `Locatable2d` and `Clone`.
+/// * `R2`: The type of the target objects, must implement `Locatable2d` and `Clone`.
 ///
 /// # Arguments
 /// * `source` - A slice of source objects.
@@ -344,21 +344,21 @@ pub fn icp_match_objects<R1, R2>(
     convergence_threshold: f64,
 ) -> Vec<(R1, R2)>
 where
-    R1: Locatable_2D + Clone,
-    R2: Locatable_2D + Clone,
+    R1: Locatable2d + Clone,
+    R2: Locatable2d + Clone,
 {
     if source.is_empty() || target.is_empty() {
         return Vec::new();
     }
 
-    // Convert source Locatable_2D objects to ndarray::Array2<f64>
+    // Convert source Locatable2d objects to ndarray::Array2<f64>
     let source_points_vec: Vec<f64> = source.iter().flat_map(|p| [p.x(), p.y()]).collect();
     let source_points = match Array2::from_shape_vec((source.len(), 2), source_points_vec) {
         Ok(arr) => arr,
         Err(_) => return Vec::new(), // Return empty if conversion fails
     };
 
-    // Convert target Locatable_2D objects to ndarray::Array2<f64>
+    // Convert target Locatable2d objects to ndarray::Array2<f64>
     let target_points_vec: Vec<f64> = target.iter().flat_map(|p| [p.x(), p.y()]).collect();
     let target_points = match Array2::from_shape_vec((target.len(), 2), target_points_vec) {
         Ok(arr) => arr,
@@ -835,7 +835,7 @@ mod tests {
         );
     }
 
-    /// Simple struct implementing Locatable_2D for testing icp_match_objects
+    /// Simple struct implementing Locatable2d for testing icp_match_objects
     #[derive(Debug, Clone, PartialEq)]
     struct PointObject {
         id: usize,
@@ -843,7 +843,7 @@ mod tests {
         y_coord: f64,
     }
 
-    impl Locatable_2D for PointObject {
+    impl Locatable2d for PointObject {
         fn x(&self) -> f64 {
             self.x_coord
         }

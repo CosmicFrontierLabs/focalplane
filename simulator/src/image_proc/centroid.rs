@@ -5,7 +5,7 @@
 
 use ndarray::ArrayView2;
 
-use crate::algo::icp::Locatable_2D;
+use crate::algo::icp::Locatable2d;
 
 /// Star detection result containing position and shape information
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ pub struct StarDetection {
     pub is_valid: bool,
 }
 
-impl Locatable_2D for StarDetection {
+impl Locatable2d for StarDetection {
     fn x(&self) -> f64 {
         self.x
     }

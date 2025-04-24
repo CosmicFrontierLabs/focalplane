@@ -261,15 +261,10 @@ pub fn draw_stars_with_x_markers(
 /// * Image with SVG overlay rendered on top
 pub fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
     // Parse SVG data using default options with detailed font setup
-    println!("Attempting to parse SVG data...");
 
     // Create font database with system fonts
     let mut fontdb = fontdb::Database::new();
     fontdb.load_system_fonts();
-
-    // Print number of fonts available
-    let font_count = fontdb.len();
-    println!("Found {} fonts in the database", font_count);
 
     // Create options with the font database and high quality rendering settings
     let options = Options {
@@ -283,56 +278,22 @@ pub fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
 
     // Parse SVG with our custom options
     let svg_tree = match Tree::from_str(svg_data, &options) {
-        Ok(tree) => {
-            println!("SVG parsed successfully");
-            tree
-        }
+        Ok(tree) => tree,
         Err(e) => {
-            println!("Failed to parse SVG: {:?}", e);
-            panic!("SVG parsing failed");
+            panic!("SVG parsing failed: {:?}", e);
         }
     };
 
-    // Debug: Print SVG size and stats
-    println!(
-        "SVG tree size: {}x{}",
-        svg_tree.size().width(),
-        svg_tree.size().height()
-    );
-    println!(
-        "Number of root children: {}",
-        svg_tree.root().children().len()
-    );
-
     // Create a pixel buffer for the overlay
-    println!("Creating pixel buffer {}x{}", image.width(), image.height());
     let mut pixmap = match Pixmap::new(image.width(), image.height()) {
         Some(p) => p,
         None => {
-            println!("Failed to create pixel buffer");
             panic!("Pixmap creation failed");
         }
     };
 
     // Render SVG to the pixel buffer
-    println!("Rendering SVG to pixel buffer");
     resvg::render(&svg_tree, Transform::identity(), &mut pixmap.as_mut());
-
-    // Check pixmap for non-transparent pixels
-    let mut non_transparent_count = 0;
-    for y in 0..pixmap.height() {
-        for x in 0..pixmap.width() {
-            if let Some(pixel) = pixmap.pixel(x, y) {
-                if pixel.alpha() > 0 {
-                    non_transparent_count += 1;
-                }
-            }
-        }
-    }
-    println!(
-        "SVG rendering complete. Found {} non-transparent pixels",
-        non_transparent_count
-    );
 
     // Convert original image to RGB format
     let rgb_image: image::ImageBuffer<Rgb<u8>, Vec<u8>> = image.to_rgb8();
