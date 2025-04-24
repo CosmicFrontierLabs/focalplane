@@ -27,6 +27,7 @@ use ndarray::Array2;
 use simulator::algo::icp::{icp_match_objects, Locatable2d};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig};
+use simulator::image_proc::histogram_stretch::sigma_stretch;
 use simulator::image_proc::image::array2_to_gray_image;
 use simulator::image_proc::render::{render_star_field, RenderingResult, StarInFrame};
 use simulator::image_proc::segment::do_detections;
@@ -36,6 +37,7 @@ use simulator::image_proc::{
 };
 use simulator::{field_diameter, SensorConfig};
 use starfield::catalogs::{BinaryCatalog, StarCatalog, StarData};
+use starfield::image::sigma_clip;
 use starfield::RaDec;
 use std::collections::HashMap;
 use std::io::Write;
@@ -389,8 +391,10 @@ fn save_image_outputs(
     let stretched_image = stretch_histogram(render_result.image.view(), 0.0, 50.0);
 
     // Convert stretched u16 image to u8 using auto-scaling for best contrast
+    let img_flt = stretched_image.mapv(|x| x as f64);
+    let normed = sigma_stretch(&img_flt, 5.0, Some(5));
+    let u8_stretched = normed.mapv(|x| (x * 255.0).round() as u8);
     let stretched_path = output_path.join(format!("{}_stretched.png", prefix));
-    let u8_stretched = u16_to_u8_auto_scale(&stretched_image);
     save_u8_image(&u8_stretched, &stretched_path).expect("Failed to save stretched image");
 
     // Use light blue (135, 206, 250) for X markers

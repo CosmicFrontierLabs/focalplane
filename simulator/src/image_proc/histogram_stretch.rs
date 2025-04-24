@@ -4,6 +4,7 @@
 //! which remaps pixel values to use the full dynamic range based on percentile parameters.
 
 use ndarray::{Array2, ArrayView2};
+use starfield::image::sigma_clip;
 use std::collections::BTreeMap;
 
 /// Stretches the histogram of a u16 image between the specified lower and upper percentiles
@@ -113,6 +114,53 @@ pub fn stretch_histogram(
             32767
         }
     })
+}
+
+pub fn sigma_stretch(input: &Array2<f64>, sigma: f64, maxiters: Option<usize>) -> Array2<f64> {
+    let mut clipped = sigma_clip(input, sigma, maxiters, false);
+
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
+    let mut sum = 0.0;
+
+    // Compute the min/max/sum in one pass
+    input.iter().for_each(|x| {
+        if *x < min_val {
+            min_val = *x;
+        }
+        if *x > max_val {
+            max_val = *x;
+        }
+
+        sum += *x;
+    });
+
+    // Compute the mean
+    let mean = sum / (input.len() as f64);
+
+    // Compute the standard deviation
+    let mut sum_sq = 0.0;
+    input.iter().for_each(|v| {
+        let diff = *v - mean;
+        sum_sq += diff * diff;
+    });
+    let stddev = (sum_sq / (input.len() as f64)).sqrt();
+
+    let min_clip = mean - sigma * stddev;
+    let max_clip = mean + sigma * stddev;
+
+    let lowest_val = min_clip.max(min_val);
+    let highest_val = max_clip.min(max_val);
+
+    // Rescale all the pixels by the min/max to map into 0-1 range
+    let range = highest_val - lowest_val;
+    if range == 0.0 {
+        return input.clone(); // Avoid division by zero
+    }
+
+    clipped.mapv_inplace(|x| (x - lowest_val) / range);
+
+    clipped
 }
 
 #[cfg(test)]
