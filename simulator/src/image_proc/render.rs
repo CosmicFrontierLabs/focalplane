@@ -4,8 +4,8 @@ use ndarray::Array2;
 use starfield::{catalogs::StarData, RaDec};
 
 use crate::{
-    algo::icp::Locatable2d, magnitude_to_electrons, star_math::equatorial_to_pixel, SensorConfig,
-    TelescopeConfig,
+    algo::icp::Locatable2d, field_diameter, magnitude_to_electrons, star_math::equatorial_to_pixel,
+    SensorConfig, TelescopeConfig,
 };
 
 use super::generate_sensor_noise;
@@ -78,9 +78,7 @@ pub fn approx_airy_pixels(
 ///
 /// # Arguments
 /// * `stars` - Reference to a vector of StarData pointers containing catalog information
-/// * `ra_deg` - Right Ascension of field center in degrees
-/// * `dec_deg` - Declination of field center in degrees
-/// * `fov_deg` - Field of view in degrees
+/// * `center` - RaDec coordinates of field center
 /// * `telescope` - Reference to telescope configuration
 /// * `sensor` - Reference to sensor configuration
 /// * `exposure` - Reference to exposure duration
@@ -90,9 +88,7 @@ pub fn approx_airy_pixels(
 /// * `RenderingResult` - Contains the rendered image, electron counts, noise, star positions, and saturation info
 pub fn render_star_field(
     stars: &Vec<&StarData>,
-    ra_deg: f64,
-    dec_deg: f64,
-    fov_deg: f64,
+    center: &RaDec,
     telescope: &TelescopeConfig,
     sensor: &SensorConfig,
     exposure: &Duration,
@@ -110,6 +106,9 @@ pub fn render_star_field(
 
     let psf_pix = approx_airy_pixels(telescope, sensor, wavelength_nm);
 
+    // Calculate field of view from telescope and sensor
+    let fov_deg = field_diameter(telescope, sensor);
+
     // Padded bounds check
     let padding = psf_pix * 2.0;
 
@@ -117,14 +116,7 @@ pub fn render_star_field(
     for &star in stars {
         // Convert position to pixel coordinates (sub-pixel precision)
         let star_radec = RaDec::from_degrees(star.ra_deg(), star.dec_deg());
-        let center_radec = RaDec::from_degrees(ra_deg, dec_deg);
-        let (x, y) = equatorial_to_pixel(
-            &star_radec,
-            &center_radec,
-            fov_deg,
-            image_width,
-            image_height,
-        );
+        let (x, y) = equatorial_to_pixel(&star_radec, center, fov_deg, image_width, image_height);
 
         // Check if star is within the image bounds
         if x < -padding

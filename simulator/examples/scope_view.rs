@@ -32,12 +32,10 @@ use simulator::image_proc::image::array2_to_gray_image;
 use simulator::image_proc::render::{render_star_field, RenderingResult, StarInFrame};
 use simulator::image_proc::segment::do_detections;
 use simulator::image_proc::{
-    draw_stars_with_x_markers, save_u8_image, stretch_histogram, u16_to_u8_auto_scale,
-    u16_to_u8_scaled, StarDetection,
+    draw_stars_with_x_markers, save_u8_image, stretch_histogram, u16_to_u8_scaled, StarDetection,
 };
 use simulator::{field_diameter, SensorConfig};
 use starfield::catalogs::{BinaryCatalog, StarCatalog, StarData};
-use starfield::image::sigma_clip;
 use starfield::RaDec;
 use std::collections::HashMap;
 use std::io::Write;
@@ -142,20 +140,12 @@ fn run_experiment(
         std::fs::create_dir_all(output_path).expect("Failed to create output directory");
     }
 
-    let fov_deg = field_diameter(telescope, sensor);
-
     // Convert Vec<StarData> to Vec<&StarData> for filtering
     let star_refs: Vec<&StarData> = stars.iter().collect();
 
     // Render the star field
     let render_result = render_star_field(
-        &star_refs,
-        ra_dec.ra_degrees(),
-        ra_dec.dec_degrees(),
-        fov_deg,
-        &telescope,
-        &sensor,
-        &exposure,
+        &star_refs, &ra_dec, &telescope, &sensor, &exposure,
         550.0, // TODO(meawoppl) make this a parameter
     );
 
