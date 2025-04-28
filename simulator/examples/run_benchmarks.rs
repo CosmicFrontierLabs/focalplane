@@ -24,6 +24,7 @@ fn create_test_sensor(width: u32, height: u32, read_noise: f64, dark_current: f6
         16,       // bit depth
         0.5,      // dn per electron
         100000.0, // max well depth
+        60.0,     // frame rate
     )
 }
 

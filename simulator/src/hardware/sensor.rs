@@ -38,6 +38,9 @@ pub struct SensorConfig {
 
     /// Max well depth in electrons
     pub max_well_depth_e: f64,
+
+    /// Maximum frame rate in frames per second
+    pub max_frame_rate_fps: f64,
 }
 
 impl SensorConfig {
@@ -54,6 +57,7 @@ impl SensorConfig {
         bit_depth: u8,
         dn_per_electron: f64,
         max_well_depth_e: f64,
+        max_frame_rate_fps: f64,
     ) -> Self {
         Self {
             name: name.into(),
@@ -66,6 +70,7 @@ impl SensorConfig {
             bit_depth,
             dn_per_electron,
             max_well_depth_e,
+            max_frame_rate_fps,
         }
     }
 
@@ -107,7 +112,7 @@ mod tests {
         let efficiencies = vec![0.0, 0.4, 0.6, 0.5, 0.0];
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
 
-        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01, 8, 3.0, 1e20);
+        let sensor = SensorConfig::new("Test", qe, 1024, 1024, 5.5, 2.0, 0.01, 8, 3.0, 1e20, 30.0);
 
         // Exact matches (use approximate comparison for float values)
         assert_relative_eq!(sensor.qe_at_wavelength(400), 0.4, epsilon = 1e-5);
@@ -126,7 +131,7 @@ mod tests {
     #[test]
     fn test_sensor_dimensions() {
         let qe = create_flat_qe(0.5);
-        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01, 8, 3.0, 1e20);
+        let sensor = SensorConfig::new("Test", qe, 1024, 768, 5.5, 2.0, 0.01, 8, 3.0, 1e20, 30.0);
         let (width_um, height_um) = sensor.dimensions_um();
 
         assert_eq!(width_um, 1024.0 * 5.5);
@@ -207,6 +212,7 @@ pub mod models {
             12,
             0.35,
             39_200.0,
+            24.0,
         )
     });
 
@@ -249,6 +255,7 @@ pub mod models {
             12,
             0.35,
             21_000.0,
+            88.0,
         )
     });
 
@@ -279,7 +286,9 @@ pub mod models {
 
         // 7.42 DN/e- at 32x gain
         // 0.242 DN/e- at 1x gain (using 1x gain here)
-        SensorConfig::new("HWK4123", qe, 4096, 2300, 4.6, 0.25, 0.1, 12, 7.42, 7_500.0)
+        SensorConfig::new(
+            "HWK4123", qe, 4096, 2300, 4.6, 0.25, 0.1, 12, 7.42, 7_500.0, 120.0,
+        )
     });
 
     /// Sony IMX455 Full-frame BSI CMOS sensor
@@ -310,7 +319,7 @@ pub mod models {
             "IMX455", qe, 9568, 6380, 3.75,  // Pixel pitch in microns
             2.67,  // Read noise in electrons (from arxiv paper)
             0.002, // Dark current in e-/px/s at -20°C (from arxiv paper)
-            16, 0.343, 71_600.0,
+            16, 0.343, 71_600.0, 21.33,
         )
     });
 }
@@ -328,6 +337,7 @@ mod model_tests {
         assert_eq!(models::GSENSE4040BSI.pixel_size_um, 9.0);
         assert_eq!(models::GSENSE4040BSI.read_noise_e, 2.3);
         assert_eq!(models::GSENSE4040BSI.dark_current_e_p_s, 0.04);
+        assert_eq!(models::GSENSE4040BSI.max_frame_rate_fps, 24.0);
         // QE should be close to 0.9 at 550nm for this sensor
         assert!(models::GSENSE4040BSI.qe_at_wavelength(550) > 0.85);
 
@@ -338,6 +348,7 @@ mod model_tests {
         assert_eq!(models::GSENSE6510BSI.pixel_size_um, 6.5);
         assert_eq!(models::GSENSE6510BSI.read_noise_e, 0.7);
         assert_eq!(models::GSENSE6510BSI.dark_current_e_p_s, 0.2);
+        assert_eq!(models::GSENSE6510BSI.max_frame_rate_fps, 88.0);
         // QE should peak around 520-550nm for this sensor
         assert!(models::GSENSE6510BSI.qe_at_wavelength(550) > 0.95);
 
@@ -348,6 +359,7 @@ mod model_tests {
         assert_eq!(models::HWK4123.pixel_size_um, 4.6);
         assert_eq!(models::HWK4123.read_noise_e, 0.25);
         assert_eq!(models::HWK4123.dark_current_e_p_s, 0.1);
+        assert_eq!(models::HWK4123.max_frame_rate_fps, 120.0);
         // QE should be close to 0.8 at 550nm for this sensor
         assert!(models::HWK4123.qe_at_wavelength(550) > 0.75);
 
@@ -358,6 +370,7 @@ mod model_tests {
         assert_eq!(models::IMX455.pixel_size_um, 3.75);
         assert_eq!(models::IMX455.read_noise_e, 2.67);
         assert_eq!(models::IMX455.dark_current_e_p_s, 0.002);
+        assert_eq!(models::IMX455.max_frame_rate_fps, 21.33);
 
         // Get actual QE value to print for debugging
         let qe_400 = models::IMX455.qe_at_wavelength(400);

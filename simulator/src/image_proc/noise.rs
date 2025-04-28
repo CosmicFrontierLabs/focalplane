@@ -211,6 +211,7 @@ mod tests {
             8,
             1.0,
             1.0,
+            60.0, // default frame rate for test
         )
     }
 
