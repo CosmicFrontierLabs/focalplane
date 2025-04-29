@@ -57,14 +57,6 @@ struct Args {
     #[arg(long, default_value = "gaia_mag16_multi.bin")]
     catalog: PathBuf,
 
-    /// Right ascension of field center in degrees
-    #[arg(long, default_value_t = 100.0)]
-    ra: f64,
-
-    /// Declination of field center in degrees
-    #[arg(long, default_value_t = 10.0)]
-    dec: f64,
-
     /// Exposure time in seconds
     #[arg(long, default_value_t = 1.0)]
     exposure: f64,
@@ -72,10 +64,6 @@ struct Args {
     /// Wavelength in nanometers
     #[arg(long, default_value_t = 550.0)]
     wavelength: f64,
-
-    /// Sensor model (GSENSE4040BSI, GSENSE6510BSI, HWK4123, IMX455)
-    #[arg(long, default_value = "GSENSE4040BSI")]
-    sensor: String,
 
     /// Number of experiments to run
     #[arg(long, default_value_t = 100)]
@@ -86,6 +74,16 @@ struct Args {
     debug: bool,
 }
 
+/// Creates telescope optics configuration optimized for a specific sensor
+///
+/// Calculates focal length to achieve 4 pixels per Airy disk for optimal sampling
+///
+/// # Arguments
+/// * `sensor` - Sensor configuration with pixel size
+/// * `wavelength_nm` - Light wavelength in nanometers
+///
+/// # Returns
+/// * `TelescopeConfig` - Optimized telescope configuration
 fn build_optics_for_sensor(sensor: &SensorConfig, wavelength_nm: f64) -> TelescopeConfig {
     // Make a pretend telescope with focal length driven to make 4pix/airy disk
     let target_airy_disk_um = sensor.pixel_size_um * 4.0; // 4 pixels per Airy disk
@@ -102,6 +100,10 @@ fn build_optics_for_sensor(sensor: &SensorConfig, wavelength_nm: f64) -> Telesco
     )
 }
 
+/// Prints histogram of star magnitudes
+///
+/// # Arguments
+/// * `stars` - Vector of stars to analyze
 fn print_am_hist(stars: &Vec<StarData>) {
     // Print histogram of star magnitudes
     if stars.is_empty() {
@@ -128,6 +130,21 @@ fn print_am_hist(stars: &Vec<StarData>) {
     }
 }
 
+/// Runs a single imaging experiment with specified sensor and telescope
+///
+/// Renders star field, detects stars, and saves output images in a background thread
+///
+/// # Arguments
+/// * `sensor` - Sensor configuration
+/// * `telescope` - Telescope configuration
+/// * `ra_dec` - Right ascension and declination pointing
+/// * `stars` - Vector of stars to render
+/// * `exposure` - Exposure duration
+/// * `experiment_num` - Experiment identifier
+/// * `debug` - Enable debug output
+///
+/// # Returns
+/// * Thread handle for the background image saving task
 fn run_experiment(
     sensor: &SensorConfig,
     telescope: &TelescopeConfig,
