@@ -2140,6 +2140,7 @@ dependencies = [
  "criterion",
  "float-cmp",
  "image",
+ "indicatif",
  "nalgebra",
  "ndarray",
  "num-traits",

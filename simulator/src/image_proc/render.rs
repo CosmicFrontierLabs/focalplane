@@ -44,10 +44,6 @@ pub struct RenderingResult {
 
     /// The stars that were rendered in the image (not clipped)
     pub rendered_stars: Vec<StarInFrame>,
-
-    /// Number of pixels that were clipped to maximum well depth
-    /// This is useful for understanding saturation effects
-    pub n_clipped: u32,
 }
 
 /// Create gaussian PSF kernel based on telescope properties
@@ -152,18 +148,19 @@ pub fn render_star_field(
         &sensor, &exposure, None, // Use random noise
     );
 
-    let mut max_well_clipped = 0;
-    // Add sensor noise to the image
-    for ((i, j), &noise_val) in noise.indexed_iter() {
-        image[[i, j]] += noise_val;
+    image += &noise;
 
-        // Clip to maximum well depth
-        if image[[i, j]] > sensor.max_well_depth_e {
-            image[[i, j]] = sensor.max_well_depth_e; // Clip to max well depth
-            max_well_clipped += 1; // Count how many pixels were clipped
-        }
+    let quantized = quantize_image(&image, sensor);
+
+    RenderingResult {
+        image: quantized,
+        electron_image: image,
+        noise_image: noise,
+        rendered_stars: to_render,
     }
+}
 
+pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Array2<u16> {
     // Get the DN per electron conversion factor from the sensor
     // Calculate max DN value based on sensor bit depth (saturate at sensor's max value)
     let max_dn = ((1 << sensor.bit_depth) - 1) as f64;
@@ -173,19 +170,12 @@ pub fn render_star_field(
     // 2. Clip to valid range (0 to max DN for the sensor bit depth)
     // 3. Round to nearest integer
     // 4. Convert to u16
-    let quantized = image.mapv(|x| {
-        let dn = x * sensor.dn_per_electron();
+    electron_img.mapv(|total_e| {
+        let clipped_e = total_e.clamp(0.0, sensor.max_well_depth_e as f64);
+        let dn = clipped_e * sensor.dn_per_electron();
         let clipped = dn.clamp(0.0, max_dn as f64);
         clipped.round() as u16
-    });
-
-    RenderingResult {
-        image: quantized,
-        electron_image: image,
-        noise_image: noise,
-        n_clipped: max_well_clipped,
-        rendered_stars: to_render,
-    }
+    })
 }
 
 /// Adds stars to an image by approximating a Gaussian point spread function (PSF).
@@ -254,6 +244,7 @@ mod tests {
     use rand::Rng;
 
     use super::*;
+    use crate::hardware::sensor::create_flat_qe;
 
     fn test_star_data() -> StarData {
         StarData {
@@ -262,6 +253,27 @@ mod tests {
             position: RaDec::from_degrees(0.0, 0.0),
             b_v: None,
         }
+    }
+
+    fn create_test_sensor(
+        bit_depth: u8,
+        dn_per_electron: f64,
+        max_well_depth_e: f64,
+    ) -> SensorConfig {
+        let qe = create_flat_qe(0.5);
+        SensorConfig::new(
+            "Test",
+            qe,
+            1024,
+            1024,
+            5.5,
+            2.0,
+            0.01,
+            bit_depth,
+            dn_per_electron,
+            max_well_depth_e,
+            30.0,
+        )
     }
 
     #[test]
@@ -393,5 +405,106 @@ mod tests {
 
         // Very loose bounds, but should catch egregious errors
         assert!(added_flux > 0.0);
+    }
+
+    #[test]
+    fn test_quantize_image_basic() {
+        let sensor = create_test_sensor(8, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 0.0; // Min value - should be 0 DN
+        electron_img[[0, 1]] = 100.0; // Middle value - should be 100 DN
+        electron_img[[0, 2]] = 200.0; // Higher value - should be 200 DN
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 0);
+        assert_eq!(quantized[[0, 1]], 100);
+        assert_eq!(quantized[[0, 2]], 200);
+    }
+
+    #[test]
+    fn test_quantize_image_saturation() {
+        let sensor = create_test_sensor(8, 1.0, 200.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 100.0; // Within well depth
+        electron_img[[0, 1]] = 200.0; // At well depth limit
+        electron_img[[0, 2]] = 300.0; // Exceeds well depth - should be clamped
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 100);
+        assert_eq!(quantized[[0, 1]], 200);
+        assert_eq!(quantized[[0, 2]], 200); // Clamped to well depth
+    }
+
+    #[test]
+    fn test_quantize_image_bit_depth() {
+        // Test with 10-bit sensor
+        let sensor = create_test_sensor(10, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 0.0;
+        electron_img[[0, 1]] = 500.0;
+        electron_img[[0, 2]] = 1500.0; // Above max well depth
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        // Max value for 10-bit is 1023
+        assert_eq!(quantized[[0, 0]], 0);
+        assert_eq!(quantized[[0, 1]], 500);
+        assert_eq!(quantized[[0, 2]], 1000); // Clamped to well depth
+    }
+
+    #[test]
+    fn test_quantize_image_dn_conversion() {
+        // Test with different DN per electron values
+        let sensor = create_test_sensor(12, 0.5, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 10.0; // 10 * 0.5 = 5 DN
+        electron_img[[0, 1]] = 100.0; // 100 * 0.5 = 50 DN
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 5);
+        assert_eq!(quantized[[0, 1]], 50);
+    }
+
+    #[test]
+    fn test_quantize_image_rounding() {
+        // Test rounding behavior
+        let sensor = create_test_sensor(12, 0.3, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set electron values that will require rounding
+        electron_img[[0, 0]] = 10.0; // 10 * 0.3 = 3.0 DN
+        electron_img[[0, 1]] = 15.0; // 15 * 0.3 = 4.5 DN -> should round to 5
+        electron_img[[0, 2]] = 16.0; // 16 * 0.3 = 4.8 DN -> should round to 5
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 3);
+        assert_eq!(quantized[[0, 1]], 5); // Rounded up
+        assert_eq!(quantized[[0, 2]], 5); // Rounded up
+    }
+
+    #[test]
+    fn test_quantize_image_negative_values() {
+        // Test handling of negative electron values (shouldn't happen in practice but test defense)
+        let sensor = create_test_sensor(8, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set some negative values
+        electron_img[[0, 0]] = -10.0; // Should be clamped to 0
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 0);
     }
 }

@@ -26,7 +26,10 @@ use image::DynamicImage;
 use ndarray::Array2;
 use simulator::algo::icp::{icp_match_objects, Locatable2d};
 use simulator::hardware::sensor::models as sensor_models;
-use simulator::hardware::telescope::{models as telescope_models, TelescopeConfig};
+use simulator::hardware::telescope::models::DEMO_50CM;
+use simulator::hardware::telescope::{
+    build_optics_for_sensor, models as telescope_models, TelescopeConfig,
+};
 use simulator::image_proc::histogram_stretch::sigma_stretch;
 use simulator::image_proc::image::array2_to_gray_image;
 use simulator::image_proc::render::{render_star_field, RenderingResult, StarInFrame};
@@ -72,32 +75,6 @@ struct Args {
     /// Enable debug output like electron histograms
     #[arg(long, default_value_t = false)]
     debug: bool,
-}
-
-/// Creates telescope optics configuration optimized for a specific sensor
-///
-/// Calculates focal length to achieve 4 pixels per Airy disk for optimal sampling
-///
-/// # Arguments
-/// * `sensor` - Sensor configuration with pixel size
-/// * `wavelength_nm` - Light wavelength in nanometers
-///
-/// # Returns
-/// * `TelescopeConfig` - Optimized telescope configuration
-fn build_optics_for_sensor(sensor: &SensorConfig, wavelength_nm: f64) -> TelescopeConfig {
-    // Make a pretend telescope with focal length driven to make 4pix/airy disk
-    let target_airy_disk_um = sensor.pixel_size_um * 4.0; // 4 pixels per Airy disk
-    let aperture = telescope_models::DEMO_50CM.aperture_m;
-    let wavelength_m = wavelength_nm * 1e-9; // Convert nm to m
-    let focal_length_m = (target_airy_disk_um * aperture) / (1e6 * 1.22 * wavelength_m);
-
-    let name = format!("{}-{:.2}", telescope_models::DEMO_50CM.name, focal_length_m);
-    TelescopeConfig::new(
-        &name,
-        aperture,
-        focal_length_m, // Default focal length, will be overridden by aperture
-        telescope_models::DEMO_50CM.light_efficiency, // Light efficiency
-    )
 }
 
 /// Prints histogram of star magnitudes
@@ -179,10 +156,6 @@ fn run_experiment(
         println!(
             "Total noise in image: {:.2}e-",
             render_result.noise_image.sum()
-        );
-        println!(
-            "{} pixels were clipped to maximum well depth of {:.2} electrons",
-            render_result.n_clipped, sensor.max_well_depth_e
         );
 
         display_electron_histogram(&render_result.electron_image, 25).unwrap();
@@ -281,7 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_scopes = all_sensors
         .iter()
-        .map(|s| build_optics_for_sensor(s, args.wavelength))
+        .map(|s| build_optics_for_sensor(&DEMO_50CM, &s, args.wavelength, 4.0))
         .collect::<Vec<_>>();
 
     // Compute the maximal FOV of all sensors:

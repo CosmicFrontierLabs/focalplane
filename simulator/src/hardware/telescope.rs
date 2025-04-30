@@ -3,6 +3,8 @@
 use once_cell::sync::Lazy;
 use std::f64::consts::PI;
 
+use super::SensorConfig;
+
 /// Configuration for a telescope optical system
 #[derive(Debug, Clone)]
 pub struct TelescopeConfig {
@@ -97,6 +99,39 @@ impl TelescopeConfig {
     pub fn effective_collecting_area_m2(&self) -> f64 {
         self.collecting_area_m2() * self.light_efficiency
     }
+}
+
+/// Creates telescope optics configuration optimized for a specific sensor
+///
+/// Calculates focal length to achieve 4 pixels per Airy disk for optimal sampling
+///
+/// # Arguments
+/// * `sensor` - Sensor configuration with pixel size
+/// * `wavelength_nm` - Light wavelength in nanometers
+/// * `airy_pix` - Desired Airy disk size in pixels
+///
+/// # Returns
+/// * `TelescopeConfig` - Optimized telescope configuration
+pub fn build_optics_for_sensor(
+    telescope: &TelescopeConfig,
+    sensor: &SensorConfig,
+    wavelength_nm: f64,
+    airy_pix: f64,
+) -> TelescopeConfig {
+    // Make a pretend telescope with focal length driven to make 4pix/airy disk
+    let target_airy_disk_um = sensor.pixel_size_um * airy_pix; // 4 pixels per Airy disk
+    let wavelength_m = wavelength_nm * 1e-9; // Convert nm to m
+    let focal_length_m = (target_airy_disk_um * telescope.aperture_m) / (1e6 * 1.22 * wavelength_m);
+
+    // Create a new TelescopeConfig with the calculated focal length
+    let name = format!("{} for {:.1}", telescope.name, focal_length_m);
+
+    TelescopeConfig::new(
+        &name,
+        telescope.aperture_m, // Use the same aperture
+        focal_length_m,
+        telescope.light_efficiency, // Light efficiency
+    )
 }
 
 #[cfg(test)]
