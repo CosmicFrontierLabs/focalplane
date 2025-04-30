@@ -197,7 +197,7 @@ mod tests {
         dark_current: f64,
         read_noise: f64,
     ) -> SensorConfig {
-        let band = Band::new(300.0, 700.0);
+        let band = Band::from_nm_bounds(300.0, 700.0);
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
         SensorConfig::new(

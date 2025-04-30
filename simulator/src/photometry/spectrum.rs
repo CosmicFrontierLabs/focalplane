@@ -33,12 +33,6 @@ impl CGS {
 /// Errors that can occur with spectrum operations
 #[derive(Debug, Error)]
 pub enum SpectrumError {
-    #[error("Wavelengths must have at least 2 points")]
-    TooFewWavelengths,
-
-    #[error("Measurements must have exactly one less element than wavelengths")]
-    MeasurementsMismatch,
-
     #[error("Invalid frequency: {0}")]
     InvalidFrequency(String),
 }
@@ -52,38 +46,6 @@ pub struct Band {
 }
 
 impl Band {
-    /// Create a new Band from a wavelength range
-    ///
-    /// # Arguments
-    ///
-    /// * `range` - A range of wavelengths in nanometers
-    ///
-    /// # Returns
-    ///
-    /// A new Band with the specified wavelength range
-    pub fn from(range: std::ops::Range<f64>) -> Self {
-        // These are programming errors, so we don't return Result
-        // but panic if the range is invalid
-        if !range.start.is_finite() || !range.end.is_finite() {
-            panic!("Wavelength range cannot contain non-finite values");
-        }
-
-        if range.start > range.end {
-            panic!(
-                "Invalid wavelength range: start must be less than end, got {}..{}",
-                range.start, range.end
-            );
-        }
-        if range.start < 0.0 || range.end < 0.0 {
-            panic!("Wavelengths must be non-negative");
-        }
-
-        Self {
-            lower_nm: range.start,
-            upper_nm: range.end,
-        }
-    }
-
     /// Create a new Band directly from lower and upper bounds
     ///
     /// # Arguments
@@ -94,8 +56,82 @@ impl Band {
     /// # Returns
     ///
     /// A new Band with the specified wavelength bounds
-    pub fn new(lower_nm: f64, upper_nm: f64) -> Self {
-        Self::from(lower_nm..upper_nm)
+    pub fn from_nm_bounds(lower_nm: f64, upper_nm: f64) -> Self {
+        // These are programming errors, so we don't return Result
+        // but panic if the range is invalid
+        if !lower_nm.is_finite() || !upper_nm.is_finite() {
+            panic!("Wavelength range cannot contain non-finite values");
+        }
+
+        if lower_nm > upper_nm {
+            panic!(
+                "Invalid wavelength range: start must be less than end, got {}..{}",
+                lower_nm, upper_nm,
+            );
+        }
+        if lower_nm < 0.0 || upper_nm < 0.0 {
+            panic!("Wavelengths must be non-negative");
+        }
+
+        Self { lower_nm, upper_nm }
+    }
+
+    /// Create a new Band from frequency bounds in Hz
+    ///
+    /// # Arguments
+    ///
+    /// * `lower_freq_hz` - Lower frequency bound in Hz
+    /// * `upper_freq_hz` - Upper frequency bound in Hz
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the new Band or an error if the frequencies are invalid
+    pub fn from_freq_bounds(lower_freq_hz: f64, upper_freq_hz: f64) -> Self {
+        // Convert frequency bounds to wavelength bounds
+        if lower_freq_hz <= 0.0 || upper_freq_hz <= 0.0 {
+            panic!(
+                "Frequencies must be positive, got {}..{}",
+                lower_freq_hz, upper_freq_hz
+            );
+        }
+
+        // Wavelength = speed of light / frequency
+        let lower_nm = CGS::SPEED_OF_LIGHT / (upper_freq_hz * 1e-7); // Convert Hz to nm
+        let upper_nm = CGS::SPEED_OF_LIGHT / (lower_freq_hz * 1e-7); // Convert Hz to nm
+
+        Self::from_nm_bounds(lower_nm, upper_nm)
+    }
+
+    /// Create a new Band centered on a given wavelength with a specified frequency spread
+    ///
+    /// # Arguments
+    ///
+    /// * `wavelength_nm` - Wavelength in nanometers to center the band on
+    /// * `frequency_spread` - Frequency spread in Hz to define the width of the band
+    ///
+    /// # Returns
+    ///
+    /// A new Band centered on the specified wavelength with the given frequency spread
+    pub fn centered_on(wavelength_nm: f64, frequency_spread: f64) -> Self {
+        // Create a band centered on a wavelength with a given width
+        if wavelength_nm <= 0.0 {
+            panic!("Wavelength must be positive, got: {}", wavelength_nm);
+        }
+        if frequency_spread <= 0.0 {
+            panic!(
+                "Frequency spread must be positive, got: {}",
+                frequency_spread
+            );
+        }
+        // Convert wavelength to frequency
+        let center_freq = CGS::SPEED_OF_LIGHT / (wavelength_nm * 1e-7); // Convert nm to Hz
+                                                                        // Calculate lower and upper frequency bounds
+        let lower_freq = center_freq - frequency_spread / 2.0;
+        let upper_freq = center_freq + frequency_spread / 2.0;
+        // Convert back to wavelength bounds
+        let lower_nm = CGS::SPEED_OF_LIGHT / (upper_freq * 1e-7); // Convert Hz to nm
+        let upper_nm = CGS::SPEED_OF_LIGHT / (lower_freq * 1e-7); // Convert Hz to nm
+        Self::from_nm_bounds(lower_nm, upper_nm)
     }
 
     /// Get the width of the band in nanometers
@@ -105,6 +141,15 @@ impl Band {
     /// The width of the band (upper_nm - lower_nm)
     pub fn width(&self) -> f64 {
         self.upper_nm - self.lower_nm
+    }
+
+    /// Return the center of a band in nanometers
+    ///
+    /// # Returns
+    ///
+    /// The center wavelength of the band in nanometers
+    pub fn center(&self) -> f64 {
+        (self.lower_nm + self.upper_nm) / 2.0
     }
 
     /// Get the frequency bounds of the band in Hz
@@ -129,11 +174,31 @@ fn nm_sub_bands(band: &Band) -> Vec<Band> {
     let first_int_nm = band.lower_nm.ceil() as u32;
     let last_int_nm = band.upper_nm.floor() as u32;
 
-    bands.push(Band::new(band.lower_nm, first_int_nm as f64));
-    bands.extend((first_int_nm..=last_int_nm).map(|nm| Band::new(nm as f64, nm as f64 + 1.0)));
-    bands.push(Band::new(last_int_nm as f64, band.upper_nm));
+    if band.lower_nm != first_int_nm as f64 {
+        bands.push(Band::from_nm_bounds(band.lower_nm, first_int_nm as f64));
+    }
+    bands.extend(
+        (first_int_nm..last_int_nm).map(|nm| Band::from_nm_bounds(nm as f64, nm as f64 + 1.0)),
+    );
+
+    if last_int_nm as f64 != band.upper_nm {
+        bands.push(Band::from_nm_bounds(last_int_nm as f64, band.upper_nm));
+    }
 
     bands
+}
+
+fn wavelength_to_ergs(wavelength_nm: f64) -> f64 {
+    // Convert wavelength in nanometers to energy in erg
+    // E = h * c / λ, where λ is in cm
+    if wavelength_nm <= 0.0 {
+        panic!(
+            "WARNING!!! Wavelength must be positive, got: {}",
+            wavelength_nm
+        );
+    }
+    let wavelength_cm = wavelength_nm * 1e-7; // Convert nm to cm
+    CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / wavelength_cm
 }
 
 /// Trait representing a spectrum of electromagnetic radiation
@@ -192,10 +257,9 @@ pub trait Spectrum: Send + Sync {
 
         // Integrate over each wavelength in the band
         for band in bands {
-            let mean_wavelength_nm = (band.lower_nm + band.upper_nm) / 2.0;
-            let mean_wavelength_cm = mean_wavelength_nm * 1e-7; // Convert to cm
-            let energy_per_photon = CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / mean_wavelength_cm;
-            total_photons += self.irradiance(&band) / energy_per_photon;
+            let energy_per_photon = wavelength_to_ergs(band.center());
+            let irradiance = self.irradiance(&band);
+            total_photons += irradiance / energy_per_photon;
         }
 
         // Multiply by duration to get total photons detected
@@ -229,146 +293,13 @@ pub trait Spectrum: Send + Sync {
 
         // Integrate over each wavelength in the band
         for band in bands {
-            let mean_wavelength_nm = (band.lower_nm + band.upper_nm) / 2.0;
-            let mean_wavelength_cm = mean_wavelength_nm * 1e-7; // Convert to cm
-            let energy_per_photon = CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / mean_wavelength_cm;
+            let energy_per_photon = wavelength_to_ergs(band.center());
             let photons_in_band = self.irradiance(&band) / energy_per_photon;
-            total_electrons += qe.at(mean_wavelength_nm) * photons_in_band;
+            total_electrons += qe.at(band.center()) * photons_in_band;
         }
 
         // Multiply by duration to get total photons detected
         total_electrons * duration.as_secs_f64() * aperture_cm2
-    }
-}
-
-/// A spectrum model with variable width wavelength bins
-///
-/// This struct stores N bin edges and N-1 measurement values.
-/// Each measurement represents the spectral irradiance within a bin defined
-/// by adjacent wavelength points.
-#[derive(Debug, Clone)]
-pub struct BinnedSpectrum {
-    /// Wavelength bin edges in nanometers (N points)
-    wavelengths: Vec<f64>,
-
-    /// Spectral irradiance for each bin in erg s⁻¹ cm⁻² nm⁻¹ (N-1 values)
-    spec_irr: Vec<f64>,
-}
-
-impl BinnedSpectrum {
-    /// Create a new BinnedSpectrum with bin edges and measurements
-    ///
-    /// # Arguments
-    ///
-    /// * `wavelengths` - The N wavelength bin edges in nanometers (must be ascending)
-    /// * `measurements` - The N-1 measurement values for each bin in erg s⁻¹ cm⁻² nm⁻¹
-    ///
-    /// # Returns
-    ///
-    /// A Result containing the new BinnedSpectrum or an error
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Wavelengths has fewer than 2 points
-    /// - Measurements length is not wavelengths length - 1
-    /// - Wavelengths are not in ascending order
-    /// - Any wavelength is negative
-    pub fn new(wavelengths: Vec<f64>, spec_irr: Vec<f64>) -> Result<Self, SpectrumError> {
-        // Check wavelengths has at least 2 points
-        if wavelengths.len() < 2 {
-            return Err(SpectrumError::TooFewWavelengths);
-        }
-
-        // Check measurements has correct length
-        if spec_irr.len() != wavelengths.len() - 1 {
-            return Err(SpectrumError::MeasurementsMismatch);
-        }
-
-        // Check wavelengths are positive
-        if let Some(negative) = wavelengths.iter().find(|&&w| w < 0.0) {
-            return Err(SpectrumError::InvalidFrequency(format!(
-                "Negative wavelength: {}",
-                negative
-            )));
-        }
-
-        // Check wavelengths are in ascending order
-        for i in 1..wavelengths.len() {
-            if wavelengths[i] <= wavelengths[i - 1] {
-                return Err(SpectrumError::InvalidFrequency(format!(
-                    "Wavelengths not in ascending order: {} <= {}",
-                    wavelengths[i],
-                    wavelengths[i - 1]
-                )));
-            }
-        }
-
-        Ok(Self {
-            wavelengths,
-            spec_irr,
-        })
-    }
-}
-
-impl Spectrum for BinnedSpectrum {
-    fn spectral_irradiance(&self, wavelength_nm: f64) -> f64 {
-        // Return 0.0 if outside the range
-        if wavelength_nm < self.wavelengths[0] || wavelength_nm > *self.wavelengths.last().unwrap()
-        {
-            return 0.0;
-        }
-
-        // Find the bin that contains the wavelength
-        // Could be done via binary search for efficiency,
-        // but for simplicity we use linear search here
-        for i in 0..self.spec_irr.len() {
-            if wavelength_nm >= self.wavelengths[i] && wavelength_nm <= self.wavelengths[i + 1] {
-                return self.spec_irr[i];
-            }
-        }
-
-        // Should never reach here...
-        0.0
-    }
-
-    fn irradiance(&self, band: &Band) -> f64 {
-        // Initialize bounds from band
-        let lower = band.lower_nm;
-        let upper = band.upper_nm;
-
-        // Clamp to spectrum range
-        let lower = lower.max(self.wavelengths[0]);
-        let upper = upper.min(*self.wavelengths.last().unwrap());
-
-        if lower >= upper {
-            return 0.0;
-        }
-
-        let mut power = 0.0;
-
-        // Integrate over each bin that overlaps with the requested range
-        for i in 0..self.spec_irr.len() {
-            let bin_start = self.wavelengths[i];
-            let bin_end = self.wavelengths[i + 1];
-
-            // Skip bins completely outside our range
-            if bin_end <= lower || bin_start >= upper {
-                continue;
-            }
-
-            // Calculate overlap between bin and requested range (units nm)
-            let overlap_start = bin_start.max(lower);
-            let overlap_end = bin_end.min(upper);
-            let overlap_width = overlap_end - overlap_start;
-
-            // Use the original measurement units for power calculation (erg s⁻¹ cm⁻² nm⁻¹)
-            // since we're integrating over wavelength, not frequency
-            power += self.spec_irr[i] * overlap_width;
-        }
-
-        // Multiply by aperture area to get total power
-        power
     }
 }
 
@@ -387,7 +318,7 @@ impl FlatStellarSpectrum {
     ///
     /// # Arguments
     ///
-    /// * `flux_density_jy` - The spectral flux density in (erg s⁻¹ cm⁻² nm⁻¹)
+    /// * `spectral_flux_density` - The spectral flux density in (erg s⁻¹ cm⁻² Hz⁻¹)
     ///
     /// # Returns
     ///
@@ -439,7 +370,7 @@ impl Spectrum for FlatStellarSpectrum {
             return 0.0;
         }
 
-        // Convert from erg s⁻¹ cm⁻² Hz⁻¹
+        // erg s⁻¹ cm⁻² Hz⁻¹
         self.spectral_flux_density
     }
 
@@ -464,13 +395,61 @@ mod tests {
     use approx::assert_relative_eq;
 
     #[test]
+    fn test_nm_sub_bands() {
+        let lowest = 400.0;
+        let highest = 700.0;
+
+        let band = Band::from_nm_bounds(lowest, highest);
+        let sub_bands = nm_sub_bands(&band);
+
+        // Should create bands for each integer nm in the range
+        assert_eq!(sub_bands.len(), 300); // 700 - 400
+
+        // Check first and last bands
+        assert_eq!(sub_bands[0].lower_nm, lowest);
+        assert_eq!(sub_bands[0].upper_nm, lowest + 1.0);
+        assert_eq!(sub_bands.last().unwrap().lower_nm, highest - 1.0);
+        assert_eq!(sub_bands.last().unwrap().upper_nm, highest);
+
+        // Check middle band
+        assert_eq!(sub_bands[150].lower_nm, 550.0);
+        assert_eq!(sub_bands[150].upper_nm, 551.0);
+
+        for b in &sub_bands {
+            assert!(
+                b.lower_nm < b.upper_nm,
+                "Band {}..{} is invalid",
+                b.lower_nm,
+                b.upper_nm
+            );
+            assert!(b.lower_nm >= lowest, "OOB {}", b.lower_nm);
+            assert!(b.upper_nm <= highest, "OOB {}", b.upper_nm);
+        }
+    }
+
+    #[test]
+    fn test_nm_sub_bands_tiny() {
+        let lowest = 10.0;
+        let highest = 11.0;
+
+        let band = Band::from_nm_bounds(lowest, highest);
+        let sub_bands = nm_sub_bands(&band);
+
+        assert_eq!(sub_bands.len(), 1); // 11 - 10
+
+        // Check the single band created
+        assert_eq!(sub_bands[0].lower_nm, lowest);
+        assert_eq!(sub_bands[0].upper_nm, highest);
+    }
+
+    #[test]
     fn test_aaron_matching_photoelec() {
         let mag_to_photons = vec![
             (0.0, 3_074_446.0),
             (10.0, 0.0001 * 3_074_446.0),
             (12.0, 48.0),
         ];
-        let band: Band = Band::new(400.0, 700.0);
+        let band: Band = Band::from_nm_bounds(400.0, 700.0);
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
         for (mag, expected_electrons) in mag_to_photons.iter() {
@@ -506,7 +485,7 @@ mod tests {
             // Calculate number of photons in 400-700nm if a 12th mag star
             let spectrum = FlatStellarSpectrum::from_ab_mag(*mag);
 
-            let band = Band::new(400.0, 700.0);
+            let band = Band::from_nm_bounds(400.0, 700.0);
 
             // Assume 1 cm² aperture and 1 second duration
             let aperture_cm2 = 1.0;
@@ -523,50 +502,6 @@ mod tests {
                 expected_photons
             );
         }
-    }
-
-    #[test]
-    fn test_binned_spectrum_irradiance() {
-        let wavelengths = vec![400.0, 450.0, 500.0, 600.0, 700.0];
-        let measurements = vec![0.1, 0.5, 0.8, 0.2];
-
-        let spectrum = BinnedSpectrum::new(wavelengths, measurements).unwrap();
-
-        // First, test the original irradiance method
-        assert_relative_eq!(spectrum.spectral_irradiance(425.0), 0.1, epsilon = 1e-5);
-        assert_relative_eq!(spectrum.spectral_irradiance(550.0), 0.8, epsilon = 1e-5);
-
-        // Test irradiance at bin edges
-        assert_relative_eq!(spectrum.spectral_irradiance(400.0), 0.1, epsilon = 1e-5);
-        assert_relative_eq!(spectrum.spectral_irradiance(500.0), 0.5, epsilon = 1e-5);
-
-        // Test irradiance outside range
-        assert_relative_eq!(spectrum.spectral_irradiance(300.0), 0.0, epsilon = 1e-5);
-        assert_relative_eq!(spectrum.spectral_irradiance(800.0), 0.0, epsilon = 1e-5);
-    }
-
-    #[test]
-    fn test_binned_spectrum_power() {
-        let wavelengths = vec![400.0, 450.0, 500.0, 600.0, 700.0];
-        let measurements = vec![0.1, 0.5, 0.8, 0.2];
-
-        let spectrum = BinnedSpectrum::new(wavelengths, measurements).unwrap();
-
-        // Test whole range with 1.0 cm² aperture
-        // Expected: (0.1 * 50 + 0.5 * 50 + 0.8 * 100 + 0.2 * 100) * 1.0 = 130.0
-        let band = Band::new(400.0, 700.0);
-        let power = spectrum.irradiance(&band);
-        assert_relative_eq!(power, 130.0, epsilon = 1e-5);
-
-        // Test partial range (450-600nm)
-        // Expected: (0.5 * 50 + 0.8 * 100) * 1.0 = 25.0 + 80.0 = 105.0
-        let band = Band::new(450.0, 600.0);
-        let power = spectrum.irradiance(&band);
-        assert_relative_eq!(power, 105.0, epsilon = 1e-5);
-
-        // Test range outside spectrum
-        let band = Band::new(200.0, 300.0);
-        assert_relative_eq!(spectrum.irradiance(&band), 0.0, epsilon = 1e-5);
     }
 
     #[test]
@@ -595,6 +530,44 @@ mod tests {
     }
 
     #[test]
+    fn test_printout_photons() {
+        let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
+        let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
+        let aperture_cm2 = 1.0; // 1 cm² aperture
+        let duration = std::time::Duration::from_secs(1); // 1 second observation
+
+        for wavelength in wavelengths {
+            // Make a band that is at the wavelength +- 1THz
+            let band = Band::centered_on(wavelength, 1e12);
+            let irradiance = spectrum.irradiance(&band);
+            let photons = spectrum.photons(&band, aperture_cm2, duration);
+            println!(
+                "Wavelength: {} nm, Irradiance: {} Photons: {:.2}",
+                wavelength, irradiance, photons
+            );
+        }
+    }
+
+    #[test]
+    fn test_stellar_photon_spectrum() {
+        let spectrum = FlatStellarSpectrum::from_gaia_magnitude(10.0);
+
+        let band1 = Band::centered_on(400.0, 1e12);
+        let band2 = Band::centered_on(800.0, 1e12);
+
+        // Calculate photons in each band
+        let photons1 = spectrum.photons(&band1, 1.0, std::time::Duration::from_secs(1));
+        let photons2 = spectrum.photons(&band2, 1.0, std::time::Duration::from_secs(1));
+
+        // Should be the same number 2x frequency == 1/2 wavelength == 2x photons
+        println!(
+            "Photons in band1 ({}nm): {}, band2 ({}nm): {}",
+            band1.lower_nm, photons1, band2.lower_nm, photons2
+        );
+        assert_relative_eq!(photons1 * 2.0, photons2, epsilon = 1e-5);
+    }
+
+    #[test]
     fn test_stellar_spectrum_scaling() {
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
         // Test dimmer star (AB mag = 5.0)
@@ -609,22 +582,28 @@ mod tests {
     }
 
     #[test]
-    fn test_errors() {
-        // Too few wavelengths
-        let result = BinnedSpectrum::new(vec![400.0], vec![]);
-        assert!(matches!(result, Err(SpectrumError::TooFewWavelengths)));
+    fn test_flat_stellar_irradiance() {
+        // Create a flat spectrum with a known flux density
+        let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
 
-        // Measurements length mismatch
-        let result = BinnedSpectrum::new(vec![400.0, 500.0, 600.0], vec![0.1, 0.2, 0.3]);
-        assert!(matches!(result, Err(SpectrumError::MeasurementsMismatch)));
+        // Test whole range
+        let band = Band::from_nm_bounds(400.0, 700.0);
+        let power1 = spectrum.irradiance(&band);
 
-        // Wavelengths not ascending
-        let result = BinnedSpectrum::new(vec![400.0, 500.0, 450.0], vec![0.1, 0.2]);
-        assert!(matches!(result, Err(SpectrumError::InvalidFrequency(_))));
+        // Test partial range
+        let band2 = Band::from_nm_bounds(450.0, 600.0);
+        let power2 = spectrum.irradiance(&band2);
 
-        // Negative wavelength
-        let result = BinnedSpectrum::new(vec![-100.0, 500.0, 600.0], vec![0.1, 0.2]);
-        assert!(matches!(result, Err(SpectrumError::InvalidFrequency(_))));
+        // Ensure non-zero values
+        assert!(power1 > 0.0);
+        assert!(power2 > 0.0);
+
+        // First band should have more power (wider wavelength range)
+        assert!(power1 > power2);
+
+        // Test range outside spectrum
+        let band3 = Band::from_nm_bounds(0.1, 0.2); // Very small wavelengths but not negative
+        assert!(spectrum.irradiance(&band3) > 0.0);
     }
 
     #[test]
@@ -632,7 +611,7 @@ mod tests {
         let aperture_cm2 = 1.0; // 1 cm² aperture
         let duration = std::time::Duration::from_secs(1); // 1 second observation
 
-        let band = Band::new(400.0, 600.0);
+        let band = Band::from_nm_bounds(400.0, 600.0);
         // Make a pretend QE that is perfect in the 400-600nm range
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
@@ -658,9 +637,9 @@ mod tests {
         let aperture_cm2 = 1.0; // 1 cm² aperture
         let duration = std::time::Duration::from_secs(1); // 1 second observation
 
-        let band = Band::new(400.0, 600.0);
-        // Make a pretend QE that is perfect in the 400-600nm range
-        let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
+        let band = Band::from_nm_bounds(400.0, 600.0);
+        // Make a pretend QE with 50% efficiency in the 400-600nm range
+        let qe = QuantumEfficiency::from_notch(&band, 0.5).unwrap();
 
         // Create a flat spectrum with a known flux density
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
@@ -668,14 +647,37 @@ mod tests {
         let photons = spectrum.photons(&band, aperture_cm2, duration);
         let electrons = spectrum.photo_electrons(&qe, aperture_cm2, &duration);
 
-        // For a perfect QE, the number of electrons should equal the number of photons
-        let err = f64::abs(photons - electrons) / photons;
+        // For 50% QE, electrons should be ~50% of photons
+        let ratio = electrons / photons;
 
-        assert!(
-            err < 0.01,
-            "Expected {} electrons, got {}",
-            photons,
-            electrons
-        );
+        assert_relative_eq!(ratio, 0.5, epsilon = 0.01);
+    }
+
+    #[test]
+    fn test_band_frequency_bounds() {
+        // Test basic conversion
+        let band = Band::from_nm_bounds(400.0, 700.0);
+        let (lower_freq, upper_freq) = band.frequency_bounds();
+
+        // Manual calculation of expected values
+        let expected_lower = CGS::SPEED_OF_LIGHT / (700.0 * 1e-7);
+        let expected_upper = CGS::SPEED_OF_LIGHT / (400.0 * 1e-7);
+
+        assert_relative_eq!(lower_freq, expected_lower, epsilon = 1e-10);
+        assert_relative_eq!(upper_freq, expected_upper, epsilon = 1e-10);
+
+        // Verify that lower_freq < upper_freq (because of wavelength inversion)
+        assert!(lower_freq < upper_freq);
+
+        // Test at different wavelength range
+        let band2 = Band::from_nm_bounds(100.0, 200.0);
+        let (lower_freq2, upper_freq2) = band2.frequency_bounds();
+
+        // Expected values for band2
+        let expected_lower2 = CGS::SPEED_OF_LIGHT / (200.0 * 1e-7);
+        let expected_upper2 = CGS::SPEED_OF_LIGHT / (100.0 * 1e-7);
+
+        assert_relative_eq!(lower_freq2, expected_lower2, epsilon = 1e-10);
+        assert_relative_eq!(upper_freq2, expected_upper2, epsilon = 1e-10);
     }
 }

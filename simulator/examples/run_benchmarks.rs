@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 /// Creates a test sensor with specified dimensions and characteristics
 fn create_test_sensor(width: u32, height: u32, read_noise: f64, dark_current: f64) -> SensorConfig {
-    let band = Band::new(300.0, 700.0);
+    let band = Band::from_nm_bounds(300.0, 700.0);
     let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
     SensorConfig::new(

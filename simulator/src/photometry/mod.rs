@@ -5,5 +5,5 @@ pub mod spectrum;
 pub mod trapezoid;
 
 pub use quantum_efficiency::QuantumEfficiency;
-pub use spectrum::{Band, BinnedSpectrum, FlatStellarSpectrum, Spectrum};
+pub use spectrum::{Band, FlatStellarSpectrum, Spectrum};
 pub use trapezoid::trap_integrate;
