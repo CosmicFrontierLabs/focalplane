@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ndarray::Array2;
-use starfield::{catalogs::StarData, RaDec};
+use starfield::{catalogs::StarData, Equatorial};
 
 use crate::{
     algo::icp::Locatable2d, field_diameter, magnitude_to_electrons, star_math::equatorial_to_pixel,
@@ -74,7 +74,7 @@ pub fn approx_airy_pixels(
 ///
 /// # Arguments
 /// * `stars` - Reference to a vector of StarData pointers containing catalog information
-/// * `center` - RaDec coordinates of field center
+/// * `center` - Equatorial coordinates of field center
 /// * `telescope` - Reference to telescope configuration
 /// * `sensor` - Reference to sensor configuration
 /// * `exposure` - Reference to exposure duration
@@ -84,7 +84,7 @@ pub fn approx_airy_pixels(
 /// * `RenderingResult` - Contains the rendered image, electron counts, noise, star positions, and saturation info
 pub fn render_star_field(
     stars: &Vec<&StarData>,
-    center: &RaDec,
+    center: &Equatorial,
     telescope: &TelescopeConfig,
     sensor: &SensorConfig,
     exposure: &Duration,
@@ -111,7 +111,7 @@ pub fn render_star_field(
     // Add stars with sub-pixel precision
     for &star in stars {
         // Convert position to pixel coordinates (sub-pixel precision)
-        let star_radec = RaDec::from_degrees(star.ra_deg(), star.dec_deg());
+        let star_radec = Equatorial::from_degrees(star.ra_deg(), star.dec_deg());
         let (x, y) = equatorial_to_pixel(&star_radec, center, fov_deg, image_width, image_height);
 
         // Check if star is within the image bounds
@@ -193,11 +193,11 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// use ndarray::Array2;
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 /// use starfield::catalogs::StarData;
-/// use starfield::RaDec;
+/// use starfield::Equatorial;
 /// let star_data = StarData {
 ///     id: 0,
 ///     magnitude: 10.0,
-///     position: RaDec::from_degrees(0.0, 0.0),
+///     position: Equatorial::from_degrees(0.0, 0.0),
 ///     b_v: None,
 /// };
 /// let mut image = Array2::zeros((100, 100));
@@ -250,7 +250,7 @@ mod tests {
         StarData {
             id: 0,
             magnitude: 10.0,
-            position: RaDec::from_degrees(0.0, 0.0),
+            position: Equatorial::from_degrees(0.0, 0.0),
             b_v: None,
         }
     }

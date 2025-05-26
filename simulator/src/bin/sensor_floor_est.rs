@@ -36,7 +36,7 @@ use simulator::image_proc::render::{
 use simulator::image_proc::segment::do_detections;
 use simulator::{magnitude_to_electrons, SensorConfig};
 use starfield::catalogs::StarData;
-use starfield::RaDec;
+use starfield::Equatorial;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::fs::File;
@@ -106,7 +106,7 @@ impl ExperimentParams {
         // Create dummy star data (position doesn't matter for this test)
         let star_data = StarData {
             id: 0,
-            position: RaDec::from_degrees(0.0, 0.0),
+            position: Equatorial::from_degrees(0.0, 0.0),
             magnitude: self.mag,
             b_v: None,
         };

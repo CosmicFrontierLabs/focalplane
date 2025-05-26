@@ -1524,9 +1524,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.21.1"
+version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d75b0bedcc4fe52caa0e03d9f1151a323e4aa5e2d78ba3580400cd3c9e2bc4bc"
+checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "oorandom"
@@ -2208,10 +2208,11 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "starfield"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44fc946e5075cd7cede2a5dffc1529a91fb2fd14c27421bd07171e126b650db7"
+checksum = "b5d07913854fa0e353aa5d0f36589d853eca58e4097553eb4d2bf617283222d2"
 dependencies = [
+ "base64 0.22.1",
  "byteorder",
  "chrono",
  "flate2",
@@ -2221,6 +2222,7 @@ dependencies = [
  "nalgebra",
  "ndarray",
  "num",
+ "once_cell",
  "rand",
  "regex",
  "reqwest",

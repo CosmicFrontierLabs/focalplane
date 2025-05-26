@@ -4,7 +4,7 @@
 //! transforming between coordinate systems (equatorial to pixel, etc.)
 
 use starfield::catalogs::StarData;
-use starfield::RaDec;
+use starfield::Equatorial;
 
 /// Converts celestial equatorial coordinates to image pixel coordinates with sub-pixel precision.
 ///
@@ -14,7 +14,7 @@ use starfield::RaDec;
 ///
 /// # Arguments
 /// * `position` - Sky coordinates (RA/Dec) of the object to transform
-/// * `center` - Sky coordinates (RA/Dec) of the field center
+/// * `center` - Sky coordinates (Equatorial) of the field center
 /// * `fov_deg` - Field of view in degrees
 /// * `image_width` - Width of the image in pixels
 /// * `image_height` - Height of the image in pixels
@@ -26,8 +26,8 @@ use starfield::RaDec;
 ///   - The center of the image is at (image_width/2, image_height/2)
 ///   - Coordinates can be outside the image bounds for objects outside the field
 pub fn equatorial_to_pixel(
-    position: &RaDec,
-    center: &RaDec,
+    position: &Equatorial,
+    center: &Equatorial,
     fov_deg: f64,
     image_width: usize,
     image_height: usize,
@@ -66,7 +66,7 @@ pub fn equatorial_to_pixel(
 ///
 /// # Arguments
 /// * `stars` - Slice of references to StarData objects to include in the list
-/// * `center` - Sky coordinates (RA/Dec) of the field center  
+/// * `center` - Sky coordinates (Equatorial) of the field center  
 /// * `fov_deg` - Field of view in degrees
 /// * `telescope_name` - Name of the telescope used
 /// * `sensor_name` - Name of the sensor used
@@ -82,7 +82,7 @@ pub fn equatorial_to_pixel(
 /// Each star entry contains: ID, RA(°), Dec(°), Magnitude, B-V, X(px), Y(px)
 pub fn save_star_list(
     stars: &[&StarData],
-    center: &RaDec,
+    center: &Equatorial,
     fov_deg: f64,
     telescope_name: &str,
     sensor_name: &str,
@@ -120,7 +120,7 @@ pub fn save_star_list(
     for star in sorted_stars {
         // Calculate pixel coordinates
         // Create RaDec for star
-        let star_radec = RaDec::from_degrees(star.ra_deg(), star.dec_deg());
+        let star_radec = Equatorial::from_degrees(star.ra_deg(), star.dec_deg());
 
         let (x, y) = equatorial_to_pixel(&star_radec, center, fov_deg, image_width, image_height);
 
@@ -158,7 +158,7 @@ mod tests {
     fn create_test_star(id: u64, ra: f64, dec: f64, magnitude: f64) -> StarData {
         // In the actual implementation, StarData contains a position field with RaDec
         // and other metadata like magnitude and b_v
-        let position = RaDec::from_degrees(ra, dec);
+        let position = Equatorial::from_degrees(ra, dec);
         StarData {
             id,
             position, // StarData stores position as RaDec
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn test_equatorial_to_pixel_center() {
         // Test that the center of the field maps to the center of the image
-        let center = RaDec::from_degrees(100.0, 10.0);
+        let center = Equatorial::from_degrees(100.0, 10.0);
         let position = center.clone(); // Same position as center
         let fov_deg = 5.0;
         let image_width = 1000;
@@ -191,13 +191,13 @@ mod tests {
     #[test]
     fn test_equatorial_to_pixel_offset() {
         // Test that positions offset from center map correctly
-        let center = RaDec::from_degrees(100.0, 10.0);
+        let center = Equatorial::from_degrees(100.0, 10.0);
         let fov_deg = 5.0;
         let image_width = 1000;
         let image_height = 800;
 
         // Position offset by 1 degree in RA (will move in x direction)
-        let position_ra_offset = RaDec::from_degrees(101.0, 10.0);
+        let position_ra_offset = Equatorial::from_degrees(101.0, 10.0);
         let (x1, _y1) = equatorial_to_pixel(
             &position_ra_offset,
             &center,
@@ -207,7 +207,7 @@ mod tests {
         );
 
         // Position offset by 1 degree in Dec (will move in y direction)
-        let position_dec_offset = RaDec::from_degrees(100.0, 11.0);
+        let position_dec_offset = Equatorial::from_degrees(100.0, 11.0);
         let (_x2, y2) = equatorial_to_pixel(
             &position_dec_offset,
             &center,
@@ -247,7 +247,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_str().unwrap();
 
-        let center = RaDec::from_degrees(100.0, 10.0);
+        let center = Equatorial::from_degrees(100.0, 10.0);
         let fov_deg = 5.0;
         let telescope_name = "Test Telescope";
         let sensor_name = "Test Sensor";

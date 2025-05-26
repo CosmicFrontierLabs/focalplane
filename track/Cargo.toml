@@ -9,7 +9,7 @@ license.workspace = true
 
 [dependencies]
 simulator = { path = "../simulator" }
-starfield = "0.1.0"  # Star catalog functionality
+starfield = "0.2.0"  # Star catalog functionality
 nalgebra = "0.32"     # Linear algebra
 image = "0.24"        # Image processing
 ndarray = "0.15"      # Multidimensional arrays

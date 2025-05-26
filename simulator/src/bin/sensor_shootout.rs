@@ -39,7 +39,7 @@ use simulator::image_proc::{
 };
 use simulator::{field_diameter, SensorConfig};
 use starfield::catalogs::{BinaryCatalog, StarCatalog, StarData};
-use starfield::RaDec;
+use starfield::Equatorial;
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::zip;
@@ -125,7 +125,7 @@ fn print_am_hist(stars: &Vec<StarData>) {
 fn run_experiment(
     sensor: &SensorConfig,
     telescope: &TelescopeConfig,
-    ra_dec: RaDec,
+    ra_dec: Equatorial,
     stars: &Vec<StarData>,
     exposure: Duration,
     experiment_num: u32,
@@ -280,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Generate a random  RaDec Pair:
         let ra = rand::random::<f64>() * 360.0; // Random RA in degrees
         let dec = rand::random::<f64>() * 0.0; // Random Dec in degrees
-        let ra_dec = RaDec::from_degrees(ra, dec);
+        let ra_dec = Equatorial::from_degrees(ra, dec);
 
         // Siphon out the stars for the maximum FOV
         let stars = catalog.stars_in_field(ra_dec.ra_degrees(), ra_dec.dec_degrees(), max_fov);

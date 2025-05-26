@@ -5,7 +5,7 @@ use simulator::image_proc::{
 };
 use simulator::{photometry::Band, QuantumEfficiency, SensorConfig};
 use starfield::catalogs::StarData;
-use starfield::RaDec;
+use starfield::Equatorial;
 use std::time::{Duration, Instant};
 
 /// Creates a test sensor with specified dimensions and characteristics
@@ -36,7 +36,7 @@ fn create_test_stars(count: usize, flux: f64) -> Vec<StarInFrame> {
     let star_data = StarData {
         id: 0,
         magnitude: 10.0,
-        position: RaDec::from_degrees(0.0, 0.0),
+        position: Equatorial::from_degrees(0.0, 0.0),
         b_v: None,
     };
 
