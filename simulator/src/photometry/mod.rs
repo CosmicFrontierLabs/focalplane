@@ -7,6 +7,7 @@ pub mod human;
 pub mod quantum_efficiency;
 pub mod spectrum;
 pub mod stellar;
+pub mod stis_zodiacal;
 pub mod trapezoid;
 pub mod zodical;
 
@@ -19,5 +20,6 @@ pub use human::{HumanPhotoreceptor, HumanVision};
 pub use quantum_efficiency::QuantumEfficiency;
 pub use spectrum::{Band, Spectrum};
 pub use stellar::{BlackbodyStellarSpectrum, FlatStellarSpectrum};
+pub use stis_zodiacal::STISZodiacalSpectrum;
 pub use trapezoid::trap_integrate;
 pub use zodical::ZodicalLight;
