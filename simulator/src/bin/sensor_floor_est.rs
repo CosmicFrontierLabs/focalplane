@@ -85,8 +85,8 @@ struct Args {
     #[arg(long, default_value_t = false)]
     serial: bool,
 
-    /// Solar elongation and ecliptic latitude coordinates for zodiacal background (format: "elongation,latitude")
-    #[arg(long, default_value = "90.0,15.0")]
+    /// Solar elongation and coordinates for zodiacal background (format: "elongation,latitude")
+    #[arg(long, default_value = "165.0,75.0")]
     coordinates: String,
 }
 

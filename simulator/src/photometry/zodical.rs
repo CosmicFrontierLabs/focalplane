@@ -137,6 +137,9 @@ fn zodical_raw_data() -> [[f64; 11]; 19] {
     ]
 }
 
+const LAT_OF_MIN: f64 = 75.0;
+const ELONG_OF_MIN: f64 = 165.0;
+
 impl ZodicalLight {
     /// Create a new ZodicalLight instance with the embedded data
     pub fn new() -> Self {
@@ -550,5 +553,40 @@ mod tests {
         let brightness = zodical.get_brightness(&coords).unwrap();
         assert!(brightness.is_finite());
         assert!(brightness > 1000.0); // Should be bright near the sun
+    }
+
+    #[test]
+    fn test_zodical_light_minimum_angle() {
+        let zodical = ZodicalLight::new();
+
+        // Test the minimum angle where zodiacal light is still measurable
+        // This is around 165° elongation and 75° latitude
+        let coords = SolarAngularCoordinates::new(ELONG_OF_MIN, LAT_OF_MIN).unwrap();
+        let min_brightness = zodical.get_brightness(&coords).unwrap();
+        assert!(min_brightness.is_finite());
+        assert!(min_brightness > 0.0); // Should be measurable at this point
+
+        // Test a grid of points across the valid range
+        // This covers the minimum angle and will have a bunch
+        // of points on the cusp to stress the interpolation
+        // We expect the brightness to be greater than 0
+        for elong in (ELONG_OF_MIN as i32 - 5..=ELONG_OF_MIN as i32 + 5).step_by(1) {
+            for lat in (LAT_OF_MIN as i32 - 5..=LAT_OF_MIN as i32 + 5).step_by(1) {
+                let elong_f64 = elong as f64;
+                let lat_f64 = lat as f64;
+
+                if let Ok(coords) = SolarAngularCoordinates::new(elong_f64, lat_f64) {
+                    if let Ok(brightness) = zodical.get_brightness(&coords) {
+                        if brightness.is_finite() {
+                            assert!(
+                    brightness >= min_brightness,
+                    "Brightness at elongation={}, lat={} is {:.3}, which is not greater than {:.3}",
+                    elong_f64, lat_f64, brightness, min_brightness
+                    );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
