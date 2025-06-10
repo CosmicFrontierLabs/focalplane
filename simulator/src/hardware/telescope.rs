@@ -239,6 +239,16 @@ pub mod models {
             0.815, // light efficiency
         )
     });
+
+    /// Weasel telescope
+    /// Spectral ranges: PAN: 0.45 – 0.9 um, RGB: 0.45 – 0.68 um, SWIR: 0.9 – 1.7 um
+    pub static WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
+        TelescopeConfig::new(
+            "Weasel", 0.47, // 470mm aperture
+            3.45, // 3450mm focal length
+            0.70, // TODO: Confirm light efficiency value
+        )
+    });
 }
 
 #[cfg(test)]

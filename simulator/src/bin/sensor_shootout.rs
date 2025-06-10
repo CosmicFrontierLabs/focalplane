@@ -27,9 +27,7 @@ use ndarray::Array2;
 use simulator::algo::icp::{icp_match_objects, Locatable2d};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::DEMO_50CM;
-use simulator::hardware::telescope::{
-    build_optics_for_sensor, models as telescope_models, TelescopeConfig,
-};
+use simulator::hardware::telescope::{build_optics_for_sensor, TelescopeConfig};
 use simulator::image_proc::histogram_stretch::sigma_stretch;
 use simulator::image_proc::image::array2_to_gray_image;
 use simulator::image_proc::io::write_hashmap_to_fits;
@@ -38,6 +36,7 @@ use simulator::image_proc::segment::do_detections;
 use simulator::image_proc::{
     draw_stars_with_x_markers, save_u8_image, stretch_histogram, u16_to_u8_scaled, StarDetection,
 };
+use simulator::shared_args::SharedSimulationArgs;
 use simulator::{field_diameter, SensorConfig};
 use starfield::catalogs::{BinaryCatalog, StarCatalog, StarData};
 use starfield::Equatorial;
@@ -49,25 +48,6 @@ use std::thread;
 use std::time::Duration;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
-/// Parse a coordinate pair in the format "lat,lon"
-fn parse_coordinate_pair(s: &str) -> Result<(f64, f64), String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        return Err("Coordinate must be in format 'lat,lon'".to_string());
-    }
-
-    let lat = parts[0]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid latitude value".to_string())?;
-    let lon = parts[1]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid longitude value".to_string())?;
-
-    Ok((lat, lon))
-}
-
 /// Command line arguments for telescope view simulation
 #[derive(Parser, Debug)]
 #[command(
@@ -76,33 +56,16 @@ fn parse_coordinate_pair(s: &str) -> Result<(f64, f64), String> {
     long_about = None
 )]
 struct Args {
+    #[command(flatten)]
+    shared: SharedSimulationArgs,
+
     /// Path to binary star catalog
     #[arg(long, default_value = "gaia_mag16_multi.bin")]
     catalog: PathBuf,
 
-    /// Exposure time in seconds
-    #[arg(long, default_value_t = 1.0)]
-    exposure: f64,
-
-    /// Wavelength in nanometers
-    #[arg(long, default_value_t = 550.0)]
-    wavelength: f64,
-
     /// Number of experiments to run
     #[arg(long, default_value_t = 100)]
     experiments: u32,
-
-    /// Enable debug output like electron histograms
-    #[arg(long, default_value_t = false)]
-    debug: bool,
-
-    /// Zodiacal coordinate as latitude,longitude in degrees
-    #[arg(long, default_value = "45.0,45.0", value_parser = parse_coordinate_pair)]
-    zodiacal_coordinate: (f64, f64),
-
-    /// Sensor temperature in degrees Celsius for dark current calculation
-    #[arg(long, default_value_t = 20.0)]
-    temperature: f64,
 }
 
 /// Prints histogram of star magnitudes
@@ -291,7 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_scopes = all_sensors
         .iter()
-        .map(|s| build_optics_for_sensor(&DEMO_50CM, &s, args.wavelength, 4.0))
+        .map(|s| build_optics_for_sensor(&DEMO_50CM, &s, args.shared.wavelength, 4.0))
         .collect::<Vec<_>>();
 
     // Compute the maximal FOV of all sensors:
@@ -334,11 +297,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scope,
                 ra_dec,
                 &stars,
-                Duration::from_secs_f64(args.exposure),
+                Duration::from_secs_f64(args.shared.exposure),
                 i,
-                args.debug,
-                args.wavelength,
-                args.temperature,
+                args.shared.debug,
+                args.shared.wavelength,
+                args.shared.temperature,
             );
             render_threads.push(thread);
         }

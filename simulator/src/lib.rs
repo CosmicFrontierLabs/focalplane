@@ -8,6 +8,7 @@ pub mod algo;
 pub mod hardware;
 pub mod image_proc;
 pub mod photometry;
+pub mod shared_args;
 pub mod star_math;
 
 // Re-exports for easier access

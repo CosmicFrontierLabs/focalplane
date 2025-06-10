@@ -35,6 +35,7 @@ use simulator::image_proc::render::{
 };
 use simulator::image_proc::segment::do_detections;
 use simulator::photometry::{zodical::SolarAngularCoordinates, ZodicalLight};
+use simulator::shared_args::SharedSimulationArgs;
 use simulator::{magnitude_to_electrons, SensorConfig};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
@@ -53,41 +54,24 @@ use std::time::Duration;
     long_about = None
 )]
 struct Args {
-    /// Exposure time in seconds
-    #[arg(long, default_value_t = 0.1)]
-    exposure: f64,
+    #[command(flatten)]
+    shared: SharedSimulationArgs,
 
     /// Detection threshold multiplier above noise floor
     #[arg(long, default_value_t = 5.0)]
     noise_floor: f64,
 
-    /// Wavelength in nanometers for PSF calculation
-    #[arg(long, default_value_t = 550.0)]
-    wavelength: f64,
-
     /// Number of experiments to run per configuration
     #[arg(long, default_value_t = 1000)]
     experiments: u32,
-
-    /// Enable additional debug output
-    #[arg(long, default_value_t = false)]
-    debug: bool,
 
     /// Output CSV file path
     #[arg(long, default_value = "sensor_floor_results.csv")]
     output_csv: String,
 
-    /// Sensor temperature in degrees Celsius for dark current calculation
-    #[arg(long, default_value_t = 20.0)]
-    temperature: f64,
-
     /// Run experiments serially instead of in parallel
     #[arg(long, default_value_t = false)]
     serial: bool,
-
-    /// Solar elongation and coordinates for zodiacal background (format: "elongation,latitude")
-    #[arg(long, default_value = "165.0,75.0")]
-    coordinates: String,
 }
 
 /// Parameters for a single experiment
@@ -253,30 +237,13 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
     }
 }
 
-/// Parse coordinates string in format "elongation,latitude"
-fn parse_coordinates(coords_str: &str) -> Result<(f64, f64), Box<dyn std::error::Error>> {
-    let parts: Vec<&str> = coords_str.split(',').collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "Invalid coordinates format. Expected 'elongation,latitude', got '{}'",
-            coords_str
-        )
-        .into());
-    }
-
-    let elongation = parts[0].trim().parse::<f64>()?;
-    let latitude = parts[1].trim().parse::<f64>()?;
-
-    Ok((elongation, latitude))
-}
-
 /// Main function for sensor floor estimation
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Parse coordinates
-    let (elongation, latitude) = parse_coordinates(&args.coordinates)?;
+    // Get coordinates from shared args
+    let (elongation, latitude) = args.shared.coordinates;
 
     // Set domain size for our test images
     let domain = 256_usize;
@@ -289,7 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sensor_models::IMX455.with_dimensions(domain as u32, domain as u32),
     ];
 
-    let exposure = Duration::from_secs_f64(args.exposure);
+    let exposure = Duration::from_secs_f64(args.shared.exposure);
     let telescope = DEMO_50CM.clone();
 
     // PSF disk sizes to test (in Airy disk units) - 2 to 8 in steps of 0.25
@@ -316,7 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Create a vector of experiment parameters for this sensor
         for (disk_idx, disk) in disks.iter().enumerate() {
             // Calculate PSF size in pixels for this disk configuration
-            let psf_pix = approx_airy_pixels(&telescope, sensor, args.wavelength) * disk;
+            let psf_pix = approx_airy_pixels(&telescope, sensor, args.shared.wavelength) * disk;
 
             for (mag_idx, mag) in mags.iter().enumerate() {
                 // Create experiment parameters
@@ -330,7 +297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     noise_floor_multiplier: args.noise_floor,
                     indices: (disk_idx, mag_idx),
                     experiment_count: args.experiments,
-                    temperature: args.temperature,
+                    temperature: args.shared.temperature,
                     elongation,
                     latitude,
                 };
@@ -421,9 +388,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Write CSV header
     writeln!(csv_file, "Sensor Floor Estimation Results").unwrap();
     writeln!(csv_file, "Parameters:").unwrap();
-    writeln!(csv_file, "Exposure: {} seconds", args.exposure).unwrap();
+    writeln!(csv_file, "Exposure: {} seconds", args.shared.exposure).unwrap();
     writeln!(csv_file, "Noise Floor Multiplier: {}", args.noise_floor).unwrap();
-    writeln!(csv_file, "Wavelength: {} nm", args.wavelength).unwrap();
+    writeln!(csv_file, "Wavelength: {} nm", args.shared.wavelength).unwrap();
     writeln!(csv_file, "Aperture diameter {} m", telescope.aperture_m).unwrap();
     writeln!(
         csv_file,
