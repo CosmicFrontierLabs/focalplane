@@ -52,6 +52,7 @@ IMPORTANT: Always run `cargo fmt` before committing any code changes!
 - **Architecture**: Separation between celestial mechanics, optics simulation, and tracking algorithms.
 - **Performance**: Prefer vectorized operations. Profile computation-heavy code. Consider GPU acceleration for image processing.
 - **Testing**: NEVER special case testing in production algorithms. Tests should validate real algorithm behavior, not special-cased shortcuts.
+- **Space context**: Avoid terrestrial telescope conventions (elevation/azimuth, horizon coordinates) - use generic pointing directions, celestial coordinates, or instrument-relative axes instead.
 
 ## Git Commits
 - Do NOT include attribution in commit messages

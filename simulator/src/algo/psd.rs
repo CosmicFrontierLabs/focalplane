@@ -207,20 +207,24 @@ impl VibrationSimulator {
     ///
     /// # Arguments
     /// * `duration` - Simulation duration
-    /// * `rng` - Optional random number generator. If None, uses thread_rng()
-    /// * `fft_planner` - Optional FFT planner. If None, creates a new one
+    /// * `seed` - Optional random seed. If None, uses random seed
     ///
     /// # Returns
     /// Vector of 3D angular displacements in radians, one per time sample
     pub fn generate_angular_displacement(
         &self,
         duration: Duration,
-        mut rng: Option<&mut dyn RngCore>,
-        mut fft_planner: Option<&mut FftPlanner<f64>>,
+        seed: Option<u64>,
     ) -> Vec<Vector3<f64>> {
         let n_samples = (duration.as_secs_f64() * self.sample_rate) as usize;
         // Ensure power of 2 for FFT efficiency
         let n_fft = n_samples.next_power_of_two();
+
+        // Initialize RNG at the top
+        let mut rng = match seed {
+            Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
 
         let mut angular_displacements = vec![Vector3::zeros(); n_samples];
 
@@ -242,10 +246,7 @@ impl VibrationSimulator {
                     let amplitude = (psd_value * df).sqrt();
 
                     // Random phase
-                    let phase = match &mut rng {
-                        Some(r) => r.gen::<f64>() * 2.0 * PI,
-                        None => thread_rng().gen::<f64>() * 2.0 * PI,
-                    };
+                    let phase = rng.gen_range(0.0..2.0 * PI);
                     spectrum[i] = Complex64::from_polar(amplitude, phase);
 
                     // Hermitian symmetry for real signal
@@ -256,10 +257,8 @@ impl VibrationSimulator {
             }
 
             // Inverse FFT to get time-domain signal
-            let inverse_fft = match &mut fft_planner {
-                Some(planner) => planner.plan_fft_inverse(n_fft),
-                None => FftPlanner::new().plan_fft_inverse(n_fft),
-            };
+            let mut planner = FftPlanner::new();
+            let inverse_fft = planner.plan_fft_inverse(n_fft);
             inverse_fft.process(&mut spectrum);
 
             // Scale and extract real part
@@ -281,18 +280,16 @@ impl VibrationSimulator {
     ///
     /// # Arguments
     /// * `duration` - Simulation duration
-    /// * `rng` - Optional random number generator. If None, uses thread_rng()
-    /// * `fft_planner` - Optional FFT planner. If None, creates a new one
+    /// * `seed` - Optional random seed. If None, uses random seed
     ///
     /// # Returns
     /// Vector of unit quaternions representing absolute orientations
     pub fn generate_orientations(
         &self,
         duration: Duration,
-        rng: Option<&mut dyn RngCore>,
-        fft_planner: Option<&mut FftPlanner<f64>>,
+        seed: Option<u64>,
     ) -> Vec<UnitQuaternion<f64>> {
-        let angular_displacements = self.generate_angular_displacement(duration, rng, fft_planner);
+        let angular_displacements = self.generate_angular_displacement(duration, seed);
 
         angular_displacements
             .iter()
@@ -317,18 +314,16 @@ impl VibrationSimulator {
     ///
     /// # Arguments
     /// * `duration` - Simulation duration
-    /// * `rng` - Optional random number generator. If None, uses thread_rng()
-    /// * `fft_planner` - Optional FFT planner. If None, creates a new one
+    /// * `seed` - Optional random seed. If None, uses random seed
     ///
     /// # Returns
     /// Vector of unit quaternions representing frame-to-frame rotations
     pub fn generate_orientation_deltas(
         &self,
         duration: Duration,
-        rng: Option<&mut dyn RngCore>,
-        fft_planner: Option<&mut FftPlanner<f64>>,
+        seed: Option<u64>,
     ) -> Vec<UnitQuaternion<f64>> {
-        let orientations = self.generate_orientations(duration, rng, fft_planner);
+        let orientations = self.generate_orientations(duration, seed);
         let mut deltas = Vec::with_capacity(orientations.len());
 
         // First delta is from identity to first orientation
@@ -383,6 +378,200 @@ impl VibrationSimulator {
         rms
     }
 }
+
+/// N-dimensional PSD curve that combines multiple orthonormal 1D PSD curves.
+///
+/// This represents vibrations in an n-dimensional space defined by orthonormal axes.
+/// The resulting quaternions are composed by applying rotations from all
+/// axes sequentially. This is useful for modeling telescope mount vibrations
+/// that have coupled motion in multiple orthogonal pointing directions.
+#[derive(Debug, Clone)]
+pub struct PsdCurveND {
+    /// Vector of PSD curves along orthonormal axes
+    pub curves: Vec<PsdCurve>,
+}
+
+/// Validate that a set of PSD curves have orthonormal axes.
+///
+/// # Arguments
+/// * `curves` - Vector of PSD curves to validate
+///
+/// # Panics
+/// * If any pair of axes are not orthonormal (dot product not near zero)
+/// * If any axis is not unit length
+fn validate_orthonormal_axes(curves: &[PsdCurve]) {
+    for (i, curve_i) in curves.iter().enumerate() {
+        // Check unit length
+        if (curve_i.axis.norm() - 1.0).abs() > 1e-10 {
+            panic!(
+                "PSD curve {} axis is not unit length: norm = {}",
+                i,
+                curve_i.axis.norm()
+            );
+        }
+
+        // Check orthogonality with all other curves
+        for (j, curve_j) in curves.iter().enumerate() {
+            if i != j {
+                let dot_product = curve_i.axis.dot(&curve_j.axis);
+                if dot_product.abs() > 1e-10 {
+                    panic!(
+                        "PSD curve axes {} and {} are not orthogonal: dot product = {}, expected near 0",
+                        i, j, dot_product
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl PsdCurveND {
+    /// Create a new N-dimensional PSD curve with validation for orthonormal axes.
+    ///
+    /// # Arguments
+    /// * `curves` - Vector of PSD curves with orthonormal axes
+    ///
+    /// # Panics
+    /// * If any pair of axes are not orthonormal (dot product not near zero)
+    /// * If any axis is not unit length
+    /// * If the curves vector is empty
+    pub fn new(curves: Vec<PsdCurve>) -> Self {
+        if curves.is_empty() {
+            panic!("PsdCurveND requires at least one curve");
+        }
+
+        validate_orthonormal_axes(&curves);
+        Self { curves }
+    }
+
+    /// Get the number of dimensions (number of curves).
+    pub fn dimensions(&self) -> usize {
+        self.curves.len()
+    }
+
+    /// Generate N-dimensional angular displacements from all PSD curves.
+    ///
+    /// Creates independent time-domain signals for all axes and combines them
+    /// into a single vector of 3D angular displacements.
+    ///
+    /// # Arguments
+    /// * `duration` - Simulation duration
+    /// * `sample_rate` - Sampling rate in Hz
+    /// * `seed` - Optional random seed for reproducible results
+    ///
+    /// # Returns
+    /// Vector of 3D angular displacements combining all axes
+    pub fn generate_angular_displacement(
+        &self,
+        duration: Duration,
+        sample_rate: f64,
+        seed: Option<u64>,
+    ) -> Vec<Vector3<f64>> {
+        let n_samples = (duration.as_secs_f64() * sample_rate) as usize;
+        let mut combined_displacements = vec![Vector3::zeros(); n_samples];
+
+        // Generate and combine displacements from all curves
+        for curve in &self.curves {
+            let sim = VibrationSimulator::new(vec![curve.clone()], sample_rate);
+            let displacements = sim.generate_angular_displacement(duration, seed);
+
+            for (i, displacement) in displacements.into_iter().enumerate() {
+                if i < combined_displacements.len() {
+                    combined_displacements[i] += displacement;
+                }
+            }
+        }
+
+        combined_displacements
+    }
+
+    /// Generate quaternion orientations by composing rotations from all axes.
+    ///
+    /// Creates independent angular displacements for all axes and composes
+    /// them into unit quaternions by applying rotations sequentially.
+    ///
+    /// # Arguments
+    /// * `duration` - Simulation duration
+    /// * `sample_rate` - Sampling rate in Hz
+    /// * `seed` - Optional random seed for reproducible results
+    ///
+    /// # Returns
+    /// Vector of unit quaternions representing composed orientations
+    pub fn generate_orientations(
+        &self,
+        duration: Duration,
+        sample_rate: f64,
+        seed: Option<u64>,
+    ) -> Vec<UnitQuaternion<f64>> {
+        let n_samples = (duration.as_secs_f64() * sample_rate) as usize;
+        let mut combined_orientations = vec![UnitQuaternion::identity(); n_samples];
+
+        // Generate orientations for each curve and compose them
+        for curve in &self.curves {
+            let sim = VibrationSimulator::new(vec![curve.clone()], sample_rate);
+            let orientations = sim.generate_orientations(duration, seed);
+
+            for (i, orientation) in orientations.into_iter().enumerate() {
+                if i < combined_orientations.len() {
+                    combined_orientations[i] = combined_orientations[i] * orientation;
+                }
+            }
+        }
+
+        combined_orientations
+    }
+
+    /// Generate quaternion orientation deltas by composing frame-to-frame rotations.
+    ///
+    /// Computes composed orientation deltas from all axes. This is useful for
+    /// simulating incremental tracking errors in n-dimensional space.
+    ///
+    /// # Arguments
+    /// * `duration` - Simulation duration
+    /// * `sample_rate` - Sampling rate in Hz
+    /// * `seed` - Optional random seed for reproducible results
+    ///
+    /// # Returns
+    /// Vector of unit quaternions representing composed frame-to-frame rotations
+    pub fn generate_orientation_deltas(
+        &self,
+        duration: Duration,
+        sample_rate: f64,
+        seed: Option<u64>,
+    ) -> Vec<UnitQuaternion<f64>> {
+        let orientations = self.generate_orientations(duration, sample_rate, seed);
+        let mut deltas = Vec::with_capacity(orientations.len());
+
+        // First delta is from identity to first orientation
+        if !orientations.is_empty() {
+            deltas.push(orientations[0]);
+        }
+
+        // Subsequent deltas are frame-to-frame
+        for i in 1..orientations.len() {
+            let delta = orientations[i - 1].inverse() * orientations[i];
+            deltas.push(delta);
+        }
+
+        deltas
+    }
+
+    /// Calculate expected RMS angular displacement from all PSD curves.
+    ///
+    /// Computes the theoretical RMS value by combining the RMS from all curves.
+    /// Since the axes are orthonormal, the total RMS is the vector sum.
+    ///
+    /// # Returns
+    /// 3D vector of RMS angular displacements in radians
+    pub fn calculate_total_rms(&self) -> Vector3<f64> {
+        let mut rms = Vector3::zeros();
+        for curve in &self.curves {
+            rms += curve.axis * curve.calculate_rms();
+        }
+        rms
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,7 +701,7 @@ mod tests {
         let simulator = VibrationSimulator::new(vec![psd_curve], 100.0);
 
         let displacements =
-            simulator.generate_angular_displacement(Duration::from_millis(100), None, None);
+            simulator.generate_angular_displacement(Duration::from_millis(100), None);
 
         assert_eq!(displacements.len(), 10); // 0.1s * 100Hz = 10 samples
 
@@ -545,7 +734,7 @@ mod tests {
         );
         let simulator = VibrationSimulator::new(vec![psd_curve], 100.0);
 
-        let orientations = simulator.generate_orientations(Duration::from_millis(100), None, None);
+        let orientations = simulator.generate_orientations(Duration::from_millis(100), None);
 
         assert_eq!(orientations.len(), 10); // 0.1s * 100Hz = 10 samples
 
@@ -572,7 +761,7 @@ mod tests {
         );
         let simulator = VibrationSimulator::new(vec![psd_curve], 100.0);
 
-        let deltas = simulator.generate_orientation_deltas(Duration::from_millis(100), None, None);
+        let deltas = simulator.generate_orientation_deltas(Duration::from_millis(100), None);
 
         assert_eq!(deltas.len(), 10); // 0.1s * 100Hz = 10 samples
 
