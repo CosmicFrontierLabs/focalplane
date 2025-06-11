@@ -9,6 +9,7 @@ pub mod motion;
 pub mod parallel;
 pub mod psd;
 pub mod quaternion;
+pub mod spline;
 
 pub use icp::{iterative_closest_point, ICPResult};
 pub use motion::{MotionModel, XAxisSpinner, XYWobble};
