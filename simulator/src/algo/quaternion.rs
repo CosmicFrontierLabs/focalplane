@@ -166,6 +166,41 @@ impl Quaternion {
             1.0 - 2.0 * (xx + yy),
         )
     }
+
+    /// Convert quaternion to Euler angles (roll, pitch, yaw) in radians
+    /// Returns (roll, pitch, yaw) where:
+    /// - roll: rotation around x-axis
+    /// - pitch: rotation around y-axis  
+    /// - yaw: rotation around z-axis
+    pub fn euler_angles(&self) -> (f64, f64, f64) {
+        let q = self.normalize();
+
+        let w = q.w;
+        let x = q.x;
+        let y = q.y;
+        let z = q.z;
+
+        // Calculate Euler angles from quaternion
+        // Roll (x-axis rotation)
+        let sin_roll = 2.0 * (w * x + y * z);
+        let cos_roll = 1.0 - 2.0 * (x * x + y * y);
+        let roll = sin_roll.atan2(cos_roll);
+
+        // Pitch (y-axis rotation)
+        let sin_pitch = 2.0 * (w * y - z * x);
+        let pitch = if sin_pitch.abs() >= 1.0 {
+            std::f64::consts::PI / 2.0 * sin_pitch.signum() // Use 90 degrees if out of range
+        } else {
+            sin_pitch.asin()
+        };
+
+        // Yaw (z-axis rotation)
+        let sin_yaw = 2.0 * (w * z + x * y);
+        let cos_yaw = 1.0 - 2.0 * (y * y + z * z);
+        let yaw = sin_yaw.atan2(cos_yaw);
+
+        (roll, pitch, yaw)
+    }
 }
 
 // Quaternion multiplication
@@ -321,5 +356,145 @@ mod tests {
         assert_relative_eq!(rotated_quat[0], 0.0, epsilon = 1e-10);
         assert_relative_eq!(rotated_quat[1], 1.0, epsilon = 1e-10);
         assert_relative_eq!(rotated_quat[2], 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_euler_angles_identity() {
+        let q = Quaternion::identity();
+        let (roll, pitch, yaw) = q.euler_angles();
+
+        assert_relative_eq!(roll, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(pitch, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(yaw, 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_euler_angles_round_trip() {
+        let test_cases = vec![
+            (30.0, 45.0, 60.0),
+            (90.0, 0.0, 0.0),
+            (0.0, 0.0, 90.0),
+            (-30.0, -45.0, -60.0),
+            (45.0, 30.0, 15.0),
+            (120.0, 60.0, 30.0),
+        ];
+
+        for (roll_deg, pitch_deg, yaw_deg) in test_cases {
+            let q = Quaternion::from_euler_angles(roll_deg, pitch_deg, yaw_deg);
+            let (roll_rad, pitch_rad, yaw_rad) = q.euler_angles();
+
+            let roll_recovered = roll_rad.to_degrees();
+            let pitch_recovered = pitch_rad.to_degrees();
+            let yaw_recovered = yaw_rad.to_degrees();
+
+            assert_relative_eq!(roll_recovered, roll_deg, epsilon = 1e-8);
+            assert_relative_eq!(pitch_recovered, pitch_deg, epsilon = 1e-8);
+            assert_relative_eq!(yaw_recovered, yaw_deg, epsilon = 1e-8);
+        }
+    }
+
+    #[test]
+    fn test_euler_angles_special_cases() {
+        let q1 = Quaternion::from_euler_angles(180.0, 0.0, 0.0);
+        let (roll1, _pitch1, _yaw1) = q1.euler_angles();
+        let roll1_deg = roll1.to_degrees();
+        assert!(roll1_deg.abs() - 180.0 < 1e-8 || roll1_deg.abs() < 1e-8);
+
+        let q2 = Quaternion::from_euler_angles(0.0, 0.0, 180.0);
+        let (_roll2, _pitch2, yaw2) = q2.euler_angles();
+        let yaw2_deg = yaw2.to_degrees();
+        assert!(yaw2_deg.abs() - 180.0 < 1e-8 || yaw2_deg.abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_euler_angles_gimbal_lock() {
+        let q = Quaternion::from_euler_angles(0.0, 90.0, 0.0);
+        let (_, pitch, _) = q.euler_angles();
+
+        assert_relative_eq!(pitch, std::f64::consts::FRAC_PI_2, epsilon = 1e-10);
+
+        let q2 = Quaternion::from_euler_angles(0.0, -90.0, 0.0);
+        let (_, pitch2, _) = q2.euler_angles();
+
+        assert_relative_eq!(pitch2, -std::f64::consts::FRAC_PI_2, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_euler_angles_axis_rotations() {
+        let q_x =
+            Quaternion::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), std::f64::consts::FRAC_PI_4);
+        let (roll, pitch, yaw) = q_x.euler_angles();
+        assert_relative_eq!(roll, std::f64::consts::FRAC_PI_4, epsilon = 1e-10);
+        assert_relative_eq!(pitch, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(yaw, 0.0, epsilon = 1e-10);
+
+        let q_y =
+            Quaternion::from_axis_angle(&Vector3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_4);
+        let (roll, pitch, yaw) = q_y.euler_angles();
+        assert_relative_eq!(roll, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(pitch, std::f64::consts::FRAC_PI_4, epsilon = 1e-10);
+        assert_relative_eq!(yaw, 0.0, epsilon = 1e-10);
+
+        let q_z =
+            Quaternion::from_axis_angle(&Vector3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_4);
+        let (roll, pitch, yaw) = q_z.euler_angles();
+        assert_relative_eq!(roll, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(pitch, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(yaw, std::f64::consts::FRAC_PI_4, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_euler_angles_edge_cases() {
+        let test_cases = vec![
+            (0.0, 0.0, 0.0),
+            (360.0, 0.0, 0.0),
+            (0.0, 360.0, 0.0),
+            (0.0, 0.0, 360.0),
+            (359.9, 0.0, 0.0),
+            (0.1, 0.0, 0.0),
+        ];
+
+        for (roll_deg, pitch_deg, yaw_deg) in test_cases {
+            let q = Quaternion::from_euler_angles(roll_deg, pitch_deg, yaw_deg);
+            let (roll_rad, pitch_rad, yaw_rad) = q.euler_angles();
+
+            let roll_recovered = roll_rad.to_degrees();
+            let pitch_recovered = pitch_rad.to_degrees();
+            let yaw_recovered = yaw_rad.to_degrees();
+
+            assert!(roll_recovered.is_finite());
+            assert!(pitch_recovered.is_finite());
+            assert!(yaw_recovered.is_finite());
+
+            assert!(roll_recovered >= -180.0 && roll_recovered <= 180.0);
+            assert!(pitch_recovered >= -90.0 && pitch_recovered <= 90.0);
+            assert!(yaw_recovered >= -180.0 && yaw_recovered <= 180.0);
+        }
+    }
+
+    #[test]
+    fn test_euler_angles_consistency_with_from_euler() {
+        let original_angles = vec![
+            (15.0, 30.0, 45.0),
+            (0.0, 45.0, 0.0),
+            (90.0, 0.0, 90.0),
+            (-45.0, -30.0, -15.0),
+            (120.0, 60.0, 30.0),
+        ];
+
+        for (roll_deg, pitch_deg, yaw_deg) in original_angles {
+            let q1 = Quaternion::from_euler_angles(roll_deg, pitch_deg, yaw_deg);
+            let (roll_rad, pitch_rad, yaw_rad) = q1.euler_angles();
+            let q2 = Quaternion::from_euler_angles(
+                roll_rad.to_degrees(),
+                pitch_rad.to_degrees(),
+                yaw_rad.to_degrees(),
+            );
+
+            assert_relative_eq!(q1.w, q2.w, epsilon = 1e-10);
+            assert_relative_eq!(q1.x, q2.x, epsilon = 1e-10);
+            assert_relative_eq!(q1.y, q2.y, epsilon = 1e-10);
+            assert_relative_eq!(q1.z, q2.z, epsilon = 1e-10);
+        }
     }
 }
