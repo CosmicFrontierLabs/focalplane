@@ -133,12 +133,7 @@ pub fn read_fits_to_hashmap<P: AsRef<Path>>(
     let mut data_map = HashMap::new();
 
     let mut hdu_idx = 0;
-    loop {
-        let hdu = match fptr.hdu(hdu_idx) {
-            Ok(hdu) => hdu,
-            Err(_) => break, // No more HDUs
-        };
-
+    while let Ok(hdu) = fptr.hdu(hdu_idx) {
         // Get HDU name, fallback to index-based name if no EXTNAME
         let hdu_name = match hdu.read_key::<String>(&mut fptr, "EXTNAME") {
             Ok(name) => name,

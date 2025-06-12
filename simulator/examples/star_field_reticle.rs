@@ -220,7 +220,7 @@ fn render_starfield_with_reticle(
             let base_size = 5.0;
             let diameter = base_size * (1.0 / (magnitude + 2.0).powf(0.5));
 
-            star_map.insert(label, (y as f64, x as f64, diameter));
+            star_map.insert(label, (y, x, diameter));
         }
     }
 

@@ -258,17 +258,17 @@ mod tests {
         assert!(cool_r > cool_b);
 
         // All values should be between 0 and 1
-        assert!(hot_r >= 0.0 && hot_r <= 1.0);
-        assert!(hot_g >= 0.0 && hot_g <= 1.0);
-        assert!(hot_b >= 0.0 && hot_b <= 1.0);
+        assert!((0.0..=1.0).contains(&hot_r));
+        assert!((0.0..=1.0).contains(&hot_g));
+        assert!((0.0..=1.0).contains(&hot_b));
 
-        assert!(sun_r >= 0.0 && sun_r <= 1.0);
-        assert!(sun_g >= 0.0 && sun_g <= 1.0);
-        assert!(sun_b >= 0.0 && sun_b <= 1.0);
+        assert!((0.0..=1.0).contains(&sun_r));
+        assert!((0.0..=1.0).contains(&sun_g));
+        assert!((0.0..=1.0).contains(&sun_b));
 
-        assert!(cool_r >= 0.0 && cool_r <= 1.0);
-        assert!(cool_g >= 0.0 && cool_g <= 1.0);
-        assert!(cool_b >= 0.0 && cool_b <= 1.0);
+        assert!((0.0..=1.0).contains(&cool_r));
+        assert!((0.0..=1.0).contains(&cool_g));
+        assert!((0.0..=1.0).contains(&cool_b));
     }
 
     #[test]

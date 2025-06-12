@@ -26,7 +26,6 @@ pub mod histogram;
 mod tests {
     use image::{DynamicImage, Rgb, RgbImage};
     use simulator::image_proc::overlay::overlay_to_image;
-    use test_helpers;
 
     #[test]
     fn test_text_rendering() {
@@ -143,8 +142,8 @@ mod tests {
             .expect("Failed to save text test image");
 
         // Verify the image size is correct
-        assert_eq!(result_image.width(), width as u32);
-        assert_eq!(result_image.height(), height as u32);
+        assert_eq!(result_image.width(), { width });
+        assert_eq!(result_image.height(), { height });
 
         // This test mainly checks if the overlay function works without errors
         // Visual verification needs to be done manually

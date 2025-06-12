@@ -138,7 +138,7 @@ pub fn render_star_field(
         }
 
         // Post transfrom/selection
-        xy_mag.push((x, y, star.clone()));
+        xy_mag.push((x, y, *star));
 
         // Calculate photon flux using telescope model
         let electrons = magnitude_to_electrons(star.magnitude, exposure, telescope, sensor);
@@ -148,7 +148,7 @@ pub fn render_star_field(
             x,
             y,
             flux: electrons,
-            star: star.clone(),
+            star: *star,
         });
     }
 
@@ -159,15 +159,14 @@ pub fn render_star_field(
 
     // Generate sensor noise (read noise and dark current)
     let sensor_noise = generate_sensor_noise(
-        &sensor, &exposure, temp_c, None, // Use specified temperature and random noise
+        sensor, exposure, temp_c, None, // Use specified temperature and random noise
     );
 
     let z_light = ZodicalLight::new();
     let ecliptic: Ecliptic = (*center).into();
     let coords = SolarAngularCoordinates::new(ecliptic.lon.to_degrees(), ecliptic.lat.to_degrees())
         .expect("Invalid zodical coordinates");
-    let zodiacal_noise =
-        z_light.generate_zodical_background(&sensor, &telescope, &exposure, &coords);
+    let zodiacal_noise = z_light.generate_zodical_background(sensor, telescope, exposure, &coords);
 
     image += &sensor_noise;
 
@@ -194,9 +193,9 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
     // 3. Round to nearest integer
     // 4. Convert to u16
     electron_img.mapv(|total_e| {
-        let clipped_e = total_e.clamp(0.0, sensor.max_well_depth_e as f64);
+        let clipped_e = total_e.clamp(0.0, sensor.max_well_depth_e);
         let dn = clipped_e * sensor.dn_per_electron();
-        let clipped = dn.clamp(0.0, max_dn as f64);
+        let clipped = dn.clamp(0.0, max_dn);
         clipped.round() as u16
     })
 }

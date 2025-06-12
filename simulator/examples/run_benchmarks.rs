@@ -48,7 +48,7 @@ fn create_test_stars(count: usize, flux: f64) -> Vec<StarInFrame> {
             x,
             y,
             flux,
-            star: star_data.clone(),
+            star: star_data,
         });
     }
 

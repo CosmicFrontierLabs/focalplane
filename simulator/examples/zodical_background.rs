@@ -142,13 +142,13 @@ fn create_spectrum_plot(
     chart
         .draw_series(LineSeries::new(data_points, &BLUE))?
         .label("Zodiacal Light Spectrum")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE));
 
     // Draw the legend
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()?;
 
     // Save the plot

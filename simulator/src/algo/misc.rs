@@ -12,7 +12,7 @@ pub enum InterpError {
     UnsortedData,
 }
 
-pub fn interp(x: f64, xs: &Vec<f64>, ys: &Vec<f64>) -> Result<f64, InterpError> {
+pub fn interp(x: f64, xs: &[f64], ys: &[f64]) -> Result<f64, InterpError> {
     if xs.len() != ys.len() {
         return Err(InterpError::MismatchedLengths);
     }

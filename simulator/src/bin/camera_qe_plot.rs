@@ -106,14 +106,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         chart
             .draw_series(LineSeries::new(qe_points, &sensor_info.color))?
             .label(sensor_info.name)
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &sensor_info.color));
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], sensor_info.color));
     }
 
     // Draw the legend
     chart
         .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()?;
 
     // Save the plot

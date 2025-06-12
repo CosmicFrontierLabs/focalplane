@@ -7,7 +7,7 @@ use nalgebra::Matrix3;
 use starfield::Equatorial;
 use starfield::{catalogs::StarData, framelib::inertial::InertialFrame};
 
-use nalgebra::{Vector2, Vector3};
+use nalgebra::Vector3;
 
 /// Star projector that maps celestial coordinates to image pixels
 pub struct StarProjector {
@@ -62,7 +62,7 @@ impl StarProjector {
         let rotation_matrix = Matrix3::from_columns(&[x, y, z]);
 
         Self {
-            center: center.clone(),
+            center: *center,
             radians_per_pixel,
             sensor_width,
             sensor_height,
@@ -297,7 +297,7 @@ mod tests {
     fn test_equatorial_to_pixel_center() {
         // Test that the center of the field maps to the center of the image
         let center = Equatorial::from_degrees(100.0, 10.0);
-        let position = center.clone(); // Same position as center
+        let position = center; // Same position as center
         let fov_deg = 5.0;
         let image_width = 1000;
         let image_height = 800;
@@ -578,7 +578,7 @@ mod tests {
         let (x, y) = unbounded.unwrap();
 
         // Coordinates should be way outside sensor bounds
-        assert!(x < 0.0 || x >= 100.0 || y < 0.0 || y >= 100.0);
+        assert!(!(0.0..100.0).contains(&x) || !(0.0..100.0).contains(&y));
     }
 
     #[test]

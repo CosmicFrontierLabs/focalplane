@@ -140,6 +140,12 @@ fn zodical_raw_data() -> [[f64; 11]; 19] {
 pub const LAT_OF_MIN: f64 = 75.0;
 pub const ELONG_OF_MIN: f64 = 165.0;
 
+impl Default for ZodicalLight {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZodicalLight {
     /// Create a new ZodicalLight instance with the embedded data
     pub fn new() -> Self {
@@ -413,7 +419,7 @@ impl ZodicalLight {
 
         // Compute the photoelectrons per solid angle and multiply by the pixel solid angle
         let aperture_cmsq = telescope.aperture_m * 10000.0;
-        let mean_pe = z_spect.photo_electrons(&sensor.quantum_efficiency, aperture_cmsq, &exposure)
+        let mean_pe = z_spect.photo_electrons(&sensor.quantum_efficiency, aperture_cmsq, exposure)
             * pixel_solid_angle_arcsec2
             * telescope.light_efficiency;
 
@@ -516,7 +522,7 @@ mod tests {
                     if let Ok(brightness) = zodical.get_brightness(&coords) {
                         if brightness.is_finite() {
                             assert!(
-                                brightness >= 40.0 && brightness <= 10000.0,
+                                (40.0..=10000.0).contains(&brightness),
                                 "Brightness at elongation={}, lat={} is {}, which is outside the expected range [40, 10000]",
                                 elong_f64, lat_f64, brightness
                             );

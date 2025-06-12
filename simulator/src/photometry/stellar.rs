@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_aaron_matching_photoelec() {
-        let mag_to_photons = vec![
+        let mag_to_photons = [
             (0.0, 3_074_446.0),
             (10.0, 0.0001 * 3_074_446.0),
             (12.0, 48.0),
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_aaron_matching() {
-        let mag_to_photons = vec![
+        let mag_to_photons = [
             (0.0, 3_074_446.0),
             (10.0, 0.0001 * 3_074_446.0),
             (12.0, 48.0),

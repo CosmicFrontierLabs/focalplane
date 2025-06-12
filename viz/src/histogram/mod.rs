@@ -1002,10 +1002,10 @@ mod tests {
         let mut hist = Histogram::new_equal_bins(0.0..30.0, 30).unwrap();
 
         // Add values with positive skew (mode < median < mean)
-        let values = vec![
+        let values = [
             5.0, 5.5, 6.0, 6.0, 6.5, 7.0, 7.0, 7.0, 7.5, 7.5, 8.0, 8.0, 8.0, 8.5, 9.0,
             9.0, // Mode around 7-8
-            10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 18.0, 20.0, 25.0, // Long tail values
+            10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 18.0, 20.0, 25.0,
         ];
         hist.add_all(values.iter().copied());
 

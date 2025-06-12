@@ -72,7 +72,7 @@ struct Args {
 ///
 /// # Arguments
 /// * `stars` - Vector of stars to analyze
-fn print_am_hist(stars: &Vec<StarData>) {
+fn print_am_hist(stars: &[StarData]) {
     // Print histogram of star magnitudes
     if stars.is_empty() {
         println!("No stars available to create histogram");
@@ -119,7 +119,7 @@ fn run_experiment(
     sensor: &SensorConfig,
     telescope: &TelescopeConfig,
     ra_dec: Equatorial,
-    stars: &Vec<StarData>,
+    stars: &[StarData],
     exposure: Duration,
     experiment_num: u32,
     debug: bool,
@@ -140,8 +140,8 @@ fn run_experiment(
     let render_result = render_star_field(
         &star_refs,
         &ra_dec,
-        &telescope,
-        &sensor,
+        telescope,
+        sensor,
         &exposure,
         wavelength,
         temperature,
@@ -182,7 +182,7 @@ fn run_experiment(
         &render_result,
         sensor,
         &detected_stars,
-        &output_path,
+        output_path,
         &prefix,
     );
 
@@ -254,7 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_scopes = all_sensors
         .iter()
-        .map(|s| build_optics_for_sensor(&DEMO_50CM, &s, args.shared.wavelength, 4.0))
+        .map(|s| build_optics_for_sensor(&DEMO_50CM, s, args.shared.wavelength, 4.0))
         .collect::<Vec<_>>();
 
     // Compute the maximal FOV of all sensors:
@@ -338,14 +338,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn save_image_outputs_threaded(
     render_result: &RenderingResult,
     sensor: &SensorConfig,
-    detected_stars: &Vec<StarDetection>,
+    detected_stars: &[StarDetection],
     output_path: &Path,
     prefix: &str,
 ) -> thread::JoinHandle<()> {
     thread::spawn({
         let render_result_clone = render_result.clone();
         let sensor_clone = sensor.clone();
-        let detected_stars_clone = detected_stars.clone();
+        let detected_stars_clone = detected_stars.to_owned();
         let output_path = output_path.to_path_buf();
         let prefix = prefix.to_string();
 
@@ -382,7 +382,7 @@ fn save_image_outputs_threaded(
 fn save_image_outputs(
     render_result: &RenderingResult,
     sensor: &SensorConfig,
-    detected_stars: &Vec<StarDetection>,
+    detected_stars: &[StarDetection],
     output_path: &Path,
     prefix: &str,
 ) {

@@ -513,7 +513,7 @@ impl PsdCurveND {
 
             for (i, orientation) in orientations.into_iter().enumerate() {
                 if i < combined_orientations.len() {
-                    combined_orientations[i] = combined_orientations[i] * orientation;
+                    combined_orientations[i] *= orientation;
                 }
             }
         }

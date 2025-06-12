@@ -7,7 +7,6 @@ use simulator::image_proc::{
     ConvolveMode, ConvolveOptions, StarDetection,
 };
 use std::collections::HashMap;
-use test_helpers;
 
 fn main() {
     // Create test image with stars
