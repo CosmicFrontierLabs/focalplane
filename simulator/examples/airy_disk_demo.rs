@@ -14,19 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("====================================");
     println!();
 
-    // Create an Airy disk for typical astronomical wavelength and aperture
-    let wavelength_microns = 0.55; // Green light (550nm)
-    let aperture_diameter_microns = 100.0; // 100μm aperture
-
-    let airy_disk = AiryDisk::new(wavelength_microns, aperture_diameter_microns);
+    let airy_disk = AiryDisk::new();
 
     println!("Parameters:");
-    println!(
-        "  Wavelength: {:.2} μm ({:.0} nm)",
-        wavelength_microns,
-        wavelength_microns * 1000.0
-    );
-    println!("  Aperture diameter: {:.1} μm", aperture_diameter_microns);
     println!(
         "  First zero location (r₀): {:.4} radians",
         airy_disk.first_zero

@@ -80,7 +80,7 @@ pub fn star_data_to_electrons(
     sensor: &SensorConfig,
 ) -> f64 {
     let spectrum = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(
-        star_data.b_v.unwrap_or(1.0),
+        star_data.b_v.unwrap_or(DEFAULT_BV),
         star_data.magnitude,
     );
     let aperture_cm2 = telescope.collecting_area_m2() * 1.0e4; // Convert m^2 to cm^2

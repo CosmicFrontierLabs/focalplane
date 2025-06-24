@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use scilib::math::bessel;
 
 /// Airy disk parameters and approximation functions
@@ -5,26 +6,20 @@ use scilib::math::bessel;
 /// The Airy disk is the diffraction pattern resulting from a uniformly
 /// illuminated circular aperture. This struct provides both exact calculations
 /// and various approximations for efficient computation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct AiryDisk {
     /// First zero location (first dark ring radius) in radians
     pub first_zero: f64,
     /// Full-width-half-maximum in radians
     pub fwhm: f64,
-    /// Wavelength in microns for the calculation
-    pub wavelength_microns: f64,
-    /// Aperture diameter in microns
-    pub aperture_diameter_microns: f64,
 }
 
 impl AiryDisk {
     /// Create a new AiryDisk with given wavelength and aperture diameter in microns
-    pub fn new(wavelength_microns: f64, aperture_diameter_microns: f64) -> Self {
+    pub fn new() -> Self {
         let mut disk = Self {
             first_zero: 0.0,
             fwhm: 0.0,
-            wavelength_microns,
-            aperture_diameter_microns,
         };
 
         // Calculate first zero location and FWHM
@@ -42,7 +37,7 @@ impl AiryDisk {
             return 1.0; // Limit as r approaches 0
         }
 
-        let j1 = self.bessel_j1(radius);
+        let j1 = bessel::j_n(1, radius);
         let term = 2.0 * j1 / radius;
         term * term
     }
@@ -202,16 +197,75 @@ impl AiryDisk {
             return 1.0;
         }
 
-        let j1 = self.bessel_j1(radius);
+        let j1 = bessel::j_n(1, radius);
         let term = 2.0 * j1 / radius;
         term * term
     }
+}
 
-    /// Implementation of Bessel function of first kind, order 1
-    ///
-    /// Uses scilib's high-accuracy Bessel function implementation
-    fn bessel_j1(&self, x: f64) -> f64 {
-        bessel::j_n(1, x)
+pub static AIRY_DISK: Lazy<AiryDisk> = Lazy::new(|| AiryDisk::new());
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScaledAiryDisk {
+    disk: AiryDisk,
+    radius_scale: f64,
+}
+
+impl ScaledAiryDisk {
+    /// Creates a new ScaledAiryDisk with a default AiryDisk and given radius scale
+    fn new(radius_scale: f64) -> Self {
+        ScaledAiryDisk {
+            disk: AIRY_DISK.clone(),
+            radius_scale,
+        }
+    }
+
+    /// Class method to create a new ScaledAiryDisk with specified radius scale
+    pub fn with_radius_scale(radius_scale: f64) -> Self {
+        Self::new(radius_scale)
+    }
+
+    /// Class method to create a new ScaledAiryDisk with specified FWHM
+    pub fn with_fwhm(fwhm: f64) -> Self {
+        let scalar = fwhm / AIRY_DISK.fwhm;
+        Self::new(scalar)
+    }
+
+    pub fn with_first_zero(first_zero: f64) -> Self {
+        let scalar = first_zero / AIRY_DISK.first_zero;
+        Self::new(scalar)
+    }
+
+    /// Returns the intensity at a given radius, scaled by the radius_scale
+    pub fn intensity(&self, radius: f64) -> f64 {
+        self.disk.intensity(radius / self.radius_scale)
+    }
+
+    /// Returns the gaussian approximation at a given radius, scaled by the radius_scale
+    pub fn gaussian_approximation(&self, radius: f64) -> f64 {
+        self.disk.gaussian_approximation(radius / self.radius_scale)
+    }
+
+    pub fn gaussian_approximation_normalized(&self, radius: f64) -> f64 {
+        // FIXME(meawoppl) the 3.9 factor above included the scaling factor 1/sqrt(2pi) and the matching scaler :/
+        // You should fix this and unwind these uglee constants
+        let normalization = 4.5702;
+        self.disk.gaussian_approximation(radius / self.radius_scale) / normalization
+    }
+
+    /// Returns the triangle approximation at a given radius, scaled by the radius_scale
+    pub fn triangle_approximation(&self, radius: f64) -> f64 {
+        self.disk.triangle_approximation(radius / self.radius_scale)
+    }
+
+    /// Returns the first zero of the underlying AiryDisk
+    pub fn first_zero(&self) -> f64 {
+        self.disk.first_zero * self.radius_scale
+    }
+
+    /// Returns the FWHM of the underlying AiryDisk
+    pub fn fwhm(&self) -> f64 {
+        self.disk.fwhm * self.radius_scale
     }
 }
 
@@ -219,33 +273,32 @@ impl AiryDisk {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use once_cell::sync::Lazy;
 
     #[test]
     fn test_airy_disk_creation() {
-        let disk = AiryDisk::new(0.55, 100.0); // 550nm, 100μm aperture
+        let disk = AiryDisk::new(); // 550nm, 100μm aperture
         assert!(disk.first_zero > 3.8 && disk.first_zero < 3.9);
         // FWHM for Airy disk should be approximately 3.2 based on numerical calculation
         assert!(disk.fwhm > 3.0 && disk.fwhm < 3.5);
-        assert_eq!(disk.wavelength_microns, 0.55);
-        assert_eq!(disk.aperture_diameter_microns, 100.0);
     }
 
     #[test]
     fn test_intensity_at_center() {
-        let disk = AiryDisk::new(0.55, 100.0);
+        let disk = AiryDisk::new();
         assert_relative_eq!(disk.intensity(0.0), 1.0, epsilon = 1e-10);
     }
 
     #[test]
     fn test_intensity_at_first_zero() {
-        let disk = AiryDisk::new(0.55, 100.0);
+        let disk = AiryDisk::new();
         let intensity_at_zero = disk.intensity(disk.first_zero);
         assert_relative_eq!(intensity_at_zero, 0.0, epsilon = 1e-4); // Relaxed for numerical precision
     }
 
     #[test]
     fn test_gaussian_approximation() {
-        let disk = AiryDisk::new(0.55, 100.0);
+        let disk = AiryDisk::new();
 
         // At center, both should be 1.0
         assert_relative_eq!(disk.gaussian_approximation(0.0), 1.0, epsilon = 1e-10);
@@ -259,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_triangle_approximation() {
-        let disk = AiryDisk::new(0.55, 100.0);
+        let disk = AiryDisk::new();
 
         // At center should be 1.0
         assert_relative_eq!(disk.triangle_approximation(0.0), 1.0, epsilon = 1e-10);
@@ -281,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_sample_generation() {
-        let disk = AiryDisk::new(0.55, 100.0);
+        let disk = AiryDisk::new();
         let (radii, exact, gaussian, triangle) = disk.generate_comparison_samples(100);
 
         assert_eq!(radii.len(), 100);
@@ -306,13 +359,34 @@ mod tests {
     }
 
     #[test]
-    fn test_bessel_j1_values() {
-        let disk = AiryDisk::new(0.55, 100.0);
+    fn test_scaled_disk_unity() {
+        let unscaled = ScaledAiryDisk::new(1.0);
+        assert_relative_eq!(unscaled.fwhm(), AIRY_DISK.fwhm, epsilon = 1e-10);
 
-        // J₁(0) should be 0
-        assert_relative_eq!(disk.bessel_j1(0.0), 0.0, epsilon = 1e-10);
+        let zero_rad = unscaled.first_zero();
+        assert_relative_eq!(zero_rad, AIRY_DISK.first_zero, epsilon = 1e-10);
+        assert!(unscaled.intensity(zero_rad) < 0.0001);
+        assert!(unscaled.gaussian_approximation(zero_rad) < 0.1); // Gaussian is a bit fat tail
+        assert!(unscaled.triangle_approximation(zero_rad) < 0.0001);
+    }
 
-        // J₁(1) ≈ 0.44005 (known value)
-        assert_relative_eq!(disk.bessel_j1(1.0), 0.44005, epsilon = 0.001);
+    #[test]
+    fn test_scaled_airy_disk_fwmh() {
+        let scaled = ScaledAiryDisk::with_fwhm(2.0);
+
+        let fwhm = scaled.fwhm();
+        assert_relative_eq!(fwhm, 2.0, epsilon = 1e-10);
+
+        let half = scaled.intensity(fwhm / 2.0);
+        assert_relative_eq!(half, 0.5, epsilon = 1e-10);
+
+        let close_half = scaled.gaussian_approximation(fwhm / 2.0);
+        assert_relative_eq!(close_half, 0.5, epsilon = 1e-2);
+    }
+
+    #[test]
+    fn test_scaled_airy_disk_first_zero() {
+        let scaled = ScaledAiryDisk::with_first_zero(2.0);
+        assert_relative_eq!(scaled.first_zero(), 2.0, epsilon = 1e-10);
     }
 }

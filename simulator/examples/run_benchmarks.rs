@@ -1,4 +1,5 @@
 use ndarray::Array2;
+use simulator::image_proc::airy::ScaledAiryDisk;
 use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 use simulator::{
     hardware::dark_current::DarkCurrentEstimator, photometry::Band, QuantumEfficiency, SensorConfig,
@@ -79,7 +80,8 @@ fn bench_add_stars_to_image() {
 
                 // Run the benchmark
                 let start = Instant::now();
-                add_stars_to_image(&mut image, &stars, sigma);
+                let airy_pix = ScaledAiryDisk::with_fwhm(sigma);
+                add_stars_to_image(&mut image, &stars, airy_pix);
                 let duration = start.elapsed();
 
                 println!(

@@ -29,6 +29,7 @@ use rayon::prelude::*;
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::DEMO_50CM;
 use simulator::hardware::telescope::TelescopeConfig;
+use simulator::image_proc::airy::ScaledAiryDisk;
 use simulator::image_proc::generate_sensor_noise;
 use simulator::image_proc::render::{
     add_stars_to_image, approx_airy_pixels, quantize_image, StarInFrame,
@@ -88,7 +89,7 @@ struct ExperimentParams {
     /// Star magnitude
     mag: f64,
     /// PSF size in pixels
-    psf_pix: f64,
+    airy_pix: ScaledAiryDisk,
     /// Noise floor multiplier for detection threshold
     noise_floor_multiplier: f64,
     /// Indices for result matrix (disk_idx, mag_idx)
@@ -183,7 +184,7 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
 
         // Create electron image and add star
         let mut e_image: Array2<f64> = Array2::zeros((params.domain, params.domain));
-        add_stars_to_image(&mut e_image, &vec![star], params.psf_pix);
+        add_stars_to_image(&mut e_image, &vec![star], params.airy_pix);
 
         // Generate and add noise to image
         let sensor_noise =
@@ -223,7 +224,7 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
             let err = (x_diff * x_diff + y_diff * y_diff).sqrt();
 
             // Detect spurious detections (mostly) and skip them
-            if err > params.psf_pix * 2.0 {
+            if err > params.airy_pix.first_zero() * 2.0 {
                 println!("Spurious detection: {} pixels", err);
                 continue;
             }
@@ -288,7 +289,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Create a vector of experiment parameters for this sensor
         for (disk_idx, disk) in disks.iter().enumerate() {
             // Calculate PSF size in pixels for this disk configuration
-            let psf_pix = approx_airy_pixels(&telescope, sensor, args.shared.wavelength) * disk;
+            let default_config = approx_airy_pixels(&telescope, sensor, args.shared.wavelength);
+            let airy_pix = ScaledAiryDisk::with_fwhm(default_config.fwhm() * disk);
 
             for (mag_idx, mag) in mags.iter().enumerate() {
                 // Create experiment parameters
@@ -298,7 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     telescope: telescope.clone(),
                     exposure,
                     mag: *mag,
-                    psf_pix,
+                    airy_pix,
                     noise_floor_multiplier: args.noise_floor,
                     indices: (disk_idx, mag_idx),
                     experiment_count: args.experiments,

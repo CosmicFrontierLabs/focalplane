@@ -2,10 +2,12 @@ use std::time::Duration;
 
 use ndarray::Array2;
 use starfield::{catalogs::StarData, Equatorial};
+use viz::histogram::Scale;
 
 use crate::{
     algo::icp::Locatable2d,
     field_diameter,
+    image_proc::airy::ScaledAiryDisk,
     photometry::{zodical::SolarAngularCoordinates, ZodicalLight},
     star_data_to_electrons,
     star_math::StarProjector,
@@ -55,14 +57,14 @@ pub fn approx_airy_pixels(
     telescope: &TelescopeConfig,
     sensor: &SensorConfig,
     wavelength_nm: f64,
-) -> f64 {
+) -> ScaledAiryDisk {
     // Calculate PSF size based on Airy disk
     let airy_radius_um = telescope.airy_disk_radius_um(wavelength_nm);
     let airy_radius_px = airy_radius_um / sensor.pixel_size_um;
 
     // Create a Gaussian approximation of the Airy disk
     // Using sigma ≈ radius/1.22 to approximate Airy disk with Gaussian
-    airy_radius_px / 1.22
+    ScaledAiryDisk::with_radius_scale(airy_radius_px / 1.22)
 }
 
 /// Renders a simulated star field based on catalog data and optical system parameters.
@@ -108,7 +110,7 @@ pub fn render_star_field(
 
     let mut xy_mag = Vec::with_capacity(stars.len());
 
-    let psf_pix = approx_airy_pixels(telescope, sensor, wavelength_nm);
+    let airy_pix = approx_airy_pixels(telescope, sensor, wavelength_nm);
 
     // Calculate field of view from telescope and sensor
     let fov_deg = field_diameter(telescope, sensor);
@@ -120,7 +122,7 @@ pub fn render_star_field(
         StarProjector::new(center, radians_per_pixel, sensor.width_px, sensor.height_px);
 
     // Padded bounds check
-    let padding = psf_pix * 2.0;
+    let padding = airy_pix.first_zero() * 2.0;
 
     // Add stars with sub-pixel precision
     for &star in stars {
@@ -158,7 +160,7 @@ pub fn render_star_field(
     to_render.sort_by(|a, b| a.flux.partial_cmp(&b.flux).unwrap());
 
     // Create PSF kernel for the given wavelength
-    add_stars_to_image(&mut image, &to_render, psf_pix);
+    add_stars_to_image(&mut image, &to_render, airy_pix);
 
     // Generate sensor noise (read noise and dark current)
     let sensor_noise = generate_sensor_noise(
@@ -217,6 +219,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 /// use starfield::catalogs::StarData;
 /// use starfield::Equatorial;
+/// use simulator::image_proc::airy::ScaledAiryDisk;
 /// let star_data = StarData {
 ///     id: 0,
 ///     magnitude: 10.0,
@@ -225,16 +228,17 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// };
 /// let mut image = Array2::zeros((100, 100));
 /// let stars = vec![StarInFrame { x: 50.0, y: 50.0, flux: 1000.0, star: star_data }];
-/// add_stars_to_image(&mut image, &stars, 2.0);
+/// let airy_pix = ScaledAiryDisk::with_fwhm(2.0);
+/// add_stars_to_image(&mut image, &stars, airy_pix);
 /// ```
-pub fn add_stars_to_image(image: &mut Array2<f64>, stars: &Vec<StarInFrame>, sigma_pix: f64) {
-    // 4 std's is a good approximation for the PSF
-    let max_pix_dist = (sigma_pix.max(1.0) * 4.0).ceil() as i32;
-
+pub fn add_stars_to_image(
+    image: &mut Array2<f64>,
+    stars: &Vec<StarInFrame>,
+    airy_pix: ScaledAiryDisk,
+) {
+    // 2x the first 0 should cover 99.99999% of flux or so
+    let max_pix_dist = (airy_pix.first_zero().max(1.0) * 4.0).ceil() as i32;
     let (width, height) = image.dim();
-    let c = sigma_pix * sigma_pix * 2.0;
-
-    let pre_term = 1.0 / (2.0 * sigma_pix * sigma_pix * std::f64::consts::PI);
 
     // Calculate the contribution of all stars to this pixel
     for star in stars {
@@ -251,9 +255,9 @@ pub fn add_stars_to_image(image: &mut Array2<f64>, stars: &Vec<StarInFrame>, sig
 
                 let dx = star.x - y as f64;
                 let dy = star.y - x as f64;
-                let distance_squared = dx * dx + dy * dy;
+                let radius = (dx * dx + dy * dy).sqrt();
                 // Update pixel value with total flux
-                let contribution = star.flux * pre_term * (-distance_squared / c).exp();
+                let contribution = star.flux * airy_pix.gaussian_approximation_normalized(radius);
 
                 image[[x as usize, y as usize]] += contribution;
             }
@@ -312,7 +316,9 @@ mod tests {
             star: test_star_data(),
         }];
 
-        add_stars_to_image(&mut image, &stars, sigma_pix);
+        let airy_pix = ScaledAiryDisk::with_fwhm(sigma_pix);
+
+        add_stars_to_image(&mut image, &stars, airy_pix);
 
         let added_flux = image.sum();
         assert_relative_eq!(added_flux, total_flux, epsilon = 0.1);
@@ -330,8 +336,9 @@ mod tests {
             flux: total_flux,
             star: test_star_data(),
         }];
+        let airy_pix = ScaledAiryDisk::with_radius_scale(sigma_pix);
 
-        add_stars_to_image(&mut image, &stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, airy_pix);
 
         let added_flux = image.sum();
         assert_relative_eq!(added_flux, 0.0, epsilon = 0.1);
@@ -350,7 +357,9 @@ mod tests {
             star: test_star_data(),
         }];
 
-        add_stars_to_image(&mut image, &stars, sigma_pix);
+        let airy_pix = ScaledAiryDisk::with_radius_scale(sigma_pix);
+
+        add_stars_to_image(&mut image, &stars, airy_pix);
 
         let added_flux = image.sum();
 
@@ -395,8 +404,9 @@ mod tests {
                 star: test_star_data(),
             },
         ];
+        let airy_pix = ScaledAiryDisk::with_fwhm(sigma_pix);
 
-        add_stars_to_image(&mut image, &stars, sigma_pix);
+        add_stars_to_image(&mut image, &stars, airy_pix);
 
         let added_flux = image.sum();
 
@@ -422,7 +432,9 @@ mod tests {
             });
         }
 
-        add_stars_to_image(&mut image, &stars, sigma_pix);
+        let airy_pix = ScaledAiryDisk::with_radius_scale(sigma_pix);
+
+        add_stars_to_image(&mut image, &stars, airy_pix);
 
         let added_flux = image.sum();
 
