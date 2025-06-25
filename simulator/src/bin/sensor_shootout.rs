@@ -23,8 +23,10 @@
 use clap::Parser;
 use core::f64;
 use image::DynamicImage;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use ndarray::Array2;
+use rayon::prelude::*;
 use simulator::algo::icp::{icp_match_objects, Locatable2d};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::DEMO_50CM;
@@ -46,7 +48,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::iter::zip;
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
@@ -57,6 +58,31 @@ struct ExperimentCommonArgs {
     wavelength: f64,
     exposure: Duration,
     coordinates: SolarAngularCoordinates,
+    noise_multiple: f64,
+    output_dir: String,
+    save_images: bool,
+    icp_max_iterations: usize,
+    icp_convergence_threshold: f64,
+}
+
+/// Parameters for a single experiment (one sky pointing with all sensors)
+#[derive(Debug, Clone)]
+struct ExperimentParams {
+    experiment_num: u32,
+    ra_dec: Equatorial,
+    all_sensors: Vec<SensorConfig>,
+    all_scopes: Vec<TelescopeConfig>,
+    common_args: ExperimentCommonArgs,
+}
+
+/// Results from a single experiment run
+#[derive(Debug)]
+struct ExperimentResult {
+    experiment_num: u32,
+    sensor_name: String,
+    coordinates: Equatorial,
+    detected_magnitudes: Vec<f64>,
+    icp_rms_error: f64,
 }
 
 /// Parse coordinates string in format "ra,dec" (degrees)
@@ -105,6 +131,34 @@ struct Args {
     /// When specified, runs simulation only at this position for all sensors instead of random sampling
     #[arg(long, value_parser = parse_ra_dec_coordinates)]
     single_shot_debug: Option<Equatorial>,
+
+    /// Output directory for experiment images and data
+    #[arg(long, default_value = "experiment_output")]
+    output_dir: String,
+
+    /// Output CSV file for experiment log
+    #[arg(long, default_value = "experiment_log.csv")]
+    output_csv: String,
+
+    /// Save image outputs (PNG, FITS files). Disabling this speeds up experiments significantly
+    #[arg(long, action)]
+    no_save_images: bool,
+
+    /// Run experiments serially instead of in parallel
+    #[arg(long, default_value_t = false)]
+    serial: bool,
+
+    /// Match pixel sampling across all sensors using this value (arcsec/pixel). If not specified, uses individual telescopes from shared args
+    #[arg(long)]
+    match_pixel_sampling: Option<f64>,
+
+    /// Maximum iterations for ICP star matching algorithm
+    #[arg(long, default_value_t = 20)]
+    icp_max_iterations: usize,
+
+    /// Convergence threshold for ICP star matching algorithm
+    #[arg(long, default_value_t = 0.25)]
+    icp_convergence_threshold: f64,
 }
 
 /// Prints histogram of star magnitudes
@@ -137,133 +191,280 @@ fn print_am_hist(stars: &[StarData]) {
     }
 }
 
-/// Runs a single imaging experiment with specified sensor and telescope
+/// Runs a single imaging experiment with specified parameters
 ///
-/// Renders star field, detects stars, and saves output images in a background thread
+/// Renders star field for one sky pointing across all sensors, detects stars, and optionally saves output images
 ///
 /// # Arguments
-/// * `sensor` - Sensor configuration
-/// * `telescope` - Telescope configuration
-/// * `ra_dec` - Right ascension and declination pointing
-/// * `stars` - Pre-selected stars to render
-/// * `experiment_num` - Experiment identifier
-/// * `common_args` - Common experiment parameters
+/// * `params` - Complete experiment parameters (one sky pointing, all sensors)
+/// * `catalog` - Star catalog for field selection
+/// * `max_fov` - Maximum field of view to use for star selection
 ///
 /// # Returns
-/// * Thread handle for the background image saving task
-fn run_experiment(
-    sensor: &SensorConfig,
-    telescope: &TelescopeConfig,
-    ra_dec: Equatorial,
-    stars: &[StarData],
-    experiment_num: u32,
-    common_args: &ExperimentCommonArgs,
-) -> thread::JoinHandle<()> {
-    let output_path = Path::new("experiment_output");
+/// * Vec<ExperimentResult> containing detection results for each sensor
+fn run_experiment<T: StarCatalog>(
+    params: &ExperimentParams,
+    catalog: &T,
+    max_fov: f64,
+) -> Vec<ExperimentResult> {
+    let output_path = Path::new(&params.common_args.output_dir);
 
-    print_am_hist(stars);
+    debug!("Running experiment {}...", params.experiment_num);
+    debug!(
+        "  RA: {:.2}, Dec: {:.2}",
+        params.ra_dec.ra_degrees(),
+        params.ra_dec.dec_degrees()
+    );
+    debug!("  Temperature: {}", params.common_args.temperature);
+    debug!("  Wavelength: {}", params.common_args.wavelength);
+    debug!("  Exposure: {:?}", params.common_args.exposure);
+    debug!("  Noise Multiple: {}", params.common_args.noise_multiple);
+    debug!("  Output Dir: {}", params.common_args.output_dir);
+    debug!("  Save Images: {}", params.common_args.save_images);
+
+    // Compute stars once for this sky pointing
+    let stars = catalog.stars_in_field(
+        params.ra_dec.ra_degrees(),
+        params.ra_dec.dec_degrees(),
+        max_fov,
+    );
+    print_am_hist(&stars);
 
     let star_refs: Vec<&StarData> = stars.iter().collect();
 
-    // Render the star field
-    let render_result = render_star_field(
-        &star_refs,
-        &ra_dec,
-        telescope,
-        sensor,
-        &common_args.exposure,
-        common_args.wavelength,
-        common_args.temperature,
-        &common_args.coordinates,
-    );
+    let mut results = Vec::new();
 
-    // Print some statistics about the rendered image
-    debug!(
-        "Total electrons in image: {:.2}e-",
-        render_result.electron_image.sum()
-    );
-    debug!(
-        "Total noise in image: {:.2}e-",
-        render_result.noise_image.sum()
-    );
-
-    display_electron_histogram(&render_result.electron_image, 25).unwrap();
-
-    let prefix = format!("{}_{}_", experiment_num, sensor.name.replace(" ", "_"),);
-
-    // Only pick stuff that is 5x above the noise floor
-    let mean_noise_elec = render_result
-        .noise_image
-        .mean()
-        .expect("Can't take image mean");
-    let cutoff_value = mean_noise_elec * sensor.dn_per_electron * 5.0; // 5x above noise floor
-
-    // Do the star detection
-    let detected_stars = do_detections(
-        &render_result.image,
-        None, // Can tweak this setting later
-        Some(cutoff_value),
-    );
-
-    // Use threaded version of save_image_outputs and collect the thread handle
-    let render_thread = save_image_outputs_threaded(
-        &render_result,
-        sensor,
-        &detected_stars,
-        output_path,
-        &prefix,
-    );
-
-    // Now we take our detected stars and match them against the sources
-    let (matches, _icp_result) = icp_match_objects::<StarDetection, StarInFrame>(
-        &detected_stars,
-        &render_result.rendered_stars,
-        20,
-        0.25,
-    )
-    .expect("ICP matching failed: detected stars and rendered stars should be valid for matching");
-
-    for (dete, star) in matches.iter() {
-        let distance = ((dete.x() - star.x()).powf(2.0) + (dete.y() - star.y()).powf(2.0)).sqrt();
-        debug!(
-            "Matched star {:?} to source {:?} with distance {:.2}",
-            dete, star, distance
+    // Run experiment for each sensor at this sky pointing
+    for (sensor, telescope) in zip(params.all_sensors.iter(), params.all_scopes.iter()) {
+        debug!("Running experiment for sensor: {}", sensor.name);
+        // Render the star field for this sensor/telescope combination
+        let render_result = render_star_field(
+            &star_refs,
+            &params.ra_dec,
+            telescope,
+            sensor,
+            &params.common_args.exposure,
+            params.common_args.wavelength,
+            params.common_args.temperature,
+            &params.common_args.coordinates,
         );
+
+        let prefix = format!(
+            "{}_{}_",
+            params.experiment_num,
+            sensor.name.replace(" ", "_"),
+        );
+
+        // Only pick stuff that is noise_multiple above the noise floor
+        let mean_noise_elec = render_result
+            .noise_image
+            .mean()
+            .expect("Can't take image mean");
+        let cutoff_value =
+            mean_noise_elec * sensor.dn_per_electron * params.common_args.noise_multiple;
+
+        // Do the star detection
+        let detected_stars = do_detections(
+            &render_result.image,
+            None, // Can tweak this setting later
+            Some(cutoff_value),
+        );
+
+        // Save images if enabled
+        if params.common_args.save_images {
+            save_image_outputs(
+                &render_result,
+                sensor,
+                &detected_stars,
+                output_path,
+                &prefix,
+            );
+        }
+
+        // Now we take our detected stars and match them against the sources
+        let result = match icp_match_objects::<StarDetection, StarInFrame>(
+            &detected_stars,
+            &render_result.rendered_stars,
+            params.common_args.icp_max_iterations,
+            params.common_args.icp_convergence_threshold,
+        ) {
+            Ok((matches, icp_result)) => {
+                // Debug statistics output
+                debug_stats(&render_result, &matches).unwrap();
+
+                let mut magnitudes: Vec<f64> =
+                    matches.iter().map(|(_, s)| s.star.magnitude).collect();
+                magnitudes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+                info!(
+                    "Detected {} stars. Faintest magnitude: {:.2}",
+                    magnitudes.len(),
+                    magnitudes.last().unwrap_or(&f64::NAN)
+                );
+
+                ExperimentResult {
+                    experiment_num: params.experiment_num,
+                    sensor_name: sensor.name.clone(),
+                    coordinates: params.ra_dec,
+                    detected_magnitudes: magnitudes,
+                    icp_rms_error: icp_result.mean_squared_error.sqrt(),
+                }
+            }
+            Err(e) => {
+                warn!("ICP matching failed for sensor {}: {}", sensor.name, e);
+
+                ExperimentResult {
+                    experiment_num: params.experiment_num,
+                    sensor_name: sensor.name.clone(),
+                    coordinates: params.ra_dec,
+                    detected_magnitudes: Vec::new(),
+                    icp_rms_error: f64::NAN,
+                }
+            }
+        };
+
+        results.push(result);
+    }
+    results
+}
+
+/// Writes experiment results to CSV file with comprehensive header information
+///
+/// # Arguments
+/// * `results` - Vector of experiment results to write
+/// * `args` - Command line arguments containing configuration
+/// * `all_sensors` - Vector of sensor configurations used
+/// * `all_scopes` - Vector of telescope configurations used  
+/// * `all_experiments` - Vector of all experiment parameters (for count)
+///
+/// # Returns
+/// * Result indicating success or failure of file writing
+fn write_results_to_csv(
+    results: &[ExperimentResult],
+    args: &Args,
+    all_sensors: &[SensorConfig],
+    all_scopes: &[TelescopeConfig],
+    all_experiments: &[ExperimentParams],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let log_file_path = Path::new(&args.output_csv);
+
+    // Create CSV file and write header information
+    let mut csv_file = std::fs::File::create(&log_file_path)
+        .unwrap_or_else(|_| panic!("Failed to create CSV file: {}", args.output_csv));
+
+    info!("Writing results to CSV file: {}", args.output_csv);
+
+    // Write CSV header with simulation configuration
+    writeln!(csv_file, "Sensor Shootout Experiment Results")?;
+    writeln!(csv_file, "Configuration Parameters:")?;
+    writeln!(csv_file, "Exposure: {} seconds", args.shared.exposure)?;
+    writeln!(csv_file, "Wavelength: {} nm", args.shared.wavelength)?;
+    writeln!(
+        csv_file,
+        "Sensor Temperature: {} °C",
+        args.shared.temperature
+    )?;
+    writeln!(
+        csv_file,
+        "Noise Floor Multiplier: {}",
+        args.shared.noise_multiple
+    )?;
+    writeln!(
+        csv_file,
+        "Solar Elongation: {:.2}°",
+        args.shared.coordinates.elongation().to_degrees()
+    )?;
+    writeln!(
+        csv_file,
+        "Ecliptic Latitude: {:.2}°",
+        args.shared.coordinates.latitude().to_degrees()
+    )?;
+    writeln!(csv_file, "Total Experiments: {}", args.experiments)?;
+    writeln!(
+        csv_file,
+        "Total Runs: {} (experiments × sensors)",
+        all_experiments.len() * all_sensors.len()
+    )?;
+    writeln!(
+        csv_file,
+        "Execution Mode: {}",
+        if args.serial { "Serial" } else { "Parallel" }
+    )?;
+    writeln!(csv_file, "Save Images: {}", args.no_save_images)?;
+
+    if let Some(pixel_sampling) = args.match_pixel_sampling {
+        writeln!(
+            csv_file,
+            "Pixel Sampling Mode: Matched at {:.3} arcsec/pixel",
+            pixel_sampling
+        )?;
+    } else {
+        writeln!(
+            csv_file,
+            "Pixel Sampling Mode: Individual telescopes (DEMO_50CM clones)"
+        )?;
     }
 
-    let mut magnitudes: Vec<f64> = matches.iter().map(|(_, s)| s.star.magnitude).collect();
-    magnitudes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    if let Some(coords) = args.single_shot_debug {
+        writeln!(
+            csv_file,
+            "Single Shot Debug: RA={:.2}°, Dec={:.2}°",
+            coords.ra_degrees(),
+            coords.dec_degrees()
+        )?;
+    } else {
+        writeln!(
+            csv_file,
+            "Single Shot Debug: Disabled (random sky positions)"
+        )?;
+    }
 
-    info!(
-        "Detected {} stars. Faintest magnitude: {:.2}",
-        magnitudes.len(),
-        magnitudes.last().unwrap_or(&f64::NAN)
-    );
+    writeln!(csv_file, "Star Catalog: {}", args.shared.catalog.display())?;
+    writeln!(csv_file, "Output Directory: {}", args.output_dir)?;
+    writeln!(csv_file)?;
 
-    // Append a row to a file with the provided formatted string
-    let log_file_path = output_path.join("experiment_log.txt");
-    let log_entry = format!(
-        "{}, {}, {:.2}, {:.2}, {}, {}\n",
-        experiment_num,
-        sensor.name,
-        ra_dec.ra_degrees(),
-        ra_dec.dec_degrees(),
-        magnitudes.len(),
-        magnitudes
-            .iter()
-            .map(|m| format!("{:.2}", m))
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
+    // Write sensor information
+    writeln!(csv_file, "Sensor Configurations:")?;
+    for (i, (sensor, scope)) in zip(all_sensors.iter(), all_scopes.iter()).enumerate() {
+        let fov_deg = field_diameter(scope, sensor);
+        writeln!(
+            csv_file,
+            "Sensor {}: {} - FOV: {:.4}° - Focal Length: {:.2}m - Aperture: {:.2}m",
+            i + 1,
+            sensor.name,
+            fov_deg,
+            scope.focal_length_m,
+            scope.aperture_m
+        )?;
+    }
+    writeln!(csv_file)?;
 
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file_path)
-        .and_then(|mut file| file.write_all(log_entry.as_bytes()))
-        .expect("Failed to write to log file");
+    // Write CSV data header
+    writeln!(csv_file, "Experiment Data:")?;
+    writeln!(csv_file, "experiment_num,sensor_name,ra_degrees,dec_degrees,detected_count,icp_rms_error,detected_magnitudes")?;
 
-    render_thread
+    // Write experiment results
+    for result in results {
+        let log_entry = format!(
+            "{}, {}, {:.2}, {:.2}, {}, {:.4}, {}\n",
+            result.experiment_num,
+            result.sensor_name,
+            result.coordinates.ra_degrees(),
+            result.coordinates.dec_degrees(),
+            result.detected_magnitudes.len(),
+            result.icp_rms_error,
+            result
+                .detected_magnitudes
+                .iter()
+                .map(|m| format!("{:.2}", m))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+
+        csv_file.write_all(log_entry.as_bytes())?;
+    }
+
+    Ok(())
 }
 
 /// Main function for telescope view simulation
@@ -281,10 +482,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sensor_models::IMX455.clone(),
     ];
 
-    let all_scopes = all_sensors
-        .iter()
-        .map(|s| build_optics_for_sensor(&DEMO_50CM, s, args.shared.wavelength, 4.0))
-        .collect::<Vec<_>>();
+    let all_scopes = if let Some(pixel_sampling) = args.match_pixel_sampling {
+        // Use the current build_optics_for_sensor implementation with match-pixel-sampling value
+        all_sensors
+            .iter()
+            .map(|s| build_optics_for_sensor(&DEMO_50CM, s, args.shared.wavelength, pixel_sampling))
+            .collect::<Vec<_>>()
+    } else {
+        // Use N clones of the base DEMO_50CM scope
+        (0..all_sensors.len())
+            .map(|_| DEMO_50CM.clone())
+            .collect::<Vec<_>>()
+    };
 
     // Compute the maximal FOV of all sensors:
     let mut max_fov = 0.0;
@@ -296,16 +505,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Track all threads so we can join them at the end
-    let mut render_threads = Vec::new();
-
     // Load the catalog....this requires some serious RAM
     let catalog = args.shared.load_catalog().expect("Could not load catalog?");
     info!("Loaded catalog with {} stars", catalog.len());
-    info!("Running {} experiments", args.experiments);
 
     // Ensure the output directory exists
-    let output_path = Path::new("experiment_output");
+    let output_path = Path::new(&args.output_dir);
     if !output_path.exists() {
         std::fs::create_dir_all(output_path).expect("Failed to create output directory");
     }
@@ -316,7 +521,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wavelength: args.shared.wavelength,
         exposure: args.shared.exposure.0,
         coordinates: args.shared.coordinates,
+        noise_multiple: args.shared.noise_multiple,
+        output_dir: args.output_dir.clone(),
+        save_images: !args.no_save_images,
+        icp_max_iterations: args.icp_max_iterations,
+        icp_convergence_threshold: args.icp_convergence_threshold,
     };
+
+    // Build all experiment parameters upfront
+    info!("Setting up experiments...");
+    let mut all_experiments = Vec::new();
 
     for i in 0..args.experiments {
         // Generate coordinates based on mode
@@ -330,17 +544,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Equatorial::from_degrees(ra, dec)
         };
 
-        // Siphon out the stars for the maximum FOV once per experiment
-        let stars = catalog.stars_in_field(ra_dec.ra_degrees(), ra_dec.dec_degrees(), max_fov);
-
-        for (sensor, scope) in zip(all_sensors.iter(), all_scopes.iter()) {
-            info!(
-                "Running experiment {} with sensor: {}, telescope: {}",
-                i, sensor.name, scope.name
-            );
-            let thread = run_experiment(sensor, scope, ra_dec, &stars, i, &common_args);
-            render_threads.push(thread);
-        }
+        // Create one experiment param per sky pointing (stars computed in run_experiment)
+        let params = ExperimentParams {
+            experiment_num: i,
+            ra_dec,
+            all_sensors: all_sensors.clone(),
+            all_scopes: all_scopes.clone(),
+            common_args: common_args.clone(),
+        };
+        all_experiments.push(params);
 
         if args.single_shot_debug.is_some() {
             // If in single-shot debug mode, only run one set of experiments
@@ -348,58 +560,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Wait for all rendering threads to complete
     info!(
-        "Waiting for {} rendering threads to complete...",
-        render_threads.len()
-    );
-    for thread in render_threads {
-        if let Err(e) = thread.join() {
-            warn!("Error joining render thread: {:?}", e);
+        "Running {} experiments (sky pointings) {}...",
+        all_experiments.len(),
+        if args.serial {
+            "serially"
+        } else {
+            "in parallel"
         }
-    }
+    );
+
+    // Setup progress tracking
+    let multi_progress = MultiProgress::new();
+    let progress_style = ProgressStyle::default_bar()
+        .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ ");
+
+    // Create progress bar
+    let pb = multi_progress.add(ProgressBar::new(all_experiments.len() as u64));
+    pb.set_style(progress_style);
+    pb.set_message("Running experiments");
+
+    // Run experiments with progress tracking (parallel or serial based on flag)
+    let experiment_results: Vec<Vec<ExperimentResult>> = if args.serial {
+        all_experiments
+            .iter()
+            .map(|params| run_experiment(params, &catalog, max_fov))
+            .map(|results| {
+                pb.inc(1);
+                results
+            })
+            .collect()
+    } else {
+        all_experiments
+            .par_iter()
+            .map(|params| run_experiment(params, &catalog, max_fov))
+            .map(|results| {
+                pb.inc(1);
+                results
+            })
+            .collect()
+    };
+
+    // Flatten results from Vec<Vec<ExperimentResult>> to Vec<ExperimentResult>
+    let flattened_results: Vec<ExperimentResult> =
+        experiment_results.into_iter().flatten().collect();
+
+    pb.finish_with_message("Experiments complete!");
+
+    // Process results
+    info!("Processing results...");
+
+    // Write results to CSV file
+    write_results_to_csv(
+        &flattened_results,
+        &args,
+        &all_sensors,
+        &all_scopes,
+        &all_experiments,
+    )?;
 
     Ok(())
-}
-
-/// Saves multiple image outputs from rendered star field data in a background thread
-///
-/// This function creates a new thread to perform image saving operations, allowing the main
-/// thread to continue processing without waiting for I/O operations to complete.
-///
-/// # Arguments
-/// * `render_result` - Complete results from star field rendering
-/// * `sensor` - Sensor configuration used for image scaling
-/// * `detected_stars` - Vector of detected star objects
-/// * `output_path` - Directory where output files will be saved
-/// * `prefix` - Filename prefix for all output files
-///
-/// # Returns
-/// * Thread join handle that can be collected and joined later
-fn save_image_outputs_threaded(
-    render_result: &RenderingResult,
-    sensor: &SensorConfig,
-    detected_stars: &[StarDetection],
-    output_path: &Path,
-    prefix: &str,
-) -> thread::JoinHandle<()> {
-    thread::spawn({
-        let render_result_clone = render_result.clone();
-        let sensor_clone = sensor.clone();
-        let detected_stars_clone = detected_stars.to_owned();
-        let output_path = output_path.to_path_buf();
-        let prefix = prefix.to_string();
-
-        move || {
-            save_image_outputs(
-                &render_result_clone,
-                &sensor_clone,
-                &detected_stars_clone,
-                &output_path,
-                &prefix,
-            );
-        }
-    })
 }
 
 /// Saves multiple image outputs from rendered star field data
@@ -486,14 +708,44 @@ fn save_image_outputs(
     write_hashmap_to_fits(&fits_data, &fits_path).expect("Failed to save FITS file");
 }
 
-/// Display a histogram of electron counts in the image
-fn display_electron_histogram(
-    image: &Array2<f64>,
-    num_bins: usize,
+/// Display debug statistics including electron counts, noise, match distances and histogram
+fn debug_stats(
+    render_result: &RenderingResult,
+    matches: &[(StarDetection, StarInFrame)],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Guard expensive debug calls for performance
+    if !log::log_enabled!(log::Level::Debug) {
+        return Ok(());
+    }
+
+    // Print some statistics about the rendered image
+    debug!(
+        "Total electrons in image: {:.2}e-",
+        render_result.electron_image.sum()
+    );
+    debug!(
+        "Total noise in image: {:.2}e-",
+        render_result.noise_image.sum()
+    );
+
+    // Print ICP match distances
+    for (dete, star) in matches.iter() {
+        let distance = ((dete.x() - star.x()).powf(2.0) + (dete.y() - star.y()).powf(2.0)).sqrt();
+        debug!(
+            "Matched star {:?} to source {:?} with distance {:.2}",
+            dete, star, distance
+        );
+    }
     // Get statistics for binning (gross)
-    let min_val = image.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_val = image.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let num_bins = 25;
+    let min_val = render_result
+        .electron_image
+        .iter()
+        .fold(f64::INFINITY, |a, &b| a.min(b));
+    let max_val = render_result
+        .electron_image
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
 
     // Skip if all values are the same
     if (max_val - min_val).abs() < 1e-10 {
@@ -502,10 +754,10 @@ fn display_electron_histogram(
     }
 
     // Calculate some basic stats for display
-    let total_pixels = image.len();
+    let total_pixels = render_result.electron_image.len();
 
     let mut full_hist = Histogram::new_equal_bins(min_val..max_val, num_bins)?;
-    full_hist.add_all(image.iter().copied());
+    full_hist.add_all(render_result.electron_image.iter().copied());
 
     let full_config = HistogramConfig {
         title: Some(format!(
