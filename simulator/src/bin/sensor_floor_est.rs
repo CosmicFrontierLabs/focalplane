@@ -139,11 +139,11 @@ impl ExperimentResults {
         let mut sum = 0.0;
 
         for &(x, y) in &self.xy_err {
-            sum += x * x + y * y;
+            sum += (x * x + y * y).sqrt();
         }
 
         sum /= self.xy_err.len() as f64;
-        sum.sqrt()
+        sum
     }
 
     /// Get the detection rate based on number of accumulated errors vs experiments
@@ -216,21 +216,36 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
         let detected_stars = do_detections(&quantized, None, Some(cutoff_value));
 
         // Calculate detection error if star was found
-        if detected_stars.len() == 1 {
-            let detected_star = &detected_stars.first().unwrap();
+        let mut best: Option<(f64, f64)> = None;
+        let mut best_err = f64::INFINITY;
 
-            let x_diff = detected_star.x - xpos;
-            let y_diff = detected_star.y - ypos;
+        if detected_stars.len() != 1 {
+            // If no stars detected, skip this experiment
+            log::warn!(
+                "{} stars detected in frame, skipping experiment",
+                detected_stars.len()
+            );
+            continue;
+        }
+
+        for detection in &detected_stars {
+            let x_diff = detection.x - xpos;
+            let y_diff = detection.y - ypos;
             let err = (x_diff * x_diff + y_diff * y_diff).sqrt();
 
             // Detect spurious detections (mostly) and skip them
-            if err > params.airy_pix.first_zero() * 2.0 {
+            if err > params.airy_pix.first_zero().max(1.0) * 3.0 {
                 println!("Spurious detection: {} pixels", err);
                 continue;
             }
 
-            xy_err.push((x_diff, y_diff));
+            if err < best_err {
+                best_err = err;
+                best = Some((x_diff, y_diff));
+            }
         }
+
+        best.map(|(x_diff, y_diff)| xy_err.push((x_diff, y_diff)));
     }
 
     ExperimentResults {
@@ -266,15 +281,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let telescope = DEMO_50CM.clone();
 
     // PSF disk sizes to test (in Airy disk units) - 2 to 8 in steps of 0.25
-    let disks = Array1::range(1.0, 6.25, 0.25);
+    let disks = Array1::range(1.0, 5.0, 0.25);
 
     // Star magnitudes to test - 15 to 20 in steps of 0.25
-    let mags = Array1::range(12.0, 19.25, 0.25);
+    let mags = Array1::range(12.0, 16.5, 0.25);
 
     println!("Setting up experiments...");
 
     // Store results for each sensor
     let mut sensor_results: HashMap<String, Array2<f64>> = HashMap::new();
+    let mut sensor_pixel_results: HashMap<String, Array2<f64>> = HashMap::new();
 
     // Build a vector of all experiments to run
     let mut all_experiments = Vec::new();
@@ -284,13 +300,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sensor_results_array = Array2::<f64>::from_elem((disks.len(), mags.len()), f64::NAN);
         sensor_results.insert(sensor.name.clone(), sensor_results_array);
 
+        let sensor_pixel_results_array =
+            Array2::<f64>::from_elem((disks.len(), mags.len()), f64::NAN);
+        sensor_pixel_results.insert(sensor.name.clone(), sensor_pixel_results_array);
+
         println!("Preparing experiments for sensor: {}", sensor.name);
 
         // Create a vector of experiment parameters for this sensor
         for (disk_idx, disk) in disks.iter().enumerate() {
             // Calculate PSF size in pixels for this disk configuration
-            let default_config = approx_airy_pixels(&telescope, sensor, args.shared.wavelength);
-            let airy_pix = ScaledAiryDisk::with_fwhm(default_config.fwhm() * disk);
+            let airy_pix = ScaledAiryDisk::with_fwhm(*disk);
 
             for (mag_idx, mag) in mags.iter().enumerate() {
                 // Create experiment parameters
@@ -377,6 +396,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sensor_array[[disk_idx, mag_idx]] = result.rms_err_mas();
         }
 
+        if let Some(sensor_pixel_array) = sensor_pixel_results.get_mut(&sensor_name) {
+            sensor_pixel_array[[disk_idx, mag_idx]] = result.rms_error();
+        }
+
         if let Some(detection_array) = detection_rates.get_mut(&sensor_name) {
             detection_array[[disk_idx, mag_idx]] = detection_rate;
         }
@@ -417,6 +440,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for sensor_name in sensors_ordered {
         let results = sensor_results.get(&sensor_name).unwrap();
+        let pixel_results = sensor_pixel_results.get(&sensor_name).unwrap();
         let detection_rate_array = detection_rates.get(&sensor_name).unwrap();
 
         println!("\n==== Sensor: {} ====", sensor_name);
@@ -431,14 +455,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(csv_file, "Detection Rate Matrix (%)").unwrap();
 
         // CSV header row with magnitude values
-        write!(csv_file, "Disk\\Mag,").unwrap();
+        write!(csv_file, "Q\\Mag,").unwrap();
         for mag in &mags {
             write!(csv_file, "{:.2},", mag).unwrap();
         }
         writeln!(csv_file).unwrap();
 
         // Print header row with magnitude values
-        print!("  Disk\\Mag |");
+        print!("  Q\\Mag |");
         for mag in &mags {
             print!(" {:.2} |", mag);
         }
@@ -481,14 +505,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(csv_file, "Mean Position Error Matrix (mas)").unwrap();
 
         // CSV header row with magnitude values
-        write!(csv_file, "Disk\\Mag,").unwrap();
+        write!(csv_file, "Q\\Mag,").unwrap();
         for mag in &mags {
             write!(csv_file, "{:.2},", mag).unwrap();
         }
         writeln!(csv_file).unwrap();
 
         // Print header row with magnitude values
-        print!("  Disk\\Mag |");
+        print!("  Q\\Mag |");
         for mag in &mags {
             print!(" {:.2} |", mag);
         }
@@ -533,62 +557,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Add blank line after matrix
         writeln!(csv_file).unwrap();
 
-        println!("\n  Summary by Disk Size:");
+        println!("\n  RMS Position Error Matrix (pixels, NaN = no detection):");
 
-        // Write summary title to CSV
-        writeln!(csv_file, "Summary by Disk Size").unwrap();
-        writeln!(csv_file, "Disk,Mean Error (pixels),Detection Rate (%)").unwrap();
+        // Write pixel error matrix title to CSV
+        writeln!(csv_file, "RMS Position Error Matrix (pixels)").unwrap();
 
+        // CSV header row with magnitude values
+        write!(csv_file, "Q\\Mag,").unwrap();
+        for mag in &mags {
+            write!(csv_file, "{:.2},", mag).unwrap();
+        }
+        writeln!(csv_file).unwrap();
+
+        // Print header row with magnitude values
+        print!("  Q\\Mag |");
+        for mag in &mags {
+            print!(" {:.2} |", mag);
+        }
+        println!();
+
+        // Print separator
+        print!("  ---------|");
+        for _ in &mags {
+            print!("------|");
+        }
+        println!();
+
+        // Print and write pixel error matrix
         for (disk_idx, disk) in disks.iter().enumerate() {
-            let mut error_sum = 0.0;
-            let mut error_count = 0;
-            let mut detection_sum = 0.0;
+            // CSV row
+            write!(csv_file, "{:.2},", disk).unwrap();
+
+            // Console row
+            print!("  {:.1}      |", disk);
 
             for mag_idx in 0..mags.len() {
-                let err = results[[disk_idx, mag_idx]];
-                let rate = detection_rate_array[[disk_idx, mag_idx]];
+                let err = pixel_results[[disk_idx, mag_idx]];
 
-                detection_sum += rate;
+                // CSV cell
+                if err.is_nan() {
+                    write!(csv_file, ",").unwrap(); // Empty cell for NaN
+                } else {
+                    write!(csv_file, "{:.3},", err).unwrap();
+                }
 
-                if !err.is_nan() {
-                    error_sum += err;
-                    error_count += 1;
+                // Console cell
+                if err.is_nan() {
+                    print!("  --- |");
+                } else {
+                    print!("{:.3} |", err);
                 }
             }
-
-            let mean_err = if error_count > 0 {
-                error_sum / error_count as f64
-            } else {
-                f64::NAN
-            };
-
-            let avg_detection_rate = if !mags.is_empty() {
-                detection_sum / mags.len() as f64
-            } else {
-                0.0
-            };
-
-            // Write summary row to CSV
-            if mean_err.is_nan() {
-                writeln!(csv_file, "{:.2},,{:.1}", disk, avg_detection_rate * 100.0).unwrap();
-            } else {
-                writeln!(
-                    csv_file,
-                    "{:.2},{:.4},{:.1}",
-                    disk,
-                    mean_err,
-                    avg_detection_rate * 100.0
-                )
-                .unwrap();
-            }
-
-            println!(
-                "    Disk {:.1}: Avg Error {:.4} pixels, Avg Detection Rate {:.1}%",
-                disk,
-                mean_err,
-                avg_detection_rate * 100.0
-            );
+            writeln!(csv_file).unwrap();
+            println!();
         }
+
+        // Add blank line after matrix
+        writeln!(csv_file).unwrap();
 
         // Add separator between sensors
         writeln!(csv_file).unwrap();

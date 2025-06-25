@@ -247,10 +247,17 @@ impl ScaledAiryDisk {
     }
 
     pub fn gaussian_approximation_normalized(&self, radius: f64) -> f64 {
-        // FIXME(meawoppl) the 3.9 factor above included the scaling factor 1/sqrt(2pi) and the matching scaler :/
-        // You should fix this and unwind these uglee constants
-        let normalization = 4.5702;
-        self.disk.gaussian_approximation(radius / self.radius_scale) / normalization
+        // TODO(meawoppl) - cleanup the constants running around
+        // Get the unscaled gaussian value
+        let gauss_value = self.disk.gaussian_approximation(radius / self.radius_scale);
+
+        // The integral of the base gaussian exp(-3.9 * r²/r₀²) in 2D is π * r₀² / 3.9
+        let r0_base = self.disk.first_zero;
+        let base_integral = std::f64::consts::PI * r0_base * r0_base / 3.9;
+
+        // When we scale by radius_scale, the integral scales by radius_scale²
+        // So the normalized function is: gauss_value / (base_integral * radius_scale²)
+        gauss_value / (base_integral * (self.radius_scale * self.radius_scale))
     }
 
     /// Returns the triangle approximation at a given radius, scaled by the radius_scale
