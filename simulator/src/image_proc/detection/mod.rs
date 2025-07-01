@@ -1,4 +1,5 @@
 pub mod aabb;
+pub mod config;
 pub mod detection;
 pub mod naive;
 pub mod thresholding;

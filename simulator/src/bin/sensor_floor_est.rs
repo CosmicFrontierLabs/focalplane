@@ -28,7 +28,7 @@ use ndarray::{Array1, Array2, Array3};
 use rayon::prelude::*;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::SatelliteConfig;
-use simulator::image_proc::detection::do_detections;
+use simulator::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
 use simulator::image_proc::generate_sensor_noise;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
 use simulator::photometry::{zodical::SolarAngularCoordinates, ZodicalLight};
@@ -85,6 +85,10 @@ struct Args {
     /// Exposure duration range in milliseconds (format: start:stop:step)
     #[arg(long, default_value = "100:1050:50")]
     exposures: RangeArg,
+
+    /// Star detection algorithm to use (dao, iraf, naive)
+    #[arg(long, default_value = "naive")]
+    star_finder: StarFinder,
 }
 
 /// Parameters for a single experiment
@@ -106,6 +110,8 @@ struct ExperimentParams {
     experiment_count: u32,
     /// Solar coordinates for zodiacal background
     coordinates: SolarAngularCoordinates,
+    /// Star detection algorithm to use
+    star_finder: StarFinder,
 }
 
 impl ExperimentParams {
@@ -139,6 +145,9 @@ impl ExperimentParams {
 struct ExperimentResults {
     pub params: ExperimentParams,
     xy_err: Vec<(f64, f64)>,
+    spurious_detections: usize,
+    multiple_detections: usize,
+    no_detections: usize,
 }
 
 impl ExperimentResults {
@@ -173,6 +182,16 @@ impl ExperimentResults {
         let _pix_err = self.rms_error();
         self.rms_error_radians() * (648_000_000.0 / PI)
     }
+
+    fn false_positive_rate(&self) -> f64 {
+        let total_experiments = self.params.experiment_count;
+        (self.spurious_detections + self.multiple_detections) as f64 / total_experiments as f64
+    }
+
+    fn spurious_rate(&self) -> f64 {
+        let total_experiments = self.params.experiment_count;
+        self.spurious_detections as f64 / total_experiments as f64
+    }
 }
 
 /// Run a single experiment and return the error (distance) or NaN if not detected, and detection rate
@@ -181,6 +200,9 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
 
     // Run the experiment multiple times and average the results
     let mut xy_err: Vec<(f64, f64)> = Vec::new();
+    let mut spurious_detections = 0;
+    let mut multiple_detections = 0;
+    let mut no_detections = 0;
 
     for _ in 0..params.experiment_count {
         // Generate random position in the center area
@@ -220,19 +242,58 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
         // Calculate detection threshold based on noise floor
         let quantized_noise = quantize_image(&noise, &params.satellite.sensor);
         let noise_mean = quantized_noise.map(|&x| x as f64).mean().unwrap();
-        let cutoff_value = noise_mean * params.noise_floor_multiplier;
+        let background_rms = noise_mean;
+        let airy_disk_pixels = params.satellite.airy_disk_fwhm_sampled().fwhm();
+        let detection_sigma = params.noise_floor_multiplier;
 
         // Run star detection algorithm
-        let detected_stars = do_detections(&quantized, None, Some(cutoff_value));
+        let detected_stars: Vec<StarDetection> = match detect_stars_unified(
+            quantized.view(),
+            params.star_finder,
+            airy_disk_pixels,
+            background_rms,
+            detection_sigma,
+        ) {
+            Ok(stars) => stars
+                .into_iter()
+                .map(|star| {
+                    // Convert boxed StellarSource to StarDetection-like structure
+                    {
+                        let (x, y) = star.get_centroid();
+                        StarDetection {
+                            id: 0,
+                            x,
+                            y,
+                            flux: star.flux(),
+                            m_xx: 1.0,
+                            m_yy: 1.0,
+                            m_xy: 0.0,
+                            aspect_ratio: 1.0,
+                            diameter: 2.0,
+                            is_valid: true,
+                        }
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                log::warn!("Star detection failed: {}", e);
+                continue;
+            }
+        };
 
         // Calculate detection error if star was found
         let mut best: Option<(f64, f64)> = None;
         let mut best_err = f64::INFINITY;
 
-        if detected_stars.len() != 1 {
-            // If no stars detected, skip this experiment
-            log::warn!(
-                "{} stars detected in frame, skipping experiment",
+        if detected_stars.len() == 0 {
+            // No stars detected
+            no_detections += 1;
+            continue;
+        } else if detected_stars.len() > 1 {
+            // Multiple stars detected
+            multiple_detections += 1;
+            log::debug!(
+                "{} stars detected in frame (expected 1)",
                 detected_stars.len()
             );
             continue;
@@ -246,8 +307,9 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
             // Detect spurious detections (mostly) and skip them
             let airy_disk = params.satellite.airy_disk_fwhm_sampled();
             if err > airy_disk.first_zero().max(1.0) * 3.0 {
-                println!("Spurious detection: {} pixels", err);
-                continue;
+                spurious_detections += 1;
+                log::debug!("Spurious detection: {} pixels from true position", err);
+                break; // Break out of detection loop for this experiment
             }
 
             if err < best_err {
@@ -264,6 +326,9 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
     ExperimentResults {
         params: params.clone(),
         xy_err,
+        spurious_detections,
+        multiple_detections,
+        no_detections,
     }
 }
 
@@ -355,6 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         indices: (disk_idx, exposure_idx, mag_idx),
                         experiment_count: args.experiments,
                         coordinates: args.shared.coordinates,
+                        star_finder: args.star_finder,
                     };
 
                     all_experiments.push(params);
@@ -422,6 +488,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sensor_name = result.params.satellite.sensor.name.clone();
         let detection_rate = result.detection_rate();
         let (disk_idx, exposure_idx, mag_idx) = result.params.indices;
+
+        // Log false positive statistics
+        if result.spurious_detections > 0 || result.multiple_detections > 0 {
+            log::info!("Algorithm: {:?}, Sensor: {}, Spurious: {}, Multiple: {}, No Detection: {}, False Positive Rate: {:.1}%",
+                      result.params.star_finder,
+                      sensor_name,
+                      result.spurious_detections,
+                      result.multiple_detections,
+                      result.no_detections,
+                      result.false_positive_rate() * 100.0);
+        }
 
         if let Some(sensor_array) = sensor_results.get_mut(&sensor_name) {
             sensor_array[[disk_idx, exposure_idx, mag_idx]] = result.rms_err_mas();

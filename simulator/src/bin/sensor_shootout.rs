@@ -30,7 +30,7 @@ use simulator::algo::icp::{icp_match_objects, Locatable2d};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::DEMO_50CM;
 use simulator::hardware::SatelliteConfig;
-use simulator::image_proc::detection::do_detections;
+use simulator::image_proc::detection::{detect_stars_unified, StarFinder};
 use simulator::image_proc::histogram_stretch::sigma_stretch;
 use simulator::image_proc::image::array2_to_gray_image;
 use simulator::image_proc::io::write_hashmap_to_fits;
@@ -60,6 +60,7 @@ struct ExperimentCommonArgs {
     save_images: bool,
     icp_max_iterations: usize,
     icp_convergence_threshold: f64,
+    star_finder: StarFinder,
 }
 
 /// Parameters for a single experiment (one sky pointing with all satellites)
@@ -155,6 +156,10 @@ struct Args {
     /// Convergence threshold for ICP star matching algorithm
     #[arg(long, default_value_t = 0.25)]
     icp_convergence_threshold: f64,
+
+    /// Star detection algorithm to use (dao, iraf, naive)
+    #[arg(long, default_value = "naive")]
+    star_finder: StarFinder,
 }
 
 /// Prints histogram of star magnitudes
@@ -255,15 +260,44 @@ fn run_experiment<T: StarCatalog>(
             .noise_image
             .mean()
             .expect("Can't take image mean");
-        let cutoff_value =
-            mean_noise_elec * satellite.sensor.dn_per_electron * params.common_args.noise_multiple;
+        let background_rms = mean_noise_elec * satellite.sensor.dn_per_electron;
+        let airy_disk_pixels = satellite.airy_disk_fwhm_sampled().fwhm();
+        let detection_sigma = params.common_args.noise_multiple;
 
         // Do the star detection
-        let detected_stars = do_detections(
-            &render_result.image,
-            None, // Can tweak this setting later
-            Some(cutoff_value),
-        );
+        let detected_stars = match detect_stars_unified(
+            render_result.image.view(),
+            params.common_args.star_finder,
+            airy_disk_pixels,
+            background_rms,
+            detection_sigma,
+        ) {
+            Ok(stars) => stars
+                .into_iter()
+                .map(|star| {
+                    // Convert boxed StellarSource to StarDetection-like structure
+                    {
+                        let (x, y) = star.get_centroid();
+                        simulator::image_proc::StarDetection {
+                            id: 0,
+                            x,
+                            y,
+                            flux: star.flux(),
+                            m_xx: 1.0,
+                            m_yy: 1.0,
+                            m_xy: 0.0,
+                            aspect_ratio: 1.0,
+                            diameter: 2.0,
+                            is_valid: true,
+                        }
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                log::warn!("Star detection failed: {}", e);
+                vec![] // Return empty vector instead of early return
+            }
+        };
 
         // Save images if enabled
         if params.common_args.save_images {
@@ -533,6 +567,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         save_images: !args.no_save_images,
         icp_max_iterations: args.icp_max_iterations,
         icp_convergence_threshold: args.icp_convergence_threshold,
+        star_finder: args.star_finder,
     };
 
     // Build all experiment parameters upfront
