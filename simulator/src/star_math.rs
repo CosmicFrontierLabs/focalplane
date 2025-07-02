@@ -11,6 +11,9 @@ use nalgebra::Vector3;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+#[cfg(test)]
+use crate::algo::MinMaxScan;
+
 /// Random Equatorial coordinate generator
 ///
 /// Generates random RA/Dec coordinates using a seeded random number generator.
@@ -463,10 +466,10 @@ mod tests {
         }
 
         // Check that we get values across the full range
-        let min_ra = ra_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max_ra = ra_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let min_dec = dec_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let max_dec = dec_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let ra_scan = MinMaxScan::new(&ra_values);
+        let dec_scan = MinMaxScan::new(&dec_values);
+        let (min_ra, max_ra) = ra_scan.min_max().unwrap();
+        let (min_dec, max_dec) = dec_scan.min_max().unwrap();
 
         // Should span a significant portion of the range
         assert!(

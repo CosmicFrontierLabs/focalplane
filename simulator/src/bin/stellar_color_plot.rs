@@ -13,6 +13,7 @@
 use clap::Parser;
 use plotters::prelude::*;
 use rayon::prelude::*;
+use simulator::algo::MinMaxScan;
 use simulator::photometry::color::SpectralClass;
 use simulator::photometry::spectrum::Spectrum;
 use simulator::photometry::stellar::BlackbodyStellarSpectrum;
@@ -207,14 +208,16 @@ fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
         .collect();
 
     // Get the maximum irradiance value across all spectra for normalization
-    let max_irr = stellar_info
+    let all_irradiances: Vec<f64> = stellar_info
         .iter()
         .flat_map(|info| {
             wavelengths
                 .iter()
                 .map(|&wl| info.spectrum.spectral_irradiance(wl))
         })
-        .fold(f64::MIN, f64::max);
+        .collect();
+    let irr_scan = MinMaxScan::new(&all_irradiances);
+    let max_irr = irr_scan.max().unwrap_or(1.0);
 
     // Draw each spectrum
     for star in &stellar_info {

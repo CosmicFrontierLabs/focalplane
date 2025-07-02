@@ -3,6 +3,7 @@
 //! This module provides functions for converting ndarray data to image formats
 //! and saving/loading them to the filesystem.
 
+use crate::algo::MinMaxScan;
 use ndarray::Array2;
 use std::collections::HashMap;
 use std::error::Error;
@@ -63,7 +64,9 @@ pub fn save_u8_image<P: AsRef<Path>>(image: &Array2<u8>, path: P) -> Result<(), 
 /// present in the image to utilize the full 8-bit range (0-255).
 pub fn u16_to_u8_auto_scale(image: &Array2<u16>) -> Array2<u8> {
     // Find max value for proper scaling
-    let max_value = image.iter().fold(0, |max_val, &x| max_val.max(x));
+    let values: Vec<f64> = image.iter().map(|&x| x as f64).collect();
+    let scan = MinMaxScan::new(&values);
+    let max_value = scan.max().unwrap_or(0.0) as u16;
 
     if max_value == 0 {
         // Return black image if maximum value is 0

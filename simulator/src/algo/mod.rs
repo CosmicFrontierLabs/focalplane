@@ -4,6 +4,7 @@
 //! extraction, quaternion mathematics, motion models, and other computational tasks.
 
 pub mod icp;
+pub mod min_max_scan;
 pub mod misc;
 pub mod motion;
 pub mod parallel;
@@ -12,6 +13,7 @@ pub mod quaternion;
 pub mod spline;
 
 pub use icp::{iterative_closest_point, ICPResult};
+pub use min_max_scan::{MinMaxError, MinMaxScan};
 pub use motion::{MotionModel, XAxisSpinner, XYWobble};
 pub use parallel::process_array_in_parallel_chunks;
 pub use quaternion::Quaternion;

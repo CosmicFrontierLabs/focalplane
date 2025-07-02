@@ -1,4 +1,3 @@
-use ndarray::Array2;
 use simulator::image_proc::airy::ScaledAiryDisk;
 use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 use starfield::catalogs::StarData;

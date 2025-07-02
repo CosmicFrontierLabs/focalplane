@@ -26,7 +26,10 @@ use image::DynamicImage;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::{debug, info, warn};
 use rayon::prelude::*;
-use simulator::algo::icp::{icp_match_objects, Locatable2d};
+use simulator::algo::{
+    icp::{icp_match_objects, Locatable2d},
+    MinMaxScan,
+};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::DEMO_50CM;
 use simulator::hardware::SatelliteConfig;
@@ -778,10 +781,9 @@ fn debug_stats(
     // Get statistics for binning (gross)
     let num_bins = 25;
     let electron_image = render_result.mean_electron_image();
-    let min_val = electron_image.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_val = electron_image
-        .iter()
-        .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let electron_values: Vec<f64> = electron_image.iter().copied().collect();
+    let electron_scan = MinMaxScan::new(&electron_values);
+    let (min_val, max_val) = electron_scan.min_max().unwrap_or((0.0, 1.0));
 
     // Skip if all values are the same
     if (max_val - min_val).abs() < 1e-10 {

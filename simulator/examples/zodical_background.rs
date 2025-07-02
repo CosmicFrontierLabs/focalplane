@@ -12,13 +12,13 @@
 use clap::Parser;
 use ndarray::{Array1, Array2};
 use plotters::prelude::*;
+use simulator::algo::MinMaxScan;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::telescope::models::DEMO_50CM;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodical::SolarAngularCoordinates, ZodicalLight};
 use simulator::shared_args::DurationArg;
-use std::time::Duration;
 
 /// Command line arguments for zodiacal background computation
 #[derive(Parser, Debug)]
@@ -91,8 +91,8 @@ fn create_spectrum_plot(
     }
 
     // Find data bounds for scaling
-    let min_irradiance = irradiances.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_irradiance = irradiances.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let irradiance_scan = MinMaxScan::new(&irradiances);
+    let (min_irradiance, max_irradiance) = irradiance_scan.min_max().unwrap_or((0.0, 1.0));
     let min_wavelength = *wavelengths.first().unwrap();
     let max_wavelength = *wavelengths.last().unwrap();
 
