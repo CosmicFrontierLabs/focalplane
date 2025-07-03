@@ -26,16 +26,18 @@
 //!
 //! ```rust
 //! use simulator::image_proc::detection::{detect_stars_unified, StarFinder, detect_stars};
+//! use simulator::image_proc::airy::ScaledAiryDisk;
 //! use ndarray::Array2;
 //!
 //! // Create a test image
 //! let image = Array2::from_elem((100, 100), 10u16);
 //!
 //! // Method 1: Unified interface with automatic parameter tuning
+//! let airy_disk = ScaledAiryDisk::with_fwhm(2.5);
 //! let stars = detect_stars_unified(
 //!     image.view(),
 //!     StarFinder::Dao,
-//!     2.5,  // Airy disk pixels
+//!     &airy_disk,  // Airy disk
 //!     1.0,  // Background RMS
 //!     5.0   // 5-sigma threshold
 //! ).unwrap();

@@ -36,6 +36,7 @@
 //!     generate_sensor_noise, detect_stars_unified, StarFinder,
 //!     stretch_histogram, save_u8_image, u16_to_u8_auto_scale
 //! };
+//! use simulator::image_proc::airy::ScaledAiryDisk;
 //! use simulator::hardware::sensor::models::GSENSE6510BSI;
 //! use ndarray::Array2;
 //! use std::time::Duration;
@@ -61,10 +62,11 @@
 //! let with_noise = psf_convolved.mapv(|x| x as u16) + noise.mapv(|x| x as u16);
 //!
 //! // 4. Detect astronomical sources
+//! let airy_disk = ScaledAiryDisk::with_fwhm(2.5);
 //! let stars = detect_stars_unified(
 //!     with_noise.view(),
 //!     StarFinder::Dao,
-//!     2.5,   // Airy disk size
+//!     &airy_disk,   // Airy disk
 //!     20.0,  // Background RMS
 //!     5.0    // 5-sigma detection
 //! ).unwrap();

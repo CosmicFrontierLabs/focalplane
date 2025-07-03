@@ -9,6 +9,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::SatelliteConfig;
+use simulator::image_proc::airy::ScaledAiryDisk;
 use simulator::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
 use simulator::image_proc::generate_sensor_noise;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
@@ -146,10 +147,11 @@ fn test_algorithm(
         let detection_sigma = args.shared.noise_multiple;
 
         // Run detection algorithm
+        let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
         let detected_stars: Vec<StarDetection> = match detect_stars_unified(
             quantized.view(),
             algorithm,
-            airy_disk_pixels,
+            &scaled_airy_disk,
             background_rms,
             detection_sigma,
         ) {
@@ -237,7 +239,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let telescope_config = args.shared.telescope.to_config().clone();
     let test_satellites: Vec<SatelliteConfig> = ALL_SENSORS
         .iter()
-        .take(2) // Just test first 2 sensors to keep it small
         .map(|sensor| {
             let sized_sensor = sensor.with_dimensions(args.domain, args.domain);
             let mut satellite = SatelliteConfig::new(

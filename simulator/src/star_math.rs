@@ -610,24 +610,6 @@ mod tests {
     use starfield::catalogs::StarData;
     use std::f64::consts::PI;
 
-    /// Create a test star with the given parameters
-    fn create_test_star(id: u64, ra: f64, dec: f64, magnitude: f64) -> StarData {
-        // In the actual implementation, StarData contains a position field with RaDec
-        // and other metadata like magnitude and b_v
-        let position = Equatorial::from_degrees(ra, dec);
-        StarData {
-            id,
-            position, // StarData stores position as RaDec
-            magnitude,
-            b_v: None,
-        }
-    }
-
-    /// Check if two floating point values are approximately equal
-    fn approx_eq(a: f64, b: f64, epsilon: f64) -> bool {
-        (a - b).abs() < epsilon
-    }
-
     const ZERO_ZERO: Equatorial = Equatorial { ra: 0.0, dec: 0.0 };
 
     #[test]

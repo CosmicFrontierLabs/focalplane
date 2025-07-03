@@ -79,11 +79,11 @@ struct Args {
     disks: RangeArg,
 
     /// Star magnitude range (format: start:stop:step)
-    #[arg(long, default_value = "12.0:17.1:0.1")]
+    #[arg(long, default_value = "12.0:18.1:0.1")]
     mags: RangeArg,
 
     /// Exposure duration range in milliseconds (format: start:stop:step)
-    #[arg(long, default_value = "100:1050:50")]
+    #[arg(long, default_value = "100:1050:100")]
     exposures: RangeArg,
 
     /// Star detection algorithm to use (dao, iraf, naive)
@@ -241,17 +241,14 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
         // Calculate detection threshold based on noise floor
         let quantized_noise = quantize_image(&noise, &params.satellite.sensor);
         let noise_mean = quantized_noise.map(|&x| x as f64).mean().unwrap();
-        let background_rms = noise_mean;
-        let airy_disk_pixels = params.satellite.airy_disk_fwhm_sampled().fwhm();
-        let detection_sigma = params.noise_floor_multiplier;
 
         // Run star detection algorithm
         let detected_stars: Vec<StarDetection> = match detect_stars_unified(
             quantized.view(),
             params.star_finder,
-            airy_disk_pixels,
-            background_rms,
-            detection_sigma,
+            &airy_disk,
+            noise_mean,
+            params.noise_floor_multiplier,
         ) {
             Ok(stars) => stars
                 .into_iter()

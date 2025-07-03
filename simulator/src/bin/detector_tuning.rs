@@ -59,6 +59,7 @@
 
 use clap::{Parser, Subcommand};
 use ndarray::Array2;
+use simulator::image_proc::airy::ScaledAiryDisk;
 use starfield::image::starfinders::{
     DAOStarFinder, DAOStarFinderConfig, IRAFStarFinder, IRAFStarFinderConfig, StellarSource,
 };
@@ -110,28 +111,26 @@ enum Commands {
     },
 }
 
-/// Create a 2D Gaussian PSF
-fn create_gaussian(
-    image: &mut Array2<f64>,
-    center_x: f64,
-    center_y: f64,
-    amplitude: f64,
-    sigma: f64,
-) {
-    let (height, width) = image.dim();
-    let x_min = (center_x - 4.0 * sigma).max(0.0) as usize;
-    let x_max = (center_x + 4.0 * sigma).min(width as f64 - 1.0) as usize;
-    let y_min = (center_y - 4.0 * sigma).max(0.0) as usize;
-    let y_max = (center_y + 4.0 * sigma).min(height as f64 - 1.0) as usize;
+/// Generate star image using ScaledAiryDisk
+fn generate_star_image(
+    image_size: usize,
+    position_x: f64,
+    position_y: f64,
+    scaled_airy_disk: &ScaledAiryDisk,
+    flux: f64,
+) -> Array2<f64> {
+    let mut image = Array2::<f64>::zeros((image_size, image_size));
 
-    for y in y_min..=y_max {
-        for x in x_min..=x_max {
-            let dx = x as f64 - center_x;
-            let dy = y as f64 - center_y;
-            let exponent = -(dx * dx + dy * dy) / (2.0 * sigma * sigma);
-            image[[y, x]] = amplitude * exponent.exp();
+    // Create star using ScaledAiryDisk's Simpson integration
+    for y in 0..image_size {
+        for x in 0..image_size {
+            let x_pixel = x as f64 - position_x;
+            let y_pixel = y as f64 - position_y;
+            image[[y, x]] = scaled_airy_disk.pixel_flux_simpson(x_pixel, y_pixel, flux);
         }
     }
+
+    image
 }
 
 /// Test DAO detector at a single position
@@ -139,15 +138,11 @@ fn test_dao_single(
     config: DAOStarFinderConfig,
     position_x: f64,
     position_y: f64,
-    image_size: usize,
-    sigma: f64,
+    image: &Array2<f64>,
 ) -> Option<f64> {
-    let mut image = Array2::<f64>::zeros((image_size, image_size));
-    create_gaussian(&mut image, position_x, position_y, 1000.0, sigma);
-
     match DAOStarFinder::new(config) {
         Ok(starfinder) => {
-            let stars = starfinder.find_stars(&image, None);
+            let stars = starfinder.find_stars(image, None);
 
             if !stars.is_empty() {
                 let (star_x, star_y) = stars[0].get_centroid();
@@ -166,13 +161,9 @@ fn test_iraf_single(
     config: IRAFStarFinderConfig,
     position_x: f64,
     position_y: f64,
-    image_size: usize,
-    sigma: f64,
+    image: &Array2<f64>,
 ) -> Option<f64> {
-    let mut image = Array2::<f64>::zeros((image_size, image_size));
-    create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
-
-    // Scale image like in the main test
+    // Scale image like in the original test
     let max_val = image.iter().cloned().fold(0.0, f64::max);
     let scale = if max_val > 0.0 {
         65535.0 / max_val
@@ -198,15 +189,7 @@ fn test_iraf_single(
 }
 
 /// Test naive detector at a single position
-fn test_naive_single(
-    position_x: f64,
-    position_y: f64,
-    image_size: usize,
-    sigma: f64,
-) -> Option<f64> {
-    let mut image = Array2::<f64>::zeros((image_size, image_size));
-    create_gaussian(&mut image, position_x, position_y, 1.0, sigma);
-
+fn test_naive_single(position_x: f64, position_y: f64, image: &Array2<f64>) -> Option<f64> {
     let stars = simulator::image_proc::detection::detect_stars(&image.view(), Some(0.1));
 
     if !stars.is_empty() {
@@ -220,10 +203,11 @@ fn test_naive_single(
 
 /// Run grid test for any detector
 fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
-    let sigma = 1.0;
-    let airy_disk = sigma * 2.0;
-    let background_rms = 0.1 * 65535.0;
+    let fwhm = 2.355; // FWHM in pixels
+    let scaled_airy_disk = ScaledAiryDisk::with_fwhm(fwhm);
+    let background_rms = 10.0; // Reasonable noise level for test stars
     let detection_sigma = 3.0;
+    let flux = 1000.0; // Total integrated flux
 
     let center_x = image_size as f64 / 2.0;
     let center_y = image_size as f64 / 2.0;
@@ -245,24 +229,28 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
             let position_x = center_x + sub_x;
             let position_y = center_y + sub_y;
 
+            // Generate the image once for all detectors
+            let image =
+                generate_star_image(image_size, position_x, position_y, &scaled_airy_disk, flux);
+
             let error_opt = match detector {
                 "dao" => {
                     let config = simulator::image_proc::detection::config::dao_autoconfig(
-                        airy_disk,
+                        &scaled_airy_disk,
                         background_rms,
                         detection_sigma,
                     );
-                    test_dao_single(config, position_x, position_y, image_size, sigma)
+                    test_dao_single(config, position_x, position_y, &image)
                 }
                 "iraf" => {
                     let config = simulator::image_proc::detection::config::iraf_autoconfig(
-                        airy_disk,
+                        &scaled_airy_disk,
                         background_rms,
                         detection_sigma,
                     );
-                    test_iraf_single(config, position_x, position_y, image_size, sigma)
+                    test_iraf_single(config, position_x, position_y, &image)
                 }
-                "naive" => test_naive_single(position_x, position_y, image_size, sigma),
+                "naive" => test_naive_single(position_x, position_y, &image),
                 _ => panic!("Unknown detector: {}", detector),
             };
 
@@ -298,10 +286,12 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
 
 /// Run parameter sweep for DAO
 fn sweep_dao_parameter(param: &str) {
-    let sigma = 1.0;
+    let fwhm = 2.355; // FWHM in pixels
+    let scaled_airy_disk = ScaledAiryDisk::with_fwhm(fwhm);
     let test_x = 25.3;
     let test_y = 25.7;
     let image_size = 51;
+    let flux = 1000.0;
 
     println!("Sweeping {} parameter for DAO detector\n", param);
     println!("Value\tError (pixels)\tNotes");
@@ -309,7 +299,7 @@ fn sweep_dao_parameter(param: &str) {
 
     let base_config = DAOStarFinderConfig {
         threshold: 30.0,
-        fwhm: 2.0 * sigma * 2.0,
+        fwhm: 2.0 * fwhm,
         ratio: 1.0,
         theta: 0.0,
         sigma_radius: 1.5,
@@ -318,7 +308,7 @@ fn sweep_dao_parameter(param: &str) {
         exclude_border: false,
         brightest: None,
         peakmax: None,
-        min_separation: 0.8 * sigma * 2.0,
+        min_separation: 0.8 * scaled_airy_disk.first_zero(),
     };
 
     let values: Vec<f64> = match param {
@@ -327,6 +317,9 @@ fn sweep_dao_parameter(param: &str) {
         "threshold" => vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0],
         _ => panic!("Unknown parameter: {}", param),
     };
+
+    // Generate the image once outside the loop
+    let image = generate_star_image(image_size, test_x, test_y, &scaled_airy_disk, flux);
 
     for value in values {
         let mut config = base_config.clone();
@@ -337,7 +330,7 @@ fn sweep_dao_parameter(param: &str) {
             _ => {}
         }
 
-        if let Some(error) = test_dao_single(config, test_x, test_y, image_size, sigma) {
+        if let Some(error) = test_dao_single(config, test_x, test_y, &image) {
             let note = if error < 0.002 {
                 "★ Excellent!"
             } else if error < 0.02 {
@@ -354,10 +347,12 @@ fn sweep_dao_parameter(param: &str) {
 
 /// Run parameter sweep for IRAF
 fn sweep_iraf_parameter(param: &str) {
-    let sigma = 1.0;
+    let fwhm = 2.355; // FWHM in pixels
+    let scaled_airy_disk = ScaledAiryDisk::with_fwhm(fwhm);
     let test_x = 25.3;
     let test_y = 25.7;
     let image_size = 51;
+    let flux = 1000.0;
 
     println!("Sweeping {} parameter for IRAF detector\n", param);
     println!("Value\tError (pixels)\tNotes");
@@ -365,7 +360,7 @@ fn sweep_iraf_parameter(param: &str) {
 
     let base_config = IRAFStarFinderConfig {
         threshold: 30.0,
-        fwhm: 1.25 * sigma * 2.0,
+        fwhm: 1.25 * fwhm,
         sigma_radius: 1.5,
         minsep_fwhm: 1.5,
         sharpness: 0.2..=5.0,
@@ -383,6 +378,9 @@ fn sweep_iraf_parameter(param: &str) {
         _ => panic!("Unknown parameter: {}", param),
     };
 
+    // Generate the image once outside the loop
+    let image = generate_star_image(image_size, test_x, test_y, &scaled_airy_disk, flux);
+
     for value in values {
         let mut config = base_config.clone();
         match param {
@@ -392,7 +390,7 @@ fn sweep_iraf_parameter(param: &str) {
             _ => {}
         }
 
-        if let Some(error) = test_iraf_single(config, test_x, test_y, image_size, sigma) {
+        if let Some(error) = test_iraf_single(config, test_x, test_y, &image) {
             let note = if error < 0.02 {
                 "★ Excellent!"
             } else if error < 0.05 {
@@ -423,10 +421,17 @@ fn main() {
                 detector, test_x, test_y
             );
 
+            let base_fwhm = sigma * 2.355;
+            let scaled_airy_disk = ScaledAiryDisk::with_fwhm(base_fwhm);
+            let flux = 1000.0;
+
+            // Generate the image once
+            let image = generate_star_image(image_size, test_x, test_y, &scaled_airy_disk, flux);
+
             let error_opt = match detector.as_str() {
                 "dao" => {
                     let mut config = simulator::image_proc::detection::config::dao_autoconfig(
-                        sigma * 2.0,
+                        &scaled_airy_disk,
                         10.0,
                         3.0,
                     );
@@ -434,11 +439,11 @@ fn main() {
                         config.fwhm = f;
                     }
                     println!("Using FWHM: {}", config.fwhm);
-                    test_dao_single(config, test_x, test_y, image_size, sigma)
+                    test_dao_single(config, test_x, test_y, &image)
                 }
                 "iraf" => {
                     let mut config = simulator::image_proc::detection::config::iraf_autoconfig(
-                        sigma * 2.0,
+                        &scaled_airy_disk,
                         10.0,
                         3.0,
                     );
@@ -446,9 +451,9 @@ fn main() {
                         config.fwhm = f;
                     }
                     println!("Using FWHM: {}", config.fwhm);
-                    test_iraf_single(config, test_x, test_y, image_size, sigma)
+                    test_iraf_single(config, test_x, test_y, &image)
                 }
-                "naive" => test_naive_single(test_x, test_y, image_size, sigma),
+                "naive" => test_naive_single(test_x, test_y, &image),
                 _ => panic!("Unknown detector: {}", detector),
             };
 

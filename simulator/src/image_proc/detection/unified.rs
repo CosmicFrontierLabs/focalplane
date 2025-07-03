@@ -29,13 +29,14 @@
 //!
 //! ```rust
 //! use simulator::image_proc::detection::{detect_stars_unified as detect_stars, StarFinder};
+//! use simulator::image_proc::airy::ScaledAiryDisk;
 //! use ndarray::Array2;
 //!
 //! // Create test image with some noise
 //! let image = Array2::from_elem((100, 100), 10u16);
 //!
 //! // Detection parameters for space telescope
-//! let airy_disk = 2.5;      // Pixels FWHM
+//! let airy_disk = ScaledAiryDisk::with_fwhm(2.5);      // Pixels FWHM
 //! let background_rms = 1.2; // RMS noise level
 //! let sigma_threshold = 5.0; // 5-sigma detection
 //!
@@ -43,7 +44,7 @@
 //! let dao_stars = detect_stars(
 //!     image.view(),
 //!     StarFinder::Dao,
-//!     airy_disk,
+//!     &airy_disk,
 //!     background_rms,
 //!     sigma_threshold
 //! ).unwrap();
@@ -51,7 +52,7 @@
 //! let iraf_stars = detect_stars(
 //!     image.view(),
 //!     StarFinder::Iraf,
-//!     airy_disk,
+//!     &airy_disk,
 //!     background_rms,
 //!     sigma_threshold
 //! ).unwrap();
@@ -64,6 +65,7 @@ use ndarray::ArrayView2;
 use starfield::image::starfinders::{DAOStarFinder, IRAFStarFinder, StellarSource};
 
 use super::config::{dao_autoconfig, iraf_autoconfig};
+use crate::image_proc::airy::ScaledAiryDisk;
 
 /// Available star detection algorithms with different complexity/performance tradeoffs.
 ///
@@ -117,10 +119,10 @@ impl std::str::FromStr for StarFinder {
 /// - **Naive**: Fast processing for bright, isolated stars or quick analysis
 ///
 /// # Arguments
-/// * `image` - Input astronomical image as 2D array view (u16 ADU values)
-/// * `algorithm` - Star detection algorithm to use (DAO/IRAF/Naive)
-/// * `airy_disk_pixels` - Telescope Airy disk diameter in pixels (for PSF sizing)
-/// * `background_rms` - Background noise RMS level (in same units as image)
+/// * `image` - The input image as a 2D array view
+/// * `algorithm` - The star detection algorithm to use
+/// * `scaled_airy_disk` - ScaledAiryDisk representing the PSF characteristics
+/// * `background_rms` - RMS noise level of the background
 /// * `detection_sigma` - Detection threshold in units of sigma (typically 5.0)
 ///
 /// # Returns
@@ -135,22 +137,23 @@ impl std::str::FromStr for StarFinder {
 ///
 /// # Examples
 /// ```rust
+/// use simulator::image_proc::airy::ScaledAiryDisk;
 /// use simulator::image_proc::detection::unified::{detect_stars, StarFinder};
 /// use ndarray::Array2;
 ///
 /// // Simulate astronomical image
-/// let mut image = Array2::from_elem((512, 512), 100u16);
-/// image[[256, 256]] = 1000; // Add a bright star
+/// let mut image = Array2::from_elem((64, 64), 100u16);
+/// image[[32, 32]] = 1000; // Add a bright star
 ///
 /// // Space telescope parameters
-/// let airy_disk = 2.5;    // FWHM in pixels
+/// let airy_disk = ScaledAiryDisk::with_first_zero(2.5);    // FWHM in pixels
 /// let noise_rms = 5.0;    // Background RMS
 /// let threshold = 5.0;    // 5-sigma detection
 ///
 /// let stars = detect_stars(
 ///     image.view(),
 ///     StarFinder::Dao,
-///     airy_disk,
+///     &airy_disk,
 ///     noise_rms,
 ///     threshold
 /// )?;
@@ -166,7 +169,7 @@ impl std::str::FromStr for StarFinder {
 pub fn detect_stars(
     image: ArrayView2<u16>,
     algorithm: StarFinder,
-    airy_disk_pixels: f64,
+    scaled_airy_disk: &ScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
 ) -> Result<Vec<Box<dyn StellarSource>>, String> {
@@ -175,8 +178,8 @@ pub fn detect_stars(
     let total_pixels = height * width;
 
     let result = match algorithm {
-        StarFinder::Dao => detect_dao(image, airy_disk_pixels, background_rms, detection_sigma),
-        StarFinder::Iraf => detect_iraf(image, airy_disk_pixels, background_rms, detection_sigma),
+        StarFinder::Dao => detect_dao(image, scaled_airy_disk, background_rms, detection_sigma),
+        StarFinder::Iraf => detect_iraf(image, scaled_airy_disk, background_rms, detection_sigma),
         StarFinder::Naive => detect_naive(image, detection_sigma * background_rms),
     };
 
@@ -196,7 +199,7 @@ pub fn detect_stars(
 /// Includes automatic type conversion and error handling.
 fn detect_dao(
     image: ArrayView2<u16>,
-    airy_disk_pixels: f64,
+    scaled_airy_disk: &ScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
 ) -> Result<Vec<Box<dyn StellarSource>>, String> {
@@ -204,7 +207,7 @@ fn detect_dao(
     let image_f64 = image.mapv(|x| x as f64);
 
     // Use optimized configuration for space telescope
-    let config = dao_autoconfig(airy_disk_pixels, background_rms, detection_sigma);
+    let config = dao_autoconfig(scaled_airy_disk, background_rms, detection_sigma);
 
     // Create DAO star finder and detect sources
     let star_finder = DAOStarFinder::new(config)
@@ -225,7 +228,7 @@ fn detect_dao(
 /// Includes automatic type conversion and error handling.
 fn detect_iraf(
     image: ArrayView2<u16>,
-    airy_disk_pixels: f64,
+    scaled_airy_disk: &ScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
 ) -> Result<Vec<Box<dyn StellarSource>>, String> {
@@ -233,7 +236,7 @@ fn detect_iraf(
     let image_f64 = image.mapv(|x| x as f64);
 
     // Use optimized configuration for space telescope
-    let config = iraf_autoconfig(airy_disk_pixels, background_rms, detection_sigma);
+    let config = iraf_autoconfig(scaled_airy_disk, background_rms, detection_sigma);
 
     // Create IRAF star finder and detect sources
     let star_finder = IRAFStarFinder::new(config)

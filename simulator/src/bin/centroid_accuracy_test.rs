@@ -14,6 +14,7 @@
 //! - Analysis of any systematic bias in X or Y directions
 
 use ndarray::Array2;
+use simulator::image_proc::airy::ScaledAiryDisk;
 use simulator::image_proc::detection::StarFinder;
 use starfield::image::starfinders::StellarSource;
 
@@ -83,10 +84,11 @@ fn run_single_star_test(
         _ => {
             // Use the unified interface for DAO and IRAF
             use simulator::image_proc::detection::detect_stars_unified;
+            let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
             match detect_stars_unified(
                 u16_image.view(),
                 *detector,
-                airy_disk_pixels,
+                &scaled_airy_disk,
                 background_rms,
                 detection_sigma,
             ) {
@@ -191,10 +193,11 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
                 _ => {
                     // Use the unified interface for DAO and IRAF
                     use simulator::image_proc::detection::detect_stars_unified;
+                    let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
                     match detect_stars_unified(
                         u16_image.view(),
                         *detector,
-                        airy_disk_pixels,
+                        &scaled_airy_disk,
                         background_rms,
                         detection_sigma,
                     ) {
@@ -512,10 +515,11 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
             _ => {
                 // Use the unified interface for DAO and IRAF
                 use simulator::image_proc::detection::detect_stars_unified;
+                let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
                 match detect_stars_unified(
                     u16_image.view(),
                     *detector,
-                    airy_disk_pixels,
+                    &scaled_airy_disk,
                     background_rms,
                     detection_sigma,
                 ) {
