@@ -607,7 +607,7 @@ mod tests {
     use approx::assert_relative_eq;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
-    use starfield::catalogs::StarData;
+
     use std::f64::consts::PI;
 
     const ZERO_ZERO: Equatorial = Equatorial { ra: 0.0, dec: 0.0 };

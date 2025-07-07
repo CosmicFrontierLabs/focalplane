@@ -128,7 +128,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sensor.width_px, sensor.height_px
     );
     println!("  Pixel size: {:.1} μm", sensor.pixel_size_um);
-    println!("  Read noise: {:.1} e⁻", sensor.read_noise_e);
+    // Get read noise estimate at operating temperature with exposure time
+    let read_noise = sensor
+        .read_noise_estimator
+        .estimate(args.shared.temperature, args.shared.exposure.0)
+        .unwrap_or(0.0);
+    println!(
+        "  Read noise: {:.1} e⁻ @ {}°C",
+        read_noise, args.shared.temperature
+    );
     println!(
         "  Dark current: {:.3} e⁻/px/s @ {}°C",
         sensor.dark_current_at_temperature(args.shared.temperature),

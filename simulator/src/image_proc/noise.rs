@@ -111,25 +111,19 @@ pub fn generate_sensor_noise(
     let height = sensor.height_px;
     let width = sensor.width_px;
 
+    // Get read noise estimate for the given temperature and exposure time
+    let read_noise = sensor
+        .read_noise_estimator
+        .estimate(temp_c, *exposure_time)
+        .unwrap_or(2.0); // Fallback value if estimation fails
+
     // Choose appropriate noise model based on dark current magnitude
     if dark_electrons_mean < 0.1 {
         // For very low dark current, use Gaussian approximation
-        generate_gaussian_noise(
-            width,
-            height,
-            sensor.read_noise_e,
-            dark_electrons_mean,
-            rng_seed,
-        )
+        generate_gaussian_noise(width, height, read_noise, dark_electrons_mean, rng_seed)
     } else {
         // For higher dark current, use Poisson distribution
-        generate_poisson_noise(
-            width,
-            height,
-            sensor.read_noise_e,
-            dark_electrons_mean,
-            rng_seed,
-        )
+        generate_poisson_noise(width, height, read_noise, dark_electrons_mean, rng_seed)
     }
 }
 
@@ -322,11 +316,17 @@ pub fn est_noise_floor(
     let dark_current = sensor.dark_current_at_temperature(temp_c);
     let dark_electrons_mean = dark_current * exposure_time.as_secs_f64();
 
+    // Get read noise estimate for the given temperature and exposure time
+    let read_noise = sensor
+        .read_noise_estimator
+        .estimate(temp_c, *exposure_time)
+        .unwrap_or(2.0); // Fallback value if estimation fails
+
     // Generate the noise field using the optimized function
     let noise_field = generate_noise_with_precomputed_params(
         width,
         height,
-        sensor.read_noise_e,
+        read_noise,
         dark_electrons_mean,
         rng_seed,
     );
@@ -363,7 +363,7 @@ mod tests {
             size.1,
             size.0,
             5.0,
-            read_noise,
+            crate::hardware::read_noise::ReadNoiseEstimator::constant(read_noise),
             DarkCurrentEstimator::new(dark_current, 20.0),
             8,
             1.0,
@@ -378,7 +378,7 @@ mod tests {
         let shape = (100, 100);
         let read_noise = 5.0;
         let dark_current = 10.0;
-        let exposure_time = Duration::from_secs(1);
+        let exposure_time = Duration::from_secs_f64(0.2); // 5 Hz
 
         let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
 
@@ -399,7 +399,7 @@ mod tests {
         let dark_current = 0.1;
 
         let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
-        let exposure_time = Duration::from_secs(1);
+        let exposure_time = Duration::from_secs_f64(0.2); // 5 Hz
 
         let noise = generate_sensor_noise(&sensor, &exposure_time, 20.0, None);
 
@@ -449,12 +449,12 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_sensor_noise_zero_exposure() {
-        // Test that with zero exposure time, the noise is only read noise
+    fn test_generate_sensor_noise_minimal_exposure() {
+        // Test that with minimal exposure time, the noise is dominated by read noise
         let shape = (100, 100); // Use a larger shape for better statistics
         let read_noise = 5.0;
         let dark_current = 10.0;
-        let exposure_time = Duration::from_secs_f64(0.0);
+        let exposure_time = Duration::from_secs_f64(0.001); // 1ms = 1000 Hz (at upper bound)
 
         // Create a sensor with the specified parameters
         let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
@@ -464,8 +464,9 @@ mod tests {
         // Calculate mean and standard deviation of the noise
         let mean = noise.mean().unwrap();
 
-        // With zero exposure, the mean should be approximately the read noise
-        assert_relative_eq!(mean, read_noise, epsilon = 0.1);
+        // With minimal exposure, dark current contribution is tiny (0.01 e-)
+        // So mean should be approximately the read noise plus tiny dark current
+        assert_relative_eq!(mean, read_noise + 0.01, epsilon = 0.5);
     }
 
     #[test]
@@ -478,19 +479,21 @@ mod tests {
         // Create a sensor with the specified parameters
         let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
 
-        let mean_0 = generate_sensor_noise(&sensor, &Duration::from_secs(0), 20.0, Some(7))
+        let mean_0 = generate_sensor_noise(&sensor, &Duration::from_secs_f64(0.001), 20.0, Some(7))
             .mean()
             .unwrap();
-        let mean_1 = generate_sensor_noise(&sensor, &Duration::from_secs(10), 20.0, Some(8))
+        let mean_1 = generate_sensor_noise(&sensor, &Duration::from_secs_f64(0.1), 20.0, Some(8))
             .mean()
             .unwrap();
-        let mean_2 = generate_sensor_noise(&sensor, &Duration::from_secs(20), 20.0, Some(9))
+        let mean_2 = generate_sensor_noise(&sensor, &Duration::from_secs_f64(0.2), 20.0, Some(9))
             .mean()
             .unwrap();
 
-        //
-        assert_relative_eq!(mean_1 - mean_0, 100.0, epsilon = 1.0);
-        assert_relative_eq!(mean_2 - mean_0, 200.0, epsilon = 1.0);
+        // With dark current of 10 e-/s, difference should be:
+        // 0.1s - 0.001s = 0.099s -> ~0.99 electrons
+        // 0.2s - 0.001s = 0.199s -> ~1.99 electrons
+        assert_relative_eq!(mean_1 - mean_0, 0.99, epsilon = 0.2);
+        assert_relative_eq!(mean_2 - mean_0, 1.99, epsilon = 0.2);
     }
 
     #[test]

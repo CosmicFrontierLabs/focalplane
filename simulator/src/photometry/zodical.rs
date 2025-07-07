@@ -208,6 +208,7 @@ use ndarray::Array2;
 use std::time::Duration;
 use thiserror::Error;
 
+use crate::algo::bilinear::{BilinearInterpolator, InterpolationError};
 use crate::hardware::SatelliteConfig;
 use crate::photometry::{spectrum::Spectrum, STISZodiacalSpectrum};
 
@@ -517,15 +518,14 @@ impl SolarAngularCoordinates {
 /// - **Detector modeling**: Realistic photoelectron noise simulation
 /// - **Calibration consistency**: Cross-validated with space telescope data
 pub struct ZodicalLight {
-    /// Zodiacal light brightness lookup table in native S10 units.
+    /// Bilinear interpolator for zodiacal light brightness.
     ///
-    /// Contains the complete Leinert et al. (1998) brightness measurements
-    /// organized as a 2D array for efficient bilinear interpolation:
-    /// - **Dimensions**: [latitude_index, elongation_index] = [11, 19]
+    /// Efficiently interpolates brightness values from Leinert et al. (1998) data:
+    /// - **X-axis**: Solar elongation in degrees [0°, 180°]
+    /// - **Y-axis**: Ecliptic latitude in degrees [0°, 90°] (absolute value)
     /// - **Units**: S10 (equivalent 10th magnitude stars per square degree)
     /// - **Invalid regions**: Infinite values for sun exclusion zones
-    /// - **Symmetry**: Absolute latitude used (north/south equivalent)
-    data: Array2<f64>,
+    interpolator: BilinearInterpolator,
 }
 
 /// Ecliptic latitude grid points from Leinert et al. (1998) Table 16.
@@ -662,56 +662,12 @@ impl ZodicalLight {
             }
         }
 
-        Self { data }
-    }
+        // Create bilinear interpolator with the data
+        let interpolator =
+            BilinearInterpolator::new(ELONGATIONS.to_vec(), LATITUDES.to_vec(), data)
+                .expect("Failed to create bilinear interpolator for zodiacal light");
 
-    /// Find the indices and interpolation weights for a value within an array
-    ///
-    /// # Arguments
-    ///
-    /// * `array` - Array of coordinate values (sorted)
-    /// * `value` - Value to locate in the array
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing:
-    /// * The lower index
-    /// * The upper index
-    /// * The weight for the lower value (interpolation factor)
-    fn find_indices_and_weights(array: &[f64], value: f64) -> Option<(usize, usize, f64)> {
-        if array.len() < 2 {
-            return None;
-        }
-
-        // Handle out of bounds cases
-        if value < array[0] || value > array[array.len() - 1] {
-            return None;
-        }
-
-        // Find the lower index using binary search
-        let mut lower_idx = 0;
-        let mut upper_idx = array.len() - 1;
-
-        while upper_idx - lower_idx > 1 {
-            let mid_idx = (lower_idx + upper_idx) / 2;
-            if array[mid_idx] <= value {
-                lower_idx = mid_idx;
-            } else {
-                upper_idx = mid_idx;
-            }
-        }
-
-        // If we hit the exact value, use the same index for both
-        if array[lower_idx] == value {
-            return Some((lower_idx, lower_idx, 1.0));
-        }
-
-        // Compute the weight for interpolation
-        let lower_val = array[lower_idx];
-        let upper_val = array[upper_idx];
-        let weight = (value - lower_val) / (upper_val - lower_val);
-
-        Some((lower_idx, upper_idx, 1.0 - weight))
+        Self { interpolator }
     }
 
     /// Get the zodiacal light brightness at given ecliptic coordinates using bilinear interpolation
@@ -724,66 +680,23 @@ impl ZodicalLight {
     ///
     /// A `Result` containing either the brightness in S10 units (10th magnitude stars per square degree) or an error
     pub fn get_brightness(&self, coords: &SolarAngularCoordinates) -> Result<f64, ZodicalError> {
-        // Find indices and weights for elongation
         let elongation = coords.elongation();
         let latitude = coords.abs_latitude();
-        let (elong_idx1, elong_idx2, elong_weight) =
-            Self::find_indices_and_weights(&ELONGATIONS, elongation)
-                .ok_or(ZodicalError::OutOfRange(elongation, coords.latitude()))?;
 
-        // Find indices and weights for latitude
-        let (lat_idx1, lat_idx2, lat_weight) = Self::find_indices_and_weights(&LATITUDES, latitude)
-            .ok_or(ZodicalError::OutOfRange(elongation, coords.latitude()))?;
-
-        // Get the four corner values (data is indexed as [latitude][elongation])
-        let q11 = self.data[[lat_idx1, elong_idx1]];
-        let q12 = self.data[[lat_idx2, elong_idx1]];
-        let q21 = self.data[[lat_idx1, elong_idx2]];
-        let q22 = self.data[[lat_idx2, elong_idx2]];
-
-        // Handle infinite values by using nearest finite value
-        let mut valid_points = Vec::new();
-        let mut valid_weights = Vec::new();
-
-        if q11.is_finite() {
-            valid_points.push(q11);
-            valid_weights.push(lat_weight * elong_weight);
-        }
-
-        if q12.is_finite() {
-            valid_points.push(q12);
-            valid_weights.push((1.0 - lat_weight) * elong_weight);
-        }
-
-        if q21.is_finite() {
-            valid_points.push(q21);
-            valid_weights.push(lat_weight * (1.0 - elong_weight));
-        }
-
-        if q22.is_finite() {
-            valid_points.push(q22);
-            valid_weights.push((1.0 - lat_weight) * (1.0 - elong_weight));
-        }
-
-        // If we have no valid points, return an error
-        if valid_points.is_empty() {
-            return Err(ZodicalError::InterpolationError(
+        // Use the bilinear interpolator with invalid data handling
+        match self
+            .interpolator
+            .interpolate_with_invalid_handling(elongation, latitude)
+        {
+            Ok(value) => Ok(value),
+            Err(InterpolationError::OutOfBounds { .. }) => {
+                Err(ZodicalError::OutOfRange(elongation, coords.latitude()))
+            }
+            Err(InterpolationError::NoValidData(_)) => Err(ZodicalError::InterpolationError(
                 "No valid data points for interpolation".to_string(),
-            ));
+            )),
+            Err(e) => Err(ZodicalError::InterpolationError(e.to_string())),
         }
-
-        // Normalize weights
-        let weight_sum: f64 = valid_weights.iter().sum();
-        let normalized_weights: Vec<f64> = valid_weights.iter().map(|&w| w / weight_sum).collect();
-
-        // Calculate weighted average
-        let result = valid_points
-            .iter()
-            .zip(normalized_weights.iter())
-            .map(|(&val, &weight)| val * weight)
-            .sum();
-
-        Ok(result)
     }
 
     /// Get the zodiacal light brightness in magnitudes per square arcsecond
@@ -963,29 +876,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_indices_and_weights() {
-        let array = [0.0, 10.0, 20.0, 30.0, 40.0];
-
-        // Test exact match
-        let (idx1, idx2, weight) = ZodicalLight::find_indices_and_weights(&array, 10.0).unwrap();
-        assert_eq!(idx1, 1);
-        assert_eq!(idx2, 1);
-        assert_eq!(weight, 1.0);
-
-        // Test interpolation
-        let (idx1, idx2, weight) = ZodicalLight::find_indices_and_weights(&array, 15.0).unwrap();
-        assert_eq!(idx1, 1);
-        assert_eq!(idx2, 2);
-        assert!((weight - 0.5).abs() < 1e-10);
-
-        // Test out of bounds (low)
-        assert!(ZodicalLight::find_indices_and_weights(&array, -5.0).is_none());
-
-        // Test out of bounds (high)
-        assert!(ZodicalLight::find_indices_and_weights(&array, 45.0).is_none());
-    }
-
-    #[test]
     fn test_get_brightness() {
         let zodical = ZodicalLight::new();
 
@@ -1033,15 +923,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_data_dimensions() {
-        let zodical = ZodicalLight::new();
-
-        // Check that the data array has the correct dimensions
-        assert_eq!(zodical.data.shape(), [LATITUDES.len(), ELONGATIONS.len()]);
-        assert_eq!(zodical.data.shape(), [11, 19]);
     }
 
     #[test]

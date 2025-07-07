@@ -70,8 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .dark_current_estimator
             .estimate_at_temperature(temp_c);
 
-        // Read noise
-        let read_noise = config.read_noise_e;
+        // Read noise - estimate at room temperature with 1s exposure for comparison
+        let read_noise = config
+            .read_noise_estimator
+            .estimate(20.0, std::time::Duration::from_secs(1))
+            .unwrap_or(0.0);
 
         // Resolution and area
         let resolution = format!("{}×{}", config.width_px, config.height_px);

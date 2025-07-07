@@ -50,6 +50,7 @@
 //! ```
 
 pub mod dark_current;
+pub mod read_noise;
 pub mod satellite;
 pub mod sensor;
 pub mod star_projection;
