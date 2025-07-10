@@ -21,12 +21,75 @@ import os
 import argparse
 from pathlib import Path
 
+def parse_float_data_cube(lines, start_idx, has_header=True):
+    """Parse a data cube from CSV lines starting at given index.
+    
+    Returns:
+        - data_dict: Dict with (q_value, exposure) keys mapping to data arrays
+        - magnitudes: Array of magnitude values from header
+        - next_idx: Index after the data cube ends
+    """
+    data_dict = {}
+    magnitudes = []
+    i = start_idx
+    
+    # Parse header if present
+    if has_header and i < len(lines):
+        header_line = lines[i].strip()
+        if header_line.startswith("Q_Value,Exposure"):
+            # Extract magnitude values from header
+            parts = header_line.split(',')
+            for j in range(2, len(parts)):
+                if parts[j].strip():
+                    try:
+                        magnitudes.append(float(parts[j]))
+                    except ValueError:
+                        break
+            i += 1
+    
+    # Parse data rows
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # Stop at section boundaries
+        if not line or line.startswith("---") or line.startswith("SENSOR:") or "Matrix" in line:
+            break
+            
+        parts = line.split(',')
+        if len(parts) >= 3:
+            try:
+                # Parse and normalize Q_value and exposure
+                q_value = round(float(parts[0]), 2)
+                exposure = float(parts[1])
+                key = (q_value, exposure)
+                
+                # Parse data values
+                data_values = []
+                for j in range(2, len(parts)):
+                    if parts[j].strip():
+                        try:
+                            data_values.append(float(parts[j]))
+                        except ValueError:
+                            data_values.append(np.nan)
+                    else:
+                        data_values.append(np.nan)
+                
+                # Store with normalized key
+                data_dict[key] = np.array(data_values)
+                
+            except (ValueError, IndexError):
+                pass
+        
+        i += 1
+    
+    return data_dict, np.array(magnitudes), i
+
+
 def parse_sensor_data(csv_file, precision_threshold=None):
     """Parse the sensor floor CSV file and extract all 3 data matrices for each sensor."""
     
     sensors_data = {}
     current_sensor = None
-    current_block = None
     
     with open(csv_file, 'r') as f:
         lines = f.readlines()
@@ -39,70 +102,41 @@ def parse_sensor_data(csv_file, precision_threshold=None):
         if line.startswith("SENSOR: "):
             current_sensor = line.replace("SENSOR: ", "")
             sensors_data[current_sensor] = {
-                'detection_rates': [],
-                'mean_errors': [],
-                'rms_errors': [],
+                'detection_rates': {},
+                'mean_errors': {},
+                'rms_errors': {},
                 'magnitudes': [],
-                'q_values': [],
-                'exposures': []
+                'q_values': set(),
+                'exposures': set()
             }
-            current_block = None
             i += 1
             continue
         
-        # Identify data block types
-        if line == "Detection Rate Matrix (%)":
-            current_block = 'detection_rates'
-            i += 1
-            # Parse header for magnitudes
-            if i < len(lines):
-                header_line = lines[i].strip()
-                if header_line.startswith("Q_Value,Exposure_ms,"):
-                    mag_values = header_line.split(',')[2:]
-                    mag_values = [float(mag) for mag in mag_values if mag.strip()]
-                    sensors_data[current_sensor]['magnitudes'] = mag_values
-                i += 1
+        # Parse detection rate matrix
+        if line == "Detection Rate Matrix (%)" and current_sensor:
+            data_dict, mags, next_i = parse_float_data_cube(lines, i + 1, has_header=True)
+            sensors_data[current_sensor]['detection_rates'] = data_dict
+            sensors_data[current_sensor]['magnitudes'] = mags
+            # Collect unique q_values and exposures
+            for (q, e) in data_dict.keys():
+                sensors_data[current_sensor]['q_values'].add(q)
+                sensors_data[current_sensor]['exposures'].add(e)
+            i = next_i
             continue
-        elif line == "Mean Position Error Matrix (milliarcseconds)":
-            current_block = 'mean_errors'
-            i += 2  # Skip header line
+            
+        # Parse mean error matrix
+        elif line == "Mean Position Error Matrix (milliarcseconds)" and current_sensor:
+            data_dict, _, next_i = parse_float_data_cube(lines, i + 1, has_header=True)
+            sensors_data[current_sensor]['mean_errors'] = data_dict
+            i = next_i
             continue
-        elif line == "RMS Position Error Matrix (pixels)":
-            current_block = 'rms_errors'
-            i += 2  # Skip header line
+            
+        # Parse RMS error matrix
+        elif line == "RMS Position Error Matrix (pixels)" and current_sensor:
+            data_dict, _, next_i = parse_float_data_cube(lines, i + 1, has_header=True)
+            sensors_data[current_sensor]['rms_errors'] = data_dict
+            i = next_i
             continue
-        
-        # Parse data rows for current block
-        if current_block and current_sensor and ',' in line and not line.startswith("---"):
-            parts = line.split(',')
-            if len(parts) >= 3:
-                try:
-                    q_value = float(parts[0])
-                    exposure = int(parts[1])
-                    
-                    # Extract data values using header length as reference
-                    expected_length = len(sensors_data[current_sensor]['magnitudes'])
-                    data_values = []
-                    
-                    # Process each expected column
-                    for j in range(expected_length):
-                        if j + 2 < len(parts) and parts[j + 2].strip():
-                            data_values.append(float(parts[j + 2]))
-                        else:
-                            data_values.append(np.nan)  # Missing or empty value
-                    
-                    sensors_data[current_sensor][current_block].append(data_values)
-                    # Only store q_values and exposures once (from detection rates)
-                    if current_block == 'detection_rates':
-                        sensors_data[current_sensor]['q_values'].append(q_value)
-                        sensors_data[current_sensor]['exposures'].append(exposure)
-                
-                except (ValueError, IndexError):
-                    pass
-        
-        # Reset block when hitting section boundaries
-        if line.startswith("SENSOR:") or line.startswith("---"):
-            current_block = None
         
         i += 1
     
@@ -110,30 +144,59 @@ def parse_sensor_data(csv_file, precision_threshold=None):
     for sensor in sensors_data:
         data = sensors_data[sensor]
         if data['detection_rates']:
-            # Convert arrays directly - they should all be same shape
-            data['detection_rates'] = np.array(data['detection_rates'])
-            data['mean_errors'] = np.array(data['mean_errors']) if data['mean_errors'] else np.array([])
-            data['rms_errors'] = np.array(data['rms_errors']) if data['rms_errors'] else np.array([])
+            # Convert sets to sorted arrays
+            data['q_values'] = np.array(sorted(data['q_values']))
+            data['exposures'] = np.array(sorted(data['exposures']))
             
-            data['q_values'] = np.array(data['q_values'])
-            data['exposures'] = np.array(data['exposures'])
-            data['magnitudes'] = np.array(data['magnitudes'])
+            # Build aligned arrays from dictionaries
+            detection_array = []
+            mean_error_array = []
+            rms_error_array = []
+            
+            # Iterate through all (q_value, exposure) combinations
+            for q in data['q_values']:
+                for e in data['exposures']:
+                    key = (q, e)
+                    
+                    # Get detection rates
+                    if key in data['detection_rates']:
+                        detection_array.append(data['detection_rates'][key])
+                    else:
+                        # Fill with NaN if missing
+                        detection_array.append(np.full(len(data['magnitudes']), np.nan))
+                    
+                    # Get RMS errors for masking
+                    if key in data['rms_errors']:
+                        rms_error_array.append(data['rms_errors'][key])
+                    else:
+                        rms_error_array.append(np.full(len(data['magnitudes']), np.nan))
+                    
+                    # Get mean errors
+                    if key in data['mean_errors']:
+                        mean_error_array.append(data['mean_errors'][key])
+                    else:
+                        mean_error_array.append(np.full(len(data['magnitudes']), np.nan))
+            
+            # Convert to numpy arrays
+            data['detection_rates'] = np.array(detection_array)
+            data['mean_errors'] = np.array(mean_error_array)
+            data['rms_errors'] = np.array(rms_error_array)
             
             # Apply precision masking if threshold is set
             if precision_threshold is not None and data['rms_errors'].size > 0:
-                # Mask detection rates where RMS error > threshold
                 # Mask detection rates where RMS error > threshold
                 mask = data['rms_errors'] > precision_threshold
                 masked_detection_rates = data['detection_rates'].copy()
                 masked_detection_rates[mask] = 0.0  # Set to 0% detection rate
                 data['detection_rates'] = masked_detection_rates
+                print(f"  {sensor}: Masked {np.sum(mask)} points with RMS error > {precision_threshold} pixels")
     
     return sensors_data
 
 def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smoothing=False, output_suffix="", contour_level=0.95):
     """Create 2D isoline plot for a single sensor."""
     
-    detection_rates = sensor_data['detection_rates']  # Shape: (n_measurements, n_magnitudes)
+    detection_rates = sensor_data['detection_rates']  # Shape: (n_q * n_exp, n_magnitudes)
     q_values = sensor_data['q_values']
     exposures = sensor_data['exposures']
     magnitudes = sensor_data['magnitudes']
@@ -144,6 +207,7 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
     
     # Get unique exposure times
     unique_exposures = np.unique(exposures)
+    n_q = len(q_values)
     
     # Create figure
     plt.figure(figsize=(12, 8))
@@ -153,13 +217,24 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
     
     # For each exposure time, find the detection rate isoline
     for exp_idx, exposure in enumerate(unique_exposures):
-        # Get data for this exposure
-        exp_mask = exposures == exposure
-        exp_q_values = q_values[exp_mask]
-        exp_detection_rates = detection_rates[exp_mask] / 100.0  # Convert percentage to fraction
+        # Extract data for this exposure
+        exp_q_values = []
+        exp_detection_rates = []
+        
+        # Find all rows for this exposure
+        row_idx = 0
+        for q in q_values:
+            for e in exposures:
+                if e == exposure and row_idx < len(detection_rates):
+                    exp_q_values.append(q)
+                    exp_detection_rates.append(detection_rates[row_idx])
+                row_idx += 1
         
         if len(exp_q_values) == 0:
             continue
+            
+        exp_q_values = np.array(exp_q_values)
+        exp_detection_rates = np.array(exp_detection_rates) / 100.0  # Convert percentage to fraction
         
         # Create meshgrid for interpolation
         mag_min, mag_max = magnitudes.min(), magnitudes.max()
