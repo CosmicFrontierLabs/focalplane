@@ -123,6 +123,7 @@ pub mod image_proc;
 pub mod photometry;
 pub mod scene;
 pub mod shared_args;
+pub mod sims;
 pub mod star_math;
 
 // Re-exports for easier access

@@ -537,7 +537,7 @@ pub mod models {
                 ],
             ), // Measured dark current data for IMX455
             16,
-            0.4,
+            1.0 / 0.4,
             26_000.0,
             21.33,
         )

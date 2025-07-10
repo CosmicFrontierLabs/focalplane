@@ -1,43 +1,20 @@
-//! Sensor floor estimation for star detection and centroiding
+//! Matrix experiments for single star detection across sensors
 //!
-//! This tool simulates star detection and centroiding accuracy across different:
-//! - Sensor models
-//! - Star magnitudes
-//! - PSF (Point Spread Function) sizes
-//!
-//! It conducts experiments by:
-//! 1. Simulating stars with known positions in images
-//! 2. Adding realistic sensor noise based on exposure parameters
-//! 3. Running detection algorithms
-//! 4. Measuring detection rates and centroid accuracy
-//!
-//! Results are presented as matrices showing detection rates and position errors
-//! across different star magnitudes and optical parameters.
-//!
-//! Usage:
-//! ```
-//! cargo run --bin sensor_floor_est -- [OPTIONS]
-//! ```
-//!
-//! See --help for detailed options.
+//! This tool runs comprehensive experiments testing star detection and centroiding
+//! accuracy across different sensors, magnitudes, and PSF sizes.
 
 use clap::Parser;
 use core::f64;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use ndarray::{Array1, Array3};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::SatelliteConfig;
-use simulator::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
-use simulator::image_proc::render::StarInFrame;
-use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
-use simulator::star_data_to_electrons;
-use simulator::Scene;
-use starfield::catalogs::StarData;
-use starfield::Equatorial;
+use simulator::sims::single_detection::{run_single_experiment, ExperimentParams};
 use std::collections::HashMap;
-use std::f64::consts::PI;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -46,8 +23,8 @@ use std::time::Duration;
 /// Command line arguments for sensor floor estimation
 #[derive(Parser, Debug)]
 #[command(
-    name = "Sensor Floor Estimator",
-    about = "Simulates star detection and centroiding accuracy across different sensors",
+    name = "Single Detection Matrix",
+    about = "Runs matrix experiments for single star detection across sensors",
     long_about = None
 )]
 struct Args {
@@ -88,231 +65,14 @@ struct Args {
 
     /// Star detection algorithm to use (dao, iraf, naive)
     #[arg(long, default_value = "naive")]
-    star_finder: StarFinder,
+    star_finder: simulator::image_proc::detection::StarFinder,
+
+    /// Random seed for reproducible experiments
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
 }
 
-/// Parameters for a single experiment
-#[derive(Clone)]
-struct ExperimentParams {
-    /// Domain size (image dimensions)
-    domain: usize,
-    /// Satellite configuration (telescope, sensor, temperature, wavelength)
-    satellite: SatelliteConfig,
-    /// Exposure duration
-    exposure: Duration,
-    /// Star magnitude
-    mag: f64,
-    /// Noise floor multiplier for detection threshold
-    noise_floor_multiplier: f64,
-    /// Indices for result matrix (disk_idx, exposure_idx, mag_idx)
-    indices: (usize, usize, usize),
-    /// Number of times to run the experiment
-    experiment_count: u32,
-    /// Solar coordinates for zodiacal background
-    coordinates: SolarAngularCoordinates,
-    /// Star detection algorithm to use
-    star_finder: StarFinder,
-}
-
-impl ExperimentParams {
-    /// Creates a StarInFrame at the given position with flux calculated from magnitude
-    fn star_at_pos(&self, xpos: f64, ypos: f64) -> StarInFrame {
-        // Create dummy star data (position doesn't matter for this test)
-        let star_data = StarData {
-            id: 0,
-            position: Equatorial::from_degrees(0.0, 0.0),
-            magnitude: self.mag,
-            b_v: None,
-        };
-
-        // Calculate electrons based on magnitude
-        let flux = star_data_to_electrons(
-            &star_data,
-            &self.exposure,
-            &self.satellite.telescope,
-            &self.satellite.sensor,
-        );
-
-        StarInFrame {
-            star: star_data,
-            x: xpos,
-            y: ypos,
-            flux,
-        }
-    }
-}
-
-struct ExperimentResults {
-    pub params: ExperimentParams,
-    xy_err: Vec<(f64, f64)>,
-    spurious_detections: usize,
-    multiple_detections: usize,
-    no_detections: usize,
-}
-
-impl ExperimentResults {
-    /// Calculate the RMS error from collected x/y errors
-    fn rms_error(&self) -> f64 {
-        let mut sum = 0.0;
-
-        for &(x, y) in &self.xy_err {
-            sum += (x * x + y * y).sqrt();
-        }
-
-        sum /= self.xy_err.len() as f64;
-        sum
-    }
-
-    /// Get the detection rate based on number of accumulated errors vs experiments
-    fn detection_rate(&self) -> f64 {
-        let total_experiments = self.params.experiment_count;
-        if total_experiments == 0 {
-            return f64::NAN;
-        }
-        self.xy_err.len() as f64 / total_experiments as f64
-    }
-
-    fn rms_error_radians(&self) -> f64 {
-        let pix_err = self.rms_error();
-        let err_m = self.params.satellite.sensor.pixel_size_um * pix_err / 1_000_000.0;
-        (err_m / self.params.satellite.telescope.focal_length_m).tan()
-    }
-
-    fn rms_err_mas(&self) -> f64 {
-        let _pix_err = self.rms_error();
-        self.rms_error_radians() * (648_000_000.0 / PI)
-    }
-
-    fn false_positive_rate(&self) -> f64 {
-        let total_experiments = self.params.experiment_count;
-        (self.spurious_detections + self.multiple_detections) as f64 / total_experiments as f64
-    }
-
-    fn spurious_rate(&self) -> f64 {
-        let total_experiments = self.params.experiment_count;
-        self.spurious_detections as f64 / total_experiments as f64
-    }
-}
-
-/// Run a single experiment and return the error (distance) or NaN if not detected, and detection rate
-fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
-    let half_d = params.domain as f64 / 2.0;
-
-    // Run the experiment multiple times and average the results
-    let mut xy_err: Vec<(f64, f64)> = Vec::new();
-    let mut spurious_detections = 0;
-    let mut multiple_detections = 0;
-    let mut no_detections = 0;
-
-    for _ in 0..params.experiment_count {
-        // Generate random position in the center area
-        let xpos = rand::random::<f64>() * half_d + half_d;
-        let ypos = rand::random::<f64>() * half_d + half_d;
-
-        // Create star at the position with correct flux
-        let star = params.star_at_pos(xpos, ypos);
-
-        // Create scene with single star
-        let scene = Scene::from_stars(
-            params.satellite.clone(),
-            vec![star],
-            Equatorial::from_degrees(0.0, 0.0), // Dummy pointing (not used for pre-positioned stars)
-            params.exposure,
-            params.coordinates,
-        );
-
-        // Render the scene
-        let render_result = scene.render();
-
-        // Use consistent background RMS calculation
-        let background_rms = render_result.background_rms();
-        // Run star detection algorithm
-        let detected_stars: Vec<StarDetection> = match detect_stars_unified(
-            render_result.quantized_image.view(),
-            params.star_finder,
-            &params.satellite.airy_disk_fwhm_sampled(),
-            background_rms,
-            params.noise_floor_multiplier,
-        ) {
-            Ok(stars) => stars
-                .into_iter()
-                .map(|star| {
-                    // Convert boxed StellarSource to StarDetection-like structure
-                    {
-                        let (x, y) = star.get_centroid();
-                        StarDetection {
-                            id: 0,
-                            x,
-                            y,
-                            flux: star.flux(),
-                            m_xx: 1.0,
-                            m_yy: 1.0,
-                            m_xy: 0.0,
-                            aspect_ratio: 1.0,
-                            diameter: 2.0,
-                            is_valid: true,
-                        }
-                    }
-                })
-                .collect(),
-            Err(e) => {
-                log::warn!("Star detection failed: {}", e);
-                continue;
-            }
-        };
-
-        // Calculate detection error if star was found
-        let mut best: Option<(f64, f64)> = None;
-        let mut best_err = f64::INFINITY;
-
-        if detected_stars.is_empty() {
-            // No stars detected
-            no_detections += 1;
-            continue;
-        } else if detected_stars.len() > 1 {
-            // Multiple stars detected
-            multiple_detections += 1;
-            log::debug!(
-                "{} stars detected in frame (expected 1)",
-                detected_stars.len()
-            );
-            continue;
-        }
-
-        for detection in &detected_stars {
-            let x_diff = detection.x - xpos;
-            let y_diff = detection.y - ypos;
-            let err = (x_diff * x_diff + y_diff * y_diff).sqrt();
-
-            // Detect spurious detections (mostly) and skip them
-            let airy_disk = params.satellite.airy_disk_fwhm_sampled();
-            if err > airy_disk.first_zero().max(1.0) * 3.0 {
-                spurious_detections += 1;
-                log::debug!("Spurious detection: {} pixels from true position", err);
-                break; // Break out of detection loop for this experiment
-            }
-
-            if err < best_err {
-                best_err = err;
-                best = Some((x_diff, y_diff));
-            }
-        }
-
-        if let Some((x_diff, y_diff)) = best {
-            xy_err.push((x_diff, y_diff));
-        }
-    }
-
-    ExperimentResults {
-        params: params.clone(),
-        xy_err,
-        spurious_detections,
-        multiple_detections,
-        no_detections,
-    }
-}
-
-/// Main function for sensor floor estimation
+/// Main function for sensor floor estimation matrix experiments
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging from environment variables
     env_logger::init();
@@ -361,6 +121,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Setting up experiments...");
 
+    // Initialize master RNG with CLI seed
+    let mut master_rng = StdRng::seed_from_u64(args.seed);
+    println!("Using random seed: {}", args.seed);
+
     // Store results for each sensor (3D: disk, exposure, mag)
     let mut sensor_results: HashMap<String, Array3<f64>> = HashMap::new();
     let mut sensor_pixel_results: HashMap<String, Array3<f64>> = HashMap::new();
@@ -390,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Adjust satellite to have the desired FWHM sampling
                     let adjusted_satellite = satellite.with_fwhm_sampling(*disk);
 
-                    // Create experiment parameters
+                    // Create experiment parameters with unique seed
                     let params = ExperimentParams {
                         domain,
                         satellite: adjusted_satellite,
@@ -401,6 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         experiment_count: args.experiments,
                         coordinates: args.shared.coordinates,
                         star_finder: args.star_finder,
+                        seed: master_rng.gen(), // Generate unique seed for this experiment
                     };
 
                     all_experiments.push(params);

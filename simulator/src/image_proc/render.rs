@@ -51,7 +51,7 @@ pub struct RenderingResult {
     pub rendered_stars: Vec<StarInFrame>,
 
     /// Sensor configuration for lazy computation
-    sensor_config: SensorConfig,
+    pub sensor_config: SensorConfig,
 }
 
 impl RenderingResult {
@@ -190,23 +190,23 @@ impl Renderer {
     ///     },
     /// ];
     ///
-    /// let renderer = Renderer::from_stars(stars, satellite_config);
+    /// let renderer = Renderer::from_stars(&stars, satellite_config);
     /// ```
-    pub fn from_stars(stars: Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
+    pub fn from_stars(stars: &Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
         let airy_pix = satellite_config.airy_disk_pixel_space();
 
         // Create base star image for 1 second exposure
         let base_star_image = add_stars_to_image(
             satellite_config.sensor.width_px,
             satellite_config.sensor.height_px,
-            &stars,
+            stars,
             airy_pix,
         );
 
         Self {
             satellite_config,
             base_star_image,
-            rendered_stars: stars,
+            rendered_stars: stars.clone(),
         }
     }
 
@@ -219,6 +219,16 @@ impl Renderer {
         zodiacal_coords: &SolarAngularCoordinates,
     ) -> RenderedImage {
         self.render_with_options(exposure, zodiacal_coords, true, None)
+    }
+
+    /// Render an image with a specific RNG seed for reproducible results
+    pub fn render_with_seed(
+        &self,
+        exposure: &Duration,
+        zodiacal_coords: &SolarAngularCoordinates,
+        seed: Option<u64>,
+    ) -> RenderedImage {
+        self.render_with_options(exposure, zodiacal_coords, true, seed)
     }
 
     /// Render an image with options for Poisson noise and RNG seed
@@ -264,7 +274,7 @@ impl Renderer {
             &self.satellite_config.sensor,
             exposure,
             self.satellite_config.temperature_c,
-            None,
+            rng_seed,
         );
 
         // Generate zodiacal background
@@ -399,48 +409,6 @@ pub fn project_stars_to_pixels(
     projected_stars.sort_by(|a, b| a.flux.partial_cmp(&b.flux).unwrap());
 
     projected_stars
-}
-
-/// Renders a simulated star field based on catalog data and optical system parameters.
-///
-/// This function simulates how stars would appear through a telescope onto a digital sensor.
-/// It performs the following steps:
-/// - Converts star equatorial coordinates (RA/Dec) to pixel coordinates
-/// - Calculates the expected electron count for each star based on magnitude, exposure and system parameters
-/// - Applies a Gaussian approximation of Airy disk as point spread function (PSF)
-/// - Adds realistic sensor noise (read noise and dark current)
-/// - Applies sensor physical limitations (well depth saturation)
-/// - Converts electron counts to digital numbers (DN)
-///
-/// # Arguments
-/// * `stars` - Reference to a vector of StarData pointers containing catalog information
-/// * `center` - Equatorial coordinates of field center
-/// * `satellite` - Reference to satellite configuration (telescope, sensor, temperature, wavelength)
-/// * `exposure` - Reference to exposure duration
-/// * `zodiacal_coords` - Solar angular coordinates for zodiacal light calculation
-///
-/// # Returns
-/// * `RenderingResult` - Contains the rendered image, electron counts, noise, star positions, and saturation info
-pub fn render_star_field(
-    stars: &Vec<&StarData>,
-    center: &Equatorial,
-    satellite: &SatelliteConfig,
-    exposure: &Duration,
-    zodiacal_coords: &SolarAngularCoordinates,
-) -> RenderingResult {
-    // Use the new Renderer for the actual work
-    let renderer = Renderer::from_catalog(stars, center, satellite.clone());
-    let rendered = renderer.render(exposure, zodiacal_coords);
-
-    // Convert back to RenderingResult for backwards compatibility
-    RenderingResult {
-        quantized_image: rendered.quantized_image,
-        star_image: rendered.star_image,
-        zodiacal_image: rendered.zodiacal_image,
-        sensor_noise_image: rendered.sensor_noise_image,
-        rendered_stars: rendered.rendered_stars,
-        sensor_config: satellite.sensor.clone(),
-    }
 }
 
 pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Array2<u16> {

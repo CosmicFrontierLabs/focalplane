@@ -191,9 +191,7 @@
 //! - **Diagnostic data**: Background levels, noise contributions
 
 use crate::hardware::SatelliteConfig;
-use crate::image_proc::render::{
-    project_stars_to_pixels, render_star_field, Renderer, RenderingResult, StarInFrame,
-};
+use crate::image_proc::render::{project_stars_to_pixels, Renderer, RenderingResult, StarInFrame};
 use crate::photometry::zodical::SolarAngularCoordinates;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
@@ -554,16 +552,25 @@ impl Scene {
     ///          result.rendered_stars.len());
     /// ```
     pub fn render(&self) -> RenderingResult {
-        // Extract StarData references for render_star_field compatibility
-        let star_data_refs: Vec<&StarData> = self.stars.iter().map(|s| &s.star).collect();
+        self.render_with_seed(None)
+    }
 
-        render_star_field(
-            &star_data_refs,
-            &self.pointing_center,
-            &self.satellite_config,
-            &self.exposure_time,
-            &self.zodiacal_coordinates,
-        )
+    /// Render the scene with a specific RNG seed for reproducible results
+    pub fn render_with_seed(&self, seed: Option<u64>) -> RenderingResult {
+        // Use the new Renderer for the actual work
+        let renderer = Renderer::from_stars(&self.stars, self.satellite_config.clone());
+        let rendered =
+            renderer.render_with_seed(&self.exposure_time, &self.zodiacal_coordinates, seed);
+
+        // Convert back to RenderingResult for backwards compatibility
+        RenderingResult {
+            quantized_image: rendered.quantized_image,
+            star_image: rendered.star_image,
+            zodiacal_image: rendered.zodiacal_image,
+            sensor_noise_image: rendered.sensor_noise_image,
+            rendered_stars: rendered.rendered_stars,
+            sensor_config: self.satellite_config.sensor.clone(),
+        }
     }
 
     /// Create optimized renderer for efficient multi-exposure simulations.
