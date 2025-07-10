@@ -50,16 +50,17 @@
 //! let catalog_stars = tycho::load_from_sample(1000).unwrap();
 //!
 //! // 3. Create scene with pointing and exposure
+//! let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
 //! let scene = Scene::from_catalog(
 //!     satellite_config,
 //!     catalog_stars,
 //!     Equatorial::from_degrees(180.0, -30.0), // Pointing
-//!     30.0, // 30-second exposure
+//!     Duration::from_secs(30), // 30-second exposure
+//!     zodiacal_coords,
 //! );
 //!
-//! // 4. Render with zodiacal light
-//! let zodiacal_coords = SolarAngularCoordinates::new(90.0, 30.0).unwrap();
-//! let result = scene.render(&zodiacal_coords);
+//! // 4. Render the scene
+//! let result = scene.render();
 //!
 //! // 5. Detect stars  
 //! let detections = detect_stars_unified(

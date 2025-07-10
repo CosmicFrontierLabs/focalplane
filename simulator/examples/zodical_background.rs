@@ -141,7 +141,7 @@ fn parse_range(range_str: &str) -> Result<Array1<f64>, Box<dyn std::error::Error
 /// # Example Usage
 ///
 /// ```rust
-/// let coords = SolarAngularCoordinates::new(120.0, 15.0)?;
+/// let coords = SolarAngularCoordinates::zodiacal_minimum();
 /// let z_light = ZodicalLight::new();
 /// create_spectrum_plot(&z_light, &coords, "spectrum.png")?;
 /// ```

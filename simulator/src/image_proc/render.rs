@@ -65,6 +65,28 @@ impl RenderingResult {
         let electron_img = self.mean_electron_image();
         quantize_image(&electron_img, &self.sensor_config)
     }
+
+    /// Calculate the background RMS noise in DN units
+    ///
+    /// This combines sensor noise (read noise + dark current) and zodiacal light,
+    /// converts from electrons to DN units using the sensor's DN per electron factor.
+    ///
+    /// # Returns
+    /// The RMS (root mean square) noise level in DN units
+    pub fn background_rms(&self) -> f64 {
+        // Combine noise sources (sensor noise + zodiacal background)
+        let noise_electrons = &self.sensor_noise_image + &self.zodiacal_image;
+
+        // Calculate RMS (root mean square) of the noise
+        let noise_rms_electrons = noise_electrons
+            .mapv(|x| x * x)
+            .mean()
+            .expect("Failed to calculate mean of noise array - array is empty")
+            .sqrt();
+
+        // Convert from electrons to DN units
+        noise_rms_electrons * self.sensor_config.dn_per_electron()
+    }
 }
 
 /// Star field renderer that handles exposure scaling and noise generation
@@ -134,6 +156,57 @@ impl Renderer {
             satellite_config,
             base_star_image,
             rendered_stars,
+        }
+    }
+
+    /// Create a new renderer from pre-computed stars with known pixel positions.
+    ///
+    /// This constructor allows direct creation of a renderer from stars that have
+    /// already been positioned in pixel coordinates, bypassing the catalog projection
+    /// step. Useful for controlled experiments and testing scenarios.
+    ///
+    /// # Arguments
+    /// * `stars` - Pre-computed stars with pixel positions and 1-second fluxes
+    /// * `satellite_config` - Satellite configuration for rendering parameters
+    ///
+    /// # Returns
+    /// A new Renderer with the base star image pre-computed
+    ///
+    /// # Examples
+    /// ```rust
+    /// use simulator::image_proc::render::{Renderer, StarInFrame};
+    /// use simulator::hardware::SatelliteConfig;
+    /// use starfield::catalogs::StarData;
+    ///
+    /// # use simulator::hardware::{telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
+    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0);
+    /// // Create test stars at known positions
+    /// let stars = vec![
+    ///     StarInFrame {
+    ///         x: 100.0,
+    ///         y: 100.0,
+    ///         flux: 1000.0,  // 1-second flux
+    ///         star: StarData::new(1, 0.0, 0.0, 10.0, None),
+    ///     },
+    /// ];
+    ///
+    /// let renderer = Renderer::from_stars(stars, satellite_config);
+    /// ```
+    pub fn from_stars(stars: Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
+        let airy_pix = satellite_config.airy_disk_pixel_space();
+
+        // Create base star image for 1 second exposure
+        let base_star_image = add_stars_to_image(
+            satellite_config.sensor.width_px,
+            satellite_config.sensor.height_px,
+            &stars,
+            airy_pix,
+        );
+
+        Self {
+            satellite_config,
+            base_star_image,
+            rendered_stars: stars,
         }
     }
 
@@ -759,5 +832,134 @@ mod tests {
         let quantized = quantize_image(&electron_img, &sensor);
 
         assert_eq!(quantized[[0, 0]], 0);
+    }
+
+    #[test]
+    fn test_background_rms_zero_noise() {
+        // Test with zero noise - should return 0
+        let sensor = create_test_sensor(12, 1.0, 1000.0);
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((10, 10)),
+            star_image: Array2::zeros((10, 10)),
+            zodiacal_image: Array2::zeros((10, 10)),
+            sensor_noise_image: Array2::zeros((10, 10)),
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        assert_eq!(result.background_rms(), 0.0);
+    }
+
+    #[test]
+    fn test_background_rms_uniform_noise() {
+        // Test with uniform noise values
+        let sensor = create_test_sensor(12, 1.0, 1000.0);
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((10, 10)),
+            star_image: Array2::zeros((10, 10)),
+            zodiacal_image: Array2::from_elem((10, 10), 5.0), // 5 electrons per pixel
+            sensor_noise_image: Array2::from_elem((10, 10), 3.0), // 3 electrons per pixel
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        // Total noise per pixel: 5 + 3 = 8 electrons
+        // RMS of uniform distribution is just the value itself
+        // With dn_per_electron = 1.0, expect 8.0 DN
+        assert_relative_eq!(result.background_rms(), 8.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_background_rms_with_dn_conversion() {
+        // Test DN conversion factor
+        let sensor = create_test_sensor(12, 0.5, 1000.0); // 0.5 DN per electron
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((10, 10)),
+            star_image: Array2::zeros((10, 10)),
+            zodiacal_image: Array2::from_elem((10, 10), 4.0),
+            sensor_noise_image: Array2::from_elem((10, 10), 4.0),
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        // Total noise: 8 electrons per pixel
+        // With dn_per_electron = 0.5, expect 4.0 DN
+        assert_relative_eq!(result.background_rms(), 4.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_background_rms_varying_noise() {
+        // Test with varying noise levels
+        let sensor = create_test_sensor(12, 1.0, 1000.0);
+
+        let mut zodiacal = Array2::zeros((2, 2));
+        let mut sensor_noise = Array2::zeros((2, 2));
+
+        // Create a simple pattern: total noise of 0, 2, 4, 6 electrons
+        zodiacal[[0, 0]] = 0.0;
+        sensor_noise[[0, 0]] = 0.0; // Total: 0
+
+        zodiacal[[0, 1]] = 1.0;
+        sensor_noise[[0, 1]] = 1.0; // Total: 2
+
+        zodiacal[[1, 0]] = 2.0;
+        sensor_noise[[1, 0]] = 2.0; // Total: 4
+
+        zodiacal[[1, 1]] = 3.0;
+        sensor_noise[[1, 1]] = 3.0; // Total: 6
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((2, 2)),
+            star_image: Array2::zeros((2, 2)),
+            zodiacal_image: zodiacal,
+            sensor_noise_image: sensor_noise,
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        // RMS = sqrt(mean(x^2)) = sqrt((0^2 + 2^2 + 4^2 + 6^2) / 4)
+        //     = sqrt((0 + 4 + 16 + 36) / 4) = sqrt(56/4) = sqrt(14)
+        let expected_rms = (14.0_f64).sqrt();
+        assert_relative_eq!(result.background_rms(), expected_rms, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_background_rms_realistic_values() {
+        // Test with realistic noise values from a sensor
+        let sensor = create_test_sensor(12, 0.25, 50000.0); // 0.25 DN/e-, 50k well depth
+
+        // Simulate realistic noise levels in electrons
+        let mut rng = rand::thread_rng();
+        let mut zodiacal = Array2::zeros((100, 100));
+        let mut sensor_noise = Array2::zeros((100, 100));
+
+        // Add some Gaussian-like noise (simplified)
+        for i in 0..100 {
+            for j in 0..100 {
+                // Zodiacal: ~10 electrons with some variation
+                zodiacal[[i, j]] = 10.0 + rng.gen_range(-2.0..2.0);
+                // Sensor noise: ~5 electrons with some variation
+                sensor_noise[[i, j]] = 5.0 + rng.gen_range(-1.0..1.0);
+            }
+        }
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((100, 100)),
+            star_image: Array2::zeros((100, 100)),
+            zodiacal_image: zodiacal,
+            sensor_noise_image: sensor_noise,
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        let rms = result.background_rms();
+
+        // With mean noise ~15 electrons and dn_per_electron = 0.25
+        // Expected RMS should be around 15 * 0.25 = 3.75 DN
+        // Allow for some variation due to randomness
+        assert!(rms > 3.0 && rms < 4.5, "RMS {} not in expected range", rms);
     }
 }

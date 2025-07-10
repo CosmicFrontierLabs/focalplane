@@ -212,6 +212,14 @@ use crate::algo::bilinear::{BilinearInterpolator, InterpolationError};
 use crate::hardware::SatelliteConfig;
 use crate::photometry::{spectrum::Spectrum, STISZodiacalSpectrum};
 
+/// Ecliptic latitude/elongation of minimum measurable zodiacal light brightness.
+///
+/// Represents the latitude where zodiacal light reaches its minimum detectable
+/// level in the Leinert et al. survey. Used for validation and boundary testing
+/// of the interpolation algorithm near the detection limits.
+pub const LAT_OF_MIN: f64 = 75.0;
+pub const ELONG_OF_MIN: f64 = 165.0;
+
 /// Comprehensive error types for zodiacal light modeling and interpolation.
 ///
 /// Provides detailed diagnostics for coordinate validation, interpolation failures,
@@ -402,6 +410,31 @@ impl SolarAngularCoordinates {
             elongation,
             latitude,
         })
+    }
+
+    /// Get the coordinates where zodiacal light is at its minimum intensity.
+    ///
+    /// Returns pre-computed solar angular coordinates corresponding to the
+    /// direction of minimum zodiacal light brightness, as determined from
+    /// observational data. This provides a reference point for estimating
+    /// the lower bound of zodiacal light contribution in photometric measurements.
+    ///
+    /// # Returns
+    /// `SolarAngularCoordinates` representing the direction of minimum zodiacal light.
+    ///
+    /// # Remarks
+    /// The returned coordinates are based on empirical analysis and represent
+    /// the approximate location where zodiacal light is least prominent.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use simulator::photometry::zodical::SolarAngularCoordinates;
+    ///
+    /// let min_zodi = SolarAngularCoordinates::zodiacal_minimum();
+    /// // Use min_zodi to estimate minimum zodiacal light contribution
+    /// ```
+    pub fn zodiacal_minimum() -> Self {
+        Self::new(ELONG_OF_MIN, LAT_OF_MIN).unwrap()
     }
 
     /// Get the solar elongation angle in degrees.
@@ -604,20 +637,6 @@ fn zodical_raw_data() -> [[f64; 11]; 19] {
         [180.0,  166.0,  152.0,  139.0,  127.0,  116.0, 105.0,  82.0,  65.0, 56.0, 60.0],
     ]
 }
-
-/// Ecliptic latitude of minimum measurable zodiacal light brightness.
-///
-/// Represents the latitude where zodiacal light reaches its minimum detectable
-/// level in the Leinert et al. survey. Used for validation and boundary testing
-/// of the interpolation algorithm near the detection limits.
-pub const LAT_OF_MIN: f64 = 75.0;
-
-/// Solar elongation of minimum measurable zodiacal light brightness.
-///
-/// Represents the elongation angle where zodiacal light approaches its minimum
-/// detectable level while remaining measurable. Critical for testing interpolation
-/// accuracy and model validation near the faint end of the brightness distribution.
-pub const ELONG_OF_MIN: f64 = 165.0;
 
 impl Default for ZodicalLight {
     fn default() -> Self {
@@ -950,7 +969,7 @@ mod tests {
 
         // Test the minimum angle where zodiacal light is still measurable
         // This is around 165° elongation and 75° latitude
-        let coords = SolarAngularCoordinates::new(ELONG_OF_MIN, LAT_OF_MIN).unwrap();
+        let coords = SolarAngularCoordinates::zodiacal_minimum();
         let min_brightness = zodical.get_brightness(&coords).unwrap();
         assert!(min_brightness.is_finite());
         assert!(min_brightness > 0.0); // Should be measurable at this point

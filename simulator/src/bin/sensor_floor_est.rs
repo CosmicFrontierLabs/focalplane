@@ -29,11 +29,11 @@ use rayon::prelude::*;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
-use simulator::image_proc::generate_sensor_noise;
-use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
-use simulator::photometry::{zodical::SolarAngularCoordinates, ZodicalLight};
+use simulator::image_proc::render::StarInFrame;
+use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
 use simulator::star_data_to_electrons;
+use simulator::Scene;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::collections::HashMap;
@@ -212,42 +212,26 @@ fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
         // Create star at the position with correct flux
         let star = params.star_at_pos(xpos, ypos);
 
-        // Create electron image and add star
-        let airy_disk = params.satellite.airy_disk_fwhm_sampled();
-        let e_image = add_stars_to_image(params.domain, params.domain, &vec![star], airy_disk);
-
-        // Generate and add noise to image
-        let sensor_noise = generate_sensor_noise(
-            &params.satellite.sensor,
-            &params.exposure,
-            params.satellite.temperature_c,
-            None,
+        // Create scene with single star
+        let scene = Scene::from_stars(
+            params.satellite.clone(),
+            vec![star],
+            Equatorial::from_degrees(0.0, 0.0), // Dummy pointing (not used for pre-positioned stars)
+            params.exposure,
+            params.coordinates,
         );
 
-        // Background light sources - using coordinates from CLI arguments
-        let z_light = ZodicalLight::new();
-        let zodical = z_light.generate_zodical_background(
-            &params.satellite,
-            &params.exposure,
-            &params.coordinates,
-        );
+        // Render the scene
+        let render_result = scene.render();
 
-        let noise = &sensor_noise + &zodical;
-        let total_e_image = &e_image + &noise;
-
-        // Quantize to digital numbers
-        let quantized = quantize_image(&total_e_image, &params.satellite.sensor);
-
-        // Calculate detection threshold based on noise floor
-        let quantized_noise = quantize_image(&noise, &params.satellite.sensor);
-        let noise_mean = quantized_noise.map(|&x| x as f64).mean().unwrap();
-
+        // Use consistent background RMS calculation
+        let background_rms = render_result.background_rms();
         // Run star detection algorithm
         let detected_stars: Vec<StarDetection> = match detect_stars_unified(
-            quantized.view(),
+            render_result.quantized_image.view(),
             params.star_finder,
-            &airy_disk,
-            noise_mean,
+            &params.satellite.airy_disk_fwhm_sampled(),
+            background_rms,
             params.noise_floor_multiplier,
         ) {
             Ok(stars) => stars

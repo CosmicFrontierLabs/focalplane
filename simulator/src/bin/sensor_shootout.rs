@@ -245,16 +245,16 @@ fn run_experiment<T: StarCatalog>(
         );
 
         // Create scene with star projection for this satellite
-        let exposure_time_s = params.common_args.exposure.as_secs_f64();
         let scene = Scene::from_catalog(
             satellite.clone(),
             stars.clone(),
             params.ra_dec,
-            exposure_time_s,
+            params.common_args.exposure,
+            params.common_args.coordinates,
         );
 
         // Render the scene
-        let render_result = scene.render(&params.common_args.coordinates);
+        let render_result = scene.render();
 
         let prefix = format!(
             "{}_{}_",
@@ -262,11 +262,8 @@ fn run_experiment<T: StarCatalog>(
             satellite.sensor.name.replace(" ", "_"),
         );
 
-        // Calculate background RMS from the sensor noise in electrons, then convert to DN
-        // This properly accounts for the noise sources (read noise + dark current + zodiacal)
-        let noise_electrons = &render_result.sensor_noise_image + &render_result.zodiacal_image;
-        let noise_rms_electrons = noise_electrons.mapv(|x| x * x).mean().unwrap_or(0.0).sqrt();
-        let background_rms = noise_rms_electrons * satellite.sensor.dn_per_electron;
+        // Calculate background RMS using the new method
+        let background_rms = render_result.background_rms();
         let airy_disk_pixels = satellite.airy_disk_fwhm_sampled().fwhm();
         let detection_sigma = params.common_args.noise_multiple;
 
