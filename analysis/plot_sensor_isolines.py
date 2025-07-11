@@ -193,10 +193,11 @@ def parse_sensor_data(csv_file, precision_threshold=None):
     
     return sensors_data
 
-def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smoothing=False, output_suffix="", contour_level=0.95):
-    """Create 2D isoline plot for a single sensor."""
+def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smoothing=False, output_suffix="", contour_level=0.95, accuracy_threshold=None):
+    """Create 2D isoline plot for a single sensor with detection isolines and optional accuracy shading."""
     
     detection_rates = sensor_data['detection_rates']  # Shape: (n_q * n_exp, n_magnitudes)
+    rms_errors = sensor_data['rms_errors']  # RMS errors in pixels
     q_values = sensor_data['q_values']
     exposures = sensor_data['exposures']
     magnitudes = sensor_data['magnitudes']
@@ -212,8 +213,12 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
     # Create figure
     plt.figure(figsize=(12, 8))
     
-    # Define colors for different exposure times
+    # Define colors for different exposure times (detection isolines)
     colors = plt.cm.viridis(np.linspace(0, 1, len(unique_exposures)))
+    
+    # Define grayscale colors for pixel accuracy isolines
+    pixel_accuracy_levels = [0.25]
+    gray_colors = plt.cm.gray(np.linspace(0.2, 0.7, len(pixel_accuracy_levels)))
     
     # For each exposure time, find the detection rate isoline
     for exp_idx, exposure in enumerate(unique_exposures):
@@ -288,10 +293,96 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
             print(f"Failed to create contour for exposure {exposure}ms: {e}")
             continue
     
+    # Add pixel accuracy shading if threshold is specified
+    if accuracy_threshold is not None:
+        # Process all exposure times together for accuracy shading
+        # First, organize data by (q_value, magnitude) to find max detection across exposures
+        point_data = {}
+        
+        row_idx = 0
+        for q in q_values:
+            for e in exposures:
+                if row_idx < len(rms_errors):
+                    rms_row = rms_errors[row_idx]
+                    detection_row = detection_rates[row_idx]
+                    for j, mag_val in enumerate(magnitudes):
+                        if j < len(rms_row) and not np.isnan(rms_row[j]):
+                            key = (q, mag_val)
+                            if key not in point_data:
+                                point_data[key] = {
+                                    'rms': rms_row[j],
+                                    'max_detection': detection_row[j]
+                                }
+                            else:
+                                # Keep max detection rate across all exposures
+                                point_data[key]['max_detection'] = max(
+                                    point_data[key]['max_detection'],
+                                    detection_row[j]
+                                )
+                row_idx += 1
+        
+        # Convert to arrays for interpolation
+        all_points = []
+        all_rms_values = []
+        all_detection_values = []
+        
+        for (q, mag), data in point_data.items():
+            flux_val = 10**(-0.4 * mag)
+            all_points.append([flux_val, q])
+            all_rms_values.append(data['rms'])
+            all_detection_values.append(data['max_detection'])
+        
+        if len(all_points) >= 4:
+            all_points = np.array(all_points)
+            all_rms_values = np.array(all_rms_values)
+            all_detection_values = np.array(all_detection_values)
+            
+            # Create same grid as before
+            mag_min, mag_max = magnitudes.min(), magnitudes.max()
+            q_min, q_max = q_values.min(), q_values.max()
+            mag_grid = np.linspace(mag_min, mag_max, 200)
+            flux_grid = 10**(-0.4 * mag_grid)
+            q_grid = np.linspace(q_min, q_max, 200)
+            Flux_grid, Q_grid = np.meshgrid(flux_grid, q_grid)
+            
+            # Interpolate both RMS errors and detection rates
+            try:
+                interpolated_rms = griddata(all_points, all_rms_values, (Flux_grid, Q_grid), 
+                                          method='cubic', fill_value=np.nan)
+                
+                # Need to interpolate max detection rate across all exposures
+                interpolated_detection = griddata(all_points, all_detection_values, (Flux_grid, Q_grid),
+                                                method='cubic', fill_value=0)
+                
+                if enable_smoothing:
+                    interpolated_rms = median_filter(interpolated_rms, size=3)
+                    interpolated_detection = median_filter(interpolated_detection, size=3)
+                
+                # Convert back to magnitude for display
+                Mag_grid_display = -2.5 * np.log10(Flux_grid)
+                
+                # Create combined mask: good accuracy AND good detection
+                # Mask where accuracy < threshold AND detection >= contour_level
+                combined_mask = np.zeros_like(interpolated_rms)
+                combined_mask[(interpolated_rms < accuracy_threshold) & 
+                             (interpolated_detection >= contour_level * 100)] = 1
+                
+                # Create filled contour only where both conditions are met
+                plt.contourf(Mag_grid_display, Q_grid, combined_mask, 
+                            levels=[0.5, 1.5],  # Binary mask levels
+                            colors=['gray'], 
+                            alpha=0.3)
+            
+            except Exception as e:
+                print(f"Failed to create pixel accuracy shading: {e}")
+    
     # Customize plot
     plt.xlabel('Star Magnitude', fontsize=12)
     plt.ylabel('PSF Sampling (Q_Value)', fontsize=12)
-    plt.title(f'{sensor_name} - {contour_level*100:.0f}% Detection Rate Isolines', fontsize=14, fontweight='bold')
+    if accuracy_threshold is not None:
+        plt.title(f'{sensor_name} - {contour_level*100:.0f}% Detection Rate (shaded: <{accuracy_threshold}px accuracy)', fontsize=14, fontweight='bold')
+    else:
+        plt.title(f'{sensor_name} - {contour_level*100:.0f}% Detection Rate Isolines', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
     
     # Use normal linear scale for x-axis
@@ -302,9 +393,18 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
     
     # Create custom legend for exposure times
     legend_elements = []
+    
+    # Add exposure time legend entries (detection isolines)
     for exp_idx, exposure in enumerate(unique_exposures):
         legend_elements.append(plt.Line2D([0], [0], color=colors[exp_idx], lw=2, 
                                         label=f'{exposure}ms'))
+    
+    # Add pixel accuracy shading to legend if used
+    if accuracy_threshold is not None:
+        legend_elements.append(plt.Line2D([0], [0], color='none', label=''))
+        from matplotlib.patches import Patch
+        legend_elements.append(Patch(facecolor='gray', alpha=0.3, 
+                                   label=f'<{accuracy_threshold}px accuracy'))
     
     # Add faint dotted horizontal line at (1.029*2)/1.22 - Nyquist sampling limit
     nyquist_y = (1.029*2)/1.22
@@ -314,7 +414,7 @@ def create_isoline_plot(sensor_name, sensor_data, output_dir="plots", enable_smo
     plt.text(plt.xlim()[1], nyquist_y, ' Nyquist sampling', 
              verticalalignment='center', fontsize=9, alpha=0.6)
     
-    plt.legend(handles=legend_elements, title='Exposure Time', loc='upper right')
+    plt.legend(handles=legend_elements, loc='upper right', framealpha=0.9)
     
     # Save plot
     os.makedirs(output_dir, exist_ok=True)
@@ -337,6 +437,8 @@ def main():
                         help='Suffix to add to output plot filenames (default: none)')
     parser.add_argument('--contour-level', type=float, default=0.95,
                         help='Detection rate contour level (0.0-1.0, default: 0.95 for 95%%)')
+    parser.add_argument('--accuracy-threshold', type=float, default=None,
+                        help='Shade areas with pixel accuracy below this threshold (default: no shading)')
     
     args = parser.parse_args()
     csv_file = args.csv_file
@@ -364,7 +466,8 @@ def main():
     for sensor_name, sensor_data in sensors_data.items():
         print(f"Processing {sensor_name}...")
         create_isoline_plot(sensor_name, sensor_data, enable_smoothing=args.smooth, 
-                          output_suffix=args.output_suffix, contour_level=args.contour_level)
+                          output_suffix=args.output_suffix, contour_level=args.contour_level,
+                          accuracy_threshold=args.accuracy_threshold)
     
     print("\nAll plots generated successfully!")
 
