@@ -186,7 +186,8 @@ impl TelescopeConfig {
     pub fn plate_scale_arcsec_per_mm(&self) -> f64 {
         // 1 radian = 206,264.8 arcseconds
         // plate scale = (1/f) * 206,264.8 arcsec/radian
-        (1.0 / self.focal_length_m) * 206_264.8
+        // focal_length_m needs to be converted to mm
+        (1.0 / (self.focal_length_m * 1000.0)) * 206_264.8
     }
 
     /// Calculate the collecting area in square meters
@@ -250,8 +251,8 @@ mod tests {
     fn test_plate_scale() {
         let telescope = TelescopeConfig::new("Test", 0.5, 4.0, 0.8);
 
-        // Calculate expected plate scale
-        let expected_plate_scale = (1.0 / 4.0) * 206_264.8;
+        // Calculate expected plate scale (focal length 4m = 4000mm)
+        let expected_plate_scale = (1.0 / 4000.0) * 206_264.8;
 
         assert!(approx_eq!(
             f64,
