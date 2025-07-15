@@ -495,7 +495,7 @@ pub trait Spectrum: Send + Sync {
     /// # Returns
     ///
     /// The number of photons detected in the specified band
-    fn photons(&self, band: &Band, aperture_cm2: f64, duration: std::time::Duration) -> f64 {
+    fn photons(&self, band: &Band, aperture_cm2: f64, duration: Duration) -> f64 {
         // Convert power to photons per second
         // E = h * c / λ, so N = P / (h * c / λ)
         // where P is power in erg/s, h is Planck's constant, c is speed of light, and λ is wavelength in cm

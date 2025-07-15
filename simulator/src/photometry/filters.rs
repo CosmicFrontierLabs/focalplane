@@ -106,7 +106,7 @@
 //! println!("Cool star U response: {:.2}", cool_star.photo_electrons(&u, aperture, &exposure));
 //! ```
 
-use super::QuantumEfficiency;
+use super::{quantum_efficiency::QuantumEfficiencyError, QuantumEfficiency};
 
 /// Hardcoded U filter transmission data from the Zodical Light Curve - SpectrumPassbands.csv
 /// Format: (wavelength_nm, transmission)
@@ -211,9 +211,7 @@ const V_FILTER_DATA: [(f64, f64); 27] = [
 /// - Wavelength data is not monotonically increasing
 /// - Transmission values are outside [0.0, 1.0] range
 /// - Data contains NaN or infinite values
-fn create_qe_from_data(
-    data: &[(f64, f64)],
-) -> Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError> {
+fn create_qe_from_data(data: &[(f64, f64)]) -> Result<QuantumEfficiency, QuantumEfficiencyError> {
     let wavelengths: Vec<f64> = data.iter().map(|(w, _)| *w).collect();
     let efficiencies: Vec<f64> = data.iter().map(|(_, e)| *e).collect();
 
@@ -253,7 +251,7 @@ fn create_qe_from_data(
 /// assert_eq!(u.at(300.0), 0.2);   // UV cutoff
 /// assert_eq!(u.at(400.0), 0.2);   // Blue cutoff
 /// ```
-pub fn u_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError> {
+pub fn u_filter() -> Result<QuantumEfficiency, QuantumEfficiencyError> {
     create_qe_from_data(&U_FILTER_DATA)
 }
 
@@ -296,7 +294,7 @@ pub fn u_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::Quantu
 /// assert_eq!(b.at(390.0), 0.35);   // UV side
 /// assert_eq!(b.at(500.0), 0.4);    // Green side
 /// ```
-pub fn b_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError> {
+pub fn b_filter() -> Result<QuantumEfficiency, QuantumEfficiencyError> {
     create_qe_from_data(&B_FILTER_DATA)
 }
 
@@ -337,7 +335,7 @@ pub fn b_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::Quantu
 /// println!("V filter band: {} to {} nm",
 ///          v.band().lower_nm, v.band().upper_nm);
 /// ```
-pub fn v_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError> {
+pub fn v_filter() -> Result<QuantumEfficiency, QuantumEfficiencyError> {
     create_qe_from_data(&V_FILTER_DATA)
 }
 
@@ -387,9 +385,9 @@ pub fn v_filter() -> Result<QuantumEfficiency, super::quantum_efficiency::Quantu
 /// println!("UBV photometry - U-B: {:.3}, B-V: {:.3}", ub_color, bv_color);
 /// ```
 pub fn ubv_filters() -> (
-    Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError>,
-    Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError>,
-    Result<QuantumEfficiency, super::quantum_efficiency::QuantumEfficiencyError>,
+    Result<QuantumEfficiency, QuantumEfficiencyError>,
+    Result<QuantumEfficiency, QuantumEfficiencyError>,
+    Result<QuantumEfficiency, QuantumEfficiencyError>,
 ) {
     (u_filter(), b_filter(), v_filter())
 }
