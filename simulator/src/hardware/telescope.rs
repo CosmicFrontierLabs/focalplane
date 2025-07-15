@@ -357,7 +357,137 @@ pub mod models {
         )
     });
 
-    /// Weasel telescope
+    /// Officina Stellare Weasel - 50cm f/6.9 Catadioptric
+    /// Bandpass: 450nm-900nm, 0.8 Strehl at 800nm, 42% obscuration ratio
+    pub static OFFICINA_STELLARE_WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
+        // Create QE curve for Weasel based on spectral data
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 450.0, 545.0, 680.0, 820.0, 900.0, 1050.0, 1400.0, 1800.0,
+            1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.0, 0.0, 0.0, 0.60, 0.77, 0.73, 0.73, 0.71, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create Weasel QE curve");
+
+        let mut telescope = TelescopeConfig::new_with_qe(
+            "Officina Stellare Weasel",
+            0.5,  // 50cm aperture
+            3.45, // 345cm focal length (f/6.9)
+            quantum_efficiency,
+        );
+        telescope.obscuration_ratio = 0.42; // 42% linear obscuration ratio
+        telescope
+    });
+
+    /// Optech/Lina LS50 - 50cm f/10 Catadioptric  
+    /// Bandpass: 400-1100nm, 0.8 Strehl at 833nm, 37% obscuration ratio
+    pub static OPTECH_LINA_LS50: Lazy<TelescopeConfig> = Lazy::new(|| {
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 400.0, 545.0, 680.0, 820.0, 1050.0, 1100.0, 1400.0, 1800.0,
+            1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.0, 0.0, 0.0, 0.70, 0.78, 0.77, 0.74, 0.77, 0.70, 0.0, 0.0, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create LS50 QE curve");
+
+        let mut telescope = TelescopeConfig::new_with_qe(
+            "Optech/Lina LS50",
+            0.5, // 50cm aperture
+            5.0, // 500cm focal length (f/10)
+            quantum_efficiency,
+        );
+        telescope.obscuration_ratio = 0.37; // 37% linear obscuration ratio
+        telescope
+    });
+
+    /// Optech/Lina LS35 - 35cm f/10 Catadioptric
+    /// Bandpass: 400-1100nm, 0.8 Strehl at 833nm, 37% obscuration ratio  
+    pub static OPTECH_LINA_LS35: Lazy<TelescopeConfig> = Lazy::new(|| {
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 400.0, 545.0, 680.0, 820.0, 1050.0, 1100.0, 1400.0, 1800.0,
+            1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.0, 0.0, 0.0, 0.70, 0.78, 0.77, 0.74, 0.77, 0.70, 0.0, 0.0, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create LS35 QE curve");
+
+        let mut telescope = TelescopeConfig::new_with_qe(
+            "Optech/Lina LS35",
+            0.35, // 35cm aperture
+            3.5,  // 350cm focal length (f/10)
+            quantum_efficiency,
+        );
+        telescope.obscuration_ratio = 0.37; // 37% linear obscuration ratio
+        telescope
+    });
+
+    /// Cosmic Frontier JBT .5m - 48.5cm f/12.3 Reflective
+    /// Bandpass: broad spectrum, 0.8 Strehl at 700nm
+    pub static COSMIC_FRONTIER_JBT_50CM: Lazy<TelescopeConfig> = Lazy::new(|| {
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create JBT 50cm QE curve");
+
+        TelescopeConfig::new_with_qe(
+            "Cosmic Frontier JBT .5m",
+            0.485, // 48.5cm aperture
+            5.987, // 598.7cm focal length (f/12.3)
+            quantum_efficiency,
+        )
+    });
+
+    /// Cosmic Frontier JBT MAX - 65cm f/12.3 Reflective
+    /// Bandpass: broad spectrum, 0.8 Strehl at 700nm
+    pub static COSMIC_FRONTIER_JBT_MAX: Lazy<TelescopeConfig> = Lazy::new(|| {
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create JBT MAX QE curve");
+
+        TelescopeConfig::new_with_qe(
+            "Cosmic Frontier JBT MAX",
+            0.65,  // 65cm aperture
+            8.024, // 802.4cm focal length (f/12.3)
+            quantum_efficiency,
+        )
+    });
+
+    /// Cosmic Frontier JBT 1.0m - 100cm f/12.3 Reflective
+    /// Bandpass: broad spectrum, 0.8 Strehl at 700nm
+    pub static COSMIC_FRONTIER_JBT_1M: Lazy<TelescopeConfig> = Lazy::new(|| {
+        let wavelengths = vec![
+            149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
+        ];
+        let efficiencies = vec![
+            0.0, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.0,
+        ];
+        let quantum_efficiency = QuantumEfficiency::from_table(wavelengths, efficiencies)
+            .expect("Failed to create JBT 1m QE curve");
+
+        TelescopeConfig::new_with_qe(
+            "Cosmic Frontier JBT 1.0m",
+            1.0,    // 100cm aperture
+            12.344, // 1234.4cm focal length (f/12.3)
+            quantum_efficiency,
+        )
+    });
+
+    /// Legacy Weasel telescope (keeping for backwards compatibility)
     /// Spectral ranges: PAN: 0.45 – 0.9 um, RGB: 0.45 – 0.68 um, SWIR: 0.9 – 1.7 um
     pub static WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
         TelescopeConfig::new(
@@ -387,5 +517,84 @@ mod model_tests {
         assert_eq!(models::FINAL_1M.focal_length_m, 10.0);
         assert_eq!(models::FINAL_1M.quantum_efficiency.at(550.0), 0.815);
         assert_eq!(models::FINAL_1M.f_number(), 10.0);
+    }
+
+    #[test]
+    fn test_concrete_telescope_embodiments() {
+        use float_cmp::approx_eq;
+
+        // Test Officina Stellare Weasel
+        let weasel = &*models::OFFICINA_STELLARE_WEASEL;
+        assert_eq!(weasel.name, "Officina Stellare Weasel");
+        assert_eq!(weasel.aperture_m, 0.5);
+        assert!(approx_eq!(f64, weasel.focal_length_m, 3.45, epsilon = 1e-6));
+        assert!(approx_eq!(f64, weasel.f_number(), 6.9, epsilon = 1e-6));
+        assert_eq!(weasel.obscuration_ratio, 0.42);
+        // At 600nm, interpolate between 545nm (0.77) and 680nm (0.73)
+        // Linear interpolation: 0.77 - (600-545)/(680-545) * (0.77-0.73) ≈ 0.754
+        assert!(approx_eq!(
+            f64,
+            weasel.quantum_efficiency.at(600.0),
+            0.754,
+            epsilon = 1e-2
+        ));
+        // At 400nm, slightly out of main band but still has some interpolated value
+        assert!(weasel.quantum_efficiency.at(400.0) < 0.1); // Near zero but not exactly
+
+        // Test Optech/Lina LS50
+        let ls50 = &*models::OPTECH_LINA_LS50;
+        assert_eq!(ls50.name, "Optech/Lina LS50");
+        assert_eq!(ls50.aperture_m, 0.5);
+        assert_eq!(ls50.focal_length_m, 5.0);
+        assert_eq!(ls50.f_number(), 10.0);
+        assert_eq!(ls50.obscuration_ratio, 0.37);
+        // At 600nm, interpolate between 545nm (0.78) and 680nm (0.77) ≈ 0.778
+        assert!(approx_eq!(
+            f64,
+            ls50.quantum_efficiency.at(600.0),
+            0.778,
+            epsilon = 1e-2
+        ));
+
+        // Test Optech/Lina LS35
+        let ls35 = &*models::OPTECH_LINA_LS35;
+        assert_eq!(ls35.name, "Optech/Lina LS35");
+        assert_eq!(ls35.aperture_m, 0.35);
+        assert_eq!(ls35.focal_length_m, 3.5);
+        assert_eq!(ls35.f_number(), 10.0);
+        assert_eq!(ls35.obscuration_ratio, 0.37);
+
+        // Test Cosmic Frontier JBT .5m
+        let jbt50 = &*models::COSMIC_FRONTIER_JBT_50CM;
+        assert_eq!(jbt50.name, "Cosmic Frontier JBT .5m");
+        assert_eq!(jbt50.aperture_m, 0.485);
+        assert!(approx_eq!(f64, jbt50.focal_length_m, 5.987, epsilon = 1e-6));
+        assert!(approx_eq!(f64, jbt50.f_number(), 12.344, epsilon = 1e-2));
+        assert_eq!(jbt50.obscuration_ratio, 0.0); // Reflective, no central obscuration specified
+        assert_eq!(jbt50.quantum_efficiency.at(550.0), 0.70);
+
+        // Test Cosmic Frontier JBT MAX
+        let jbt_max = &*models::COSMIC_FRONTIER_JBT_MAX;
+        assert_eq!(jbt_max.name, "Cosmic Frontier JBT MAX");
+        assert_eq!(jbt_max.aperture_m, 0.65);
+        assert!(approx_eq!(
+            f64,
+            jbt_max.focal_length_m,
+            8.024,
+            epsilon = 1e-6
+        ));
+        assert!(approx_eq!(f64, jbt_max.f_number(), 12.344, epsilon = 1e-2));
+
+        // Test Cosmic Frontier JBT 1.0m
+        let jbt1m = &*models::COSMIC_FRONTIER_JBT_1M;
+        assert_eq!(jbt1m.name, "Cosmic Frontier JBT 1.0m");
+        assert_eq!(jbt1m.aperture_m, 1.0);
+        assert!(approx_eq!(
+            f64,
+            jbt1m.focal_length_m,
+            12.344,
+            epsilon = 1e-6
+        ));
+        assert!(approx_eq!(f64, jbt1m.f_number(), 12.344, epsilon = 1e-2));
     }
 }
