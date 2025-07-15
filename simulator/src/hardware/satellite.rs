@@ -1,5 +1,6 @@
 use super::{sensor::SensorConfig, telescope::TelescopeConfig};
 use crate::image_proc::airy::ScaledAiryDisk;
+use crate::photometry::QuantumEfficiency;
 
 /// Complete satellite configuration combining telescope optics and sensor.
 ///
@@ -55,6 +56,8 @@ pub struct SatelliteConfig {
     pub temperature_c: f64,
     /// Primary observing wavelength in nanometers (affects PSF size)
     pub wavelength_nm: f64,
+    /// Combined quantum efficiency of telescope optics and sensor
+    pub combined_qe: QuantumEfficiency,
 }
 
 impl SatelliteConfig {
@@ -90,24 +93,22 @@ impl SatelliteConfig {
         temperature_c: f64,
         wavelength_nm: f64,
     ) -> Self {
+        // Calculate combined QE from telescope and sensor
+        let combined_qe =
+            QuantumEfficiency::product(&telescope.quantum_efficiency, &sensor.quantum_efficiency)
+                .expect("Failed to combine telescope and sensor QE curves");
+
         Self {
             telescope,
             sensor,
             temperature_c,
             wavelength_nm,
+            combined_qe,
         }
     }
 
     /// Get the effective collecting area accounting for telescope efficiency.
     ///
-    /// Returns the light-gathering power including optical losses from
-    /// obscuration, mirror reflectivity, and other efficiency factors.
-    ///
-    /// # Returns
-    /// Effective collecting area in square meters
-    pub fn effective_collecting_area_m2(&self) -> f64 {
-        self.telescope.effective_collecting_area_m2()
-    }
 
     /// Get the plate scale in arcseconds per millimeter at the focal plane.
     ///
@@ -352,7 +353,7 @@ mod tests {
 
         let satellite = SatelliteConfig::new(telescope, sensor, temp, 550.0);
         assert_eq!(satellite.temperature_c, -10.0);
-        assert!(satellite.effective_collecting_area_m2() > 0.0);
+        assert!(satellite.telescope.collecting_area_m2() > 0.0);
         assert!(satellite.plate_scale_arcsec_per_pixel() > 0.0);
     }
 

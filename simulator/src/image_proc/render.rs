@@ -393,8 +393,7 @@ pub fn project_stars_to_pixels(
         }
 
         // Calculate photon flux using telescope model
-        let electrons =
-            star_data_to_electrons(star, exposure, &satellite.telescope, &satellite.sensor);
+        let electrons = star_data_to_electrons(star, exposure, satellite);
 
         // Create StarInFrame with projected coordinates and flux
         projected_stars.push(StarInFrame {

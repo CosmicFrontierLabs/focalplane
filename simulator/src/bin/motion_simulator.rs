@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Focal length: {:.1} m", telescope.focal_length_m);
     println!(
         "  Light efficiency: {:.1}%",
-        telescope.light_efficiency * 100.0
+        telescope.quantum_efficiency.at(550.0) * 100.0
     );
     println!();
     println!("Sensor configuration:");

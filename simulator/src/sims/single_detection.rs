@@ -63,12 +63,7 @@ impl ExperimentParams {
         };
 
         // Calculate electrons based on magnitude
-        let flux = star_data_to_electrons(
-            &star_data,
-            &self.exposure,
-            &self.satellite.telescope,
-            &self.satellite.sensor,
-        );
+        let flux = star_data_to_electrons(&star_data, &self.exposure, &self.satellite);
 
         StarInFrame {
             star: star_data,

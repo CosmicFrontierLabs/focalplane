@@ -103,12 +103,7 @@ fn test_algorithm(
             b_v: None,
         };
 
-        let flux = star_data_to_electrons(
-            &star_data,
-            &args.shared.exposure.0,
-            &satellite.telescope,
-            &satellite.sensor,
-        );
+        let flux = star_data_to_electrons(&star_data, &args.shared.exposure.0, &satellite);
 
         let star = StarInFrame {
             star: star_data,

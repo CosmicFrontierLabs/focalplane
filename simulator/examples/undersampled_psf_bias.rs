@@ -182,12 +182,7 @@ fn create_star_at_position(
         b_v: None,
     };
 
-    let flux = star_data_to_electrons(
-        &star_data,
-        exposure,
-        &satellite.telescope,
-        &satellite.sensor,
-    );
+    let flux = star_data_to_electrons(&star_data, exposure, satellite);
 
     StarInFrame {
         star: star_data,
