@@ -328,6 +328,122 @@ impl QuantumEfficiency {
         }
     }
 
+    /// Create a new QuantumEfficiency from the product of two existing ones.
+    ///
+    /// Computes the wavelength-dependent product QE_total(λ) = QE1(λ) × QE2(λ)
+    /// over the wavelength range where both input curves overlap. This models
+    /// the combined response of optical elements in series, such as:
+    /// - Filter × Detector response
+    /// - Multiple filters in optical path
+    /// - Telescope optics × Instrument response
+    ///
+    /// # Physics Model
+    ///
+    /// For independent optical elements with quantum efficiencies QE₁ and QE₂,
+    /// the combined probability of photon transmission/detection is:
+    /// QE_combined(λ) = QE₁(λ) × QE₂(λ)
+    ///
+    /// This assumes no wavelength-dependent interference effects between elements.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Determine overlapping wavelength range
+    /// 2. Collect all unique wavelength points from both curves within overlap
+    /// 3. Evaluate both curves at each wavelength point
+    /// 4. Compute product at each point
+    /// 5. Ensure boundary conditions (QE = 0 at edges)
+    ///
+    /// # Arguments
+    /// * `qe1` - First quantum efficiency curve
+    /// * `qe2` - Second quantum efficiency curve
+    ///
+    /// # Returns
+    /// Result containing the product QuantumEfficiency curve
+    ///
+    /// # Examples
+    /// ```rust
+    /// use simulator::photometry::{QuantumEfficiency, Band};
+    ///
+    /// // Create a detector QE curve
+    /// let detector_wavelengths = vec![300.0, 400.0, 700.0, 900.0];
+    /// let detector_efficiencies = vec![0.0, 0.8, 0.6, 0.0];
+    /// let detector = QuantumEfficiency::from_table(
+    ///     detector_wavelengths,
+    ///     detector_efficiencies
+    /// ).unwrap();
+    ///
+    /// // Create a filter transmission curve
+    /// let filter_band = Band::from_nm_bounds(500.0, 600.0);
+    /// let filter = QuantumEfficiency::from_notch(&filter_band, 0.9).unwrap();
+    ///
+    /// // Compute combined response
+    /// let combined = QuantumEfficiency::product(&detector, &filter).unwrap();
+    ///
+    /// // Check results
+    /// assert_eq!(combined.at(450.0), 0.0);  // Outside filter band
+    /// assert!(combined.at(550.0) > 0.0);    // Within both ranges
+    /// assert_eq!(combined.at(650.0), 0.0);  // Outside filter band
+    /// ```
+    pub fn product(
+        qe1: &QuantumEfficiency,
+        qe2: &QuantumEfficiency,
+    ) -> Result<Self, QuantumEfficiencyError> {
+        // Get the overlapping wavelength range
+        let band1 = qe1.band();
+        let band2 = qe2.band();
+
+        let overlap_lower = band1.lower_nm.max(band2.lower_nm);
+        let overlap_upper = band1.upper_nm.min(band2.upper_nm);
+
+        // Check if there's any overlap
+        if overlap_lower >= overlap_upper {
+            // No overlap - return a QE that's zero everywhere
+            // Need to ensure wavelengths are in ascending order
+            let min_wl = overlap_lower.min(overlap_upper);
+            let max_wl = overlap_lower.max(overlap_upper);
+            return Self::from_table(vec![min_wl, max_wl], vec![0.0, 0.0]);
+        }
+
+        // Collect all unique wavelength points from both curves within the overlap range
+        let mut wavelengths = Vec::new();
+
+        // Add boundary points
+        wavelengths.push(overlap_lower);
+        wavelengths.push(overlap_upper);
+
+        // Add all wavelength points from qe1 that fall within overlap
+        for &w in &qe1.wavelengths {
+            if w > overlap_lower && w < overlap_upper {
+                wavelengths.push(w);
+            }
+        }
+
+        // Add all wavelength points from qe2 that fall within overlap
+        for &w in &qe2.wavelengths {
+            if w > overlap_lower && w < overlap_upper && !wavelengths.contains(&w) {
+                wavelengths.push(w);
+            }
+        }
+
+        // Sort wavelengths
+        wavelengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        // Compute efficiencies as the product at each wavelength
+        let efficiencies: Vec<f64> = wavelengths
+            .iter()
+            .map(|&w| {
+                if w == overlap_lower || w == overlap_upper {
+                    // Force boundaries to zero
+                    0.0
+                } else {
+                    qe1.at(w) * qe2.at(w)
+                }
+            })
+            .collect();
+
+        Self::from_table(wavelengths, efficiencies)
+    }
+
     /// Integrate the quantum efficiency over the wavelength range
     ///
     /// # Arguments
@@ -429,5 +545,93 @@ mod tests {
         // Total = 25 + 50 + 25 = 100
         let area = qe.integrate(|_| 1.0);
         assert_relative_eq!(area, 100.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn test_product_overlapping_curves() {
+        // Create two overlapping QE curves
+        let qe1_wavelengths = vec![300.0, 400.0, 600.0, 700.0];
+        let qe1_efficiencies = vec![0.0, 0.8, 0.8, 0.0];
+        let qe1 = QuantumEfficiency::from_table(qe1_wavelengths, qe1_efficiencies).unwrap();
+
+        let qe2_wavelengths = vec![350.0, 450.0, 550.0, 650.0];
+        let qe2_efficiencies = vec![0.0, 0.5, 0.5, 0.0];
+        let qe2 = QuantumEfficiency::from_table(qe2_wavelengths, qe2_efficiencies).unwrap();
+
+        let product = QuantumEfficiency::product(&qe1, &qe2).unwrap();
+
+        // Check the band of the product
+        let band = product.band();
+        assert_eq!(band.lower_nm, 350.0); // Max of lower bounds
+        assert_eq!(band.upper_nm, 650.0); // Min of upper bounds
+
+        // Check some values
+        assert_eq!(product.at(350.0), 0.0); // Boundary
+        assert_eq!(product.at(650.0), 0.0); // Boundary
+
+        // At 500nm: qe1 = 0.8, qe2 = 0.5, product = 0.4
+        assert_relative_eq!(product.at(500.0), 0.4, epsilon = 1e-5);
+
+        // Outside the overlapping range
+        assert_eq!(product.at(300.0), 0.0);
+        assert_eq!(product.at(700.0), 0.0);
+    }
+
+    #[test]
+    fn test_product_filter_detector() {
+        // Simulate a detector with broad response
+        let detector_wavelengths = vec![300.0, 400.0, 700.0, 900.0];
+        let detector_efficiencies = vec![0.0, 0.8, 0.6, 0.0];
+        let detector =
+            QuantumEfficiency::from_table(detector_wavelengths, detector_efficiencies).unwrap();
+
+        // Create a narrow-band filter
+        let filter_band = Band::from_nm_bounds(500.0, 600.0);
+        let filter = QuantumEfficiency::from_notch(&filter_band, 0.9).unwrap();
+
+        let combined = QuantumEfficiency::product(&detector, &filter).unwrap();
+
+        // Check the combined response
+        assert_eq!(combined.at(450.0), 0.0); // Outside filter
+        assert_eq!(combined.at(650.0), 0.0); // Outside filter
+
+        // At 550nm: detector ≈ 0.7, filter = 0.9, product ≈ 0.63
+        let detector_at_550 = detector.at(550.0);
+        let expected = detector_at_550 * 0.9;
+        assert_relative_eq!(combined.at(550.0), expected, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn test_product_no_overlap() {
+        // Create two non-overlapping QE curves
+        let qe1_wavelengths = vec![300.0, 400.0, 500.0, 600.0];
+        let qe1_efficiencies = vec![0.0, 0.8, 0.8, 0.0];
+        let qe1 = QuantumEfficiency::from_table(qe1_wavelengths, qe1_efficiencies).unwrap();
+
+        let qe2_wavelengths = vec![700.0, 800.0, 900.0, 1000.0];
+        let qe2_efficiencies = vec![0.0, 0.5, 0.5, 0.0];
+        let qe2 = QuantumEfficiency::from_table(qe2_wavelengths, qe2_efficiencies).unwrap();
+
+        let product = QuantumEfficiency::product(&qe1, &qe2).unwrap();
+
+        // Product should be zero everywhere
+        assert_eq!(product.at(500.0), 0.0);
+        assert_eq!(product.at(800.0), 0.0);
+    }
+
+    #[test]
+    fn test_product_identical_curves() {
+        // Create identical QE curves
+        let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
+        let efficiencies = vec![0.0, 0.8, 0.8, 0.0];
+        let qe1 = QuantumEfficiency::from_table(wavelengths.clone(), efficiencies.clone()).unwrap();
+        let qe2 = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
+
+        let product = QuantumEfficiency::product(&qe1, &qe2).unwrap();
+
+        // Product should be square of original
+        assert_eq!(product.at(400.0), 0.0); // Boundary
+        assert_eq!(product.at(700.0), 0.0); // Boundary
+        assert_relative_eq!(product.at(550.0), 0.64, epsilon = 1e-5); // 0.8 * 0.8
     }
 }
