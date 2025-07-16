@@ -28,6 +28,7 @@ use log::{debug, info, warn};
 use rayon::prelude::*;
 use simulator::algo::{
     icp::{icp_match_objects, Locatable2d},
+    misc::generate_wwt_overlay_url,
     MinMaxScan,
 };
 use simulator::hardware::sensor::models as sensor_models;
@@ -44,7 +45,7 @@ use simulator::image_proc::{
 };
 use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::scene::Scene;
-use simulator::shared_args::SharedSimulationArgs;
+use simulator::shared_args::{RangeArg, SharedSimulationArgs};
 use simulator::star_math::EquatorialRandomizer;
 use simulator::{star_math::field_diameter, SensorConfig};
 use starfield::catalogs::{StarCatalog, StarData};
@@ -52,13 +53,13 @@ use starfield::Equatorial;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use viz::histogram::{Histogram, HistogramConfig, Scale};
 
 /// Common arguments for experiments
 #[derive(Debug, Clone)]
 struct ExperimentCommonArgs {
-    exposure: Duration,
+    exposures: Vec<Duration>, // Multiple exposure durations
     coordinates: SolarAngularCoordinates,
     noise_multiple: f64,
     output_dir: String,
@@ -77,14 +78,23 @@ struct ExperimentParams {
     common_args: ExperimentCommonArgs,
 }
 
-/// Results from a single experiment run
+/// Results from a single exposure test
+#[derive(Debug, Clone)]
+struct ExposureResult {
+    detected_count: usize,
+    brightest_magnitude: f64,
+    faintest_magnitude: f64,
+    alignment_error: f64,
+}
+
+/// Results from all exposures for one experiment/sensor combination
 #[derive(Debug)]
 struct ExperimentResult {
     experiment_num: u32,
     sensor_name: String,
     coordinates: Equatorial,
-    detected_magnitudes: Vec<f64>,
-    alignment_error: f64,
+    exposure_results: HashMap<Duration, ExposureResult>, // Key is exposure duration
+    duration: Duration,                                  // Time taken for this experiment
 }
 
 /// Parse coordinates string in format "ra,dec" (degrees)
@@ -154,12 +164,18 @@ struct Args {
     #[arg(long)]
     match_pixel_sampling: Option<f64>,
 
+    /// Exposure duration range in milliseconds (start:stop:step format)
+    /// Example: --exposure_range_ms 10000:120000:10000 for 10s to 120s in 10s steps
+    /// Default: 100:500:100 (100ms to 500ms in 100ms steps)
+    #[arg(long, default_value = "50:1000:50")]
+    exposure_range_ms: RangeArg,
+
     /// Maximum iterations for ICP star matching algorithm
     #[arg(long, default_value_t = 20)]
     icp_max_iterations: usize,
 
     /// Convergence threshold for ICP star matching algorithm
-    #[arg(long, default_value_t = 0.25)]
+    #[arg(long, default_value_t = 0.05)]
     icp_convergence_threshold: f64,
 
     /// Star detection algorithm to use (dao, iraf, naive)
@@ -213,6 +229,7 @@ fn run_experiment<T: StarCatalog>(
     catalog: &T,
     max_fov: f64,
 ) -> Vec<ExperimentResult> {
+    let experiment_start = Instant::now();
     let output_path = Path::new(&params.common_args.output_dir);
 
     debug!("Running experiment {}...", params.experiment_num);
@@ -222,7 +239,7 @@ fn run_experiment<T: StarCatalog>(
         params.ra_dec.dec_degrees()
     );
     debug!("  Temperature/Wavelength: per-satellite configuration");
-    debug!("  Exposure: {:?}", params.common_args.exposure);
+    debug!("  Exposures: {:?}", params.common_args.exposures);
     debug!("  Noise Multiple: {}", params.common_args.noise_multiple);
     debug!("  Output Dir: {}", params.common_args.output_dir);
     debug!("  Save Images: {}", params.common_args.save_images);
@@ -244,134 +261,168 @@ fn run_experiment<T: StarCatalog>(
             satellite.sensor.name, satellite.temperature_c, satellite.wavelength_nm
         );
 
-        // Create scene with star projection for this satellite
-        let scene = Scene::from_catalog(
-            satellite.clone(),
-            stars.clone(),
-            params.ra_dec,
-            params.common_args.exposure,
-            params.common_args.coordinates,
-        );
+        let mut exposure_results = HashMap::new();
 
-        // Render the scene
-        let render_result = scene.render();
-
-        let prefix = format!(
-            "{}_{}_",
-            params.experiment_num,
-            satellite.sensor.name.replace(" ", "_"),
-        );
-
-        // Calculate background RMS using the new method
-        let background_rms = render_result.background_rms();
-        let airy_disk_pixels = satellite.airy_disk_fwhm_sampled().fwhm();
-        let detection_sigma = params.common_args.noise_multiple;
-
-        // Do the star detection
-        let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
-        let detected_stars = match detect_stars_unified(
-            render_result.quantized_image.view(),
-            params.common_args.star_finder,
-            &scaled_airy_disk,
-            background_rms,
-            detection_sigma,
-        ) {
-            Ok(stars) => stars
-                .into_iter()
-                .map(|star| {
-                    // Convert boxed StellarSource to StarDetection-like structure
-                    {
-                        let (x, y) = star.get_centroid();
-                        simulator::image_proc::StarDetection {
-                            id: 0,
-                            x,
-                            y,
-                            flux: star.flux(),
-                            m_xx: 1.0,
-                            m_yy: 1.0,
-                            m_xy: 0.0,
-                            aspect_ratio: 1.0,
-                            diameter: 2.0,
-                            is_valid: true,
-                        }
-                    }
-                })
-                .collect(),
-            Err(e) => {
-                log::warn!("Star detection failed: {}", e);
-                vec![] // Return empty vector instead of early return
-            }
-        };
-
-        // Save images if enabled
-        if params.common_args.save_images {
-            save_image_outputs(
-                &render_result,
-                &satellite.sensor,
-                &detected_stars,
-                output_path,
-                &prefix,
+        // Loop through each exposure duration
+        for exposure_duration in params.common_args.exposures.iter() {
+            debug!(
+                "  Testing exposure duration: {:.1}s",
+                exposure_duration.as_secs_f64()
             );
-        }
 
-        // Now we take our detected stars and match them against the sources
-        // Get projected stars from scene instead of render_result
-        let projected_stars: Vec<StarInFrame> = scene.stars.clone();
-        let result = match icp_match_objects::<StarDetection, StarInFrame>(
-            &detected_stars,
-            &projected_stars,
-            params.common_args.icp_max_iterations,
-            params.common_args.icp_convergence_threshold,
-        ) {
-            Ok((matches, icp_result)) => {
-                // Debug statistics output
-                debug_stats(&render_result, &matches).unwrap();
+            // Create scene with star projection for this satellite and exposure
+            let scene = Scene::from_catalog(
+                satellite.clone(),
+                stars.clone(),
+                params.ra_dec,
+                *exposure_duration,
+                params.common_args.coordinates,
+            );
 
-                let mut magnitudes: Vec<f64> =
-                    matches.iter().map(|(_, s)| s.star.magnitude).collect();
-                magnitudes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // Log rendering start
+            info!(
+                "Rendering: Exp {} | Sensor {} | RA {:.2}° Dec {:.2}° | Exposure {:.1}s",
+                params.experiment_num,
+                satellite.sensor.name,
+                params.ra_dec.ra_degrees(),
+                params.ra_dec.dec_degrees(),
+                exposure_duration.as_secs_f64()
+            );
 
-                info!(
-                    "Detected {} stars. Faintest magnitude: {:.2}",
-                    magnitudes.len(),
-                    magnitudes.last().unwrap_or(&f64::NAN)
-                );
+            // Render the scene
+            let render_result = scene.render();
 
-                debug!("ICP match results:");
-                debug!("\tMatched stars: {}", matches.len());
-                debug!("\tTranslation: {:?}", icp_result.translation);
-                debug!("\tRotation: {:?}", icp_result.rotation);
-                debug!("\tScale: {:?}", icp_result.rotation_quat);
+            let prefix = format!(
+                "{}_{}_{:.1}s_",
+                params.experiment_num,
+                satellite.sensor.name.replace(" ", "_"),
+                exposure_duration.as_secs_f64(),
+            );
 
-                let alignment_error = icp_result.translation.map(|disp| disp * disp).sum().sqrt();
+            // Calculate background RMS using the new method
+            let background_rms = render_result.background_rms();
+            let airy_disk_pixels = satellite.airy_disk_fwhm_sampled().fwhm();
+            let detection_sigma = params.common_args.noise_multiple;
 
-                ExperimentResult {
-                    experiment_num: params.experiment_num,
-                    sensor_name: satellite.sensor.name.clone(),
-                    coordinates: params.ra_dec,
-                    detected_magnitudes: magnitudes,
-                    alignment_error,
+            // Do the star detection
+            let scaled_airy_disk = ScaledAiryDisk::with_fwhm(airy_disk_pixels);
+            let detected_stars = match detect_stars_unified(
+                render_result.quantized_image.view(),
+                params.common_args.star_finder,
+                &scaled_airy_disk,
+                background_rms,
+                detection_sigma,
+            ) {
+                Ok(stars) => stars
+                    .into_iter()
+                    .map(|star| {
+                        // Convert boxed StellarSource to StarDetection-like structure
+                        {
+                            let (x, y) = star.get_centroid();
+                            simulator::image_proc::StarDetection {
+                                id: 0,
+                                x,
+                                y,
+                                flux: star.flux(),
+                                m_xx: 1.0,
+                                m_yy: 1.0,
+                                m_xy: 0.0,
+                                aspect_ratio: 1.0,
+                                diameter: 2.0,
+                                is_valid: true,
+                            }
+                        }
+                    })
+                    .collect(),
+                Err(e) => {
+                    log::warn!("Star detection failed: {}", e);
+                    vec![] // Return empty vector instead of early return
                 }
-            }
-            Err(e) => {
-                warn!(
-                    "ICP matching failed for satellite {}: {}",
-                    satellite.description(),
-                    e
+            };
+
+            // Save images if enabled
+            if params.common_args.save_images {
+                save_image_outputs(
+                    &render_result,
+                    &satellite.sensor,
+                    &detected_stars,
+                    output_path,
+                    &prefix,
                 );
-
-                ExperimentResult {
-                    experiment_num: params.experiment_num,
-                    sensor_name: satellite.sensor.name.clone(),
-                    coordinates: params.ra_dec,
-                    detected_magnitudes: Vec::new(),
-                    alignment_error: f64::NAN,
-                }
             }
-        };
 
-        results.push(result);
-    }
+            // Now we take our detected stars and match them against the sources
+            // Get projected stars from scene instead of render_result
+            let projected_stars: Vec<StarInFrame> = scene.stars.clone();
+            let result = match icp_match_objects::<StarDetection, StarInFrame>(
+                &detected_stars,
+                &projected_stars,
+                params.common_args.icp_max_iterations,
+                params.common_args.icp_convergence_threshold,
+            ) {
+                Ok((matches, icp_result)) => {
+                    // Debug statistics output
+                    debug_stats(&render_result, &matches).unwrap();
+
+                    let magnitudes: Vec<f64> =
+                        matches.iter().map(|(_, s)| s.star.magnitude).collect();
+
+                    let mag_scan = MinMaxScan::new(&magnitudes);
+                    let (brightest_mag, faintest_mag) =
+                        mag_scan.min_max().unwrap_or((f64::NAN, f64::NAN));
+
+                    info!(
+                        "Detected {} stars. Faintest magnitude: {:.2}",
+                        magnitudes.len(),
+                        faintest_mag
+                    );
+
+                    debug!("ICP match results:");
+                    debug!("\tMatched stars: {}", matches.len());
+                    debug!("\tTranslation: {:?}", icp_result.translation);
+                    debug!("\tRotation: {:?}", icp_result.rotation);
+                    debug!("\tScale: {:?}", icp_result.rotation_quat);
+
+                    let alignment_error =
+                        icp_result.translation.map(|disp| disp * disp).sum().sqrt();
+
+                    ExposureResult {
+                        detected_count: magnitudes.len(),
+                        brightest_magnitude: brightest_mag,
+                        faintest_magnitude: faintest_mag,
+                        alignment_error,
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "ICP matching failed for satellite {}: {}",
+                        satellite.description(),
+                        e
+                    );
+
+                    ExposureResult {
+                        detected_count: 0,
+                        brightest_magnitude: f64::NAN,
+                        faintest_magnitude: f64::NAN,
+                        alignment_error: f64::NAN,
+                    }
+                }
+            };
+
+            // Store result for this exposure duration
+            exposure_results.insert(*exposure_duration, result);
+        } // End exposure loop
+
+        // Create experiment result for this satellite with all exposure results
+        results.push(ExperimentResult {
+            experiment_num: params.experiment_num,
+            sensor_name: satellite.sensor.name.clone(),
+            coordinates: params.ra_dec,
+            exposure_results,
+            duration: experiment_start.elapsed(),
+        });
+    } // End satellite loop
+
     results
 }
 
@@ -390,6 +441,7 @@ fn write_results_to_csv(
     args: &Args,
     satellites: &[SatelliteConfig],
     all_experiments: &[ExperimentParams],
+    exposure_durations: &[f64],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let log_file_path = Path::new(&args.output_csv);
 
@@ -402,7 +454,15 @@ fn write_results_to_csv(
     // Write CSV header with simulation configuration
     writeln!(csv_file, "Sensor Shootout Experiment Results")?;
     writeln!(csv_file, "Configuration Parameters:")?;
-    writeln!(csv_file, "Exposure: {} seconds", args.shared.exposure)?;
+    writeln!(
+        csv_file,
+        "Exposures: [{}] seconds",
+        exposure_durations
+            .iter()
+            .map(|d| format!("{}", d))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )?;
     writeln!(csv_file, "Wavelength: per-satellite configuration")?;
     writeln!(csv_file, "Sensor Temperature: per-satellite configuration")?;
     writeln!(
@@ -474,7 +534,15 @@ fn write_results_to_csv(
         let read_noise = satellite
             .sensor
             .read_noise_estimator
-            .estimate(satellite.temperature_c, args.shared.exposure.0)
+            .estimate(
+                satellite.temperature_c,
+                Duration::from_secs_f64(
+                    exposure_durations
+                        .first()
+                        .copied()
+                        .unwrap_or(args.shared.exposure.0.as_secs_f64()),
+                ),
+            )
             .unwrap_or(f64::NAN);
         writeln!(
             csv_file,
@@ -492,29 +560,188 @@ fn write_results_to_csv(
     }
     writeln!(csv_file)?;
 
+    // Get sorted list of exposure durations for consistent column ordering
+    let mut exposure_keys: Vec<Duration> = if !results.is_empty() {
+        results[0].exposure_results.keys().cloned().collect()
+    } else {
+        vec![]
+    };
+    exposure_keys.sort();
+
+    // Group results by experiment number
+    let mut grouped_results: std::collections::BTreeMap<u32, Vec<&ExperimentResult>> =
+        std::collections::BTreeMap::new();
+    for result in results {
+        grouped_results
+            .entry(result.experiment_num)
+            .or_insert_with(Vec::new)
+            .push(result);
+    }
+
     // Write CSV data header
     writeln!(csv_file, "Experiment Data:")?;
-    writeln!(csv_file, "experiment_num,sensor_name,ra_degrees,dec_degrees,detected_count,alignment_error_pix,detected_magnitudes")?;
 
-    // Write experiment results
-    for result in results {
-        let log_entry = format!(
-            "{}, {}, {:.2}, {:.2}, {}, {:.4}, {}\n",
-            result.experiment_num,
-            result.sensor_name,
-            result.coordinates.ra_degrees(),
-            result.coordinates.dec_degrees(),
-            result.detected_magnitudes.len(),
-            result.alignment_error,
-            result
-                .detected_magnitudes
+    // Row 1: Basic columns + Sensor names (spanning multiple columns)
+    write!(csv_file, "Experiment,RA,Dec,Duration")?;
+    for satellite in satellites {
+        // Each sensor spans multiple columns (4 groups of exposures + 1 for URL)
+        let num_cols = exposure_keys.len() * 4 + 1;
+        write!(csv_file, ",{}", satellite.sensor.name)?;
+        // Add empty cells for the remaining columns this sensor spans
+        for _ in 1..num_cols {
+            write!(csv_file, ",")?;
+        }
+    }
+    writeln!(csv_file)?;
+
+    // Row 2: Basic columns + Parameter types (grouped by parameter)
+    write!(csv_file, "Number,Degrees,Degrees,Seconds")?;
+    for _satellite in satellites {
+        // First write Star Count header spanning all its exposure columns
+        write!(csv_file, ",Star Count")?;
+        for _ in 1..exposure_keys.len() {
+            write!(csv_file, ",")?; // Empty cells for remaining star count exposures
+        }
+        // Then write Brightest Mag header spanning all its exposure columns
+        write!(csv_file, ",Brightest Mag")?;
+        for _ in 1..exposure_keys.len() {
+            write!(csv_file, ",")?; // Empty cells for remaining brightest mag exposures
+        }
+        // Then write Faintest Mag header spanning all its exposure columns
+        write!(csv_file, ",Faintest Mag")?;
+        for _ in 1..exposure_keys.len() {
+            write!(csv_file, ",")?; // Empty cells for remaining faintest mag exposures
+        }
+        // Then write Error header spanning all its exposure columns
+        write!(csv_file, ",Error (px)")?;
+        for _ in 1..exposure_keys.len() {
+            write!(csv_file, ",")?; // Empty cells for remaining error exposures
+        }
+        // Finally WWT link (single column)
+        write!(csv_file, ",WWT Link")?;
+    }
+    writeln!(csv_file)?;
+
+    // Row 3: Basic columns + Exposure times
+    write!(csv_file, ",,,")?; // Empty for experiment_num, ra, dec, duration
+    for _satellite in satellites {
+        // Exposure times for star counts
+        for exposure in &exposure_keys {
+            let exposure_ms = exposure.as_secs_f64() * 1000.0;
+            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+        }
+        // Exposure times for brightest mags
+        for exposure in &exposure_keys {
+            let exposure_ms = exposure.as_secs_f64() * 1000.0;
+            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+        }
+        // Exposure times for faintest mags
+        for exposure in &exposure_keys {
+            let exposure_ms = exposure.as_secs_f64() * 1000.0;
+            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+        }
+        // Exposure times for errors
+        for exposure in &exposure_keys {
+            let exposure_ms = exposure.as_secs_f64() * 1000.0;
+            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+        }
+        write!(csv_file, ",")?; // Empty for WWT URL column
+    }
+    writeln!(csv_file)?;
+
+    // Write experiment results grouped by experiment number
+    for (exp_num, exp_results) in grouped_results {
+        // Get coordinates from first result (they're all the same for an experiment)
+        let coordinates = &exp_results[0].coordinates;
+        // Get duration from first result (all sensors in same experiment have same duration)
+        let duration_secs = exp_results[0].duration.as_secs_f64();
+
+        write!(
+            csv_file,
+            "{},{:.2},{:.2},{:.3}",
+            exp_num,
+            coordinates.ra_degrees(),
+            coordinates.dec_degrees(),
+            duration_secs
+        )?;
+
+        // Write results for each sensor (grouped by parameter type)
+        for satellite in satellites {
+            // Find the result for this sensor
+            let sensor_result = exp_results
                 .iter()
-                .map(|m| format!("{:.2}", m))
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
+                .find(|r| r.sensor_name == satellite.sensor.name);
 
-        csv_file.write_all(log_entry.as_bytes())?;
+            // Write all star counts first
+            for exposure in &exposure_keys {
+                if let Some(result) = sensor_result {
+                    if let Some(exp_result) = result.exposure_results.get(exposure) {
+                        write!(csv_file, ",{}", exp_result.detected_count)?;
+                    } else {
+                        write!(csv_file, ",")?;
+                    }
+                } else {
+                    write!(csv_file, ",")?;
+                }
+            }
+
+            // Write all brightest magnitudes
+            for exposure in &exposure_keys {
+                if let Some(result) = sensor_result {
+                    if let Some(exp_result) = result.exposure_results.get(exposure) {
+                        write!(csv_file, ",{:.2}", exp_result.brightest_magnitude)?;
+                    } else {
+                        write!(csv_file, ",")?;
+                    }
+                } else {
+                    write!(csv_file, ",")?;
+                }
+            }
+
+            // Write all faintest magnitudes
+            for exposure in &exposure_keys {
+                if let Some(result) = sensor_result {
+                    if let Some(exp_result) = result.exposure_results.get(exposure) {
+                        write!(csv_file, ",{:.2}", exp_result.faintest_magnitude)?;
+                    } else {
+                        write!(csv_file, ",")?;
+                    }
+                } else {
+                    write!(csv_file, ",")?;
+                }
+            }
+
+            // Write all errors
+            for exposure in &exposure_keys {
+                if let Some(result) = sensor_result {
+                    if let Some(exp_result) = result.exposure_results.get(exposure) {
+                        write!(csv_file, ",{:.4}", exp_result.alignment_error)?;
+                    } else {
+                        write!(csv_file, ",")?;
+                    }
+                } else {
+                    write!(csv_file, ",")?;
+                }
+            }
+
+            // Generate and write WWT URL for this sensor
+            let f_number = satellite.telescope.f_number();
+            let overlay_text = format!("{} f/{:.1}", satellite.sensor.name, f_number);
+
+            let wwt_url = generate_wwt_overlay_url(
+                &format!("Exp {} - {}", exp_num, satellite.sensor.name),
+                coordinates,
+                satellite,
+                180.0, // Rotate 180 degrees to flip right-side up
+                Some(&overlay_text),
+                "FFFF00",   // Yellow text
+                "00000080", // Semi-transparent black background
+            )
+            .unwrap_or_else(|_| "Error generating URL".to_string());
+
+            write!(csv_file, ",{}", wwt_url)?;
+        }
+        writeln!(csv_file)?;
     }
 
     Ok(())
@@ -527,6 +754,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse command line arguments
     let args = Args::parse();
+
+    // Start wallclock timer
+    let wallclock_start = Instant::now();
+
+    // Parse exposure durations from range in milliseconds
+    let exposure_durations_vec = args.exposure_range_ms.to_duration_vec_ms();
+    let exposure_durations: Vec<f64> = exposure_durations_vec
+        .iter()
+        .map(|d| d.as_secs_f64())
+        .collect();
+    info!(
+        "Using {} exposure durations: {:?}s",
+        exposure_durations.len(),
+        exposure_durations
+    );
 
     let all_sensors = &*sensor_models::ALL_SENSORS;
 
@@ -585,7 +827,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create common experiment arguments
     let common_args = ExperimentCommonArgs {
-        exposure: args.shared.exposure.0,
+        exposures: exposure_durations_vec.clone(),
         coordinates: args.shared.coordinates,
         noise_multiple: args.shared.noise_multiple,
         output_dir: args.output_dir.clone(),
@@ -678,7 +920,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing results...");
 
     // Write results to CSV file
-    write_results_to_csv(&flattened_results, &args, &satellites, &all_experiments)?;
+    write_results_to_csv(
+        &flattened_results,
+        &args,
+        &satellites,
+        &all_experiments,
+        &exposure_durations,
+    )?;
+
+    // Calculate and report timing statistics
+    let wallclock_duration = wallclock_start.elapsed();
+
+    // Calculate total compute time (sum of all experiment durations)
+    let total_compute_time: Duration = flattened_results.iter().map(|r| r.duration).sum();
+
+    // Calculate average experiment time
+    let avg_experiment_time = if flattened_results.is_empty() {
+        Duration::from_secs(0)
+    } else {
+        total_compute_time / flattened_results.len() as u32
+    };
+
+    // Print timing report
+    info!("==================== TIMING REPORT ====================");
+    info!("Total experiments run: {}", all_experiments.len());
+    info!("Total sensor configurations: {}", satellites.len());
+    info!(
+        "Total experiment-sensor combinations: {}",
+        flattened_results.len()
+    );
+    info!(
+        "Execution mode: {}",
+        if args.serial { "Serial" } else { "Parallel" }
+    );
+    info!("");
+    info!("Wallclock time: {:.2}s", wallclock_duration.as_secs_f64());
+    info!(
+        "Total compute time: {:.2}s",
+        total_compute_time.as_secs_f64()
+    );
+    info!(
+        "Average time per experiment: {:.2}s",
+        avg_experiment_time.as_secs_f64()
+    );
+
+    if !args.serial {
+        let speedup = total_compute_time.as_secs_f64() / wallclock_duration.as_secs_f64();
+        info!("Parallel speedup: {:.2}x", speedup);
+        info!(
+            "Effective CPU utilization: {:.1}%",
+            speedup * 100.0 / num_cpus::get() as f64
+        );
+    }
+    info!("======================================================");
 
     Ok(())
 }

@@ -5,11 +5,17 @@
 //!
 //! - **Linear interpolation**: Fast 1D interpolation with error handling
 //! - **Numerical utilities**: Common mathematical operations for scientific computing
+//! - **WWT utilities**: Functions for generating WorldWide Telescope overlay URLs
 //!
 //! These functions are designed for performance and robustness in scientific
 //! applications, with comprehensive error handling and input validation.
 
+use crate::hardware::SatelliteConfig;
+use crate::star_math::field_diameter;
+use starfield::Equatorial;
+use std::f64::consts::PI;
 use thiserror::Error;
+use url::Url;
 
 /// Errors that can occur during interpolation operations.
 ///
@@ -182,5 +188,179 @@ mod tests {
             interp(1.5, &xs, &ys),
             Err(InterpError::UnsortedData)
         ));
+    }
+}
+
+/// Converts Right Ascension from Hours, Minutes, Seconds to Decimal Degrees.
+/// RA (Hours) * 15 = RA (Degrees)
+pub fn ra_hms_to_deg(hours: f64, minutes: f64, seconds: f64) -> f64 {
+    (hours + minutes / 60.0 + seconds / 3600.0) * 15.0
+}
+
+/// Converts Declination from Degrees, Minutes, Seconds to Decimal Degrees.
+/// Handles negative declination correctly.
+pub fn dec_dms_to_deg(degrees: f64, minutes: f64, seconds: f64) -> f64 {
+    let sign = if degrees < 0.0 { -1.0 } else { 1.0 };
+    (degrees.abs() + minutes / 60.0 + seconds / 3600.0) * sign
+}
+
+/// Generates a WorldWide Telescope ShowImage.aspx URL with a transparent overlay.
+///
+/// # Arguments
+/// * `object_name` - A descriptive name for the target.
+/// * `coordinates` - Equatorial coordinates (RA/Dec) of the center of the box.
+/// * `satellite` - Satellite configuration containing telescope and sensor parameters.
+/// * `rotation_deg` - Rotation of the image on the sky in degrees (0 = North up, East left).
+/// * `text` - Optional text to display in the center of the overlay.
+/// * `text_color` - Hex color code for the text (e.g., "FFFFFF" for white).
+/// * `background_color` - Hex color code for the background (e.g., "00000000" for transparent).
+///
+/// # Returns
+/// A `Result` containing the generated URL as a `String` or an `url::ParseError`.
+pub fn generate_wwt_overlay_url(
+    object_name: &str,
+    coordinates: &Equatorial,
+    satellite: &SatelliteConfig,
+    rotation_deg: f64,
+    text: Option<&str>,
+    text_color: &str,
+    background_color: &str,
+) -> Result<String, url::ParseError> {
+    // Calculate field of view from satellite configuration
+    let fov_deg = field_diameter(&satellite.telescope, &satellite.sensor);
+    let fov_rad = fov_deg * PI / 180.0;
+
+    // Use sensor dimensions for image shape
+    let image_pixel_width = satellite.sensor.width_px;
+    let image_pixel_height = satellite.sensor.height_px;
+
+    // Ensure minimum dimensions for placehold.co
+    let image_pixel_width = image_pixel_width.max(1);
+    let image_pixel_height = image_pixel_height.max(1);
+
+    // Generate Placehold.co URL for the overlay image
+    let display_text = text.unwrap_or("");
+    let placehold_url_str = format!(
+        "https://placehold.co/{}x{}/{}/{}?text={}",
+        image_pixel_width,
+        image_pixel_height,
+        background_color,
+        text_color,
+        urlencoding::encode(display_text)
+    );
+    let placehold_url = Url::parse(&placehold_url_str)?;
+
+    // Calculate WWT 'scale' parameter (width of image in degrees)
+    let scale_deg = fov_rad * (180.0 / PI);
+
+    // Calculate center pixel for the image (assuming image is centered)
+    let center_x_px = image_pixel_width as f64 / 2.0;
+    let center_y_px = image_pixel_height as f64 / 2.0;
+
+    // Construct the WWT ShowImage.aspx URL
+    let mut wwt_url = Url::parse("http://www.worldwidetelescope.org/wwtweb/ShowImage.aspx")?;
+    wwt_url
+        .query_pairs_mut()
+        .append_pair("reverseparity", "False")
+        .append_pair("scale", &scale_deg.to_string())
+        .append_pair("name", object_name)
+        .append_pair("imageurl", placehold_url.as_str())
+        .append_pair("credits", "Generated via Rust")
+        .append_pair("creditsUrl", "https://github.com/meter-sim")
+        .append_pair("ra", &coordinates.ra_degrees().to_string())
+        .append_pair("dec", &coordinates.dec_degrees().to_string())
+        .append_pair("x", &center_x_px.to_string())
+        .append_pair("y", &center_y_px.to_string())
+        .append_pair("rotation", &rotation_deg.to_string());
+
+    Ok(wwt_url.to_string())
+}
+
+#[cfg(test)]
+mod wwt_tests {
+    use super::*;
+    use crate::hardware::{sensor::models::GSENSE6510BSI, telescope::models::DEMO_50CM};
+
+    #[test]
+    fn test_ra_hms_to_deg() {
+        // Test Andromeda Galaxy coordinates: 0h 42m 44.3s
+        let ra_deg = ra_hms_to_deg(0.0, 42.0, 44.3);
+        assert!((ra_deg - 10.6845833).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_dec_dms_to_deg() {
+        // Test positive declination: 41° 16' 9"
+        let dec_deg = dec_dms_to_deg(41.0, 16.0, 9.0);
+        assert!((dec_deg - 41.2691667).abs() < 0.0001);
+
+        // Test negative declination: -23° 30' 0"
+        let dec_deg_neg = dec_dms_to_deg(-23.0, 30.0, 0.0);
+        assert!((dec_deg_neg - (-23.5)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_generate_wwt_overlay_url() {
+        // Test basic overlay without text
+        let coordinates = Equatorial::from_degrees(10.6845833, 41.2691667); // Andromeda
+        let satellite = SatelliteConfig::new(
+            DEMO_50CM.clone(),
+            GSENSE6510BSI.clone(),
+            -10.0, // temperature
+            550.0, // wavelength
+        );
+
+        let url = generate_wwt_overlay_url(
+            "Test Overlay",
+            &coordinates,
+            &satellite,
+            30.0, // 30 degree rotation
+            None,
+            "FFFFFF",
+            "00000000",
+        )
+        .unwrap();
+
+        assert!(url.contains("worldwidetelescope.org"));
+        assert!(url.contains("ra=10.6845833"));
+        assert!(url.contains("dec=41.2691667"));
+        assert!(url.contains("rotation=30"));
+        assert!(url.contains("placehold.co"));
+    }
+
+    #[test]
+    fn test_generate_wwt_overlay_url_with_text() {
+        // Test overlay with text
+        let coordinates = Equatorial::from_degrees(56.871, 24.105); // Pleiades
+        let satellite = SatelliteConfig::new(
+            DEMO_50CM.clone(),
+            GSENSE6510BSI.clone(),
+            -10.0, // temperature
+            550.0, // wavelength
+        );
+
+        let url = generate_wwt_overlay_url(
+            "Pleiades Cluster",
+            &coordinates,
+            &satellite,
+            0.0, // No rotation
+            Some("M45"),
+            "FFFF00",   // Yellow text
+            "00000080", // Semi-transparent black background
+        )
+        .unwrap();
+
+        // Print URL for debugging
+        println!("Generated URL: {}", url);
+
+        // Check that basic WWT parameters are present
+        assert!(url.contains("worldwidetelescope.org"));
+        assert!(url.contains("placehold.co"));
+
+        // Check colors are in the placehold URL (URL encoded)
+        assert!(url.contains("00000080") && url.contains("FFFF00")); // Both colors present
+
+        // Check that the text parameter is present (URL encoded as %3D)
+        assert!(url.contains("M45"));
     }
 }

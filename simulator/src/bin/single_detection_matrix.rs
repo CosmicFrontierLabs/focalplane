@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
 
 /// Command line arguments for sensor floor estimation
 #[derive(Parser, Debug)]
@@ -46,10 +45,6 @@ struct Args {
     /// Domain size for test images (width and height in pixels)
     #[arg(long, default_value_t = 128)]
     domain: usize,
-
-    /// Test multiple exposure durations instead of just the shared exposure setting
-    #[arg(long, default_value_t = true)]
-    test_exposures: bool,
 
     /// PSF disk size range in Airy disk FWHM units (format: start:stop:step)
     #[arg(long, default_value = "1.5:2.1:0.1")]
@@ -106,18 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mag_start, mag_stop, mag_step) = args.mags.as_tuple();
     let mags = Array1::range(mag_start, mag_stop, mag_step);
 
-    // Exposure durations to test
-    let exposures = if args.test_exposures {
-        // Generate exposure durations from CLI range (in milliseconds)
-        let (exp_start, exp_stop, exp_step) = args.exposures.as_tuple();
-        let exp_range = Array1::range(exp_start, exp_stop, exp_step);
-        exp_range
-            .iter()
-            .map(|&ms| Duration::from_millis(ms as u64))
-            .collect()
-    } else {
-        vec![args.shared.exposure.0]
-    };
+    // Exposure durations to test from CLI range (in milliseconds)
+    let exposures = args.exposures.to_duration_vec_ms();
 
     println!("Setting up experiments...");
 

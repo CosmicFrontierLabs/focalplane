@@ -605,6 +605,23 @@ impl RangeArg {
         self.2
     }
 
+    /// Parse RangeArg of milliseconds into Vec<Duration>
+    ///
+    /// Converts a range specified in milliseconds to a vector of Duration objects.
+    /// Useful for exposure time sweeps and other time-based parameter scans.
+    ///
+    /// # Returns
+    /// Vector of Duration objects from start to stop (inclusive) by step
+    pub fn to_duration_vec_ms(&self) -> Vec<Duration> {
+        let mut durations = Vec::new();
+        let mut current_ms = self.0;
+        while current_ms <= self.1 {
+            durations.push(Duration::from_millis(current_ms as u64));
+            current_ms += self.2;
+        }
+        durations
+    }
+
     /// Convert to raw tuple for compatibility with legacy APIs.
     ///
     /// # Returns

@@ -28,6 +28,8 @@ clap = { version = "4.5", features = [
 ] } # Command line argument parsing
 log = "0.4"                   # Logging facade
 env_logger = "0.11"           # Environment-based logger
+url = "2.5"                   # URL parsing and manipulation
+urlencoding = "2.1"           # URL encoding utilities
 test_helpers = { path = "../test_helpers" }
 viz = { path = "../viz" }
 
@@ -35,6 +37,7 @@ rand = "0.8"
 rand_core = "0.6"
 rand_distr = "0.4"
 indicatif = "0.17"                                           # Progress bars
+num_cpus = "1.16"                                            # CPU count detection
 
 plotters = "0.3"                                             # Plotting library
 rustfft = "6.3.0"
