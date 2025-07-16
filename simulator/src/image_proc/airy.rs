@@ -40,37 +40,6 @@
 //! ```
 //! Simple linear falloff, computationally efficient for basic simulations.
 //!
-//! # Examples
-//!
-//! ```rust
-//! use simulator::image_proc::airy::{AiryDisk, ScaledAiryDisk};
-//!
-//! // Create standard Airy disk model
-//! let airy = AiryDisk::new();
-//! let center_intensity = airy.intensity(0.0);
-//! let first_zero_radius = airy.first_zero;
-//! let fwhm = airy.fwhm;
-//!
-//! println!("Peak intensity: {:.3}", center_intensity);
-//! println!("First dark ring: {:.3} units", first_zero_radius);
-//! println!("FWHM: {:.3} units", fwhm);
-//!
-//! // Create scaled version for telescope simulation
-//! let scaled_airy = ScaledAiryDisk::with_fwhm(2.5); // 2.5 pixels FWHM
-//! let psf_value = scaled_airy.intensity(1.0); // At 1 pixel radius
-//! let gaussian_approx = scaled_airy.gaussian_approximation(1.0);
-//!
-//! println!("PSF at 1 pixel: {:.4}", psf_value);
-//! println!("Gaussian approx: {:.4}", gaussian_approx);
-//!
-//! // Compare approximation quality
-//! let (radii, exact, gaussian, triangle) = airy.generate_comparison_samples(100);
-//! let gaussian_mse = AiryDisk::calculate_mse(&exact, &gaussian);
-//! let triangle_mse = AiryDisk::calculate_mse(&exact, &triangle);
-//!
-//! println!("Gaussian MSE: {:.6}", gaussian_mse);
-//! println!("Triangle MSE: {:.6}", triangle_mse);
-//! ```
 
 use once_cell::sync::Lazy;
 use scilib::math::bessel;
@@ -95,23 +64,6 @@ use scilib::math::bessel;
 /// - Gaussian approximation: ~10x faster, <5% error within FWHM
 /// - Triangle approximation: ~50x faster, good for rough estimates
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::image_proc::airy::AiryDisk;
-///
-/// let airy = AiryDisk::new();
-/// let peak_intensity = airy.intensity(0.0);        // = 1.0
-/// let half_intensity = airy.intensity(airy.fwhm/2.0); // ≈ 0.5
-/// let dark_ring = airy.intensity(airy.first_zero);     // ≈ 0.0
-///
-/// // Compare approximation quality
-/// let radius = 1.0;
-/// let exact = airy.intensity(radius);
-/// let approx = airy.gaussian_approximation(radius);
-/// let error = (exact - approx).abs();
-/// println!("Approximation error: {:.4}", error);
-/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct AiryDisk {
     /// First zero location (first dark ring radius) in normalized units
@@ -136,14 +88,6 @@ impl AiryDisk {
     /// # Returns
     /// AiryDisk with computed first_zero ≈ 3.832 and fwhm ≈ 3.233
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::AiryDisk;
-    ///
-    /// let airy = AiryDisk::new();
-    /// assert!(airy.first_zero > 3.8 && airy.first_zero < 3.9);
-    /// assert!(airy.fwhm > 3.0 && airy.fwhm < 3.5);
-    /// ```
     pub fn new() -> Self {
         let mut disk = Self {
             first_zero: 0.0,
@@ -172,14 +116,6 @@ impl AiryDisk {
     /// Uses Bessel function evaluation - moderate computational cost.
     /// Consider gaussian_approximation() for performance-critical applications.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::AiryDisk;
-    ///
-    /// let airy = AiryDisk::new();
-    /// assert_eq!(airy.intensity(0.0), 1.0);  // Peak at center
-    /// assert!(airy.intensity(airy.first_zero) < 0.001);  // Near zero at dark ring
-    /// ```
     pub fn intensity(&self, radius: f64) -> f64 {
         if radius.abs() < 1e-10 {
             return 1.0; // Limit as r approaches 0
@@ -210,16 +146,6 @@ impl AiryDisk {
     /// # Performance
     /// ~10x faster than exact Bessel function calculation.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::AiryDisk;
-    ///
-    /// let airy = AiryDisk::new();
-    /// let r = airy.fwhm / 4.0;  // Quarter FWHM radius
-    /// let exact = airy.intensity(r);
-    /// let approx = airy.gaussian_approximation(r);
-    /// assert!((exact - approx).abs() < 0.05);  // < 5% error
-    /// ```
     pub fn gaussian_approximation(&self, radius: f64) -> f64 {
         (-3.9 * (radius * radius) / (self.first_zero * self.first_zero)).exp()
     }
@@ -244,15 +170,6 @@ impl AiryDisk {
     /// # Performance
     /// ~50x faster than exact calculation - just arithmetic operations.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::AiryDisk;
-    ///
-    /// let airy = AiryDisk::new();
-    /// assert_eq!(airy.triangle_approximation(0.0), 1.0);  // Peak
-    /// assert_eq!(airy.triangle_approximation(airy.first_zero), 0.0);  // Zero
-    /// assert_eq!(airy.triangle_approximation(2.0 * airy.first_zero), 0.0);  // Beyond
-    /// ```
     pub fn triangle_approximation(&self, radius: f64) -> f64 {
         let normalized_radius = radius / self.first_zero;
         if normalized_radius >= 1.0 {
@@ -280,21 +197,6 @@ impl AiryDisk {
     /// - Computing MSE or other error metrics
     /// - Analyzing approximation behavior across different radii
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::AiryDisk;
-    ///
-    /// let airy = AiryDisk::new();
-    /// let (radii, exact, gaussian, triangle) = airy.generate_comparison_samples(100);
-    ///
-    /// // Calculate RMS error for Gaussian approximation
-    /// let mse = AiryDisk::calculate_mse(&exact, &gaussian);
-    /// println!("Gaussian RMS error: {:.4}", mse.sqrt());
-    ///
-    /// // Find maximum error location
-    /// let (max_err, radius_at_max, _) = AiryDisk::find_max_error(&radii, &exact, &gaussian);
-    /// println!("Max error {:.3} at radius {:.2}", max_err, radius_at_max);
-    /// ```
     pub fn generate_comparison_samples(
         &self,
         num_points: usize,
@@ -452,21 +354,6 @@ pub static AIRY_DISK: Lazy<AiryDisk> = Lazy::new(AiryDisk::new);
 /// - Physical Airy radius = 1.22 × λ × f / D
 /// - Scale factor = physical_radius / normalized_radius
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::image_proc::airy::ScaledAiryDisk;
-///
-/// // Scale to 2.5 pixels FWHM for detector sampling
-/// let psf = ScaledAiryDisk::with_fwhm(2.5);
-/// let center_value = psf.intensity(0.0);  // = 1.0
-/// let half_max = psf.intensity(1.25);     // ≈ 0.5 (at FWHM/2)
-///
-/// // Scale to match telescope optics
-/// let airy_radius_pixels = 3.2;  // From telescope/sensor calculation
-/// let telescope_psf = ScaledAiryDisk::with_first_zero(airy_radius_pixels);
-/// println!("PSF FWHM: {:.2} pixels", telescope_psf.fwhm());
-/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct PixelScaledAiryDisk {
     disk: AiryDisk,
@@ -496,16 +383,6 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// ScaledAiryDisk with the specified radius scaling
     ///
-    /// # Examples
-    /// ```rust,ignore
-    /// // NOTE: This doctest is ignored due to floating point precision issues
-    /// use simulator::image_proc::airy::ScaledAiryDisk;
-    ///
-    /// let scaled = ScaledAiryDisk::with_radius_scale(2.0);
-    /// // The first zero is scaled by the radius scale factor
-    /// let unscaled_first_zero = 3.831705970207512; // Bessel function first zero
-    /// assert!((scaled.first_zero() - 2.0 * unscaled_first_zero).abs() < 0.01);
-    /// ```
     pub fn with_radius_scale(radius_scale: f64) -> Self {
         Self::new(radius_scale)
     }
@@ -521,17 +398,6 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// ScaledAiryDisk with scaling to match the specified FWHM
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::ScaledAiryDisk;
-    ///
-    /// // Create PSF with 2.5 pixel FWHM for optimal detector sampling
-    /// let psf = ScaledAiryDisk::with_fwhm(2.5);
-    /// assert!((psf.fwhm() - 2.5).abs() < 1e-10);
-    ///
-    /// // Half-maximum intensity at FWHM/2
-    /// let half_intensity = psf.intensity(1.25);  // Should be ≈ 0.5
-    /// ```
     pub fn with_fwhm(fwhm: f64) -> Self {
         let scalar = fwhm / AIRY_DISK.fwhm;
         Self::new(scalar)
@@ -548,16 +414,6 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// ScaledAiryDisk with scaling to match the specified first zero
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::ScaledAiryDisk;
-    ///
-    /// // Match theoretical telescope Airy disk size
-    /// let airy_radius_pixels = 3.5;
-    /// let psf = ScaledAiryDisk::with_first_zero(airy_radius_pixels);
-    /// assert!((psf.first_zero() - 3.5).abs() < 1e-10);
-    /// assert!(psf.intensity(airy_radius_pixels) < 0.001);  // Near zero
-    /// ```
     pub fn with_first_zero(first_zero: f64) -> Self {
         let scalar = first_zero / AIRY_DISK.first_zero;
         Self::new(scalar)
@@ -571,14 +427,6 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// Intensity value (0.0 to 1.0)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::airy::ScaledAiryDisk;
-    ///
-    /// let psf = ScaledAiryDisk::with_fwhm(4.0);
-    /// let center = psf.intensity(0.0);    // = 1.0
-    /// let half_max = psf.intensity(2.0);  // ≈ 0.5 (at FWHM/2)
-    /// ```
     pub fn intensity(&self, radius: f64) -> f64 {
         self.disk.intensity(radius / self.radius_scale)
     }

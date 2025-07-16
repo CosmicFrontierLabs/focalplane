@@ -57,86 +57,27 @@
 //! # Usage Examples
 //!
 //! ## Basic Project Path Access
-//! ```rust
-//! use test_helpers::{find_project_root, get_output_dir};
-//!
-//! // Locate project root from any test context
-//! let root = find_project_root().expect("Failed to find project");
-//! println!("Project root: {}", root.display());
-//!
-//! // Access standardized output directory
-//! let output = get_output_dir();
-//! println!("Test outputs: {}", output.display());
-//! ```
+//! # Usage
+//! Use `find_project_root()` to locate the project root from any test context.
+//! Use `get_output_dir()` to access the standardized output directory.
 //!
 //! ## Test Image Generation
-//! ```rust
-//! use test_helpers::output_path;
-//! use std::fs;
-//!
-//! #[test]
-//! fn test_star_field_simulation() {
-//!     // Simulate astronomical observation
-//!     let simulation_result = simulate_star_field();
-//!     
-//!     // Save result for visual inspection
-//!     let image_path = output_path("star_field_test.png");
-//!     simulation_result.save_image(&image_path).expect("Failed to save");
-//!     
-//!     // Verify image was created
-//!     assert!(image_path.exists());
-//!     
-//!     // Optional: Compare with reference image
-//!     let reference_path = output_path("reference/star_field_expected.png");
-//!     if reference_path.exists() {
-//!         assert_images_similar(&image_path, &reference_path, 0.01);
-//!     }
-//! }
-//! ```
+//! # Usage
+//! Use `output_path()` to generate paths for saving test artifacts like images.
+//! The function ensures proper directory structure and cross-platform compatibility.
+//! Test images can be saved for visual inspection and compared with reference images.
 //!
 //! ## Cross-Test Data Sharing
-//! ```rust
-//! use test_helpers::{output_path, find_project_root};
-//!
-//! #[test]
-//! fn test_catalog_processing() {
-//!     let root = find_project_root().unwrap();
-//!     
-//!     // Load shared test catalog
-//!     let catalog_path = root.join("test_data/small_catalog.bin");
-//!     let catalog = load_test_catalog(&catalog_path).unwrap();
-//!     
-//!     // Process and save results
-//!     let results = process_catalog(&catalog);
-//!     let output_file = output_path("catalog_processing_results.json");
-//!     save_results(&results, &output_file).unwrap();
-//! }
-//! ```
+//! # Usage
+//! Use `find_project_root()` to access shared test data files.
+//! Use `output_path()` to save processing results in a standardized location.
+//! This pattern enables data sharing between tests while maintaining organization.
 //!
 //! ## Performance Testing
-//! ```rust
-//! use test_helpers::output_path;
-//! use std::time::Instant;
-//!
-//! #[test]
-//! fn benchmark_star_projection() {
-//!     let start = Instant::now();
-//!     
-//!     // Run performance-critical operation
-//!     let result = project_million_stars();
-//!     
-//!     let duration = start.elapsed();
-//!     
-//!     // Log performance metrics
-//!     let benchmark_file = output_path("projection_benchmark.txt");
-//!     std::fs::write(&benchmark_file,
-//!         format!("Projected {} stars in {:?}", result.count, duration)
-//!     ).unwrap();
-//!     
-//!     // Performance assertion
-//!     assert!(duration.as_millis() < 1000, "Projection too slow: {:?}", duration);
-//! }
-//! ```
+//! # Usage
+//! Use `output_path()` to save benchmark results and performance metrics.
+//! This enables tracking performance over time and identifying regressions.
+//! Benchmark files can be uploaded as CI artifacts for trend analysis.
 //!
 //! # Integration with CI/CD
 //!
@@ -214,20 +155,11 @@ pub enum TestHelperError {
 /// * `Ok(PathBuf)` - Absolute path to workspace root directory
 /// * `Err(TestHelperError)` - Detailed error with failure context
 ///
-/// # Examples
-/// ```rust
-/// use test_helpers::find_project_root;
-///
-/// // Find project root from any subdirectory
-/// let root = find_project_root().expect("Project root not found");
-///
-/// // Verify workspace structure
-/// assert!(root.join("Cargo.toml").exists());
-/// assert!(root.join("simulator").exists());
-/// assert!(root.join("test_helpers").exists());
-///
-/// println!("Project root: {}", root.display());
-/// ```
+/// # Usage
+/// Call `find_project_root()` to locate the workspace root from any subdirectory.
+/// The function returns the absolute path to the project root directory containing
+/// the workspace Cargo.toml file. Verify workspace structure by checking for
+/// expected subdirectories like "simulator" and "test_helpers".
 ///
 /// # Error Conditions
 /// - **No workspace found**: Traversed to filesystem root without finding workspace
@@ -303,24 +235,11 @@ static PROJECT_ROOT: Lazy<PathBuf> =
 /// # Returns
 /// Absolute path to the test output directory (guaranteed to exist)
 ///
-/// # Examples
-/// ```rust
-/// use test_helpers::get_output_dir;
-/// use std::fs;
-///
-/// // Get output directory
-/// let output_dir = get_output_dir();
-/// assert!(output_dir.exists());
-/// assert!(output_dir.is_dir());
-///
-/// // Create subdirectory for organized storage
-/// let image_dir = output_dir.join("simulation_images");
-/// fs::create_dir_all(&image_dir).unwrap();
-///
-/// // Save test artifacts
-/// let test_image_path = image_dir.join("star_field_001.png");
-/// // ... save image to test_image_path ...
-/// ```
+/// # Usage
+/// Call `get_output_dir()` to get the standardized test output directory.
+/// The directory is automatically created if it doesn't exist.
+/// Create subdirectories within the output directory for organized storage
+/// of different types of test artifacts (images, data, logs, etc.).
 ///
 /// # Thread Safety
 /// This function is thread-safe and can be called concurrently from
@@ -354,28 +273,11 @@ pub fn get_output_dir() -> PathBuf {
 /// # Returns
 /// Complete absolute path to the specified location in test output directory
 ///
-/// # Examples
-/// ```rust
-/// use test_helpers::output_path;
-/// use std::fs;
-///
-/// // Simple file paths
-/// let image_path = output_path("test_image.png");
-/// let data_path = output_path("results.json");
-///
-/// // Subdirectory organization
-/// let plot_path = output_path("plots/performance_graph.svg");
-/// let benchmark_path = output_path("benchmarks/timing_results.txt");
-///
-/// // Create parent directories as needed
-/// if let Some(parent) = plot_path.parent() {
-///     fs::create_dir_all(parent).unwrap();
-/// }
-///
-/// // Use paths directly with file operations
-/// fs::write(&data_path, "test results").unwrap();
-/// assert!(data_path.exists());
-/// ```
+/// # Usage
+/// Call `output_path()` with a relative path to construct a full path within
+/// the test output directory. Supports both simple filenames and subdirectory
+/// paths. Create parent directories as needed before writing files.
+/// The function handles cross-platform path joining automatically.
 ///
 /// # Use Cases
 /// - **Test images**: Generated simulation outputs

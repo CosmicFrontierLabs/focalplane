@@ -23,29 +23,6 @@ use crate::photometry::QuantumEfficiency;
 /// - Temperature-dependent dark current
 /// - Geometric field-of-view calculations
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM};
-/// use simulator::hardware::sensor::models::GSENSE6510BSI;
-///
-/// // Create space telescope configuration
-/// let satellite = SatelliteConfig::new(
-///     DEMO_50CM.clone(),
-///     GSENSE6510BSI.clone(),
-///     -15.0,  // Operating temperature (°C)
-///     650.0,  // Red observation wavelength (nm)
-/// );
-///
-/// // Get optical properties
-/// let (fov_x, fov_y) = satellite.field_of_view_arcmin();
-/// let plate_scale = satellite.plate_scale_arcsec_per_pixel();
-/// let airy_disk = satellite.airy_disk_fwhm_sampled();
-///
-/// println!("FOV: {:.1}' × {:.1}'", fov_x, fov_y);
-/// println!("Plate scale: {:.2} arcsec/pixel", plate_scale);
-/// println!("PSF FWHM: {:.2} pixels", airy_disk.fwhm());
-/// ```
 #[derive(Debug, Clone)]
 pub struct SatelliteConfig {
     /// Telescope optical configuration (aperture, focal length, efficiency)
@@ -75,18 +52,6 @@ impl SatelliteConfig {
     /// # Returns
     /// New SatelliteConfig ready for astronomical simulations
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM};
-    /// use simulator::hardware::sensor::models::GSENSE6510BSI;
-    ///
-    /// let satellite = SatelliteConfig::new(
-    ///     DEMO_50CM.clone(),
-    ///     GSENSE6510BSI.clone(),
-    ///     -20.0,  // Space-like operating temperature
-    ///     550.0,  // Green wavelength for optimal QE
-    /// );
-    /// ```
     pub fn new(
         telescope: TelescopeConfig,
         sensor: SensorConfig,
@@ -129,17 +94,6 @@ impl SatelliteConfig {
     /// # Returns
     /// Plate scale in arcseconds per pixel
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM};
-    /// use simulator::hardware::sensor::models::GSENSE6510BSI;
-    ///
-    /// let satellite = SatelliteConfig::new(
-    ///     DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0
-    /// );
-    /// let scale = satellite.plate_scale_arcsec_per_pixel();
-    /// println!("Angular resolution: {:.2} arcsec/pixel", scale);
-    /// ```
     pub fn plate_scale_arcsec_per_pixel(&self) -> f64 {
         let pixel_size_mm = self.sensor.pixel_size_um / 1000.0;
         self.plate_scale_arcsec_per_mm() * pixel_size_mm
@@ -153,17 +107,6 @@ impl SatelliteConfig {
     /// # Returns
     /// Tuple of (width, height) field of view in arcminutes
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM};
-    /// use simulator::hardware::sensor::models::GSENSE6510BSI;
-    ///
-    /// let satellite = SatelliteConfig::new(
-    ///     DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0
-    /// );
-    /// let (fov_x, fov_y) = satellite.field_of_view_arcmin();
-    /// println!("Survey area: {:.1}' × {:.1}'", fov_x, fov_y);
-    /// ```
     pub fn field_of_view_arcmin(&self) -> (f64, f64) {
         let arcsec_per_pixel = self.plate_scale_arcsec_per_pixel();
         let width_arcmin = (self.sensor.width_px as f64 * arcsec_per_pixel) / 60.0;
@@ -179,18 +122,6 @@ impl SatelliteConfig {
     /// # Returns
     /// Field of view in steradians
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM};
-    /// use simulator::hardware::sensor::models::GSENSE6510BSI;
-    ///
-    /// let satellite = SatelliteConfig::new(
-    ///     DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0
-    /// );
-    /// let fov_sr = satellite.field_of_view_steradians();
-    /// let sky_percent = (fov_sr / (4.0 * std::f64::consts::PI)) * 100.0;
-    /// println!("FOV: {:.6} sr ({:.4}% of sky)", fov_sr, sky_percent);
-    /// ```
     pub fn field_of_view_steradians(&self) -> f64 {
         let (width_arcmin, height_arcmin) = self.field_of_view_arcmin();
         // Convert to radians
@@ -227,18 +158,6 @@ impl SatelliteConfig {
     /// # Returns
     /// A ScaledAiryDisk with FWHM sized according to the current sampling ratio
     ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::{SatelliteConfig, telescope::TelescopeConfig};
-    /// use simulator::hardware::sensor::models::GSENSE4040BSI;
-    ///
-    /// let telescope = TelescopeConfig::new("Test", 0.5, 2.5, 0.8);
-    /// let satellite = SatelliteConfig::new(telescope, GSENSE4040BSI.clone(), -10.0, 550.0);
-    ///
-    /// // Get Airy disk scaled to current FWHM sampling
-    /// let airy_disk = satellite.airy_disk_fwhm_sampled();
-    /// println!("FWHM in pixels: {:.2}", airy_disk.fwhm());
-    /// ```
     pub fn airy_disk_fwhm_sampled(&self) -> PixelScaledAiryDisk {
         // Get current FWHM sampling ratio (pixels per FWHM)
         let fwhm_pixels = self.fwhm_sampling_ratio();
@@ -260,17 +179,6 @@ impl SatelliteConfig {
     /// # Returns
     /// A new SatelliteConfig with adjusted telescope focal length
     ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::{SatelliteConfig, telescope::TelescopeConfig};
-    /// use simulator::hardware::sensor::models::GSENSE4040BSI;
-    ///
-    /// let telescope = TelescopeConfig::new("Test", 0.5, 2.5, 0.8);
-    /// let satellite = SatelliteConfig::new(telescope, GSENSE4040BSI.clone(), -10.0, 550.0);
-    ///
-    /// // Create version with 2.5 pixels per FWHM
-    /// let resampled = satellite.with_fwhm_sampling(2.5);
-    /// ```
     pub fn with_fwhm_sampling(&self, q: f64) -> SatelliteConfig {
         let current_q =
             self.telescope.fwhm_image_spot_um(self.wavelength_nm) / self.sensor.pixel_size_um;
@@ -294,17 +202,6 @@ impl SatelliteConfig {
     /// # Returns
     /// Number of pixels per FWHM of the PSF
     ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::{SatelliteConfig, telescope::TelescopeConfig};
-    /// use simulator::hardware::sensor::models::GSENSE4040BSI;
-    ///
-    /// let telescope = TelescopeConfig::new("Test", 0.5, 2.5, 0.8);
-    /// let satellite = SatelliteConfig::new(telescope, GSENSE4040BSI.clone(), -10.0, 550.0);
-    ///
-    /// let sampling = satellite.fwhm_sampling_ratio();
-    /// println!("Current sampling: {:.2} pixels per FWHM", sampling);
-    /// ```
     pub fn fwhm_sampling_ratio(&self) -> f64 {
         self.telescope.fwhm_image_spot_um(self.wavelength_nm) / self.sensor.pixel_size_um
     }
@@ -318,18 +215,6 @@ impl SatelliteConfig {
     /// # Returns
     /// A string describing the satellite configuration
     ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::{SatelliteConfig, telescope::TelescopeConfig};
-    /// use simulator::hardware::sensor::models::GSENSE4040BSI;
-    ///
-    /// let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
-    /// let satellite = SatelliteConfig::new(telescope, GSENSE4040BSI.clone(), -10.0, 550.0);
-    ///
-    /// let description = satellite.description();
-    /// println!("{}", description);
-    /// // Output: "Test Scope (0.50m f/5.0) + GSENSE4040BSI"
-    /// ```
     pub fn description(&self) -> String {
         format!(
             "{} ({:.2}m f/{:.1}) + {}",

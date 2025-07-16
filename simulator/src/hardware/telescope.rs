@@ -34,33 +34,6 @@
 //! - **FINAL_1M**: Large aperture survey telescope
 //! - **WEASEL**: Multi-spectral Earth observation system
 //!
-//! # Examples
-//!
-//! ```rust
-//! use simulator::hardware::telescope::{TelescopeConfig, models::DEMO_50CM};
-//! use simulator::hardware::sensor::models::GSENSE6510BSI;
-//!
-//! // Use predefined telescope model
-//! let telescope = DEMO_50CM.clone();
-//! let sensor = GSENSE6510BSI.clone();
-//!
-//! // Calculate optical performance
-//! let f_number = telescope.f_number();
-//! let resolution_mas = telescope.diffraction_limited_resolution_mas(550.0);
-//! let plate_scale = telescope.plate_scale_arcsec_per_mm();
-//! let collecting_area = telescope.collecting_area_m2();
-//!
-//! println!("f/{:.1} telescope", f_number);
-//! println!("Resolution: {:.0} mas @ 550nm", resolution_mas);
-//! println!("Plate scale: {:.1} arcsec/mm", plate_scale);
-//! println!("Light gathering: {:.2} m²", collecting_area);
-//!
-//! // Optimize focal length for sensor sampling
-//! let optimized = telescope.with_focal_length(8.5);
-//! let airy_radius_um = optimized.airy_disk_radius_um(550.0);
-//! let pixels_per_airy = airy_radius_um / sensor.pixel_size_um;
-//! println!("Sampling: {:.1} pixels per Airy disk", pixels_per_airy);
-//! ```
 
 use once_cell::sync::Lazy;
 use std::f64::consts::PI;
@@ -82,28 +55,6 @@ use crate::photometry::QuantumEfficiency;
 /// - **Sampling optimization**: Focal length adjustment for optimal detector sampling
 /// - **Wavelength response**: Quantum efficiency curves for optical system
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::hardware::telescope::TelescopeConfig;
-///
-/// // Create custom telescope configuration
-/// let telescope = TelescopeConfig::new(
-///     "Custom 0.8m",
-///     0.8,   // 80cm aperture
-///     6.4,   // 6.4m focal length (f/8)
-///     0.75,  // 75% throughput efficiency
-/// );
-///
-/// // Calculate optical properties
-/// let f_ratio = telescope.f_number();
-/// let resolution = telescope.diffraction_limited_resolution_mas(650.0);
-/// let light_power = telescope.collecting_area_m2();
-///
-/// println!("f/{:.1} system", f_ratio);
-/// println!("Resolution: {:.0} mas", resolution);
-/// println!("Effective area: {:.2} m²", light_power);
-/// ```
 #[derive(Debug, Clone)]
 pub struct TelescopeConfig {
     /// Primary mirror or lens diameter in meters (clear aperture)

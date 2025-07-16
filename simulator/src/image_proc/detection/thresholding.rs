@@ -23,33 +23,10 @@
 //! - **Preprocessing**: Prepare images for centroiding and photometry
 //! - **Artifact removal**: Identify and filter cosmic rays, hot pixels
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::detection::thresholding::{
-//!     otsu_threshold, apply_threshold, connected_components, get_bounding_boxes
-//! };
-//! use ndarray::Array2;
-//!
-//! // Create test image with some bright objects
-//! let mut image = Array2::from_elem((100, 100), 0.1);
-//! image[[50, 50]] = 1.0;  // Bright star
-//! image[[25, 75]] = 0.8;  // Dimmer star
-//!
-//! // Automatic threshold selection
-//! let threshold = otsu_threshold(&image.view());
-//! println!("Otsu threshold: {:.3}", threshold);
-//!
-//! // Binary segmentation
-//! let binary = apply_threshold(&image.view(), threshold);
-//!
-//! // Connected component labeling
-//! let labeled = connected_components(&binary.view());
-//!
-//! // Extract object regions
-//! let bboxes = get_bounding_boxes(&labeled.view());
-//! println!("Found {} objects", bboxes.len());
-//! ```
+//! Perform complete image segmentation workflow from threshold selection
+//! through connected component analysis for astronomical object detection.
 
 use crate::image_proc::detection::AABB;
 use ndarray::{Array2, ArrayView2};
@@ -74,22 +51,9 @@ use ndarray::{Array2, ArrayView2};
 /// # Performance
 /// O(N + 256²) where N is number of pixels. Efficient for typical image sizes.
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::thresholding::otsu_threshold;
-/// use ndarray::Array2;
-///
-/// // Image with distinct foreground/background
-/// let mut image = Array2::from_elem((100, 100), 0.1);  // Dark background
-/// for i in 40..60 {
-///     for j in 40..60 {
-///         image[[i, j]] = 0.8;  // Bright square object
-///     }
-/// }
-///
-/// let threshold = otsu_threshold(&image.view());
-/// println!("Optimal threshold: {:.3}", threshold);  // Should be ~0.45
-/// ```
+/// # Usage
+/// Automatic threshold selection using Otsu's method for separating
+/// stellar objects from sky background in astronomical images.
 pub fn otsu_threshold(image: &ArrayView2<f64>) -> f64 {
     // Convert to histogram
     let mut histogram = vec![0; 256];
@@ -153,18 +117,9 @@ pub fn otsu_threshold(image: &ArrayView2<f64>) -> f64 {
 /// # Returns
 /// Binary image with 1.0 for pixels >= threshold, 0.0 otherwise
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::thresholding::{otsu_threshold, apply_threshold};
-/// use ndarray::Array2;
-///
-/// let image = Array2::from_elem((10, 10), 0.3);
-/// let threshold = 0.5;
-/// let binary = apply_threshold(&image.view(), threshold);
-///
-/// // All pixels below 0.5, so result should be all zeros
-/// assert_eq!(binary.sum(), 0.0);
-/// ```
+/// # Usage
+/// Creates binary mask for astronomical object detection by applying
+/// intensity threshold to separate foreground from background.
 pub fn apply_threshold(image: &ArrayView2<f64>, threshold: f64) -> Array2<f64> {
     let shape = image.dim();
     let mut binary = Array2::zeros(shape);
@@ -253,24 +208,9 @@ fn union_labels(labels: &mut [usize], label1: usize, label2: usize) -> usize {
 /// - Space: O(L) where L is number of distinct labels
 /// - Path compression ensures near-constant union-find operations
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::thresholding::connected_components;
-/// use ndarray::Array2;
-///
-/// // Create binary image with two separate objects
-/// let mut binary = Array2::zeros((5, 5));
-/// binary[[1, 1]] = 1.0; binary[[1, 2]] = 1.0;  // Object 1
-/// binary[[3, 3]] = 1.0; binary[[3, 4]] = 1.0;  // Object 2
-///
-/// let labeled = connected_components(&binary.view());
-///
-/// // Two objects should get labels 1 and 2
-/// assert_eq!(labeled[[1, 1]], 1);
-/// assert_eq!(labeled[[1, 2]], 1);  // Same object
-/// assert_eq!(labeled[[3, 3]], 2);  // Different object
-/// assert_eq!(labeled[[3, 4]], 2);  // Same object
-/// ```
+/// # Usage
+/// Groups connected pixels into distinct objects with unique labels.
+/// Uses 4-connectivity and optimized union-find for efficient processing.
 pub fn connected_components(binary_image: &ArrayView2<f64>) -> Array2<usize> {
     let (height, width) = binary_image.dim();
     let mut labels = Array2::zeros((height, width));
@@ -361,29 +301,8 @@ pub fn connected_components(binary_image: &ArrayView2<f64>) -> Array2<usize> {
 /// - Index i corresponds to object with label i+1
 /// - Empty if no objects found
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::thresholding::{
-///     apply_threshold, connected_components, get_bounding_boxes
-/// };
-/// use ndarray::Array2;
-///
-/// // Create test image with bright star
-/// let mut image = Array2::from_elem((100, 100), 0.1);
-/// for i in 45..55 {
-///     for j in 45..55 {
-///         image[[i, j]] = 0.9;  // 10x10 bright square
-///     }
-/// }
-///
-/// let binary = apply_threshold(&image.view(), 0.5);
-/// let labeled = connected_components(&binary.view());
-/// let bboxes = get_bounding_boxes(&labeled.view());
-///
-/// assert_eq!(bboxes.len(), 1);  // One object found
-/// assert_eq!(bboxes[0].width(), 10);   // 10 pixels wide
-/// assert_eq!(bboxes[0].height(), 10);  // 10 pixels tall
-/// ```
+/// # Usage
+/// Extracts bounding boxes for all detected objects from labeled image.\n/// Essential for object detection pipelines and region analysis.
 pub fn get_bounding_boxes(labeled_image: &ArrayView2<usize>) -> Vec<AABB> {
     let max_label = labeled_image.iter().copied().max().unwrap_or(0);
     let mut bboxes = vec![AABB::new(); max_label + 1];

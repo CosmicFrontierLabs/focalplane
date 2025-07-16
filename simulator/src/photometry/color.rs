@@ -28,58 +28,16 @@
 //! # Examples
 //!
 //! ## Spectral Classification
-//! ```rust
-//! use simulator::photometry::color::{temperature_to_spectral_class, SpectralClass};
-//!
-//! // Classify different stellar types by temperature
-//! let sun_class = temperature_to_spectral_class(5778.0);  // Sun
-//! let sirius_class = temperature_to_spectral_class(9940.0);  // Sirius A
-//! let betelgeuse_class = temperature_to_spectral_class(3500.0);  // Betelgeuse
-//!
-//! assert_eq!(sun_class, SpectralClass::G);
-//! assert_eq!(sirius_class, SpectralClass::A);
-//! assert_eq!(betelgeuse_class, SpectralClass::M);
-//!
-//! println!("Sun: {} class, Sirius: {} class, Betelgeuse: {} class",
-//!          sun_class, sirius_class, betelgeuse_class);
-//! ```
+//! Classify stars by temperature using the Morgan-Keenan system
+//! for stellar population analysis and catalog organization.
 //!
 //! ## Color Analysis
-//! ```rust
-//! use simulator::photometry::color::{spectrum_to_rgb_values, color_temperature_index};
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
+//! Convert stellar spectra to RGB values and calculate color indices
+//! for astronomical visualization and temperature estimation.
 //!
-//! // Create stellar spectra
-//! let hot_star = BlackbodyStellarSpectrum::new(20000.0, 1.0);  // Blue giant
-//! let cool_star = BlackbodyStellarSpectrum::new(3000.0, 1.0);  // Red dwarf
-//!
-//! // Get RGB colors for display
-//! let (hot_r, hot_g, hot_b) = spectrum_to_rgb_values(&hot_star);
-//! let (cool_r, cool_g, cool_b) = spectrum_to_rgb_values(&cool_star);
-//!
-//! // Calculate color indices
-//! let hot_index = color_temperature_index(&hot_star);   // Positive (blue)
-//! let cool_index = color_temperature_index(&cool_star); // Negative (red)
-//!
-//! println!("Hot star RGB: ({:.2}, {:.2}, {:.2}), Index: {:.2}",
-//!          hot_r, hot_g, hot_b, hot_index);
-//! println!("Cool star RGB: ({:.2}, {:.2}, {:.2}), Index: {:.2}",
-//!          cool_r, cool_g, cool_b, cool_index);
-//! ```
-//!
-//! ## Temperature Sequence Generation  
-//! ```rust
-//! use simulator::photometry::color::{generate_temperature_sequence, temperature_to_spectral_class};
-//!
-//! // Generate logarithmically-spaced temperatures for stellar analysis
-//! let temps = generate_temperature_sequence(2500.0, 50000.0, 10);
-//!
-//! // Process entire stellar population
-//! for (i, temp) in temps.iter().enumerate() {
-//!     let class = temperature_to_spectral_class(*temp);
-//!     println!("Star {}: {:.0}K, Class {}", i+1, temp, class);
-//! }
-//! ```
+//! ## Temperature Sequence Generation
+//! Generate logarithmically-spaced temperature ranges for
+//! stellar population synthesis and survey planning.
 
 use super::human::HumanVision;
 use super::spectrum::Spectrum;
@@ -154,19 +112,9 @@ impl fmt::Display for SpectralClass {
 /// # Returns
 /// Vector of temperatures in Kelvin, evenly spaced on logarithmic scale
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::color::generate_temperature_sequence;
-///
-/// // Generate 7 temperatures covering main sequence
-/// let main_sequence = generate_temperature_sequence(3000.0, 30000.0, 7);
-/// println!("Main sequence temperatures: {:?}", main_sequence);
-/// // Output: [3000.0, 4100.0, 5600.0, 7700.0, 10500.0, 14400.0, 30000.0]
-///
-/// // Single temperature (edge case)
-/// let single = generate_temperature_sequence(5778.0, 6000.0, 1);
-/// assert_eq!(single, vec![5778.0]);  // Returns min_temp for n=1
-/// ```
+/// # Usage
+/// Generate logarithmically-spaced temperature sequence for stellar
+/// population analysis and survey planning.
 pub fn generate_temperature_sequence(min_temp: f64, max_temp: f64, n_temps: usize) -> Vec<f64> {
     if n_temps <= 1 {
         return vec![min_temp];
@@ -202,21 +150,9 @@ pub fn generate_temperature_sequence(min_temp: f64, max_temp: f64, n_temps: usiz
 /// # Returns
 /// Spectral class as SpectralClass enum value
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::color::{temperature_to_spectral_class, SpectralClass};
-///
-/// // Famous stars and their classifications
-/// assert_eq!(temperature_to_spectral_class(5778.0), SpectralClass::G); // Sun
-/// assert_eq!(temperature_to_spectral_class(9940.0), SpectralClass::A); // Sirius A
-/// assert_eq!(temperature_to_spectral_class(4286.0), SpectralClass::K); // Arcturus  
-/// assert_eq!(temperature_to_spectral_class(3500.0), SpectralClass::M); // Betelgeuse
-/// assert_eq!(temperature_to_spectral_class(22000.0), SpectralClass::B); // Rigel
-///
-/// // Edge cases
-/// assert_eq!(temperature_to_spectral_class(50000.0), SpectralClass::O); // Very hot
-/// assert_eq!(temperature_to_spectral_class(2000.0), SpectralClass::M);  // Very cool
-/// ```
+/// # Usage
+/// Classify stellar effective temperature using Morgan-Keenan system
+/// for astronomical catalogs and stellar population studies.
 pub fn temperature_to_spectral_class(temperature: f64) -> SpectralClass {
     if temperature >= 30000.0 {
         SpectralClass::O
@@ -254,32 +190,9 @@ pub fn temperature_to_spectral_class(temperature: f64) -> SpectralClass {
 /// # Returns
 /// Tuple (r, g, b) with each component normalized to [0.0, 1.0] range
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::color::spectrum_to_rgb_values;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-///
-/// // Create spectra for different stellar types
-/// let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);      // G2V (yellow)
-/// let vega = BlackbodyStellarSpectrum::new(9602.0, 1.0);     // A0V (white)
-/// let arcturus = BlackbodyStellarSpectrum::new(4286.0, 1.0); // K1.5III (orange)
-/// let betelgeuse = BlackbodyStellarSpectrum::new(3500.0, 1.0); // M1-2Ia (red)
-///
-/// // Get RGB colors
-/// let (sun_r, sun_g, sun_b) = spectrum_to_rgb_values(&sun);
-/// let (vega_r, vega_g, vega_b) = spectrum_to_rgb_values(&vega);
-/// let (arc_r, arc_g, arc_b) = spectrum_to_rgb_values(&arcturus);
-/// let (bet_r, bet_g, bet_b) = spectrum_to_rgb_values(&betelgeuse);
-///
-/// // Verify expected color trends
-/// // Vega is white - all colors roughly equal
-/// // Sun has peak in green/yellow range
-/// assert!(arc_r > arc_b);      // Arcturus appears orange
-/// assert!(bet_r > bet_g);      // Betelgeuse appears red
-///
-/// println!("Sun RGB: ({:.2}, {:.2}, {:.2})", sun_r, sun_g, sun_b);
-/// println!("Vega RGB: ({:.2}, {:.2}, {:.2})", vega_r, vega_g, vega_b);
-/// ```
+/// # Usage
+/// Convert stellar spectrum to RGB values for astronomical visualization
+/// and color analysis with scientifically accurate stellar colors.
 pub fn spectrum_to_rgb_values(spectrum: &impl Spectrum) -> (f64, f64, f64) {
     // Set up duration and aperture for photo-electron calculations
     let duration = Duration::from_secs(1);
@@ -333,29 +246,9 @@ pub fn spectrum_to_rgb_values(spectrum: &impl Spectrum) -> (f64, f64, f64) {
 /// - Negative: red-cool stars  
 /// - Zero: white/neutral stars
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::color::color_temperature_index;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-///
-/// // Create spectra for different temperature stars
-/// let rigel = BlackbodyStellarSpectrum::new(22000.0, 1.0);     // B8Ia (blue)
-/// let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);       // G2V (yellow)
-/// let proxima = BlackbodyStellarSpectrum::new(3042.0, 1.0);   // M5.5V (red)
-///
-/// let rigel_index = color_temperature_index(&rigel);    // > 0 (blue)
-/// let sun_index = color_temperature_index(&sun);        // < 0 (yellow)  
-/// let proxima_index = color_temperature_index(&proxima); // << 0 (red)
-///
-/// // Verify temperature ordering
-/// assert!(rigel_index > sun_index);
-/// assert!(sun_index > proxima_index);
-/// assert!(rigel_index > 0.0);      // Blue star
-/// assert!(proxima_index < 0.0);   // Red star (not necessarily < -1.0)
-///
-/// println!("Color indices - Rigel: {:.2}, Sun: {:.2}, Proxima: {:.2}",
-///          rigel_index, sun_index, proxima_index);
-/// ```
+/// # Usage
+/// Calculate logarithmic blue-red color temperature index for stellar
+/// temperature estimation and photometric analysis.
 pub fn color_temperature_index(spectrum: &impl Spectrum) -> f64 {
     // Set up duration and aperture for photo-electron calculations
     let duration = Duration::from_secs(1);

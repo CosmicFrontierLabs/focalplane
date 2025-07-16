@@ -30,42 +30,12 @@
 //! # Scientific Applications
 //!
 //! ## Synthetic Photometry
-//! Essential for comparing theoretical stellar models with Gaia observations:
-//! ```rust
-//! use simulator::photometry::gaia::GAIA_PASSBAND;
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-//! use simulator::photometry::Spectrum;
-//! use std::time::Duration;
-//!
-//! // Create solar-type stellar spectrum
-//! let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);
-//!
-//! // Calculate Gaia G-band flux
-//! let exposure = Duration::from_secs(1);
-//! let aperture = 100.0; // cm²
-//! let g_flux = sun.photo_electrons(&*GAIA_PASSBAND, aperture, &exposure);
-//!
-//! // Convert to Gaia G magnitude (simplified)
-//! let g_mag = -2.5 * g_flux.log10() + 25.0; // Approximate zero-point
-//! println!("Solar G magnitude: {:.2}", g_mag);
-//! ```
+//! Compare theoretical stellar models with Gaia observations
+//! for validation and cross-calibration studies.
 //!
 //! ## Catalog Cross-Matching
-//! Compare ground-based surveys with Gaia measurements:
-//! ```rust
-//! use simulator::photometry::gaia::GAIA_PASSBAND;
-//! use simulator::photometry::filters::v_filter;
-//!
-//! // Get both passbands for color transformations
-//! let gaia_g = &*GAIA_PASSBAND;
-//! let johnson_v = v_filter();
-//!
-//! // Check wavelength coverage overlap
-//! let g_band = gaia_g.band();
-//! let v_band = johnson_v.band();
-//! println!("Gaia G: {:.0}-{:.0} nm", g_band.lower_nm, g_band.upper_nm);
-//! println!("Johnson V: {:.0}-{:.0} nm", v_band.lower_nm, v_band.upper_nm);
-//! ```
+//! Cross-reference ground-based surveys with Gaia measurements
+//! for comprehensive stellar catalogs.
 //!
 //! ## Space Telescope Calibration
 //! Essential reference for calibrating space telescope photometry:
@@ -111,47 +81,12 @@ use once_cell::sync::Lazy;
 /// # Photometric Applications
 ///
 /// ## Magnitude Calculations
-/// ```rust
-/// use simulator::photometry::gaia::GAIA_PASSBAND;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// use simulator::photometry::Spectrum;
-/// use std::time::Duration;
-///
-/// // Calculate Gaia G magnitude for different stellar types
-/// let stars = [
-///     ("Sun", 5778.0),      // G2V solar type
-///     ("Vega", 9602.0),     // A0V standard
-///     ("Arcturus", 4286.0), // K1.5III giant
-///     ("Proxima", 3042.0),  // M5.5V red dwarf
-/// ];
-///
-/// for (name, temp) in stars.iter() {
-///     let spectrum = BlackbodyStellarSpectrum::new(*temp, 1.0);
-///     let flux = spectrum.photo_electrons(&*GAIA_PASSBAND, 1.0, &Duration::from_secs(1));
-///     println!("{}: Gaia G flux = {:.2e} e⁻/s/cm²", name, flux);
-/// }
-/// ```
+/// Calculate Gaia G magnitudes for stellar classification
+/// and population synthesis studies.
 ///
 /// ## Passband Comparisons
-/// ```rust
-/// use simulator::photometry::gaia::GAIA_PASSBAND;
-/// use simulator::photometry::filters::{v_filter, b_filter};
-///
-/// // Compare effective wavelengths
-/// let gaia_band = GAIA_PASSBAND.band();
-/// let v_band = v_filter().band();
-/// let b_band = b_filter().band();
-///
-/// println!("Passband comparisons:");
-/// println!("Gaia G: {:.0}-{:.0} nm", gaia_band.lower_nm, gaia_band.upper_nm);
-/// println!("Johnson V: {:.0}-{:.0} nm", v_band.lower_nm, v_band.upper_nm);
-/// println!("Johnson B: {:.0}-{:.0} nm", b_band.lower_nm, b_band.upper_nm);
-///
-/// // Check transmission at key wavelengths
-/// assert_eq!(GAIA_PASSBAND.at(700.0), 0.709495858); // Peak efficiency
-/// assert!(GAIA_PASSBAND.at(400.0) > 0.3);           // Good blue response
-/// assert!(GAIA_PASSBAND.at(900.0) > 0.01);          // NIR sensitivity
-/// ```
+/// Compare Gaia G-band with standard photometric systems
+/// for color transformations and cross-calibration.
 ///
 /// # Performance Optimization
 ///

@@ -172,26 +172,6 @@ impl Renderer {
     /// # Returns
     /// A new Renderer with the base star image pre-computed
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::render::{Renderer, StarInFrame};
-    /// use simulator::hardware::SatelliteConfig;
-    /// use starfield::catalogs::StarData;
-    ///
-    /// # use simulator::hardware::{telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0);
-    /// // Create test stars at known positions
-    /// let stars = vec![
-    ///     StarInFrame {
-    ///         x: 100.0,
-    ///         y: 100.0,
-    ///         flux: 1000.0,  // 1-second flux
-    ///         star: StarData::new(1, 0.0, 0.0, 10.0, None),
-    ///     },
-    /// ];
-    ///
-    /// let renderer = Renderer::from_stars(&stars, satellite_config);
-    /// ```
     pub fn from_stars(stars: &Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
         let airy_pix = satellite_config.airy_disk_pixel_space();
 

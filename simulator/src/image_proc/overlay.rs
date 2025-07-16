@@ -22,35 +22,11 @@
 //! - Quality assurance for detection algorithms
 //! - Publication figures and presentations
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::overlay::{draw_bounding_boxes, draw_stars_with_x_markers};
-//! use image::DynamicImage;
-//!
-//! # fn get_sample_image() -> DynamicImage {
-//! #     DynamicImage::new_rgb8(100, 100)
-//! # }
-//! let image = get_sample_image();
-//!
-//! // Draw detection bounding boxes
-//! let bboxes = vec![(20, 30, 25, 35), (60, 70, 65, 75)];
-//! let labels = vec!["Star 1".to_string(), "Star 2".to_string()];
-//! let with_boxes = draw_bounding_boxes(
-//!     &image,
-//!     &bboxes,
-//!     (255, 0, 0),  // Red boxes
-//!     Some(&labels),
-//!     None,
-//!     None
-//! );
-//!
-//! // Draw star positions with X markers
-//! let mut star_positions = std::collections::HashMap::new();
-//! star_positions.insert("Star 1".to_string(), (32.5, 22.5, 10.0));  // (y, x, diameter)
-//! star_positions.insert("Star 2".to_string(), (72.5, 62.5, 10.0));
-//! let with_markers = draw_stars_with_x_markers(&image, &star_positions, (0, 255, 0), 5.0);
-//! ```
+//! Draw bounding boxes, circular markers, and custom overlays on astronomical images.
+//! Use draw_bounding_boxes for detection results and draw_stars_with_x_markers
+//! for precise star position visualization with custom labels.
 
 use image::{DynamicImage, Rgb, RgbImage};
 use std::collections::HashMap;
@@ -78,37 +54,9 @@ use usvg::{self, fontdb, Options, Tree};
 /// # Returns
 /// New image with rendered overlays preserving original image quality
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::overlay::draw_bounding_boxes;
-/// use image::DynamicImage;
-///
-/// # fn get_image() -> DynamicImage { DynamicImage::new_rgb8(200, 200) }
-/// let image = get_image();
-///
-/// // Detection results: bounding boxes around stars
-/// let detections = vec![
-///     (45, 67, 55, 77),   // 10x10 pixel region
-///     (120, 89, 125, 94), // 5x5 pixel region
-/// ];
-///
-/// let labels = vec!["Bright Star".to_string(), "Faint Star".to_string()];
-///
-/// // Add circular markers at star centers  
-/// let circles = vec![
-///     (50.0, 72.0, 8.0),   // Center of first detection, 8px diameter
-///     (122.5, 91.5, 4.0), // Center of second detection, 4px diameter
-/// ];
-///
-/// let annotated = draw_bounding_boxes(
-///     &image,
-///     &detections,
-///     (255, 0, 0),      // Red boxes
-///     Some(&labels),
-///     Some(&circles),
-///     Some((0, 255, 0)) // Green circles
-/// );
-/// ```
+/// # Usage
+/// Renders professional-quality bounding boxes and circular markers with optional
+/// text labels. Uses SVG-based rendering for publication-quality scientific visualizations.
 pub fn draw_bounding_boxes(
     image: &DynamicImage,
     bboxes: &[(usize, usize, usize, usize)],

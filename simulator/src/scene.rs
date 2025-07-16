@@ -45,39 +45,8 @@
 //! # Usage Patterns
 //!
 //! ## Single Exposure Simulation
-//! ```rust
-//! use simulator::{Scene, hardware::{SatelliteConfig, telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI}};
-//! use simulator::photometry::zodical::SolarAngularCoordinates;
-//! use starfield::{Equatorial, catalogs::StarData};
-//! use std::time::Duration;
-//!
-//! # // Use small sensor for fast doctest
-//! # let small_sensor = GSENSE6510BSI.with_dimensions(16, 16);
-//! # let satellite_config = SatelliteConfig::new(
-//! #     DEMO_50CM.clone(),
-//! #     small_sensor,
-//! #     -10.0,
-//! #     550.0
-//! # );
-//! # let catalog_stars = vec![];
-//! // Create scene from star catalog
-//! let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-//! let scene = Scene::from_catalog(
-//!     satellite_config,
-//!     catalog_stars,
-//!     Equatorial::from_degrees(180.0, -30.0), // Pointing
-//!     Duration::from_secs(30), // 30-second exposure
-//!     zodiacal_coords,
-//! );
-//!
-//! // Render the scene
-//! let result = scene.render();
-//!
-//! println!("Rendered {} stars, quantized image shape: {}x{}",
-//!          scene.stars.len(),
-//!          result.quantized_image.shape()[1],
-//!          result.quantized_image.shape()[0]);
-//! ```
+//! Create scene from star catalog with satellite configuration, telescope,
+//! sensor, and zodiacal coordinates for rendering realistic astronomical images.
 //!
 //! ## Time Series Simulation
 //! ```ignore
@@ -230,73 +199,10 @@ use std::time::Duration;
 /// 3. **Image Rendering**: Generate detector images with noise models
 /// 4. **Analysis**: Extract photometry and astrometry from simulated data
 ///
-/// # Example Usage
-///
-/// ```ignore
-/// // NOTE: This doctest is ignored because it's computationally expensive - renders full scene
-/// use simulator::{Scene, hardware::SatelliteConfig, hardware::sensor::SensorConfig,
-///                 hardware::telescope::TelescopeConfig, hardware::dark_current::DarkCurrentEstimator,
-///                 photometry::zodical::SolarAngularCoordinates, photometry::quantum_efficiency::QuantumEfficiency,
-///                 photometry::Band};
-/// use starfield::{Equatorial, catalogs::StarData};
-/// use std::time::Duration;
-///
-/// // Create telescope configuration (50cm demo telescope)
-/// let telescope = TelescopeConfig::new(
-///     "Demo 50cm",
-///     0.5,      // 50cm aperture
-///     10.0,     // 10m focal length  
-///     0.815,    // light efficiency
-/// );
-///
-/// // Create sensor configuration (simple example)
-/// let band = Band::from_nm_bounds(400.0, 700.0);
-/// let qe = QuantumEfficiency::from_notch(&band, 0.8).unwrap(); // 80% QE
-/// let dark_current = DarkCurrentEstimator::new(0.1, -40.0); // Low dark current
-/// let sensor = SensorConfig::new(
-///     "Example Sensor",
-///     qe,
-///     2048,     // width pixels
-///     2048,     // height pixels  
-///     5.0,      // 5μm pixel size
-///     2.0,      // 2e- read noise
-///     dark_current,
-///     16,       // 16-bit depth
-///     1.0,      // 1 DN per electron
-///     50000.0,  // 50ke- well depth
-///     10.0,     // 10 fps max
-/// );
-///
-/// // Create satellite configuration
-/// let satellite_config = SatelliteConfig::new(telescope, sensor, -10.0, 550.0);
-///
-/// // Create some example stars (in real usage, load from catalog)
-/// let catalog_stars = vec![
-///     StarData::new(1, 180.0, -30.0, 5.0, Some(0.5)), // Magnitude 5 star with B-V color
-/// ];
-///
-/// // Define observation parameters
-/// let pointing = Equatorial::from_degrees(180.0, -30.0); // RA/Dec
-/// let exposure_time = Duration::from_secs_f64(1.0);
-/// let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-///
-/// // Create scene with automatic star projection
-/// let scene = Scene::from_catalog(
-///     satellite_config,
-///     catalog_stars,
-///     pointing,
-///     exposure_time,
-///     zodiacal_coords,
-/// );
-///
-/// // Render the scene
-/// let result = scene.render();
-///
-/// println!("Rendered {} stars to {}x{} image",
-///          scene.stars.len(),
-///          result.quantized_image.shape()[1],
-///          result.quantized_image.shape()[0]);
-/// ```
+/// # Usage
+/// The Scene struct represents a complete astronomical observation, combining instrument hardware,
+/// stellar targets, pointing direction, and exposure parameters. Create a scene from a star catalog
+/// using `Scene::from_catalog()`, or from pre-computed stars using `Scene::from_stars()`.
 #[derive(Debug, Clone)]
 pub struct Scene {
     /// Complete satellite hardware configuration defining the observation system.
@@ -365,34 +271,10 @@ impl Scene {
     /// # Returns
     /// Complete Scene with projected stars ready for rendering
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::{Scene, hardware::SatelliteConfig};
-    /// use starfield::{Equatorial, catalogs::StarData};
-    /// use std::time::Duration;
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// # use simulator::hardware::{telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0);
-    /// // Create sample star catalog
-    /// let stars = vec![
-    ///     StarData::new(1, 180.0, -30.0, 8.5, Some(0.65)), // G-type star
-    ///     StarData::new(2, 180.1, -29.9, 10.2, Some(1.15)), // K-type star
-    ///     StarData::new(3, 179.9, -30.1, 6.8, Some(0.15)), // A-type star
-    /// ];
-    ///
-    /// // Create scene centered on southern sky
-    /// let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-    /// let scene = Scene::from_catalog(
-    ///     satellite_config,
-    ///     stars,
-    ///     Equatorial::from_degrees(180.0, -30.0),
-    ///     Duration::from_secs(60), // 1-minute exposure
-    ///     zodiacal_coords,
-    /// );
-    ///
-    /// println!("Scene contains {} projected stars", scene.stars.len());
-    /// ```
+    /// # Usage
+    /// Create a scene from a star catalog by projecting catalog stars onto the detector plane.
+    /// The scene automatically handles coordinate transformations, field-of-view calculations,
+    /// and flux computations based on the instrument configuration.
     pub fn from_catalog(
         satellite_config: SatelliteConfig,
         catalog_stars: Vec<StarData>,
@@ -449,35 +331,10 @@ impl Scene {
     /// Complete Scene ready for rendering with the provided stars
     ///
     /// # Examples
-    /// ```rust
-    /// use simulator::{Scene, hardware::SatelliteConfig};
-    /// use simulator::image_proc::render::StarInFrame;
-    /// use starfield::{Equatorial, catalogs::StarData};
-    /// use std::time::Duration;
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// # use simulator::hardware::{telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0);
-    /// // Create a test star at a specific pixel location
-    /// let test_star = StarInFrame {
-    ///     x: 512.5,  // Center of 1024x1024 sensor
-    ///     y: 512.5,
-    ///     flux: 10000.0,  // 10,000 photoelectrons
-    ///     star: StarData::new(1, 0.0, 0.0, 10.0, None),
-    /// };
-    ///
-    /// // Create scene with the test star
-    /// let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-    /// let scene = Scene::from_stars(
-    ///     satellite_config,
-    ///     vec![test_star],
-    ///     Equatorial::from_degrees(0.0, 0.0),  // Nominal pointing
-    ///     Duration::from_secs(1),
-    ///     zodiacal_coords,
-    /// );
-    ///
-    /// println!("Scene contains {} pre-positioned stars", scene.stars.len());
-    /// ```
+    /// # Usage
+    /// Create a scene with pre-computed stars at specific pixel positions. This is useful for
+    /// testing scenarios where you need precise control over star placement, such as detector
+    /// characterization, PSF analysis, or algorithm validation with known ground truth.
     pub fn from_stars(
         satellite_config: SatelliteConfig,
         stars: Vec<StarInFrame>,
@@ -527,30 +384,10 @@ impl Scene {
     /// Complete RenderingResult with image data and diagnostic information
     ///
     /// # Examples
-    /// ```rust
-    /// use simulator::Scene;
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    /// use std::time::Duration;
-    ///
-    /// # use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-    /// # use starfield::Equatorial;
-    /// # // Use small sensor for fast doctest
-    /// # let small_sensor = GSENSE6510BSI.with_dimensions(16, 16);
-    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), small_sensor, -10.0, 550.0);
-    /// # let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-    /// # let scene = Scene::from_catalog(satellite_config, vec![], Equatorial::from_degrees(0.0, 0.0), Duration::from_secs(1), zodiacal_coords);
-    /// // Render the scene
-    /// let result = scene.render();
-    ///
-    /// // Access rendering outputs
-    /// println!("Image dimensions: {}x{}",
-    ///          result.quantized_image.shape()[1],
-    ///          result.quantized_image.shape()[0]);
-    /// println!("Zodiacal background electrons: {:.2}",
-    ///          result.zodiacal_image.mean().unwrap());
-    /// println!("Star count: {}",
-    ///          result.rendered_stars.len());
-    /// ```
+    /// # Usage
+    /// Render the scene to produce a complete astronomical image with realistic detector effects.
+    /// The output includes the quantized detector image, zodiacal background map, and metadata
+    /// about rendered stars. Use the stored zodiacal coordinates for background calculation.
     pub fn render(&self) -> RenderingResult {
         self.render_with_seed(None)
     }
@@ -602,32 +439,10 @@ impl Scene {
     /// Optimized Renderer configured for this scene's stellar field
     ///
     /// # Examples
-    /// ```rust
-    /// use simulator::Scene;
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    /// use std::time::Duration;
-    ///
-    /// # use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-    /// # use starfield::Equatorial;
-    /// # let satellite_config = SatelliteConfig::new(DEMO_50CM.clone(), GSENSE6510BSI.clone().with_dimensions(64,64), -10.0, 550.0);
-    /// # let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-    /// # let scene = Scene::from_catalog(satellite_config, vec![], Equatorial::from_degrees(0.0, 0.0), Duration::from_secs(1), zodiacal_coords);
-    /// // Create renderer for efficient batch processing
-    /// let renderer = scene.create_renderer();
-    /// let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-    ///
-    /// // Generate exposure time series
-    /// let exposures = [1.0, 2.0];
-    /// let mut images = Vec::new();
-    ///
-    /// for &exp_time in &exposures {
-    ///     let duration = Duration::from_secs_f64(exp_time);
-    ///     let image = renderer.render(&duration, &zodiacal_coords);
-    ///     images.push(image);
-    /// }
-    ///
-    /// println!("Generated {} exposures efficiently", images.len());
-    /// ```
+    /// # Usage
+    /// Create an optimized renderer for efficient multi-exposure simulations. The renderer
+    /// pre-computes the base stellar image, allowing rapid generation of multiple exposures
+    /// with different integration times while maintaining independent noise realizations.
     pub fn create_renderer(&self) -> Renderer {
         let star_data_refs: Vec<&StarData> = self.stars.iter().map(|s| &s.star).collect();
 

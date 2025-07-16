@@ -74,93 +74,27 @@
 //! # Usage Examples
 //!
 //! ## Basic Star Projection
-//! ```rust
-//! use simulator::star_math::StarProjector;
-//! use starfield::Equatorial;
 //!
-//! // Define field center and detector parameters
-//! let field_center = Equatorial::from_degrees(180.0, -30.0);
-//! let radians_per_pixel = 1e-6; // ~0.2 arcsec/pixel
-//! let (width, height) = (4096, 4096);
-//!
-//! // Create projector
-//! let projector = StarProjector::new(&field_center, radians_per_pixel, width, height);
-//!
-//! // Project a star
-//! let star_position = Equatorial::from_degrees(180.1, -29.9);
-//! if let Some((x, y)) = projector.project(&star_position) {
-//!     println!("Star projects to pixel ({:.2}, {:.2})", x, y);
-//! }
-//! ```
+//! Create a StarProjector with field center and detector parameters, then project
+//! star coordinates to pixel positions. The projector handles coordinate transformations
+//! and bounds checking automatically.
 //!
 //! ## Random Sky Position Generation
-//! ```rust
-//! use simulator::star_math::EquatorialRandomizer;
 //!
-//! // Create seeded randomizer for reproducible tests
-//! let mut randomizer = EquatorialRandomizer::new(42);
-//!
-//! // Generate random sky positions
-//! for i in 0..10 {
-//!     let position = randomizer.generate();
-//!     println!("Random star {}: RA={:.3}°, Dec={:.3}°",
-//!              i, position.ra_degrees(), position.dec_degrees());
-//! }
-//! ```
+//! Use EquatorialRandomizer to generate uniformly distributed random sky positions
+//! with optional seeding for reproducible test scenarios.
 //!
 //! ## Field Coverage Analysis
-//! ```rust
-//! use simulator::star_math::StarProjector;
-//! use starfield::Equatorial;
 //!
-//! let projector = StarProjector::new(
-//!     &Equatorial::from_degrees(0.0, 0.0),
-//!     5e-6, // 1 arcsec/pixel
-//!     2048, 2048
-//! );
-//!
-//! // Test field coverage
-//! let test_positions = [
-//!     (0.0, 0.0),      // Field center
-//!     (0.1, 0.0),      // 0.1° east
-//!     (0.0, 0.1),      // 0.1° north
-//!     (0.5, 0.5),      // Field corner
-//! ];
-//!
-//! for (ra_offset, dec_offset) in test_positions {
-//!     let star = Equatorial::from_degrees(ra_offset, dec_offset);
-//!     match projector.project(&star) {
-//!         Some((x, y)) => println!("({:.1}°, {:.1}°) → pixel ({:.1}, {:.1})",
-//!                                  ra_offset, dec_offset, x, y),
-//!         None => println!("({:.1}°, {:.1}°) outside field of view",
-//!                          ra_offset, dec_offset),
-//!     }
-//! }
-//! ```
+//! Test field coverage by projecting known celestial positions and checking
+//! whether they fall within detector bounds. Useful for validating telescope
+//! pointing accuracy and field geometry.
 //!
 //! ## Unbounded Projection for Analysis
-//! ```rust
-//! use simulator::star_math::StarProjector;
-//! use starfield::Equatorial;
 //!
-//! let projector = StarProjector::new(
-//!     &Equatorial::from_degrees(180.0, 0.0),
-//!     1e-6, 1024, 1024
-//! );
-//!
-//! // Project star outside detector bounds
-//! let distant_star = Equatorial::from_degrees(190.0, 10.0);
-//!
-//! // Bounded projection returns None for out-of-bounds
-//! assert!(projector.project(&distant_star).is_none());
-//!
-//! // Unbounded projection returns coordinates for analysis
-//! if let Some((x, y)) = projector.project_unbounded(&distant_star) {
-//!     println!("Star would be at pixel ({:.1}, {:.1}) if detector were larger", x, y);
-//!     let distance_from_center = ((x - 512.0).powi(2) + (y - 512.0).powi(2)).sqrt();
-//!     println!("Distance from center: {:.1} pixels", distance_from_center);
-//! }
-//! ```
+//! Use unbounded projection to analyze star positions outside detector bounds.
+//! This helps with field geometry analysis and understanding where stars would
+//! appear with larger detectors.
 //!
 //! # Performance Considerations
 //!
@@ -235,16 +169,9 @@ const DEFAULT_BV: f64 = 1.4;
 /// # Returns
 /// Field of view diameter in degrees
 ///
-/// # Examples
-/// ```rust
-/// use simulator::hardware::{telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-/// use simulator::star_math::field_diameter;
-///
-/// let telescope = DEMO_50CM.clone();
-/// let sensor = GSENSE6510BSI.clone();
-/// let fov = field_diameter(&telescope, &sensor);
-/// println!("Survey coverage: {:.2}° diameter", fov);
-/// ```
+/// # Usage
+/// Calculates the diagonal field of view diameter based on sensor dimensions
+/// and telescope focal length. Essential for survey planning and coverage analysis.
 pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
     // Get sensor dimensions in microns
     let (width_um, height_um) = sensor.dimensions_um();
@@ -300,22 +227,9 @@ pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
 /// # Returns
 /// Expected photoelectron count in sensor pixels
 ///
-/// # Examples
-/// ```rust
-/// use simulator::hardware::{SatelliteConfig, telescope::models::DEMO_50CM, sensor::models::GSENSE6510BSI};
-/// use simulator::star_math::star_data_to_electrons;
-/// use starfield::catalogs::StarData;
-/// use std::time::Duration;
-///
-/// let telescope = DEMO_50CM.clone();
-/// let sensor = GSENSE6510BSI.clone();
-/// let satellite = SatelliteConfig::new(telescope, sensor, -10.0, 550.0);
-/// let star = StarData::new(1, 0.0, 0.0, 10.0, Some(0.6)); // F-type star
-/// let exposure = Duration::from_secs(60);
-///
-/// let signal = star_data_to_electrons(&star, &exposure, &satellite);
-/// println!("SNR estimate: {:.1}", signal.sqrt()); // Poisson noise limit
-/// ```
+/// # Usage
+/// Converts star catalog data to expected photoelectron count for photometric
+/// calculations. Handles spectral integration and quantum efficiency weighting.
 pub fn star_data_to_electrons(
     star_data: &StarData,
     exposure: &Duration,
@@ -404,27 +318,9 @@ where
 /// For true uniform sphere sampling, use rejection sampling or inverse transform
 /// methods with appropriate Jacobian corrections.
 ///
-/// # Examples
-/// ```rust
-/// use simulator::star_math::EquatorialRandomizer;
-///
-/// // Create seeded generator for reproducible results
-/// let mut randomizer = EquatorialRandomizer::new(42);
-///
-/// // Generate sequence of random positions
-/// for i in 0..5 {
-///     let coord = randomizer.generate();
-///     println!("Star {}: RA={:.3}°, Dec={:.3}°",
-///              i, coord.ra_degrees(), coord.dec_degrees());
-/// }
-///
-/// // Same seed produces identical sequence
-/// let mut randomizer2 = EquatorialRandomizer::new(42);
-/// let coord1 = randomizer2.generate();
-/// let mut randomizer3 = EquatorialRandomizer::new(42);
-/// let coord2 = randomizer3.generate();
-/// assert_eq!(coord1.ra_degrees(), coord2.ra_degrees());
-/// ```
+/// # Usage
+/// Create seeded generators for reproducible coordinate sequences in testing
+/// and Monte Carlo simulations. Identical seeds produce identical sequences.
 pub struct EquatorialRandomizer {
     rng: StdRng,
 }
@@ -442,23 +338,9 @@ impl EquatorialRandomizer {
     /// # Returns
     /// New EquatorialRandomizer instance ready for coordinate generation
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::star_math::EquatorialRandomizer;
-    ///
-    /// // Different seeds produce different sequences
-    /// let mut rng1 = EquatorialRandomizer::new(12345);
-    /// let mut rng2 = EquatorialRandomizer::new(67890);
-    ///
-    /// let coord1 = rng1.generate();
-    /// let coord2 = rng2.generate();
-    /// assert_ne!(coord1.ra_degrees(), coord2.ra_degrees());
-    ///
-    /// // Same seeds produce identical sequences
-    /// let mut rng3 = EquatorialRandomizer::new(12345);
-    /// let coord3 = rng3.generate();
-    /// assert_eq!(coord1.ra_degrees(), coord3.ra_degrees());
-    /// ```
+    /// # Usage
+    /// Different seeds produce different sequences, while identical seeds
+    /// produce identical sequences for reproducible testing.
     pub fn new(seed: u64) -> Self {
         Self {
             rng: StdRng::seed_from_u64(seed),
@@ -482,21 +364,9 @@ impl EquatorialRandomizer {
     /// This method mutates internal RNG state and is not thread-safe.
     /// Create separate generators for concurrent use.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::star_math::EquatorialRandomizer;
-    ///
-    /// let mut rng = EquatorialRandomizer::new(42);
-    ///
-    /// // Generate multiple random coordinates
-    /// for _ in 0..100 {
-    ///     let coord = rng.generate();
-    ///     
-    ///     // Verify coordinate bounds
-    ///     assert!(coord.ra_degrees() >= 0.0 && coord.ra_degrees() < 360.0);
-    ///     assert!(coord.dec_degrees() >= -90.0 && coord.dec_degrees() <= 90.0);
-    /// }
-    /// ```
+    /// # Usage
+    /// Call repeatedly to generate coordinate sequences. Each call advances
+    /// the internal RNG state and returns the next coordinate in the sequence.
     pub fn generate(&mut self) -> Equatorial {
         let ra = self.rng.gen::<f64>() * 360.0; // Random RA in degrees [0, 360)
         let dec = (self.rng.gen::<f64>() - 0.5) * 180.0; // Random Dec in degrees [-90, 90]
@@ -594,21 +464,9 @@ impl StarProjector {
     /// # Returns
     /// Configured StarProjector ready for coordinate transformations
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::star_math::StarProjector;
-    /// use starfield::Equatorial;
-    ///
-    /// // Create projector for 1-arcsec/pixel scale
-    /// let field_center = Equatorial::from_degrees(180.0, -30.0);
-    /// let scale = (1.0_f64).to_radians() / 3600.0; // 1 arcsec in radians
-    /// let projector = StarProjector::new(&field_center, scale, 2048, 2048);
-    ///
-    /// // Field center should project to detector center
-    /// let (x, y) = projector.project(&field_center).unwrap();
-    /// assert!((x - 1024.0).abs() < 0.1);
-    /// assert!((y - 1024.0).abs() < 0.1);
-    /// ```
+    /// # Usage
+    /// Creates a configured projector for transforming celestial coordinates
+    /// to detector pixel coordinates. The field center maps to detector center.
     pub fn new(
         center: &Equatorial,
         radians_per_pixel: f64,
@@ -669,27 +527,9 @@ impl StarProjector {
     /// * `Some((x, y))` - Pixel coordinates if star visible (in front of camera)
     /// * `None` - If star is behind camera or at coordinate singularity
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::star_math::StarProjector;
-    /// use starfield::Equatorial;
-    ///
-    /// let projector = StarProjector::new(
-    ///     &Equatorial::from_degrees(0.0, 0.0),
-    ///     1e-6, 1024, 1024
-    /// );
-    ///
-    /// // Star far outside detector bounds
-    /// let distant_star = Equatorial::from_degrees(10.0, 10.0);
-    /// if let Some((x, y)) = projector.project_unbounded(&distant_star) {
-    ///     println!("Star at pixel ({:.1}, {:.1}) - way outside detector!", x, y);
-    ///     // Coordinates may be negative or >> detector dimensions
-    /// }
-    ///
-    /// // Star behind camera returns None
-    /// let behind_star = Equatorial::from_degrees(180.0, 0.0); // Opposite sky
-    /// assert!(projector.project_unbounded(&behind_star).is_none());
-    /// ```
+    /// # Usage
+    /// Projects stars without bounds checking. Returns pixel coordinates even
+    /// for stars outside detector bounds, useful for field geometry analysis.
     pub fn project_unbounded(&self, equatorial: &Equatorial) -> Option<(f64, f64)> {
         // Convert equatorial to cartesian unit vector
         let cartesian = equatorial.to_cartesian().to_vector3();
@@ -738,27 +578,9 @@ impl StarProjector {
     /// For performance-critical applications with pre-filtered coordinates,
     /// consider using `project_unbounded()` directly.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::star_math::StarProjector;
-    /// use starfield::Equatorial;
-    ///
-    /// let projector = StarProjector::new(
-    ///     &Equatorial::from_degrees(0.0, 0.0),
-    ///     1e-6, // ~0.2 arcsec/pixel
-    ///     2048, 2048
-    /// );
-    ///
-    /// // Star within field of view
-    /// let nearby_star = Equatorial::from_degrees(0.01, 0.01);
-    /// if let Some((x, y)) = projector.project(&nearby_star) {
-    ///     println!("Star visible at pixel ({:.2}, {:.2})", x, y);
-    /// }
-    ///
-    /// // Star outside field of view
-    /// let distant_star = Equatorial::from_degrees(1.0, 1.0);
-    /// assert!(projector.project(&distant_star).is_none());
-    /// ```
+    /// # Usage
+    /// Primary method for projecting stars with bounds checking. Returns None
+    /// for stars outside the detector field of view or behind the camera.
     pub fn project(&self, equatorial: &Equatorial) -> Option<(f64, f64)> {
         let (pixel_x, pixel_y) = self.project_unbounded(equatorial)?;
 

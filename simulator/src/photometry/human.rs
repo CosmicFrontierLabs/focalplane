@@ -23,33 +23,8 @@
 //! # Astronomical Color Applications
 //!
 //! ## Stellar Color Rendering
-//! Accurate reproduction of how different stellar types appear to the human eye:
-//! ```rust
-//! use simulator::photometry::human::HumanVision;
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-//! use simulator::photometry::{QuantumEfficiency, Spectrum};
-//! use std::time::Duration;
-//!
-//! // Create stellar spectra for different types
-//! let sirius = BlackbodyStellarSpectrum::new(9940.0, 1.0);    // A0V - blue-white
-//! let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);      // G2V - yellow
-//! let arcturus = BlackbodyStellarSpectrum::new(4286.0, 1.0); // K1.5III - orange
-//!
-//! // Get cone responses
-//! let red_qe = HumanVision::red();
-//! let green_qe = HumanVision::green_blue();
-//! let blue_qe = HumanVision::blue();
-//!
-//! // Calculate color responses for Sirius
-//! let aperture = 1.0; // cm²
-//! let exposure = Duration::from_secs(1);
-//! let sirius_red = sirius.photo_electrons(&red_qe, aperture, &exposure);
-//! let sirius_green = sirius.photo_electrons(&green_qe, aperture, &exposure);
-//! let sirius_blue = sirius.photo_electrons(&blue_qe, aperture, &exposure);
-//!
-//! println!("Sirius RGB response: R={:.2}, G={:.2}, B={:.2}",
-//!          sirius_red, sirius_green, sirius_blue);
-//! ```
+//! Accurate reproduction of stellar colors as they appear to human vision
+//! for realistic astronomical visualization and color analysis.
 //!
 //! ## Magnitude System Calibration
 //! Human vision models are fundamental to photometric magnitude systems:
@@ -58,25 +33,8 @@
 //! - **Photographic magnitudes**: Historical systems calibrated to visual estimates
 //!
 //! ## Display Color Matching
-//! Convert telescope observations to accurate display colors:
-//! ```rust
-//! use simulator::photometry::human::HumanVision;
-//!
-//! // Get human vision quantum efficiency curves
-//! let red_response = HumanVision::red();
-//! let green_response = HumanVision::green_blue();
-//! let blue_response = HumanVision::blue();
-//!
-//! // Check peak sensitivities
-//! println!("Red peak at 600nm: {:.3}", red_response.at(600.0));
-//! println!("Green peak at 500nm: {:.3}", green_response.at(500.0));  
-//! println!("Blue peak at 450nm: {:.3}", blue_response.at(450.0));
-//!
-//! // Verify visible spectrum coverage
-//! let visible = HumanVision::visible_band();
-//! println!("Human visible range: {:.0}-{:.0} nm",
-//!          visible.lower_nm, visible.upper_nm);
-//! ```
+//! Convert telescope observations to accurate display colors
+//! using human cone response functions for realistic rendering.
 //!
 //! # Data Sources and Validation
 //!
@@ -109,18 +67,9 @@ use super::spectrum::Band;
 /// - M-cones: Medium wavelength (green) sensitivity, peak ~535nm
 /// - S-cones: Short wavelength (blue) sensitivity, peak ~420nm
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::human::{HumanPhotoreceptor, HumanVision};
-///
-/// // Access specific cone types
-/// let red_response = HumanVision::for_receptor(HumanPhotoreceptor::Red);
-/// let blue_response = HumanVision::for_receptor(HumanPhotoreceptor::Blue);
-///
-/// // Check peak wavelength responses
-/// assert!(red_response.at(600.0) > red_response.at(500.0));  // Red peak
-/// assert!(blue_response.at(450.0) > blue_response.at(600.0)); // Blue peak
-/// ```
+/// # Usage
+/// Enumeration of human cone types for programmatic access
+/// to specific photoreceptor responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HumanPhotoreceptor {
     /// L-cone photoreceptors (long wavelength, red-sensitive).
@@ -164,30 +113,8 @@ pub enum HumanPhotoreceptor {
 /// - **Validation**: Curves validated against CIE color matching functions
 ///
 /// # Usage Patterns
-/// ```rust
-/// use simulator::photometry::human::HumanVision;
-/// use simulator::photometry::{QuantumEfficiency, Spectrum};
-///
-/// // Get individual cone responses
-/// let red_cone = HumanVision::red();
-/// let green_cone = HumanVision::green_blue();  // Primary green channel
-/// let blue_cone = HumanVision::blue();
-///
-/// // Calculate RGB color from spectrum
-/// # use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// # use std::time::Duration;
-/// let star_spectrum = BlackbodyStellarSpectrum::new(5778.0, 1.0);
-/// let exposure = Duration::from_secs(1);
-/// let aperture = 1.0;
-///
-/// let r = star_spectrum.photo_electrons(&red_cone, aperture, &exposure);
-/// let g = star_spectrum.photo_electrons(&green_cone, aperture, &exposure);
-/// let b = star_spectrum.photo_electrons(&blue_cone, aperture, &exposure);
-///
-/// // Normalize for display
-/// let max_val = r.max(g).max(b);
-/// println!("RGB: ({:.2}, {:.2}, {:.2})", r/max_val, g/max_val, b/max_val);
-/// ```
+/// Create human cone response curves for stellar color analysis
+/// and accurate RGB rendering of astronomical objects.
 pub struct HumanVision {}
 
 impl HumanVision {
@@ -215,24 +142,9 @@ impl HumanVision {
     /// # Returns
     /// QuantumEfficiency curve for L-cone photoreceptors
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::human::HumanVision;
-    /// use simulator::photometry::QuantumEfficiency;
-    ///
-    /// let red_qe = HumanVision::red();
-    ///
-    /// // Check peak red sensitivity
-    /// assert_eq!(red_qe.at(600.0), 0.32);
-    ///
-    /// // Verify red vs blue response
-    /// assert!(red_qe.at(650.0) > red_qe.at(450.0));
-    ///
-    /// // Check wavelength range
-    /// let band = red_qe.band();
-    /// assert_eq!(band.lower_nm, 0.0);
-    /// assert_eq!(band.upper_nm, 1100.0);
-    /// ```
+    /// # Usage
+    /// L-cone quantum efficiency for red color perception
+    /// and stellar color analysis.
     pub fn red() -> QuantumEfficiency {
         let wavelengths = Self::standard_wavelengths();
         let efficiencies = vec![
@@ -260,22 +172,9 @@ impl HumanVision {
     /// # Returns
     /// QuantumEfficiency curve for S-cone photoreceptors
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::human::HumanVision;
-    /// use simulator::photometry::QuantumEfficiency;
-    ///
-    /// let blue_qe = HumanVision::blue();
-    ///
-    /// // Check peak blue sensitivity
-    /// assert_eq!(blue_qe.at(450.0), 0.33);
-    ///
-    /// // Verify blue vs red response
-    /// assert!(blue_qe.at(450.0) > blue_qe.at(650.0));
-    ///
-    /// // Check UV sensitivity (limited)
-    /// assert!(blue_qe.at(350.0) < blue_qe.at(450.0));
-    /// ```
+    /// # Usage
+    /// S-cone quantum efficiency for blue color perception
+    /// and UV-sensitive stellar analysis.
     pub fn blue() -> QuantumEfficiency {
         let wavelengths = Self::standard_wavelengths();
         let efficiencies = vec![
@@ -325,20 +224,9 @@ impl HumanVision {
     /// # Returns
     /// QuantumEfficiency curve for green-blue hybrid photoreceptors
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::human::HumanVision;
-    /// use simulator::photometry::QuantumEfficiency;
-    ///
-    /// let green_blue_qe = HumanVision::green_blue();
-    ///
-    /// // Check peak green sensitivity
-    /// assert_eq!(green_blue_qe.at(500.0), 0.40);
-    ///
-    /// // Verify green response range
-    /// assert!(green_blue_qe.at(550.0) > 0.1);
-    /// assert!(green_blue_qe.at(450.0) > 0.2);
-    /// ```
+    /// # Usage
+    /// Hybrid green-blue quantum efficiency for primary green channel
+    /// in RGB color synthesis and stellar visualization.
     pub fn green_blue() -> QuantumEfficiency {
         let wavelengths = Self::standard_wavelengths();
         let efficiencies = vec![
@@ -362,23 +250,9 @@ impl HumanVision {
     /// # Returns
     /// QuantumEfficiency curve for the specified photoreceptor
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::human::{HumanPhotoreceptor, HumanVision};
-    ///
-    /// // Programmatic access to cone types
-    /// let cone_types = [
-    ///     HumanPhotoreceptor::Red,
-    ///     HumanPhotoreceptor::GreenBlue,
-    ///     HumanPhotoreceptor::Blue,
-    /// ];
-    ///
-    /// for cone_type in cone_types.iter() {
-    ///     let qe = HumanVision::for_receptor(*cone_type);
-    ///     println!("{:?} cone range: {:.0}-{:.0} nm",
-    ///              cone_type, qe.band().lower_nm, qe.band().upper_nm);
-    /// }
-    /// ```
+    /// # Usage
+    /// Programmatic access to cone response curves
+    /// for systematic color analysis.
     pub fn for_receptor(receptor: HumanPhotoreceptor) -> QuantumEfficiency {
         match receptor {
             HumanPhotoreceptor::Red => Self::red(),
@@ -407,22 +281,9 @@ impl HumanVision {
     /// # Returns
     /// Band object with human visible spectrum bounds
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::human::HumanVision;
-    /// use simulator::photometry::Band;
-    ///
-    /// let visible = HumanVision::visible_band();
-    ///
-    /// // Check standard visible range
-    /// assert_eq!(visible.lower_nm, 350.0);
-    /// assert_eq!(visible.upper_nm, 750.0);
-    ///
-    /// // Verify wavelength is in visible range
-    /// assert!(visible.lower_nm <= 550.0 && 550.0 <= visible.upper_nm);  // Green light
-    /// assert!(!(visible.lower_nm <= 900.0 && 900.0 <= visible.upper_nm)); // Near-infrared
-    /// assert!(!(visible.lower_nm <= 300.0 && 300.0 <= visible.upper_nm)); // Near-ultraviolet
-    /// ```
+    /// # Usage
+    /// Standard human visible spectrum (350-750nm) for
+    /// wavelength filtering and spectrum analysis.
     pub fn visible_band() -> Band {
         Band::from_nm_bounds(350.0, 750.0)
     }

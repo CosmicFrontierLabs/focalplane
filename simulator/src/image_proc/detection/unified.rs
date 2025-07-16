@@ -25,41 +25,10 @@
 //! - **Features**: Fast threshold + centroiding
 //! - **Performance**: Fastest but least sophisticated
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::detection::{detect_stars_unified as detect_stars, StarFinder};
-//! use simulator::image_proc::airy::ScaledAiryDisk;
-//! use ndarray::Array2;
-//!
-//! // Create test image with some noise
-//! let image = Array2::from_elem((100, 100), 10u16);
-//!
-//! // Detection parameters for space telescope
-//! let airy_disk = ScaledAiryDisk::with_fwhm(2.5);      // Pixels FWHM
-//! let background_rms = 1.2; // RMS noise level
-//! let sigma_threshold = 5.0; // 5-sigma detection
-//!
-//! // Try different algorithms
-//! let dao_stars = detect_stars(
-//!     image.view(),
-//!     StarFinder::Dao,
-//!     &airy_disk,
-//!     background_rms,
-//!     sigma_threshold
-//! ).unwrap();
-//!
-//! let iraf_stars = detect_stars(
-//!     image.view(),
-//!     StarFinder::Iraf,
-//!     &airy_disk,
-//!     background_rms,
-//!     sigma_threshold
-//! ).unwrap();
-//!
-//! println!("DAO found {} stars", dao_stars.len());
-//! println!("IRAF found {} stars", iraf_stars.len());
-//! ```
+//! Provides unified interface for multiple star detection algorithms
+//! with automatic parameter optimization for space telescope observations.
 
 use ndarray::ArrayView2;
 use starfield::image::starfinders::{DAOStarFinder, IRAFStarFinder, StellarSource};
@@ -135,37 +104,9 @@ impl std::str::FromStr for StarFinder {
 /// - IRAF: ~20-50 ns/pixel  
 /// - Naive: ~5-10 ns/pixel
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::airy::ScaledAiryDisk;
-/// use simulator::image_proc::detection::unified::{detect_stars, StarFinder};
-/// use ndarray::Array2;
-///
-/// // Simulate astronomical image
-/// let mut image = Array2::from_elem((64, 64), 100u16);
-/// image[[32, 32]] = 1000; // Add a bright star
-///
-/// // Space telescope parameters
-/// let airy_disk = ScaledAiryDisk::with_first_zero(2.5);    // FWHM in pixels
-/// let noise_rms = 5.0;    // Background RMS
-/// let threshold = 5.0;    // 5-sigma detection
-///
-/// let stars = detect_stars(
-///     image.view(),
-///     StarFinder::Dao,
-///     &airy_disk,
-///     noise_rms,
-///     threshold
-/// )?;
-///
-/// println!("Detected {} stars", stars.len());
-/// for star in &stars {
-///     let (x, y) = star.get_centroid();
-///     println!("Star at ({:.2}, {:.2}) with flux {:.1}",
-///              x, y, star.flux());
-/// }
-/// # Ok::<(), String>(())
-/// ```
+/// # Usage
+/// Unified interface for DAO, IRAF, and naive star detection algorithms
+/// with automatic parameter optimization and performance monitoring.
 pub fn detect_stars(
     image: ArrayView2<u16>,
     algorithm: StarFinder,

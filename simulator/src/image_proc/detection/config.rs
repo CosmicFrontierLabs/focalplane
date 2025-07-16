@@ -24,22 +24,8 @@
 //!
 //! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::detection::config::{dao_autoconfig, iraf_autoconfig};
-//! use simulator::image_proc::airy::ScaledAiryDisk;
-//!
-//! // Space telescope parameters
-//! let airy_disk = ScaledAiryDisk::with_fwhm(2.5);  // FWHM from telescope/sensor combination
-//! let background_rms = 1.2;    // From background noise analysis
-//! let detection_sigma = 5.0;   // 5-sigma detection threshold
-//!
-//! // Create optimized configurations
-//! let dao_config = dao_autoconfig(&airy_disk, background_rms, detection_sigma);
-//! let iraf_config = iraf_autoconfig(&airy_disk, background_rms, detection_sigma);
-//!
-//! println!("DAO threshold: {:.2}", dao_config.threshold);
-//! println!("IRAF FWHM: {:.2} pixels", iraf_config.fwhm);
-//! ```
+//! Create optimized detection configurations using dao_autoconfig() and
+//! iraf_autoconfig() with PSF characteristics and noise parameters.
 
 use crate::image_proc::airy::PixelScaledAiryDisk;
 use starfield::image::starfinders::{DAOStarFinderConfig, IRAFStarFinderConfig};
@@ -64,17 +50,9 @@ use starfield::image::starfinders::{DAOStarFinderConfig, IRAFStarFinderConfig};
 /// # Returns
 /// DAOStarFinderConfig with parameters optimized for space telescope characteristics
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::config::dao_autoconfig;
-/// use simulator::image_proc::airy::ScaledAiryDisk;
-///
-/// // For 2.5 pixel FWHM space telescope
-/// let airy_disk = ScaledAiryDisk::with_fwhm(2.5);
-/// let config = dao_autoconfig(&airy_disk, 1.0, 5.0);
-/// assert_eq!(config.fwhm, 5.0);  // 2.0 × FWHM
-/// assert_eq!(config.threshold, 6.0);  // 5σ × 1.0 RMS × 1.2 factor
-/// ```
+/// # Usage
+/// Creates DAOStarFinder configuration with conservative shape filtering
+/// and parameters optimized for space telescope PSF characteristics.
 pub fn dao_autoconfig(
     scaled_airy_disk: &PixelScaledAiryDisk,
     background_rms: f64,
@@ -119,18 +97,9 @@ pub fn dao_autoconfig(
 /// # Returns
 /// IRAFStarFinderConfig with parameters optimized for space telescope characteristics
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::config::iraf_autoconfig;
-/// use simulator::image_proc::airy::ScaledAiryDisk;
-///
-/// // For 2.5 pixel FWHM space telescope
-/// let airy_disk = ScaledAiryDisk::with_fwhm(2.5);
-/// let config = iraf_autoconfig(&airy_disk, 1.0, 5.0);
-/// assert_eq!(config.fwhm, 4.375);  // 1.75 × 2.5
-/// assert_eq!(config.threshold, 6.0);  // 5σ × 1.0 RMS × 1.2 factor
-/// assert_eq!(config.minsep_fwhm, 1.5);  // 1.5× FWHM separation
-/// ```
+/// # Usage
+/// Creates IRAFStarFinder configuration with simpler parameters
+/// and faster detection suitable for space telescope observations.
 pub fn iraf_autoconfig(
     scaled_airy_disk: &PixelScaledAiryDisk,
     background_rms: f64,

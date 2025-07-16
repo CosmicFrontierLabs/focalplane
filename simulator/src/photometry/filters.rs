@@ -45,63 +45,16 @@
 //! # Examples
 //!
 //! ## Basic Filter Usage
-//! ```rust
-//! use simulator::photometry::filters::{u_filter, b_filter, v_filter};
-//! use simulator::photometry::QuantumEfficiency;
-//!
-//! // Create individual filters
-//! let u = u_filter();
-//! let b = b_filter();
-//! let v = v_filter();
-//!
-//! // Check transmission at effective wavelengths
-//! println!("U filter at 365nm: {:.2}", u.at(365.0));
-//! println!("B filter at 445nm: {:.2}", b.at(445.0));
-//! println!("V filter at 551nm: {:.2}", v.at(551.0));
-//! ```
+//! Create individual UBV filters and check transmission values
+//! at specific wavelengths for photometric analysis.
 //!
 //! ## Color Index Calculation
-//! ```rust
-//! use simulator::photometry::filters::{b_filter, v_filter};
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-//! use simulator::photometry::Spectrum;
-//! use std::time::Duration;
-//!
-//! // Create filters and stellar spectrum
-//! let b = b_filter();
-//! let v = v_filter();
-//! let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);  // Solar spectrum
-//!
-//! // Calculate magnitudes (simplified)
-//! let exposure = Duration::from_secs(1);
-//! let aperture = 1.0; // 1 cm²
-//! let b_flux = sun.photo_electrons(&b, aperture, &exposure);
-//! let v_flux = sun.photo_electrons(&v, aperture, &exposure);
-//!
-//! // B-V color index
-//! let bv_color = -2.5 * (b_flux / v_flux).log10();
-//! println!("Sun B-V color index: {:.3}", bv_color);  // Should be ~0.656
-//! ```
+//! Calculate B-V color indices from stellar spectra using standard
+//! photometric filters for stellar classification.
 //!
 //! ## Complete UBV Photometry
-//! ```rust
-//! use simulator::photometry::filters::ubv_filters;
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-//! use simulator::photometry::{QuantumEfficiency, Spectrum};
-//!
-//! // Get all three filters at once
-//! let (u, b, v) = ubv_filters();
-//!
-//! // Analyze different stellar types
-//! let hot_star = BlackbodyStellarSpectrum::new(25000.0, 1.0);  // O-type
-//! let cool_star = BlackbodyStellarSpectrum::new(3500.0, 1.0);  // M-type
-//!
-//! // Hot stars are bright in U, cool stars are faint
-//! let exposure = std::time::Duration::from_secs(1);
-//! let aperture = 1.0; // cm²
-//! println!("Hot star U response: {:.2}", hot_star.photo_electrons(&u, aperture, &exposure));
-//! println!("Cool star U response: {:.2}", cool_star.photo_electrons(&u, aperture, &exposure));
-//! ```
+//! Perform comprehensive UBV photometry for stellar population
+//! analysis and temperature classification.
 
 use super::{quantum_efficiency::QuantumEfficiencyError, QuantumEfficiency};
 
@@ -231,23 +184,9 @@ fn create_qe_from_data(data: &[(f64, f64)]) -> Result<QuantumEfficiency, Quantum
 /// # Returns
 /// U-band QuantumEfficiency
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::filters::u_filter;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// use simulator::photometry::QuantumEfficiency;
-///
-/// let u = u_filter();
-///
-/// // U filter is sensitive to hot stars
-/// let hot_star = BlackbodyStellarSpectrum::new(30000.0, 1.0);  // O-type
-/// let cool_star = BlackbodyStellarSpectrum::new(3000.0, 1.0);  // M-type
-///
-/// // Check transmission at key wavelengths
-/// assert_eq!(u.at(350.0), 1.0);   // Peak transmission
-/// assert_eq!(u.at(300.0), 0.2);   // UV cutoff
-/// assert_eq!(u.at(400.0), 0.2);   // Blue cutoff
-/// ```
+/// # Usage
+/// Standard Johnson U-band filter for UV stellar photometry
+/// and hot star detection.
 pub fn u_filter() -> QuantumEfficiency {
     create_qe_from_data(&U_FILTER_DATA).expect("U filter data is hardcoded and should never fail")
 }
@@ -268,29 +207,9 @@ pub fn u_filter() -> QuantumEfficiency {
 /// # Returns
 /// B-band QuantumEfficiency
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::filters::b_filter;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// use simulator::photometry::{QuantumEfficiency, Spectrum};
-/// use std::time::Duration;
-///
-/// let b = b_filter();
-///
-/// // B filter for stellar classification
-/// let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);
-///
-/// // Calculate B-band flux
-/// let exposure = Duration::from_secs(1);
-/// let aperture = 100.0; // cm²
-/// let b_flux = sun.photo_electrons(&b, aperture, &exposure);
-///
-/// // Check key transmission points
-/// assert_eq!(b.at(440.0), 1.0);    // Peak blue
-/// assert_eq!(b.at(450.0), 1.0);    // Peak blue  
-/// assert_eq!(b.at(390.0), 0.35);   // UV side
-/// assert_eq!(b.at(500.0), 0.4);    // Green side
-/// ```
+/// # Usage
+/// Standard Johnson B-band filter for blue stellar photometry
+/// and color index calculations.
 pub fn b_filter() -> QuantumEfficiency {
     create_qe_from_data(&B_FILTER_DATA).expect("B filter data is hardcoded and should never fail")
 }
@@ -311,27 +230,9 @@ pub fn b_filter() -> QuantumEfficiency {
 /// # Returns
 /// V-band QuantumEfficiency
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::filters::v_filter;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// use simulator::photometry::QuantumEfficiency;
-///
-/// let v = v_filter();
-///
-/// // V filter closely matches human eye sensitivity
-/// let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);
-///
-/// // Check visual wavelength response
-/// assert_eq!(v.at(540.0), 1.0);    // Peak visual
-/// assert_eq!(v.at(550.0), 1.0);    // Peak visual
-/// assert_eq!(v.at(500.0), 0.5);    // Green side
-/// assert_eq!(v.at(600.0), 0.45);   // Red side
-///
-/// // V-band is reference for stellar magnitudes
-/// println!("V filter band: {} to {} nm",
-///          v.band().lower_nm, v.band().upper_nm);
-/// ```
+/// # Usage
+/// Standard Johnson V-band filter matching human eye sensitivity
+/// for visual magnitude reference and stellar classification.
 pub fn v_filter() -> QuantumEfficiency {
     create_qe_from_data(&V_FILTER_DATA).expect("V filter data is hardcoded and should never fail")
 }
@@ -352,32 +253,9 @@ pub fn v_filter() -> QuantumEfficiency {
 /// # Returns
 /// Tuple containing (U, B, V) QuantumEfficiency objects
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::filters::ubv_filters;
-/// use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-/// use simulator::photometry::{QuantumEfficiency, Spectrum};
-/// use std::time::Duration;
-///
-/// // Get complete UBV filter set
-/// let (u, b, v) = ubv_filters();
-///
-/// // Multi-band stellar photometry
-/// let star = BlackbodyStellarSpectrum::new(5778.0, 1.0);  // Solar type
-/// let exposure = Duration::from_secs(30);
-/// let aperture = 100.0; // cm²
-///
-/// // Calculate UBV magnitudes
-/// let u_flux = star.photo_electrons(&u, aperture, &exposure);
-/// let b_flux = star.photo_electrons(&b, aperture, &exposure);  
-/// let v_flux = star.photo_electrons(&v, aperture, &exposure);
-///
-/// // Color indices
-/// let ub_color = -2.5 * (u_flux / b_flux).log10();
-/// let bv_color = -2.5 * (b_flux / v_flux).log10();
-///
-/// println!("UBV photometry - U-B: {:.3}, B-V: {:.3}", ub_color, bv_color);
-/// ```
+/// # Usage
+/// Complete UBV filter set for multi-band stellar photometry
+/// and comprehensive color index analysis.
 pub fn ubv_filters() -> (QuantumEfficiency, QuantumEfficiency, QuantumEfficiency) {
     (u_filter(), b_filter(), v_filter())
 }

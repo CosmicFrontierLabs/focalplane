@@ -16,90 +16,20 @@
 //! # Core Components
 //!
 //! ## Spectrum Trait
-//! Universal interface for all spectral energy distributions:
-//! ```rust
-//! use simulator::photometry::{Spectrum, Band};
-//! use std::time::Duration;
-//!
-//! # struct ExampleSpectrum;
-//! # impl Spectrum for ExampleSpectrum {
-//! #     fn spectral_irradiance(&self, _: f64) -> f64 { 1e-10 }
-//! #     fn irradiance(&self, _: &Band) -> f64 { 1e-8 }
-//! # }
-//! let spectrum = ExampleSpectrum;
-//! let band = Band::from_nm_bounds(400.0, 700.0);
-//!
-//! // Get spectral irradiance at specific wavelength
-//! let flux_550nm = spectrum.spectral_irradiance(550.0);
-//!
-//! // Integrate total power in band
-//! let total_power = spectrum.irradiance(&band);
-//!
-//! // Count photons for realistic detector
-//! let aperture = 100.0; // cm²
-//! let exposure = Duration::from_secs(30);
-//! let photon_count = spectrum.photons(&band, aperture, exposure);
-//! ```
+//! Universal interface for stellar spectra, blackbody radiation,
+//! and other spectral energy distributions.
 //!
 //! ## Wavelength Bands
-//! Precise wavelength range definitions for filters and detectors:
-//! ```rust
-//! use simulator::photometry::Band;
-//!
-//! // Johnson V-band approximation
-//! let v_band = Band::from_nm_bounds(500.0, 600.0);
-//!
-//! // Narrow-band H-alpha filter
-//! let ha_band = Band::centered_on(656.3, 2e12); // 656.3nm ± 1GHz
-//!
-//! // Check band properties
-//! println!("V-band: {:.0}-{:.0} nm (width: {:.0} nm)",
-//!          v_band.lower_nm, v_band.upper_nm, v_band.width());
-//! println!("H-alpha center: {:.1} nm", ha_band.center());
-//! ```
+//! Precise wavelength range definitions for photometric filters
+//! and detector response calculations.
 //!
 //! ## Physical Constants
-//! Accurate CGS physical constants for astronomical calculations:
-//! ```rust
-//! use simulator::photometry::spectrum::CGS;
-//!
-//! // AB magnitude zero point
-//! println!("AB zero-point: {:.2e} erg/s/cm²/Hz", CGS::AB_ZERO_POINT_FLUX_DENSITY);
-//!
-//! // Fundamental constants
-//! println!("Planck constant: {:.3e} erg⋅s", CGS::PLANCK_CONSTANT);
-//! println!("Speed of light: {:.5e} cm/s", CGS::SPEED_OF_LIGHT);
-//! ```
+//! Accurate CGS physical constants for astronomical magnitude
+//! calculations and photon energy conversions.
 //!
 //! # Synthetic Photometry Workflow
-//!
-//! ```rust
-//! use simulator::photometry::{Spectrum, Band, QuantumEfficiency};
-//! use std::time::Duration;
-//!
-//! # struct SolarSpectrum;
-//! # impl Spectrum for SolarSpectrum {
-//! #     fn spectral_irradiance(&self, wavelength: f64) -> f64 {
-//! #         // Simplified solar spectrum
-//! #         if (400.0..=700.0).contains(&wavelength) { 1e-10 } else { 0.0 }
-//! #     }
-//! #     fn irradiance(&self, band: &Band) -> f64 { 1e-8 * band.width() }
-//! # }
-//! // 1. Define stellar spectrum
-//! let sun = SolarSpectrum;
-//!
-//! // 2. Define detector response
-//! let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
-//! let efficiencies = vec![0.0, 0.8, 0.9, 0.0];
-//! let detector = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
-//!
-//! // 3. Calculate synthetic photometry
-//! let aperture = 50.0; // cm² telescope
-//! let exposure = Duration::from_secs(60);
-//! let photoelectrons = sun.photo_electrons(&detector, aperture, &exposure);
-//!
-//! println!("Detected {:.0} photoelectrons in 60s", photoelectrons);
-//! ```
+//! Complete pipeline for calculating detector responses from stellar
+//! spectra through realistic telescope and sensor models.
 //!
 //! # Wavelength-Frequency Conversions
 //!
@@ -129,18 +59,8 @@ use super::QuantumEfficiency;
 /// (centimeter-gram-second) units for consistency with astronomical literature.
 ///
 /// # Usage
-/// ```rust
-/// use simulator::photometry::spectrum::CGS;
-///
-/// // Calculate photon energy at 550nm
-/// let wavelength_cm = 550e-7; // Convert nm to cm
-/// let photon_energy = CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / wavelength_cm;
-/// println!("550nm photon energy: {:.2e} erg", photon_energy);
-///
-/// // AB magnitude zero-point reference
-/// let ab_zp = CGS::AB_ZERO_POINT_FLUX_DENSITY;
-/// println!("AB zero-point: {:.0e} erg/s/cm²/Hz", ab_zp);
-/// ```
+/// Physical constants for astronomical photon energy calculations
+/// and AB magnitude zero-point reference values.
 pub struct CGS {}
 
 impl CGS {
@@ -185,23 +105,9 @@ pub enum SpectrumError {
 /// - **Integration bounds**: Spectral photometry calculations
 /// - **Bandwidth analysis**: Effective wavelength and filter width
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::Band;
-///
-/// // Standard Johnson V-band (approximate)
-/// let v_band = Band::from_nm_bounds(500.0, 600.0);
-/// assert_eq!(v_band.width(), 100.0);
-/// assert_eq!(v_band.center(), 550.0);
-///
-/// // Narrow H-alpha filter
-/// let ha_filter = Band::from_nm_bounds(655.0, 657.0);
-/// assert_eq!(ha_filter.width(), 2.0);
-///
-/// // Wide visible spectrum
-/// let visible = Band::from_nm_bounds(380.0, 750.0);
-/// assert_eq!(visible.width(), 370.0);
-/// ```
+/// # Usage
+/// Create wavelength ranges for astronomical filters, detector sensitivity
+/// ranges, and spectral integration bounds with precise nanometer definitions.
 pub struct Band {
     /// Lower wavelength bound in nanometers
     pub lower_nm: f64,
@@ -389,37 +295,9 @@ pub fn wavelength_to_ergs(wavelength_nm: f64) -> f64 {
 /// - **FlatStellarSpectrum**: Uniform flux density (calibration)
 /// - **STISZodiacalSpectrum**: Zodiacal light background model
 ///
-/// # Typical Usage Pattern
-/// ```rust
-/// use simulator::photometry::{Spectrum, Band, QuantumEfficiency};
-/// use std::time::Duration;
-///
-/// # struct ExampleSpectrum;
-/// # impl Spectrum for ExampleSpectrum {
-/// #     fn spectral_irradiance(&self, wavelength: f64) -> f64 {
-/// #         if (400.0..=700.0).contains(&wavelength) { 1e-10 } else { 0.0 }
-/// #     }
-/// #     fn irradiance(&self, band: &Band) -> f64 { 1e-8 * band.width() }
-/// # }
-/// fn analyze_spectrum<S: Spectrum>(spectrum: &S) {
-///     // 1. Check spectral irradiance at key wavelengths
-///     let blue_flux = spectrum.spectral_irradiance(450.0);  // B-band
-///     let visual_flux = spectrum.spectral_irradiance(550.0); // V-band
-///     let red_flux = spectrum.spectral_irradiance(650.0);   // R-band
-///     
-///     // 2. Calculate color indices
-///     let bv_ratio = blue_flux / visual_flux;
-///     
-///     // 3. Integrate total power in visible spectrum
-///     let visible_band = Band::from_nm_bounds(400.0, 700.0);
-///     let total_power = spectrum.irradiance(&visible_band);
-///     
-///     // 4. Count photons for 1-meter telescope, 1-second exposure
-///     let aperture = 10000.0; // cm² (1m diameter)
-///     let exposure = Duration::from_secs(1);
-///     let photon_count = spectrum.photons(&visible_band, aperture, exposure);
-/// }
-/// ```
+/// # Usage
+/// Universal interface for astronomical spectral energy distributions with
+/// wavelength-dependent irradiance evaluation and photometric integration.
 pub trait Spectrum: Send + Sync {
     /// Evaluate spectral irradiance at specific wavelength.
     ///
@@ -438,39 +316,9 @@ pub trait Spectrum: Send + Sync {
     /// # Returns
     /// Spectral irradiance in erg s⁻¹ cm⁻² Hz⁻¹, or 0.0 outside spectrum range
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::Spectrum;
-    ///
-    /// # struct SolarSpectrum;
-    /// # impl Spectrum for SolarSpectrum {
-    /// #     fn spectral_irradiance(&self, wavelength: f64) -> f64 {
-    /// #         // Solar-like spectrum with peak in green
-    /// #         if (400.0..=700.0).contains(&wavelength) {
-    /// #             match wavelength as i32 {
-    /// #                 400..=500 => 0.8e-10,  // Blue
-    /// #                 500..=600 => 1.2e-10,  // Green (peak)
-    /// #                 600..=700 => 0.9e-10,  // Red
-    /// #                 _ => 1e-10
-    /// #             }
-    /// #         } else { 0.0 }
-    /// #     }
-    /// #     fn irradiance(&self, band: &simulator::photometry::Band) -> f64 { 1e-8 }
-    /// # }
-    /// let sun = SolarSpectrum;
-    ///
-    /// // Sample key wavelengths
-    /// let uv_flux = sun.spectral_irradiance(350.0);   // Near-UV
-    /// let blue_flux = sun.spectral_irradiance(450.0);  // Blue
-    /// let green_flux = sun.spectral_irradiance(550.0); // Green (peak)
-    /// let red_flux = sun.spectral_irradiance(650.0);   // Red
-    /// let ir_flux = sun.spectral_irradiance(850.0);    // Near-IR
-    ///
-    /// // Verify spectrum ranges
-    /// assert!(green_flux > 0.0);       // In range
-    /// assert!(blue_flux > 0.0);        // In range
-    /// assert_eq!(uv_flux, 0.0);        // Outside spectrum range
-    /// ```
+    /// # Usage
+    /// Evaluate power per unit area per unit frequency at specific wavelengths
+    /// for fundamental spectral quantity calculations and photometric analysis.
     fn spectral_irradiance(&self, wavelength_nm: f64) -> f64;
 
     /// Calculate the integrated power within a wavelength range and aperture

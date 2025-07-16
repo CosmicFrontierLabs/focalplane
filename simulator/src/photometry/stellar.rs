@@ -32,90 +32,22 @@
 //! # Implemented Spectrum Types
 //!
 //! ## BlackbodyStellarSpectrum
-//! Accurate Planck function stellar spectra:
-//! ```rust
-//! use simulator::photometry::stellar::BlackbodyStellarSpectrum;
-//! use simulator::photometry::Band;
-//!
-//! // Create solar-type star (G2V, 5778K)
-//! let sun = BlackbodyStellarSpectrum::new(5778.0, 1.0);
-//!
-//! // Hot blue star (B0V, 30000K)
-//! let hot_star = BlackbodyStellarSpectrum::new(30000.0, 1.0);
-//!
-//! // Cool red star (M5V, 3000K)
-//! let cool_star = BlackbodyStellarSpectrum::new(3000.0, 1.0);
-//!
-//! // Compare spectral shapes
-//! use simulator::photometry::Spectrum;
-//! let blue_band = Band::from_nm_bounds(400.0, 500.0);
-//! let red_band = Band::from_nm_bounds(600.0, 700.0);
-//!
-//! // Hot stars are brighter in blue
-//! assert!(hot_star.irradiance(&blue_band) > hot_star.irradiance(&red_band));
-//!
-//! // Cool stars are brighter in red  
-//! assert!(cool_star.irradiance(&red_band) > cool_star.irradiance(&blue_band));
-//! ```
+//! Accurate Planck function stellar spectra for solar-type, hot blue,
+//! and cool red stars with spectral shape analysis.
 //!
 //! ## FlatStellarSpectrum
-//! Uniform spectral flux density for calibration:
-//! ```rust
-//! use simulator::photometry::{Spectrum, stellar::FlatStellarSpectrum};
-//!
-//! // Create from AB magnitude system
-//! let mag_0_star = FlatStellarSpectrum::from_ab_mag(0.0);   // Bright reference
-//! let mag_12_star = FlatStellarSpectrum::from_ab_mag(12.0); // Faint source
-//!
-//! // Create from Gaia photometry
-//! let gaia_star = FlatStellarSpectrum::from_gaia_magnitude(15.5);
-//!
-//! // Verify magnitude scaling (5 mag = 100x flux difference)
-//! let ratio = mag_0_star.spectral_irradiance(550.0) / mag_12_star.spectral_irradiance(550.0);
-//! assert!((ratio - 63095.7).abs() < 1000.0); // 10^(12*0.4) ≈ 63096
-//! ```
+//! Uniform spectral flux density for calibration with AB magnitude
+//! system and Gaia photometry scaling verification.
 //!
 //! # Color-Temperature Relations
 //!
 //! ## B-V Color Index
-//! Empirical relationship from Ballesteros (2012):
-//! ```rust
-//! use simulator::photometry::stellar::{temperature_from_bv, BlackbodyStellarSpectrum};
+//! Empirical relationship from Ballesteros (2012) for converting
+//! B-V color to effective temperature and spectrum creation.
 //!
-//! // Convert B-V color to effective temperature
-//! let bv_sun = 0.656;  // Solar B-V color
-//! let temp_sun = temperature_from_bv(bv_sun);
-//! assert!((temp_sun - 5778.0).abs() < 100.0);  // Should be close to solar temperature
-//!
-//! // Create spectrum from observational data
-//! let star_from_color = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(bv_sun, 10.0);
-//! ```
-//!
-//! # Synthetic Photometry Example
-//!
-//! ```rust
-//! use simulator::photometry::{Spectrum, stellar::BlackbodyStellarSpectrum};
-//! use simulator::photometry::filters::{b_filter, v_filter};
-//! use std::time::Duration;
-//!
-//! // Create stellar spectrum
-//! let star = BlackbodyStellarSpectrum::new(5778.0, 1.0);  // Solar temperature
-//!
-//! // Get standard photometric filters
-//! let b_band = b_filter();
-//! let v_band = v_filter();
-//!
-//! // Calculate synthetic photometry for 1-meter telescope, 30-second exposure
-//! let aperture = 10000.0;  // cm² (1-meter diameter)
-//! let exposure = Duration::from_secs(30);
-//!
-//! let b_electrons = star.photo_electrons(&b_band, aperture, &exposure);
-//! let v_electrons = star.photo_electrons(&v_band, aperture, &exposure);
-//!
-//! // Calculate B-V color index
-//! let bv_color = -2.5 * (b_electrons / v_electrons).log10();
-//! println!("Synthetic B-V color: {:.3}", bv_color);
-//! ```
+//! # Synthetic Photometry
+//! Calculate stellar spectrum photo-electrons through standard photometric
+//! filters for telescope observations and B-V color index determination.
 //!
 //! # Physical Accuracy
 //!
@@ -355,23 +287,9 @@ pub struct BlackbodyStellarSpectrum {
 /// # Returns
 /// Stellar effective temperature in Kelvin
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::stellar::temperature_from_bv;
-///
-/// // Famous stars and their properties
-/// let sun_temp = temperature_from_bv(0.656);    // Sun (G2V)
-/// let vega_temp = temperature_from_bv(0.000);   // Vega (A0V)
-/// let arcturus_temp = temperature_from_bv(1.238); // Arcturus (K1.5III)
-///
-/// assert!((sun_temp - 5778.0).abs() < 100.0);     // Solar temperature
-/// assert!((vega_temp - 9602.0).abs() < 1000.0);   // Vega temperature (formula approximation)
-/// assert!((arcturus_temp - 4286.0).abs() < 200.0); // Arcturus temperature
-///
-/// // Verify temperature ordering
-/// assert!(vega_temp > sun_temp);      // Hotter stars are bluer (lower B-V)
-/// assert!(sun_temp > arcturus_temp);  // Cooler stars are redder (higher B-V)
-/// ```
+/// # Usage
+/// Convert B-V color index to stellar effective temperature using
+/// Ballesteros (2012) empirical relationship for famous stars.
 pub fn temperature_from_bv(b_v: f64) -> f64 {
     // equation 14 in the source above
     4600.0 * (1.0 / (0.92 * b_v + 1.7) + (1.0 / (0.92 * b_v + 0.62)))

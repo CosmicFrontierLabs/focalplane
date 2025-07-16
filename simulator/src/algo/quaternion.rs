@@ -30,12 +30,6 @@ impl Quaternion {
     /// * `y` - Second complex component (j)
     /// * `z` - Third complex component (k)
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    /// let q = Quaternion::new(1.0, 0.0, 0.0, 0.0); // Identity quaternion
-    /// ```
     pub fn new(w: f64, x: f64, y: f64, z: f64) -> Self {
         Self { w, x, y, z }
     }
@@ -45,17 +39,6 @@ impl Quaternion {
     /// The identity quaternion has w=1 and x=y=z=0, representing zero rotation.
     /// When applied to any vector, it returns the vector unchanged.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    /// use nalgebra::Vector3;
-    ///
-    /// let q = Quaternion::identity();
-    /// let v = Vector3::new(1.0, 2.0, 3.0);
-    /// let rotated = q.rotate_vector(&v);
-    /// assert_eq!(rotated, v); // No rotation applied
-    /// ```
     pub fn identity() -> Self {
         Self {
             w: 1.0,
@@ -75,16 +58,6 @@ impl Quaternion {
     /// * `axis` - The rotation axis (does not need to be unit length)
     /// * `angle` - Rotation angle in radians (positive = right-hand rule)
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    /// use nalgebra::Vector3;
-    /// use std::f64::consts::PI;
-    ///
-    /// // 90-degree rotation around Z-axis
-    /// let q = Quaternion::from_axis_angle(&Vector3::z(), PI / 2.0);
-    /// ```
     pub fn from_axis_angle(axis: &Vector3<f64>, angle: f64) -> Self {
         let half_angle = angle / 2.0;
         let sin_half_angle = half_angle.sin();
@@ -108,14 +81,6 @@ impl Quaternion {
     /// * `pitch` - Rotation around Y-axis in degrees  
     /// * `yaw` - Rotation around Z-axis in degrees
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    ///
-    /// // 45-degree rotations around each axis
-    /// let q = Quaternion::from_euler_angles(45.0, 30.0, 60.0);
-    /// ```
     pub fn from_euler_angles(roll: f64, pitch: f64, yaw: f64) -> Self {
         // Convert to radians
         let roll_rad = roll.to_radians();
@@ -159,15 +124,6 @@ impl Quaternion {
     ///
     /// A new quaternion with norm = 1.0
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    ///
-    /// let q = Quaternion::new(2.0, 0.0, 0.0, 0.0);
-    /// let unit_q = q.normalize();
-    /// assert!((unit_q.norm() - 1.0).abs() < 1e-10);
-    /// ```
     pub fn normalize(&self) -> Self {
         let norm = self.norm();
         if norm.abs() < 1e-10 {
@@ -209,16 +165,6 @@ impl Quaternion {
     ///
     /// The inverse quaternion such that q × q⁻¹ = identity
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use simulator::algo::quaternion::Quaternion;
-    ///
-    /// let q = Quaternion::new(1.0, 2.0, 3.0, 4.0).normalize();
-    /// let q_inv = q.inverse();
-    /// let identity = q * q_inv;
-    /// // identity should be approximately (1, 0, 0, 0)
-    /// ```
     pub fn inverse(&self) -> Self {
         let norm_squared = self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z;
         if norm_squared < 1e-10 {

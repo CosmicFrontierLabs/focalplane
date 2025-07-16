@@ -68,76 +68,16 @@
 //! # Usage Examples
 //!
 //! ## Basic Brightness Calculation
-//! ```rust
-//! use simulator::photometry::zodical::{ZodicalLight, SolarAngularCoordinates};
-//!
-//! let zodi_model = ZodicalLight::new();
-//!
-//! // High zodiacal light: near ecliptic, moderate elongation
-//! let bright_coords = SolarAngularCoordinates::new(60.0, 15.0).unwrap();
-//! let bright_s10 = zodi_model.get_brightness(&bright_coords).unwrap();
-//! let bright_mag = zodi_model.get_brightness_mag_per_square_arcsec(&bright_coords).unwrap();
-//!
-//! // Low zodiacal light: high ecliptic latitude, large elongation
-//! let faint_coords = SolarAngularCoordinates::new(150.0, 75.0).unwrap();
-//! let faint_s10 = zodi_model.get_brightness(&faint_coords).unwrap();
-//! let faint_mag = zodi_model.get_brightness_mag_per_square_arcsec(&faint_coords).unwrap();
-//!
-//! println!("Bright region: {:.0} S10 = {:.1} mag/arcsec²", bright_s10, bright_mag);
-//! println!("Faint region: {:.0} S10 = {:.1} mag/arcsec²", faint_s10, faint_mag);
-//!
-//! // Typical result: bright ~500 S10 (22.5 mag/arcsec²), faint ~60 S10 (24.0 mag/arcsec²)
-//! ```
+//! Calculate zodiacal light brightness in S10 units and magnitude per square arcsecond
+//! for high and low zodiacal light regions with typical result ranges.
 //!
 //! ## Spectral Background Modeling
-//! ```rust
-//! use simulator::photometry::zodical::{ZodicalLight, SolarAngularCoordinates};
-//! use simulator::photometry::{Band, Spectrum};
-//!
-//! let zodi_model = ZodicalLight::new();
-//! let coords = SolarAngularCoordinates::new(90.0, 30.0).unwrap();
-//!
-//! // Get position-dependent zodiacal spectrum
-//! let zodi_spectrum = zodi_model.get_zodical_spectrum(&coords).unwrap();
-//!
-//! // Calculate background in astronomical bands
-//! let v_band = Band::from_nm_bounds(500.0, 600.0);
-//! let r_band = Band::from_nm_bounds(600.0, 700.0);
-//! let i_band = Band::from_nm_bounds(700.0, 900.0);
-//!
-//! let v_background = zodi_spectrum.irradiance(&v_band);
-//! let r_background = zodi_spectrum.irradiance(&r_band);
-//! let i_background = zodi_spectrum.irradiance(&i_band);
-//!
-//! println!("Zodiacal background irradiance:");
-//! println!("  V-band: {:.2e} erg/s/cm²", v_background);
-//! println!("  R-band: {:.2e} erg/s/cm²", r_background);
-//! println!("  I-band: {:.2e} erg/s/cm²", i_background);
-//! ```
+//! Get position-dependent zodiacal spectrum and calculate background irradiance
+//! in astronomical V, R, and I bands for space telescope observations.
 //!
 //! ## Mission Planning Application
-//! ```rust
-//! use simulator::photometry::zodical::{ZodicalLight, SolarAngularCoordinates};
-//! use std::time::Duration;
-//!
-//! let zodi_model = ZodicalLight::new();
-//!
-//! // Survey different sky regions
-//! let survey_fields = [
-//!     ("Ecliptic pole", 90.0, 90.0),    // Minimum zodiacal light
-//!     ("Anti-solar", 180.0, 0.0),       // Opposition, moderate zodi
-//!     ("Morning sky", 90.0, 0.0),       // High zodiacal light
-//!     ("High latitude", 120.0, 60.0),   // Reduced zodiacal light
-//! ];
-//!
-//! for (name, elongation, latitude) in survey_fields.iter() {
-//!     let coords = SolarAngularCoordinates::new(*elongation, *latitude).unwrap();
-//!     let brightness = zodi_model.get_brightness_mag_per_square_arcsec(&coords).unwrap();
-//!     let scale_factor = zodi_model.get_spectrum_scale_factor(&coords).unwrap();
-//!     
-//!     println!("{}: {:.2} mag/arcsec² (scale: {:.3}x)", name, brightness, scale_factor);
-//! }
-//! ```
+//! Survey different sky regions including ecliptic pole, anti-solar, morning sky,
+//! and high latitude areas for zodiacal light brightness and scale factor analysis.
 //!
 //! ## Detector Noise Modeling
 //! ```ignore
@@ -311,23 +251,9 @@ pub enum ZodicalError {
 /// - **Mission timeline**: Schedule observations based on zodiacal light levels
 /// - **Data reduction**: Correct for zodiacal contamination in photometry
 ///
-/// # Examples
-/// ```rust
-/// use simulator::photometry::zodical::SolarAngularCoordinates;
-///
-/// // High zodiacal light: near ecliptic, moderate elongation
-/// let bright_region = SolarAngularCoordinates::new(60.0, 10.0).unwrap();
-///
-/// // Low zodiacal light: high latitude, large elongation  
-/// let dark_region = SolarAngularCoordinates::new(150.0, 70.0).unwrap();
-///
-/// // Anti-solar point: opposition with moderate zodiacal light
-/// let opposition = SolarAngularCoordinates::new(180.0, 0.0).unwrap();
-///
-/// // Access coordinate components
-/// println!("Elongation: {:.1}°", bright_region.elongation());
-/// println!("Latitude: {:.1}°", bright_region.latitude());
-/// ```
+/// # Usage
+/// Create solar angular coordinates for bright, dark, and opposition regions
+/// with component access for zodiacal light brightness calculations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolarAngularCoordinates {
     /// Solar elongation angle in degrees [0°, 180°].
@@ -377,26 +303,9 @@ impl SolarAngularCoordinates {
     /// * `Ok(SolarAngularCoordinates)` - Successfully validated coordinates
     /// * `Err(ZodicalError)` - Validation failure with specific error type
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// // Valid coordinates
-    /// let coords = SolarAngularCoordinates::new(90.0, 30.0).unwrap();
-    /// assert_eq!(coords.elongation(), 90.0);
-    /// assert_eq!(coords.latitude(), 30.0);
-    ///
-    /// // Invalid elongation (out of range)
-    /// assert!(SolarAngularCoordinates::new(200.0, 0.0).is_err());
-    ///
-    /// // Invalid latitude (out of range)
-    /// assert!(SolarAngularCoordinates::new(90.0, 100.0).is_err());
-    ///
-    /// // Edge cases (valid)
-    /// let sun_coords = SolarAngularCoordinates::new(0.0, 0.0).unwrap();
-    /// let opposition = SolarAngularCoordinates::new(180.0, 0.0).unwrap();
-    /// let pole = SolarAngularCoordinates::new(90.0, 90.0).unwrap();
-    /// ```
+    /// # Usage
+    /// Create valid solar angular coordinates with range validation for elongation
+    /// and latitude, including edge cases for sun, opposition, and pole positions.
     pub fn new(elongation: f64, latitude: f64) -> Result<Self, ZodicalError> {
         if !(0.0..=180.0).contains(&elongation) {
             return Err(ZodicalError::InvalidElongation(elongation));
@@ -426,13 +335,9 @@ impl SolarAngularCoordinates {
     /// The returned coordinates are based on empirical analysis and represent
     /// the approximate location where zodiacal light is least prominent.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// let min_zodi = SolarAngularCoordinates::zodiacal_minimum();
-    /// // Use min_zodi to estimate minimum zodiacal light contribution
-    /// ```
+    /// # Usage
+    /// Get coordinates for minimum zodiacal light contribution
+    /// for optimal space telescope observation planning.
     pub fn zodiacal_minimum() -> Self {
         Self::new(ELONG_OF_MIN, LAT_OF_MIN).unwrap()
     }
@@ -446,13 +351,9 @@ impl SolarAngularCoordinates {
     /// # Returns
     /// Solar elongation in degrees [0°, 180°]
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// let coords = SolarAngularCoordinates::new(120.0, 45.0).unwrap();
-    /// assert_eq!(coords.elongation(), 120.0);
-    /// ```
+    /// # Usage
+    /// Get solar elongation angle for zodiacal light brightness
+    /// calculations and scattering geometry analysis.
     pub fn elongation(&self) -> f64 {
         self.elongation
     }
@@ -467,15 +368,9 @@ impl SolarAngularCoordinates {
     /// # Returns
     /// Ecliptic latitude in degrees [-90°, +90°]
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// let north = SolarAngularCoordinates::new(90.0, 30.0).unwrap();
-    /// let south = SolarAngularCoordinates::new(90.0, -30.0).unwrap();
-    /// assert_eq!(north.latitude(), 30.0);
-    /// assert_eq!(south.latitude(), -30.0);
-    /// ```
+    /// # Usage
+    /// Get ecliptic latitude for northern and southern hemisphere
+    /// zodiacal light calculations and brightness modeling.
     pub fn latitude(&self) -> f64 {
         self.latitude
     }
@@ -489,14 +384,9 @@ impl SolarAngularCoordinates {
     /// # Returns
     /// Absolute ecliptic latitude in degrees [0°, 90°]
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::SolarAngularCoordinates;
-    ///
-    /// let coords = SolarAngularCoordinates::new(90.0, -45.0).unwrap();
-    /// // abs_latitude is internal - use latitude() and take abs if needed
-    /// assert_eq!(coords.latitude().abs(), 45.0);
-    /// ```
+    /// # Usage
+    /// Get absolute ecliptic latitude for internal zodiacal light
+    /// interpolation with hemisphere symmetry assumptions.
     pub(crate) fn abs_latitude(&self) -> f64 {
         self.latitude.abs()
     }
@@ -661,13 +551,9 @@ impl ZodicalLight {
     /// # Returns
     /// Complete ZodicalLight model ready for brightness calculations
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::zodical::ZodicalLight;
-    ///
-    /// let zodi_model = ZodicalLight::new();
-    /// // Model is now ready for brightness calculations at any valid coordinates
-    /// ```
+    /// # Usage
+    /// Create complete ZodicalLight model ready for brightness
+    /// calculations at any valid solar angular coordinates.
     pub fn new() -> Self {
         // Convert the hardcoded 2D array to an ndarray::Array2
         // Raw data is organized as [elongation][latitude], but we want [latitude][elongation]

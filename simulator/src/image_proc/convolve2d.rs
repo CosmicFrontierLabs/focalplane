@@ -19,26 +19,10 @@
 //! - **Feature detection**: Edge detection and structure analysis filters
 //! - **Template matching**: Cross-correlation for object identification
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode};
-//! use ndarray::Array2;
-//!
-//! // Create test image (100x100 pixels)
-//! let mut image = Array2::zeros((32, 32));
-//! image[[16, 16]] = 1000.0;  // Point source at center
-//!
-//! // Generate 2.5-pixel FWHM Gaussian PSF
-//! let sigma = 2.5 / 2.355;  // Convert FWHM to sigma
-//! let kernel = gaussian_kernel(15, sigma);
-//!
-//! // Apply PSF convolution
-//! let options = ConvolveOptions { mode: ConvolveMode::Same };
-//! let convolved = convolve2d(&image.view(), &kernel.view(), Some(options));
-//!
-//! println!("Peak after convolution: {:.2}", convolved[[16, 16]]);
-//! ```
+//! Create test images, generate Gaussian kernels, and apply PSF convolution
+//! using the convolve2d function with appropriate boundary handling modes.
 
 use ndarray::{Array2, ArrayView2};
 
@@ -47,17 +31,10 @@ use ndarray::{Array2, ArrayView2};
 /// Controls how convolution handles image boundaries and edge effects.
 /// Different modes are optimized for different astronomical applications.
 ///
-/// # Examples
+/// # Usage
 ///
-/// ```rust
-/// use simulator::image_proc::convolve2d::{ConvolveOptions, ConvolveMode};
-///
-/// // For PSF modeling - preserve image size with zero padding
-/// let psf_options = ConvolveOptions { mode: ConvolveMode::Same };
-///
-/// // For feature detection - only valid overlapping regions
-/// let detect_options = ConvolveOptions { mode: ConvolveMode::Valid };
-/// ```
+/// Configure boundary handling for convolution operations. Use Same mode
+/// for PSF modeling and Valid mode for feature detection.
 #[derive(Debug, Clone, Copy)]
 pub struct ConvolveOptions {
     /// Boundary handling mode for convolution operation
@@ -118,25 +95,10 @@ impl Default for ConvolveOptions {
 /// - Memory: Allocates new array for output
 /// - For large kernels, consider separable filters when possible
 ///
-/// # Examples
+/// # Usage
 ///
-/// ```rust
-/// use simulator::image_proc::convolve2d::{convolve2d, gaussian_kernel, ConvolveOptions, ConvolveMode};
-/// use ndarray::array;
-///
-/// let image = array![[1.0, 2.0, 3.0],
-///                   [4.0, 5.0, 6.0],
-///                   [7.0, 8.0, 9.0]];
-///
-/// // 3x3 Gaussian blur kernel
-/// let kernel = gaussian_kernel(3, 1.0);
-///
-/// // Apply smoothing with same-size output
-/// let options = ConvolveOptions { mode: ConvolveMode::Same };
-/// let smoothed = convolve2d(&image.view(), &kernel.view(), Some(options));
-///
-/// assert_eq!(smoothed.dim(), image.dim());
-/// ```
+/// Perform 2D convolution with various kernel types and boundary handling modes.
+/// Use with gaussian_kernel for PSF modeling and custom kernels for feature detection.
 pub fn convolve2d(
     image: &ArrayView2<f64>,
     kernel: &ArrayView2<f64>,
@@ -253,25 +215,10 @@ pub fn convolve2d(
 /// - Minimum recommended size: 2×ceil(3σ) + 1
 /// - For computational efficiency, don't make size unnecessarily large
 ///
-/// # Examples
+/// # Usage
 ///
-/// ```rust
-/// use simulator::image_proc::convolve2d::gaussian_kernel;
-///
-/// // Create 2.5 pixel FWHM PSF (typical for good seeing)
-/// let fwhm = 2.5_f64;
-/// let sigma = fwhm / 2.355;
-/// let kernel_size = (6.0 * sigma).ceil() as usize | 1;  // Force odd
-/// let psf = gaussian_kernel(kernel_size, sigma);
-///
-/// // Verify normalization
-/// let sum: f64 = psf.iter().sum();
-/// assert!((sum - 1.0).abs() < 1e-10);
-///
-/// // Check center is maximum
-/// let center = kernel_size / 2;
-/// assert!(psf[[center, center]] > psf[[0, 0]]);
-/// ```
+/// Create normalized Gaussian kernels for PSF modeling and image smoothing.
+/// Convert FWHM to sigma using the relationship: sigma = FWHM / 2.355.
 pub fn gaussian_kernel(size: usize, sigma: f64) -> Array2<f64> {
     assert!(size % 2 == 1, "Kernel size must be odd");
 

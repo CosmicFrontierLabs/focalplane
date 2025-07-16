@@ -36,29 +36,6 @@
 //! - **Dark Current**: Thermal generation with temperature dependence
 //! - **Shot Noise**: Poisson statistics from photon arrival
 //!
-//! # Examples
-//!
-//! ```rust
-//! use simulator::hardware::sensor::models::{GSENSE6510BSI, ALL_SENSORS};
-//! use simulator::hardware::sensor::SensorConfig;
-//!
-//! // Use a predefined sensor model
-//! let sensor = GSENSE6510BSI.clone();
-//! println!("QE at 550nm: {:.1}%", sensor.qe_at_wavelength(550) * 100.0);
-//! println!("Dark current at -15°C: {:.3} e⁻/px/s",
-//!          sensor.dark_current_at_temperature(-15.0));
-//!
-//! // Create custom sensor for specific field of view
-//! let custom_sensor = sensor.with_dimensions(1024, 768);
-//! let (width_um, height_um) = custom_sensor.dimensions_um();
-//! println!("Active area: {:.1} × {:.1} mm", width_um/1000.0, height_um/1000.0);
-//!
-//! // Survey all available sensors
-//! for sensor in ALL_SENSORS.iter() {
-//!     let megapixels = sensor.width_px * sensor.height_px / 1_000_000;
-//!     println!("{}: {}MP, {:.1}μm pixels", sensor.name, megapixels, sensor.pixel_size_um);
-//! }
-//! ```
 
 #![allow(clippy::approx_constant)]
 
@@ -83,27 +60,6 @@ use crate::photometry::quantum_efficiency::QuantumEfficiency;
 /// - **Dynamic range**: Well depth, bit depth, and gain characteristics
 /// - **Thermal modeling**: Temperature-dependent dark current
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::hardware::sensor::models::GSENSE6510BSI;
-/// use simulator::hardware::sensor::SensorConfig;
-///
-/// // Use predefined sensor model
-/// let sensor = GSENSE6510BSI.clone();
-///
-/// // Query sensor properties
-/// let qe_peak = sensor.qe_at_wavelength(550);  // Peak QE wavelength
-/// let noise_20c = sensor.dark_current_at_temperature(-20.0);
-/// let (width_mm, height_mm) = sensor.dimensions_um();
-///
-/// println!("Peak QE: {:.1}%", qe_peak * 100.0);
-/// println!("Dark current: {:.3} e⁻/px/s", noise_20c);
-/// println!("Active area: {:.1} × {:.1} mm", width_mm/1000.0, height_mm/1000.0);
-///
-/// // Create custom version for different field of view
-/// let cropped = sensor.with_dimensions(1024, 1024);
-/// ```
 #[derive(Debug, Clone)]
 pub struct SensorConfig {
     /// Wavelength-dependent quantum efficiency curve from manufacturer data

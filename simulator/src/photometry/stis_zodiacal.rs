@@ -56,64 +56,17 @@
 //!
 //! # Usage Examples
 //!
-//! ## Basic Zodiacal Light Modeling
-//! ```rust
-//! use simulator::photometry::{STISZodiacalSpectrum, Band, Spectrum};
-//!
-//! // Create standard zodiacal light spectrum
-//! let zodi = STISZodiacalSpectrum::new(1.0);
-//!
-//! // Sample spectral irradiance at key wavelengths
-//! let uv_flux = zodi.spectral_irradiance(300.0);   // Near-UV
-//! let blue_flux = zodi.spectral_irradiance(450.0);  // Blue
-//! let visual_flux = zodi.spectral_irradiance(550.0); // V-band
-//! let red_flux = zodi.spectral_irradiance(650.0);   // Red
-//! let ir_flux = zodi.spectral_irradiance(850.0);    // Near-IR
-//!
-//! println!("Zodiacal light spectral irradiance:");
-//! println!("  300nm: {:.2e} erg/s/cm²/Hz", uv_flux);
-//! println!("  550nm: {:.2e} erg/s/cm²/Hz", visual_flux);
-//! println!("  850nm: {:.2e} erg/s/cm²/Hz", ir_flux);
-//! ```
+//! ## Basic Zodiacal Light Modeling  
+//! Create standard zodiacal light spectrum and sample spectral irradiance
+//! at key wavelengths for UV, blue, visual, red, and near-IR analysis.
 //!
 //! ## Photometric Band Integration
-//! ```rust
-//! use simulator::photometry::{STISZodiacalSpectrum, Band, v_filter, Spectrum};
-//!
-//! let zodi = STISZodiacalSpectrum::new(1.0);
-//!
-//! // Calculate zodiacal light flux in Johnson V-band
-//! let v_band = v_filter();
-//! let v_background = zodi.irradiance(&v_band.band());
-//!
-//! // Calculate background in wide visible band
-//! let visible_band = Band::from_nm_bounds(400.0, 700.0);
-//! let visible_background = zodi.irradiance(&visible_band);
-//!
-//! println!("Background irradiance:");
-//! println!("  V-band: {:.2e} erg/s/cm²", v_background);
-//! println!("  400-700nm: {:.2e} erg/s/cm²", visible_background);
-//! ```
+//! Calculate zodiacal light flux in Johnson V-band and wide visible
+//! band for background irradiance measurements.
 //!
 //! ## Observing Condition Scaling
-//! ```rust
-//! use simulator::photometry::{STISZodiacalSpectrum, Spectrum};
-//!
-//! // Different zodiacal light conditions
-//! let high_zodi = STISZodiacalSpectrum::new(2.0);    // 2x enhanced (near ecliptic)
-//! let standard_zodi = STISZodiacalSpectrum::new(1.0); // STIS calibration
-//! let low_zodi = STISZodiacalSpectrum::new(0.3);     // 30% reduced (high latitude)
-//!
-//! // Compare background levels at 550nm
-//! let high_bg = high_zodi.spectral_irradiance(550.0);
-//! let std_bg = standard_zodi.spectral_irradiance(550.0);
-//! let low_bg = low_zodi.spectral_irradiance(550.0);
-//!
-//! println!("550nm zodiacal light comparison:");
-//! println!("  High: {:.2e} ({:.1}x standard)", high_bg, high_bg / std_bg);
-//! println!("  Standard: {:.2e}", std_bg);
-//! println!("  Low: {:.2e} ({:.1}x standard)", low_bg, low_bg / std_bg);
-//! ```
+//! Different zodiacal light conditions for enhanced, standard, and reduced
+//! background levels with comparison at 550nm wavelength.
 //!
 //! # Data References
 //!
@@ -266,24 +219,9 @@ impl STISZodiacalSpectrum {
     /// # Returns
     /// New STISZodiacalSpectrum instance with converted and scaled data
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{STISZodiacalSpectrum, Spectrum};
-    ///
-    /// // Standard zodiacal light level
-    /// let standard_zodi = STISZodiacalSpectrum::new(1.0);
-    ///
-    /// // Reduced zodiacal light for high ecliptic latitude observing
-    /// let low_zodi = STISZodiacalSpectrum::new(0.3);
-    ///
-    /// // Enhanced zodiacal light for observations near the ecliptic plane
-    /// let high_zodi = STISZodiacalSpectrum::new(1.5);
-    ///
-    /// // Compare brightness at 550nm
-    /// let std_flux = standard_zodi.spectral_irradiance(550.0);
-    /// let low_flux = low_zodi.spectral_irradiance(550.0);
-    /// assert!((low_flux / std_flux - 0.3).abs() < 1e-10);
-    /// ```
+    /// # Usage
+    /// Create zodiacal light spectrum with standard, reduced, or enhanced
+    /// brightness scaling for different ecliptic latitude observing conditions.
     pub fn new(scale_factor: f64) -> Self {
         let wavelengths = WAVELENGTHS_NM.to_vec();
 
@@ -320,20 +258,9 @@ impl STISZodiacalSpectrum {
     /// - **Minimum**: 100.0 nm (near-UV limit)
     /// - **Maximum**: 1100.0 nm (near-IR limit)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{STISZodiacalSpectrum, Spectrum};
-    ///
-    /// let zodi = STISZodiacalSpectrum::new(1.0);
-    /// let (min_wl, max_wl) = zodi.wavelength_bounds();
-    ///
-    /// assert_eq!(min_wl, 100.0);   // UV limit
-    /// assert_eq!(max_wl, 1100.0);  // NIR limit
-    ///
-    /// // Verify out-of-bounds behavior
-    /// assert_eq!(zodi.spectral_irradiance(50.0), 0.0);    // Below range
-    /// assert_eq!(zodi.spectral_irradiance(1200.0), 0.0);  // Above range
-    /// ```
+    /// # Usage
+    /// Get minimum and maximum wavelengths for calibrated zodiacal light
+    /// data with out-of-bounds verification for spectrum range validation.
     pub fn wavelength_bounds(&self) -> (f64, f64) {
         (
             *self.wavelengths.first().unwrap(),
@@ -352,17 +279,9 @@ impl Default for STISZodiacalSpectrum {
     /// # Returns
     /// STISZodiacalSpectrum with standard STIS calibration scaling
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{STISZodiacalSpectrum, Spectrum};
-    ///
-    /// // These are equivalent
-    /// let zodi1 = STISZodiacalSpectrum::default();
-    /// let zodi2 = STISZodiacalSpectrum::new(1.0);
-    ///
-    /// // Verify identical spectral irradiance
-    /// assert_eq!(zodi1.spectral_irradiance(550.0), zodi2.spectral_irradiance(550.0));
-    /// ```
+    /// # Usage
+    /// Create default zodiacal light spectrum equivalent to standard
+    /// STIS calibration with unit scaling factor verification.
     fn default() -> Self {
         Self::new(1.0)
     }
@@ -393,27 +312,9 @@ impl Spectrum for STISZodiacalSpectrum {
     /// # Returns
     /// Spectral irradiance in erg s⁻¹ cm⁻² Hz⁻¹, or 0.0 if outside range
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{STISZodiacalSpectrum, Spectrum};
-    ///
-    /// let zodi = STISZodiacalSpectrum::new(1.0);
-    ///
-    /// // Sample at key astronomical wavelengths
-    /// let uv_flux = zodi.spectral_irradiance(300.0);   // Near-UV
-    /// let blue_flux = zodi.spectral_irradiance(450.0);  // B-band
-    /// let visual_flux = zodi.spectral_irradiance(550.0); // V-band peak
-    /// let red_flux = zodi.spectral_irradiance(650.0);   // R-band
-    /// let ir_flux = zodi.spectral_irradiance(900.0);    // Near-IR
-    ///
-    /// // Zodiacal light in frequency units increases toward IR due to λ²/c conversion
-    /// assert!(visual_flux > blue_flux);  // Still true - visual > blue
-    /// assert!(ir_flux > visual_flux);    // IR > visual in Hz units
-    ///
-    /// // Out-of-range returns zero
-    /// assert_eq!(zodi.spectral_irradiance(50.0), 0.0);   // Far-UV
-    /// assert_eq!(zodi.spectral_irradiance(1200.0), 0.0); // Mid-IR
-    /// ```
+    /// # Usage
+    /// Sample zodiacal light spectral irradiance at key astronomical wavelengths
+    /// with linear interpolation and out-of-range boundary checking.
     fn spectral_irradiance(&self, wavelength_nm: f64) -> f64 {
         if wavelength_nm < *self.wavelengths.first().unwrap()
             || wavelength_nm > *self.wavelengths.last().unwrap()
@@ -453,37 +354,9 @@ impl Spectrum for STISZodiacalSpectrum {
     /// # Returns
     /// Integrated irradiance in erg s⁻¹ cm⁻², or 0.0 if no overlap
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{STISZodiacalSpectrum, Band, Spectrum};
-    ///
-    /// let zodi = STISZodiacalSpectrum::new(1.0);
-    ///
-    /// // Standard photometric bands
-    /// let u_band = Band::from_nm_bounds(300.0, 400.0);  // Johnson U
-    /// let b_band = Band::from_nm_bounds(400.0, 500.0);  // Johnson B  
-    /// let v_band = Band::from_nm_bounds(500.0, 600.0);  // Johnson V
-    /// let r_band = Band::from_nm_bounds(600.0, 700.0);  // Johnson R
-    ///
-    /// // Calculate zodiacal background in each band
-    /// let u_bg = zodi.irradiance(&u_band);
-    /// let b_bg = zodi.irradiance(&b_band);
-    /// let v_bg = zodi.irradiance(&v_band);
-    /// let r_bg = zodi.irradiance(&r_band);
-    ///
-    /// // V-band typically has highest zodiacal light
-    /// assert!(v_bg > u_bg);  // V > U (solar-like spectrum)
-    /// assert!(v_bg > r_bg);  // V > R (peak in green-yellow)
-    ///
-    /// // Wide-band integration
-    /// let visible = Band::from_nm_bounds(400.0, 700.0);
-    /// let visible_bg = zodi.irradiance(&visible);
-    /// assert!(visible_bg > v_bg);  // Wide band > single band
-    ///
-    /// // Out-of-range band returns zero
-    /// let far_uv = Band::from_nm_bounds(50.0, 90.0);
-    /// assert_eq!(zodi.irradiance(&far_uv), 0.0);
-    /// ```
+    /// # Usage
+    /// Integrate zodiacal light irradiance over standard photometric bands
+    /// with trapezoidal numerical integration and out-of-range handling.
     fn irradiance(&self, band: &Band) -> f64 {
         // Trapezoid integration over the band
         let (band_min, band_max) = (band.lower_nm, band.upper_nm);

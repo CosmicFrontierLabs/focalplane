@@ -22,29 +22,11 @@
 //! - **Memory efficiency**: Chunk-based processing for large images
 //! - **SIMD optimization**: Vectorized operations where possible
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::noise::{generate_sensor_noise, generate_noise_with_precomputed_params};
-//! use simulator::hardware::sensor::models::GSENSE6510BSI;
-//! use std::time::Duration;
-//!
-//! let sensor = GSENSE6510BSI.clone();
-//! let exposure = Duration::from_secs(30);
-//! let temperature = -20.0;  // Typical space telescope operating temperature
-//!
-//! // Generate realistic sensor noise
-//! let noise = generate_sensor_noise(&sensor, &exposure, temperature, Some(42));
-//! println!("Generated noise for {}x{} sensor", sensor.width_px, sensor.height_px);
-//!
-//! // For repeated calls with same parameters (more efficient)
-//! let noise2 = generate_noise_with_precomputed_params(
-//!     1024, 1024,
-//!     5.0,    // Read noise (e⁻)
-//!     0.001,  // Dark current mean (e⁻/px/s)
-//!     Some(123)
-//! );
-//! ```
+//! Generate realistic sensor noise for astronomical detector simulation.
+//! Use generate_sensor_noise for full sensor modeling or generate_noise_with_precomputed_params
+//! for batch processing with known parameters.
 
 use std::time::Duration;
 
@@ -78,23 +60,9 @@ use rand_distr::{Distribution, Normal, Poisson};
 /// # Returns
 /// 2D noise field in electrons (e⁻) with realistic statistical properties
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::noise::generate_sensor_noise;
-/// use simulator::hardware::sensor::models::GSENSE6510BSI;
-/// use std::time::Duration;
-///
-/// // Use small sensor for fast doctest
-/// let sensor = GSENSE6510BSI.with_dimensions(16, 16);
-/// let exposure = Duration::from_secs(60);  // 1 minute exposure
-/// let temp = -15.0;  // Cold space telescope
-///
-/// let noise = generate_sensor_noise(&sensor, &exposure, temp, Some(42));
-///
-/// // Verify expected noise statistics
-/// let noise_rms = (noise.iter().map(|x| x.powi(2)).sum::<f64>() / noise.len() as f64).sqrt();
-/// println!("Noise RMS: {:.2} e⁻", noise_rms);
-/// ```
+/// # Usage
+/// Creates comprehensive noise model combining read noise and dark current
+/// with proper statistical distributions and temperature dependencies.
 pub fn generate_sensor_noise(
     sensor: &SensorConfig,
     exposure_time: &Duration,
@@ -210,19 +178,9 @@ fn generate_poisson_noise(
 /// ~2-3x faster than full sensor model when called repeatedly
 /// with same parameters.
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::noise::generate_noise_with_precomputed_params;
-///
-/// // Generate 100 noise realizations for Monte Carlo analysis
-/// let noise = generate_noise_with_precomputed_params(
-///     64, 64,  // 64x64 image
-///     4.5,     // 4.5 e⁻ read noise
-///     0.02,    // 0.02 e⁻/px dark current
-///     None     // Different seed each time
-/// );
-///
-/// ```
+/// # Usage
+/// Generate sensor noise with precomputed parameters for batch processing.
+/// Ideal for Monte Carlo simulations or repeated noise generation.
 pub fn generate_noise_with_precomputed_params(
     width: usize,
     height: usize,

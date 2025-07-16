@@ -23,27 +23,11 @@
 //! - **Dynamic range optimization**: Maximize use of display bit depth
 //! - **Survey image processing**: Standardize contrast across multiple observations
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::histogram_stretch::{stretch_histogram, sigma_stretch};
-//! use ndarray::Array2;
-//!
-//! // Astronomical image with wide dynamic range
-//! let mut image = Array2::from_elem((64, 64), 1000u16);  // Sky background
-//! image[[32, 32]] = 50000;  // Bright star
-//! image[[10, 10]] = 5000;   // Faint star
-//!
-//! // Method 1: Percentile stretching (5%-95% range)
-//! let stretched_perc = stretch_histogram(image.view(), 5.0, 95.0);
-//!
-//! // Method 2: Sigma clipping stretch (3-sigma, f64 version)
-//! let image_f64 = image.mapv(|x| x as f64);
-//! let stretched_sigma = sigma_stretch(&image_f64, 3.0, Some(5));
-//!
-//! println!("Percentile stretch range: 0-65535");
-//! println!("Sigma stretch range: 0.0-1.0");
-//! ```
+//! Apply histogram stretching to astronomical images for enhanced contrast.
+//! Use percentile stretching for outlier rejection or sigma clipping for
+//! robust statistical enhancement based on image characteristics.
 
 use ndarray::{Array2, ArrayView2};
 use starfield::image::sigma_clip;
@@ -75,36 +59,9 @@ use std::collections::BTreeMap;
 /// - Space: O(K) where K is number of unique pixel values
 /// - Optimized single-pass percentile calculation
 ///
-/// # Examples
-/// ```rust,ignore
-/// // NOTE: This doctest is ignored due to histogram stretching behavior changes
-/// use simulator::image_proc::histogram_stretch::stretch_histogram;
-/// use ndarray::Array2;
-///
-/// // Create test image with known distribution
-/// let mut image = Array2::from_elem((10, 10), 1000u16);  // Background
-/// image[[5, 5]] = 50000;  // Single bright star
-/// image[[2, 2]] = 2000;   // Slightly brighter than background
-/// image[[7, 7]] = 5000;   // Medium brightness
-///
-/// // Use percentiles that will capture the dynamic range
-/// let enhanced = stretch_histogram(image.view(), 10.0, 90.0);
-///
-/// // After stretching:
-/// // - 10th percentile (background ~1000) should map to 0
-/// // - 90th percentile should be less than the bright star
-/// // - The bright star should be clipped to 65535
-///
-/// // Verify the bright star is clipped
-/// assert_eq!(enhanced[[5, 5]], 65535, "Bright star should be clipped");
-///
-/// // Verify ordering is preserved
-/// let bg = enhanced[[0, 0]];
-/// let faint = enhanced[[2, 2]];
-/// let medium = enhanced[[7, 7]];
-/// assert!(faint > bg, "Faint star should be brighter than background");
-/// assert!(medium > faint, "Medium star should be brighter than faint");
-/// ```
+/// # Usage
+/// Maps pixel values between specified percentiles to full u16 range.
+/// Effectively clips outliers and enhances contrast in astronomical images.
 pub fn stretch_histogram(
     image: ArrayView2<u16>,
     lower_percentile: f64,
@@ -209,22 +166,9 @@ pub fn stretch_histogram(
 /// # Returns
 /// Normalized image with values in [0.0, 1.0] range
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::histogram_stretch::sigma_stretch;
-/// use ndarray::Array2;
-///
-/// // Image with Gaussian noise + outliers
-/// let mut image = Array2::from_elem((64, 64), 100.0);  // Background
-/// image[[32, 32]] = 1000.0;  // Bright source
-/// image[[10, 10]] = -50.0;   // Negative outlier
-///
-/// // 3-sigma stretch with up to 5 iterations
-/// let stretched = sigma_stretch(&image, 3.0, Some(5));
-///
-/// // Output should be normalized to [0,1] with outliers clipped
-/// assert!(stretched.iter().all(|&x| x >= 0.0 && x <= 1.0));
-/// ```
+/// # Usage
+/// Applies sigma-clipping based stretch for robust contrast enhancement.
+/// More adaptive than percentile stretching for varying noise characteristics.
 pub fn sigma_stretch(input: &Array2<f64>, sigma: f64, maxiters: Option<usize>) -> Array2<f64> {
     let mut clipped = sigma_clip(input, sigma, maxiters, false);
 

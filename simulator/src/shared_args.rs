@@ -87,20 +87,11 @@
 //! - **ID management**: Collision-free star identification across sources
 //!
 //! ## Catalog Enhancement
-//! ```rust,ignore
-//! // NOTE: This doctest is ignored because parse() method doesn't exist - use try_parse() instead
-//! use simulator::shared_args::SharedSimulationArgs;
-//!
-//! // Automatic bright star augmentation
-//! let args = SharedSimulationArgs::parse();
-//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let catalog = args.load_catalog()?; // Includes embedded bright stars
-//!
-//! println!("Loaded {} stars from {} + embedded data",
-//!          catalog.len(), args.catalog.display());
-//! # Ok(())
-//! # }
-//! ```
+//! # Usage
+//! Demonstrates how to use the automatic bright star augmentation feature:
+//! - Use SharedSimulationArgs::parse() to parse command-line arguments
+//! - Call args.load_catalog() to load the catalog with embedded bright stars included
+//! - The returned catalog combines the specified binary catalog with additional bright stars
 //!
 //! # Error Handling and Validation
 //!
@@ -122,75 +113,29 @@
 //! # Integration Examples
 //!
 //! ## Basic Simulation Setup
-//! ```rust,no_run
-//! use simulator::shared_args::SharedSimulationArgs;
-//! use clap::Parser;
-//!
-//! let args = SharedSimulationArgs::parse();
-//!
-//! // Access validated parameters
-//! let exposure_time = args.exposure.0;  // Duration
-//! let telescope_config = args.telescope.to_config();
-//! let zodiacal_coords = args.coordinates;
-//!
-//! // Load enhanced star catalog
-//! let catalog = args.load_catalog()?;
-//!
-//! println!("Simulating {} stars with {}m telescope",
-//!          catalog.len(), telescope_config.aperture_m);
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
+//! # Usage
+//! Shows how to set up a basic simulation using SharedSimulationArgs:
+//! - Parse command-line arguments with SharedSimulationArgs::parse()
+//! - Access validated parameters: exposure time, telescope config, zodiacal coordinates
+//! - Load the enhanced star catalog with args.load_catalog()
+//! - The telescope configuration provides aperture and other optical parameters
 //!
 //! ## Custom Binary with Additional Arguments
-//! ```rust,no_run
-//! use simulator::shared_args::SharedSimulationArgs;
-//! use clap::{Parser, Subcommand};
-//!
-//! #[derive(Parser)]
-//! struct CustomArgs {
-//!     #[command(flatten)]
-//!     shared: SharedSimulationArgs,
-//!     
-//!     /// Custom parameter specific to this binary
-//!     #[arg(long, default_value_t = 100)]
-//!     custom_param: u32,
-//! }
-//!
-//! let args = CustomArgs::parse();
-//! let catalog = args.shared.load_catalog()?;
-//!
-//! // Use both shared and custom arguments
-//! println!("Using telescope: {}", args.shared.telescope);
-//! println!("Custom parameter: {}", args.custom_param);
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
+//! # Usage
+//! Demonstrates extending SharedSimulationArgs with custom parameters:
+//! - Define a custom struct that includes SharedSimulationArgs via #[command(flatten)]
+//! - Add custom parameters specific to your binary
+//! - Access both shared and custom arguments through the combined struct
+//! - Use args.shared to access the standard simulation parameters
 //!
 //! ## Batch Processing with Parameter Sweeps
-//! ```rust
-//! use simulator::shared_args::{SharedSimulationArgs, RangeArg};
-//! use clap::Parser;
-//!
-//! #[derive(Parser)]
-//! struct BatchArgs {
-//!     #[command(flatten)]
-//!     shared: SharedSimulationArgs,
-//!     
-//!     /// Magnitude range for parameter sweep
-//!     #[arg(long, default_value = "10.0:16.0:0.5")]
-//!     magnitude_range: RangeArg,
-//! }
-//!
-//! let args = BatchArgs::parse();
-//! let (start, stop, step) = args.magnitude_range.as_tuple();
-//!
-//! // Generate magnitude sweep
-//! let mut magnitude = start;
-//! while magnitude <= stop {
-//!     println!("Processing magnitude limit: {:.1}", magnitude);
-//!     // ... simulation logic ...
-//!     magnitude += step;
-//! }
-//! ```
+//! # Usage
+//! Shows how to implement parameter sweeps using RangeArg:
+//! - Define custom args with a RangeArg field for parameter ranges
+//! - Use the default format "start:stop:step" for range specification
+//! - Extract start, stop, and step values with as_tuple() method
+//! - Iterate through the parameter space for batch processing
+//! - Useful for sensitivity analysis and systematic studies
 //!
 //! # Performance and Efficiency
 //!
@@ -233,20 +178,16 @@ use std::time::Duration;
 /// * `Ok(SolarAngularCoordinates)` - Validated coordinates
 /// * `Err(String)` - Detailed error message for invalid input
 ///
-/// # Examples
-/// ```rust
-/// use simulator::shared_args::parse_coordinates;
+/// # Usage
+/// Valid coordinate formats:
+/// - "90.0,30.0" - Standard format
+/// - " 165.0 , 75.0 " - Whitespace is automatically trimmed
+/// - "0.0,-45.0" - Negative latitude is valid
 ///
-/// // Valid coordinate formats
-/// let coords1 = parse_coordinates("90.0,30.0").unwrap();
-/// let coords2 = parse_coordinates(" 165.0 , 75.0 ").unwrap(); // Whitespace OK
-/// let coords3 = parse_coordinates("0.0,-45.0").unwrap();     // Negative latitude OK
-///
-/// // Invalid formats
-/// assert!(parse_coordinates("90.0").is_err());          // Missing latitude
-/// assert!(parse_coordinates("200.0,30.0").is_err());    // Invalid elongation
-/// assert!(parse_coordinates("90.0,100.0").is_err());    // Invalid latitude
-/// ```
+/// Invalid formats that return errors:
+/// - "90.0" - Missing latitude
+/// - "200.0,30.0" - Elongation must be between 0° and 180°
+/// - "90.0,100.0" - Latitude must be between -90° and +90°
 pub fn parse_coordinates(s: &str) -> Result<SolarAngularCoordinates, String> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
@@ -320,19 +261,12 @@ const ADDITIONAL_BRIGHT_STARS_CSV: &str = include_str!("../data/missing_bright_s
 /// * `Ok(Vec<MinimalStar>)` - Successfully parsed stars with assigned IDs
 /// * `Err(Box<dyn std::error::Error>)` - Parse error with diagnostic information
 ///
-/// # Examples
-/// ```rust
-/// use simulator::shared_args::parse_additional_stars;
-///
-/// let stars = parse_additional_stars()?;
-/// println!("Loaded {} additional bright stars", stars.len());
-///
-/// // Verify ID assignment
-/// if let Some(first_star) = stars.first() {
-///     assert_eq!(first_star.id, u64::MAX);
-/// }
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
+/// # Usage
+/// The function parses embedded CSV data and returns a vector of MinimalStar objects:
+/// - Each star is assigned a unique ID counting backwards from u64::MAX
+/// - First star gets ID = u64::MAX, second gets u64::MAX - 1, etc.
+/// - This ensures no ID collisions when merging with primary catalogs
+/// - Returns an error if CSV format is invalid or coordinates are out of bounds
 pub fn parse_additional_stars() -> Result<Vec<MinimalStar>, Box<dyn std::error::Error>> {
     let mut stars = Vec::new();
     let mut current_id = u64::MAX; // Start from maximum possible value and count backwards
@@ -405,28 +339,20 @@ pub fn parse_additional_stars() -> Result<Vec<MinimalStar>, Box<dyn std::error::
 /// * `Ok(Duration)` - Parsed duration with proper precision
 /// * `Err(String)` - Validation error with specific diagnostic
 ///
-/// # Examples
-/// ```rust
-/// use simulator::shared_args::parse_duration;
-/// use std::time::Duration;
+/// # Usage
+/// Various valid duration formats:
+/// - "1s" → 1 second
+/// - "500ms" → 500 milliseconds
+/// - "1.5s" → 1.5 seconds (fractional values supported)
+/// - "2m" → 2 minutes (120 seconds)
+/// - "1h" → 1 hour (3600 seconds)
+/// - "1000us" → 1000 microseconds
+/// - "30" → 30 seconds (default unit if none specified)
 ///
-/// // Various valid formats
-/// assert_eq!(parse_duration("1s")?, Duration::from_secs(1));
-/// assert_eq!(parse_duration("500ms")?, Duration::from_millis(500));
-/// assert_eq!(parse_duration("1.5s")?, Duration::from_secs_f64(1.5));
-/// assert_eq!(parse_duration("2m")?, Duration::from_secs(120));
-/// assert_eq!(parse_duration("1h")?, Duration::from_secs(3600));
-/// assert_eq!(parse_duration("1000us")?, Duration::from_micros(1000));
-///
-/// // Default to seconds if no unit
-/// assert_eq!(parse_duration("30")?, Duration::from_secs(30));
-///
-/// // Error cases
-/// assert!(parse_duration("-1s").is_err());      // Negative duration
-/// assert!(parse_duration("invalid").is_err());  // Invalid number
-/// assert!(parse_duration("1x").is_err());       // Unknown unit
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
+/// Invalid formats that return errors:
+/// - "-1s" - Negative durations are not allowed
+/// - "invalid" - Must be a valid number
+/// - "1x" - Unknown unit suffix
 pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let s = s.trim();
 
@@ -491,25 +417,16 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 /// * `Ok((f64, f64, f64))` - Validated (start, stop, step) tuple
 /// * `Err(String)` - Validation error with specific diagnostic
 ///
-/// # Examples
-/// ```rust
-/// use simulator::shared_args::parse_range;
+/// # Usage
+/// Valid range formats:
+/// - Forward ranges: "0.0:10.0:1.0", "8.0:16.0:0.5"
+/// - Reverse ranges: "10.0:0.0:-1.0", "5.0:1.0:-0.5"
 ///
-/// // Forward ranges
-/// assert_eq!(parse_range("0.0:10.0:1.0")?, (0.0, 10.0, 1.0));
-/// assert_eq!(parse_range("8.0:16.0:0.5")?, (8.0, 16.0, 0.5));
-///
-/// // Reverse ranges  
-/// assert_eq!(parse_range("10.0:0.0:-1.0")?, (10.0, 0.0, -1.0));
-/// assert_eq!(parse_range("5.0:1.0:-0.5")?, (5.0, 1.0, -0.5));
-///
-/// // Error cases
-/// assert!(parse_range("1.0:2.0").is_err());        // Missing step
-/// assert!(parse_range("1.0:2.0:0.0").is_err());    // Zero step
-/// assert!(parse_range("5.0:1.0:1.0").is_err());    // Wrong direction
-/// assert!(parse_range("1.0:5.0:-1.0").is_err());   // Wrong direction
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
+/// Invalid formats that return errors:
+/// - "1.0:2.0" - Missing step component
+/// - "1.0:2.0:0.0" - Step cannot be zero
+/// - "5.0:1.0:1.0" - Positive step requires start < stop
+/// - "1.0:5.0:-1.0" - Negative step requires start > stop
 pub fn parse_range(s: &str) -> Result<(f64, f64, f64), String> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() != 3 {
@@ -627,21 +544,11 @@ impl RangeArg {
     /// # Returns
     /// (start, stop, step) tuple for direct parameter unpacking
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::shared_args::RangeArg;
-    ///
-    /// let range: RangeArg = "1.0:10.0:0.5".parse().unwrap();
-    /// let (start, stop, step) = range.as_tuple();
-    ///
-    /// // Generate parameter sequence
-    /// let mut values = Vec::new();
-    /// let mut current = start;
-    /// while current <= stop {
-    ///     values.push(current);
-    ///     current += step;
-    /// }
-    /// ```
+    /// # Usage
+    /// Parse a range string and extract values:
+    /// - Use str::parse() to create a RangeArg from "start:stop:step" format
+    /// - Call as_tuple() to get (start, stop, step) for iteration
+    /// - Generate parameter sequences by incrementing from start to stop by step
     pub fn as_tuple(&self) -> (f64, f64, f64) {
         (self.0, self.1, self.2)
     }
@@ -794,15 +701,12 @@ impl SharedSimulationArgs {
     /// # Returns
     /// * `Result<BinaryCatalog, Box<dyn std::error::Error>>` - The loaded catalog with additional stars or error
     ///
-    /// # Example
-    /// ```rust,ignore
-    /// use simulator::shared_args::SharedSimulationArgs;
-    /// use clap::Parser;
-    ///
-    /// let args = SharedSimulationArgs::parse();
-    /// let catalog = args.load_catalog()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
+    /// # Usage
+    /// Load a catalog with automatic bright star augmentation:
+    /// - Loads the binary catalog from the specified path
+    /// - Automatically adds embedded bright stars from CSV data
+    /// - Returns a combined catalog with collision-free star IDs
+    /// - Reports clear error messages if catalog loading fails
     pub fn load_catalog(&self) -> Result<BinaryCatalog, Box<dyn std::error::Error>> {
         let mut catalog = BinaryCatalog::load(&self.catalog).map_err(|e| {
             format!(

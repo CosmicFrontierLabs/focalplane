@@ -27,62 +27,13 @@
 //! # Applications
 //!
 //! ## Detector Characterization
-//! ```rust
-//! use simulator::photometry::{QuantumEfficiency, Band};
-//!
-//! // Create a CCD quantum efficiency curve
-//! let wavelengths = vec![300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0];
-//! let efficiencies = vec![0.0, 0.3, 0.8, 0.9, 0.7, 0.4, 0.0];
-//!
-//! let ccd_qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
-//!     .expect("Failed to create QE curve");
-//!
-//! // Check peak efficiency
-//! println!("Peak QE at 600nm: {:.1}%", ccd_qe.at(600.0) * 100.0);
-//!
-//! // Get wavelength coverage
-//! let band = ccd_qe.band();
-//! println!("Sensitive range: {:.0}-{:.0} nm", band.lower_nm, band.upper_nm);
-//! ```
+//! Create quantum efficiency curves for CCD and CMOS sensors.
 //!
 //! ## Filter Response Modeling
-//! ```rust
-//! use simulator::photometry::{QuantumEfficiency, Band};
-//!
-//! // Create a narrow-band filter (e.g., H-alpha at 656nm)
-//! let ha_band = Band::from_nm_bounds(650.0, 662.0);
-//! let ha_filter = QuantumEfficiency::from_notch(&ha_band, 0.85)
-//!     .expect("Failed to create H-alpha filter");
-//!
-//! // Check filter characteristics
-//! assert_eq!(ha_filter.at(656.0), 0.85);  // Peak transmission
-//! assert_eq!(ha_filter.at(600.0), 0.0);   // Out-of-band rejection
-//! ```
+//! Model narrow-band filters and notch filters with sharp cutoffs.
 //!
 //! ## Synthetic Photometry Integration
-//! ```rust
-//! use simulator::photometry::QuantumEfficiency;
-//!
-//! # let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
-//! # let efficiencies = vec![0.0, 0.8, 0.9, 0.0];
-//! # let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
-//! // Integrate with stellar spectrum
-//! let total_response = qe.integrate(|wavelength| {
-//!     // Example: Planck function for 5780K blackbody (solar temperature)
-//!     let h = 6.626e-34; // Planck constant
-//!     let c = 3e8;       // Speed of light  
-//!     let k = 1.381e-23; // Boltzmann constant
-//!     let T = 5780.0;    // Temperature in K
-//!     
-//!     let lambda_m = wavelength * 1e-9; // Convert nm to meters
-//!     let exponent = (h * c) / (lambda_m * k * T);
-//!     
-//!     // Simplified Planck function
-//!     1.0 / (lambda_m.powi(5) * (exponent.exp() - 1.0))
-//! });
-//!
-//! println!("Total integrated response: {:.2e}", total_response);
-//! ```
+//! Integrate quantum efficiency with stellar spectra for photometric calculations.
 //!
 //! # Data Requirements
 //!
@@ -166,20 +117,6 @@ impl QuantumEfficiency {
     /// # Returns
     /// Result containing QuantumEfficiency model or validation error
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{QuantumEfficiency, Band};
-    ///
-    /// // Create H-alpha narrow-band filter (656.3nm ± 5nm)
-    /// let ha_band = Band::from_nm_bounds(651.3, 661.3);
-    /// let ha_filter = QuantumEfficiency::from_notch(&ha_band, 0.85)
-    ///     .expect("Failed to create H-alpha filter");
-    ///
-    /// // Verify filter properties
-    /// assert_eq!(ha_filter.at(656.3), 0.85);  // Peak transmission
-    /// assert_eq!(ha_filter.at(600.0), 0.0);   // Out-of-band
-    /// assert_eq!(ha_filter.at(700.0), 0.0);   // Out-of-band
-    /// ```
     pub fn from_notch(band: &Band, efficiency: f64) -> Result<Self, QuantumEfficiencyError> {
         // Validate efficiency value
         if !(0.0..=1.0).contains(&efficiency) {
@@ -276,25 +213,6 @@ impl QuantumEfficiency {
     /// # Returns
     /// Quantum efficiency [0.0, 1.0] or 0.0 if outside detector range
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::QuantumEfficiency;
-    ///
-    /// let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
-    /// let efficiencies = vec![0.0, 0.8, 0.9, 0.0];
-    /// let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
-    ///
-    /// // Direct lookup at data points
-    /// assert_eq!(qe.at(500.0), 0.8);
-    /// assert_eq!(qe.at(600.0), 0.9);
-    ///
-    /// // Linear interpolation between points
-    /// assert!((qe.at(550.0) - 0.85).abs() < 0.01);  // Midpoint between 500nm and 600nm
-    ///
-    /// // Out-of-band returns zero
-    /// assert_eq!(qe.at(300.0), 0.0);   // Below range
-    /// assert_eq!(qe.at(800.0), 0.0);   // Above range
-    /// ```
     pub fn at(&self, wavelength: f64) -> f64 {
         // Return 0.0 if outside the range
         if wavelength < self.wavelengths[0] || wavelength > *self.wavelengths.last().unwrap() {

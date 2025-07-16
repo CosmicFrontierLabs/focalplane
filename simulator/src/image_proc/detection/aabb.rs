@@ -20,29 +20,10 @@
 //! - **Region of interest**: Defining sub-regions for detailed analysis
 //! - **Quality filtering**: Size and shape filtering based on bounding box properties
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::detection::aabb::{AABB, merge_overlapping_aabbs};
-//!
-//! // Create bounding boxes for detected stars
-//! let star1 = AABB::from_coords(100, 150, 105, 155);  // 6x6 pixel region
-//! let star2 = AABB::from_coords(103, 152, 108, 157);  // Overlapping detection
-//! let star3 = AABB::from_coords(200, 300, 202, 302);  // Separate star
-//!
-//! // Check for overlaps
-//! assert!(star1.overlaps(&star2));
-//! assert!(!star1.overlaps(&star3));
-//!
-//! // Merge overlapping detections to avoid duplicates
-//! let detections = vec![star1, star2, star3];
-//! let merged = merge_overlapping_aabbs(&detections, Some(2));  // 2-pixel padding
-//! assert_eq!(merged.len(), 2);  // Two distinct objects
-//!
-//! // Calculate properties
-//! println!("Merged star area: {} pixels", merged[0].area());
-//! println!("Star center: {:?}", merged[0].center());
-//! ```
+//! Create bounding boxes for astronomical object detection, merge overlapping
+//! detections, and calculate geometric properties for spatial analysis.
 
 /// Axis-Aligned Bounding Box for 2D image regions.
 ///
@@ -58,21 +39,9 @@
 /// # Memory Layout
 /// Optimized for fast overlap tests and minimal memory usage (32 bytes on 64-bit systems).
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::image_proc::detection::aabb::AABB;
-///
-/// // Create bounding box for a 5x5 pixel star detection
-/// let star_bbox = AABB::from_coords(100, 200, 104, 204);
-/// assert_eq!(star_bbox.width(), 5);
-/// assert_eq!(star_bbox.height(), 5);
-/// assert_eq!(star_bbox.area(), 25);
-///
-/// // Check if pixel is within detection region
-/// assert!(star_bbox.contains_point(102, 202));
-/// assert!(!star_bbox.contains_point(95, 195));
-/// ```
+/// # Usage
+/// Represents rectangular regions in image coordinates for star detection
+/// and object tracking with inclusive bounds and optimized memory layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AABB {
     /// Minimum row (y) coordinate (inclusive)
@@ -93,21 +62,8 @@ impl AABB {
     /// `expand_to_include()`.
     ///
     /// # Usage
-    /// Primarily used as a starting point for incrementally building bounding
-    /// boxes by adding points.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let mut bbox = AABB::new();
-    /// assert!(!bbox.is_valid());  // Initially invalid
-    ///
-    /// bbox.expand_to_include(50, 100);
-    /// bbox.expand_to_include(55, 105);
-    /// assert!(bbox.is_valid());
-    /// assert_eq!(bbox.width(), 6);
-    /// ```
+    /// Used as starting point for incrementally building bounding boxes
+    /// by adding points with expand_to_include().
     pub fn new() -> Self {
         Self {
             min_row: usize::MAX,
@@ -125,15 +81,9 @@ impl AABB {
     /// * `max_row` - Bottom edge (maximum y-coordinate, inclusive)
     /// * `max_col` - Right edge (maximum x-coordinate, inclusive)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// // 10x20 pixel region starting at (50, 100)
-    /// let detection = AABB::from_coords(50, 100, 59, 119);
-    /// assert_eq!(detection.width(), 20);
-    /// assert_eq!(detection.height(), 10);
-    /// ```
+    /// # Usage
+    /// Creates AABB with explicit coordinate bounds for astronomical
+    /// object detection regions.
     pub fn from_coords(min_row: usize, min_col: usize, max_row: usize, max_col: usize) -> Self {
         Self {
             min_row,
@@ -148,14 +98,9 @@ impl AABB {
     /// # Arguments
     /// * `coords` - Tuple of (min_row, min_col, max_row, max_col)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_tuple((10, 20, 30, 40));
-    /// assert_eq!(bbox.min_row, 10);
-    /// assert_eq!(bbox.max_col, 40);
-    /// ```
+    /// # Usage
+    /// Convenient constructor from coordinate tuple format
+    /// for interface with external libraries.
     pub fn from_tuple(coords: (usize, usize, usize, usize)) -> Self {
         Self {
             min_row: coords.0,
@@ -186,17 +131,9 @@ impl AABB {
     /// # Returns
     /// `true` if any part of the AABBs overlap, `false` otherwise
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let star1 = AABB::from_coords(10, 10, 20, 20);
-    /// let star2 = AABB::from_coords(15, 15, 25, 25);  // Overlapping
-    /// let star3 = AABB::from_coords(30, 30, 40, 40);  // Separate
-    ///
-    /// assert!(star1.overlaps(&star2));
-    /// assert!(!star1.overlaps(&star3));
-    /// ```
+    /// # Usage
+    /// Fast overlap detection for star detection merging
+    /// and duplicate removal algorithms.
     pub fn overlaps(&self, other: &Self) -> bool {
         self.min_row <= other.max_row
             && self.max_row >= other.min_row
@@ -217,16 +154,9 @@ impl AABB {
     /// # Returns
     /// `true` if the padded AABB overlaps with the other AABB
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let star1 = AABB::from_coords(10, 10, 15, 15);
-    /// let star2 = AABB::from_coords(18, 18, 23, 23);  // 3 pixels away
-    ///
-    /// assert!(!star1.overlaps(&star2));              // No direct overlap
-    /// assert!(star1.overlaps_with_padding(&star2, 3)); // Overlap with 3px padding
-    /// ```
+    /// # Usage
+    /// Groups nearby detections that should be considered the same object
+    /// by expanding bounds temporarily for overlap testing.
     pub fn overlaps_with_padding(&self, other: &Self, padding: usize) -> bool {
         // Apply padding for overlap check
         let min_row = self.min_row.saturating_sub(padding);
@@ -253,17 +183,9 @@ impl AABB {
     /// # Returns
     /// New AABB containing both input AABBs
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let detection1 = AABB::from_coords(10, 10, 20, 20);
-    /// let detection2 = AABB::from_coords(15, 25, 30, 35);
-    ///
-    /// let merged = detection1.merge(&detection2);
-    /// assert_eq!(merged.min_row, 10);  // min of 10, 15
-    /// assert_eq!(merged.max_col, 35);  // max of 20, 35
-    /// ```
+    /// # Usage
+    /// Combines overlapping detections into single bounding box
+    /// for duplicate removal and object consolidation.
     pub fn merge(&self, other: &Self) -> Self {
         Self {
             min_row: self.min_row.min(other.min_row),
@@ -282,18 +204,9 @@ impl AABB {
     /// * `row` - Y-coordinate of the point to include
     /// * `col` - X-coordinate of the point to include
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let mut bbox = AABB::new();
-    /// bbox.expand_to_include(50, 100);
-    /// bbox.expand_to_include(55, 95);   // Expand down and left
-    /// bbox.expand_to_include(45, 105);  // Expand up and right
-    ///
-    /// assert_eq!(bbox.min_row, 45);
-    /// assert_eq!(bbox.max_col, 105);
-    /// ```
+    /// # Usage
+    /// Incrementally builds bounding box by adding detection points,
+    /// useful for growing regions during object detection.
     pub fn expand_to_include(&mut self, row: usize, col: usize) {
         self.min_row = self.min_row.min(row);
         self.min_col = self.min_col.min(col);
@@ -306,13 +219,9 @@ impl AABB {
     /// # Returns
     /// Width as number of pixels (max_col - min_col + 1)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 20, 15, 29);  // 6 rows × 10 cols
-    /// assert_eq!(bbox.width(), 10);
-    /// ```
+    /// # Usage
+    /// Calculates horizontal extent of detection region
+    /// for size filtering and analysis.
     pub fn width(&self) -> usize {
         self.max_col - self.min_col + 1
     }
@@ -322,13 +231,9 @@ impl AABB {
     /// # Returns
     /// Height as number of pixels (max_row - min_row + 1)
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 20, 15, 29);  // 6 rows × 10 cols
-    /// assert_eq!(bbox.height(), 6);
-    /// ```
+    /// # Usage
+    /// Calculates vertical extent of detection region
+    /// for size filtering and analysis.
     pub fn height(&self) -> usize {
         self.max_row - self.min_row + 1
     }
@@ -340,13 +245,9 @@ impl AABB {
     ///
     /// Useful for filtering detections by size or estimating object extent.
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 20, 15, 29);  // 6 rows × 10 cols
-    /// assert_eq!(bbox.area(), 60);
-    /// ```
+    /// # Usage
+    /// Computes total pixel area for object size filtering
+    /// and detection quality assessment.
     pub fn area(&self) -> usize {
         self.width() * self.height()
     }
@@ -359,16 +260,9 @@ impl AABB {
     /// # Returns
     /// `true` if the AABB represents a valid region, `false` otherwise
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let empty = AABB::new();
-    /// assert!(!empty.is_valid());
-    ///
-    /// let valid = AABB::from_coords(10, 10, 20, 20);
-    /// assert!(valid.is_valid());
-    /// ```
+    /// # Usage
+    /// Validates bounding box before geometric calculations
+    /// and prevents errors from malformed regions.
     pub fn is_valid(&self) -> bool {
         self.min_row <= self.max_row && self.min_col <= self.max_col
     }
@@ -384,16 +278,9 @@ impl AABB {
     /// # Returns
     /// New padded AABB
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 10, 20, 20);
-    /// let padded = bbox.with_padding(5);
-    ///
-    /// assert_eq!(padded.min_row, 5);   // 10 - 5
-    /// assert_eq!(padded.max_row, 25);  // 20 + 5
-    /// ```
+    /// # Usage
+    /// Creates expanded region for grouping nearby objects
+    /// or adding safety margins around detections.
     pub fn with_padding(&self, padding: usize) -> Self {
         Self {
             min_row: self.min_row.saturating_sub(padding),
@@ -415,15 +302,9 @@ impl AABB {
     /// # Returns
     /// `true` if the point is within the AABB bounds
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 10, 20, 20);
-    /// assert!(bbox.contains_point(10, 10));  // Corner point
-    /// assert!(bbox.contains_point(15, 15));  // Interior point
-    /// assert!(!bbox.contains_point(5, 5));   // Outside
-    /// ```
+    /// # Usage
+    /// Tests pixel membership for region-based analysis
+    /// and spatial filtering operations.
     pub fn contains_point(&self, row: usize, col: usize) -> bool {
         row >= self.min_row && row <= self.max_row && col >= self.min_col && col <= self.max_col
     }
@@ -439,17 +320,9 @@ impl AABB {
     /// # Returns
     /// `true` if this AABB completely contains the other AABB
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let large = AABB::from_coords(10, 10, 30, 30);
-    /// let small = AABB::from_coords(15, 15, 25, 25);
-    /// let overlapping = AABB::from_coords(5, 5, 20, 20);
-    ///
-    /// assert!(large.contains(&small));
-    /// assert!(!large.contains(&overlapping));
-    /// ```
+    /// # Usage
+    /// Determines hierarchical relationships between detection regions
+    /// for nested object analysis.
     pub fn contains(&self, other: &Self) -> bool {
         self.min_row <= other.min_row
             && self.max_row >= other.max_row
@@ -465,14 +338,9 @@ impl AABB {
     /// # Returns
     /// Tuple of (x_center, y_center) in image coordinates
     ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::image_proc::detection::aabb::AABB;
-    ///
-    /// let bbox = AABB::from_coords(10, 20, 30, 40);
-    /// let center = bbox.center();
-    /// assert_eq!(center, (30.0, 20.0));  // (x, y) = ((20+40)/2, (10+30)/2)
-    /// ```
+    /// # Usage
+    /// Calculates geometric center for object positioning
+    /// and centroid-based analysis.
     pub fn center(&self) -> (f64, f64) {
         (
             (self.min_col as f64 + self.max_col as f64) / 2.0,
@@ -500,20 +368,9 @@ impl Default for AABB {
 /// * `Some(AABB)` - Union bounding box if input is non-empty
 /// * `None` - If input slice is empty
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::aabb::{AABB, union_aabbs};
-///
-/// let detections = vec![
-///     AABB::from_coords(10, 10, 20, 20),  // Star 1
-///     AABB::from_coords(50, 50, 60, 60),  // Star 2
-///     AABB::from_coords(100, 5, 110, 15), // Star 3
-/// ];
-///
-/// let field_extent = union_aabbs(&detections).unwrap();
-/// assert_eq!(field_extent.min_row, 10);  // Topmost detection
-/// assert_eq!(field_extent.max_col, 60);  // Rightmost detection
-/// ```
+/// # Usage
+/// Finds overall field extent for multiple astronomical detections
+/// or creates summary regions for object catalogs.
 pub fn union_aabbs(boxes: &[AABB]) -> Option<AABB> {
     if boxes.is_empty() {
         return None;
@@ -538,14 +395,9 @@ pub fn union_aabbs(boxes: &[AABB]) -> Option<AABB> {
 /// # Returns
 /// Vector of AABB objects
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::aabb::{tuples_to_aabbs, AABB};
-///
-/// let coordinates = vec![(10, 10, 20, 20), (50, 50, 60, 60)];
-/// let bboxes = tuples_to_aabbs(&coordinates);
-/// assert_eq!(bboxes[0].area(), 121);  // 11 × 11 pixels
-/// ```
+/// # Usage
+/// Batch conversion utility for interfacing with external detection
+/// algorithms or deserializing bounding box data.
 pub fn tuples_to_aabbs(bboxes: &[(usize, usize, usize, usize)]) -> Vec<AABB> {
     bboxes.iter().map(|&bbox| AABB::from_tuple(bbox)).collect()
 }
@@ -561,14 +413,9 @@ pub fn tuples_to_aabbs(bboxes: &[(usize, usize, usize, usize)]) -> Vec<AABB> {
 /// # Returns
 /// Vector of coordinate tuples (min_row, min_col, max_row, max_col)
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::aabb::{aabbs_to_tuples, AABB};
-///
-/// let bboxes = vec![AABB::from_coords(10, 10, 20, 20)];
-/// let tuples = aabbs_to_tuples(&bboxes);
-/// assert_eq!(tuples[0], (10, 10, 20, 20));
-/// ```
+/// # Usage
+/// Batch conversion utility for serialization or interfacing with
+/// external libraries expecting tuple-based formats.
 pub fn aabbs_to_tuples(boxes: &[AABB]) -> Vec<(usize, usize, usize, usize)> {
     boxes.iter().map(|bbox| bbox.to_tuple()).collect()
 }
@@ -595,24 +442,10 @@ pub fn aabbs_to_tuples(boxes: &[AABB]) -> Vec<(usize, usize, usize, usize)> {
 /// # Performance
 /// Time complexity: O(n²) in worst case, O(n) for well-separated objects
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::aabb::{AABB, merge_overlapping_aabbs};
-///
-/// // Multiple detections of the same star at different thresholds
-/// let detections = vec![
-///     AABB::from_coords(100, 100, 105, 105),  // Core
-///     AABB::from_coords(102, 102, 108, 108),  // Extended
-///     AABB::from_coords(200, 200, 202, 202),  // Different star
-/// ];
-///
-/// let cleaned = merge_overlapping_aabbs(&detections, Some(1));
-/// assert_eq!(cleaned.len(), 2);  // Two distinct stars
-///
-/// // First merged detection encompasses both overlapping boxes
-/// assert!(cleaned[0].contains_point(100, 100));
-/// assert!(cleaned[0].contains_point(108, 108));
-/// ```
+/// # Usage
+/// Eliminates duplicate detections by combining overlapping regions.
+/// Essential for cleaning detection results where the same object
+/// may be detected multiple times at different thresholds.
 pub fn merge_overlapping_aabbs(boxes: &[AABB], padding: Option<usize>) -> Vec<AABB> {
     if boxes.is_empty() {
         return Vec::new();

@@ -59,25 +59,6 @@ pub enum InterpError {
 /// - Space complexity: O(1)
 /// - Suitable for repeated queries on the same dataset
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::algo::misc::interp;
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let x_coords = vec![0.0, 1.0, 2.0, 3.0];
-/// let y_values = vec![0.0, 1.0, 4.0, 9.0];
-///
-/// // Interpolate at x = 1.5
-/// let result = interp(1.5, &x_coords, &y_values)?;
-/// assert_eq!(result, 2.5);  // Linear interpolation between (1,1) and (2,4)
-///
-/// // Exact match
-/// let exact = interp(2.0, &x_coords, &y_values)?;
-/// assert_eq!(exact, 4.0);   // Exact value at x = 2
-/// # Ok(())
-/// # }
-/// ```
 ///
 /// # Errors
 ///

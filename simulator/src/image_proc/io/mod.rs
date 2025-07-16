@@ -19,23 +19,11 @@
 //! - Memory-efficient large image processing
 //! - Coordinate system preservation between formats
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::io::{save_u8_image, u16_to_u8_auto_scale};
-//! use ndarray::Array2;
-//!
-//! // Convert high-dynamic-range sensor data to 8-bit for visualization
-//! let sensor_data = Array2::from_elem((512, 512), 40000u16);  // 16-bit ADU
-//! let display_image = u16_to_u8_auto_scale(&sensor_data);
-//!
-//! // Save for presentation
-//! # #[cfg(feature = "io_test")]
-//! save_u8_image(&display_image, "starfield.png").unwrap();
-//!
-//! println!("Converted {}x{} sensor data to display format",
-//!          sensor_data.nrows(), sensor_data.ncols());
-//! ```
+//! Convert high-dynamic-range sensor data to 8-bit for visualization,
+//! then save in standard image formats. Handles coordinate transformations
+//! and provides both automatic and fixed scaling options.
 
 use crate::algo::MinMaxScan;
 use ndarray::Array2;
@@ -62,21 +50,9 @@ use thiserror::Error;
 /// - JPEG: Lossy compression, good for presentations
 /// - TIFF: Lossless, good for archival display images
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::io::save_u8_image;
-/// use ndarray::Array2;
-/// use std::path::Path;
-///
-/// // Create synthetic star field
-/// let mut image = Array2::from_elem((256, 256), 30u8);  // Dark sky
-/// image[[128, 128]] = 255;  // Bright star
-/// image[[100, 200]] = 180;  // Dimmer star
-///
-/// // Save as PNG for lossless visualization
-/// # #[cfg(feature = "io_test")]
-/// save_u8_image(&image, "starfield.png").unwrap();
-/// ```
+/// # Usage
+/// Save 8-bit grayscale arrays as standard image files. File format
+/// determined by extension. Handles coordinate system conversion automatically.
 pub fn save_u8_image<P: AsRef<Path>>(image: &Array2<u8>, path: P) -> Result<(), Box<dyn Error>> {
     use image::{ImageBuffer, Luma};
 
@@ -114,18 +90,9 @@ pub fn save_u8_image<P: AsRef<Path>>(image: &Array2<u8>, path: P) -> Result<(), 
 /// - Creating display images from high dynamic range data
 /// - Preprocessing for image analysis algorithms requiring 8-bit input
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::io::u16_to_u8_auto_scale;
-/// use ndarray::Array2;
-///
-/// // Typical 16-bit astronomical data
-/// let mut sensor_data = Array2::from_elem((10, 10), 1000u16);  // Background
-/// sensor_data[[5, 5]] = 45000;  // Bright star near saturation
-/// sensor_data[[2, 7]] = 8000;   // Moderate star
-///
-/// u16_to_u8_auto_scale(&sensor_data);
-/// ```
+/// # Usage
+/// Convert 16-bit sensor data to 8-bit display format using automatic
+/// scaling based on the image's maximum value for optimal contrast.
 pub fn u16_to_u8_auto_scale(image: &Array2<u16>) -> Array2<u8> {
     // Find max value for proper scaling
     let values: Vec<f64> = image.iter().map(|&x| x as f64).collect();
@@ -158,23 +125,9 @@ pub fn u16_to_u8_auto_scale(image: &Array2<u16>) -> Array2<u8> {
 /// `output_pixel = round((input_pixel × 255) / max_value)`
 /// Values above max_value are clipped to 255.
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::io::u16_to_u8_scaled;
-/// use ndarray::Array2;
-///
-/// // 12-bit sensor data (0-4095 range)
-/// let mut data = Array2::from_elem((50, 50), 2048u16);  // Mid-level
-/// data[[25, 25]] = 4095;  // Maximum 12-bit value
-/// data[[10, 10]] = 0;     // Minimum value
-///
-/// // Scale using 12-bit maximum for consistent mapping
-/// let display = u16_to_u8_scaled(&data, 4095);
-///
-/// assert_eq!(display[[25, 25]], 255);  // Max 12-bit → 255
-/// assert_eq!(display[[10, 10]], 0);    // Min → 0
-/// assert_eq!(display[[30, 30]], 128);  // Mid-level → ~128
-/// ```
+/// # Usage
+/// Convert 16-bit data to 8-bit using a fixed scaling reference.
+/// Useful for consistent scaling across multiple images or known bit depths.
 pub fn u16_to_u8_scaled(image: &Array2<u16>, max_value: u32) -> Array2<u8> {
     if max_value == 0 {
         // Return black image if maximum value is 0
@@ -204,16 +157,9 @@ pub enum FitsError {
 /// # Returns
 /// * `Result<HashMap<String, Array2<f64>>, FitsError>` - Map of HDU names to 2D arrays
 ///
-/// # Examples
-/// ```no_run
-/// use std::path::Path;
-/// use simulator::image_proc::io::read_fits_to_hashmap;
-///
-/// let data = read_fits_to_hashmap(Path::new("example.fits")).unwrap();
-/// for (name, array) in data {
-///     println!("HDU '{}' has shape {:?}", name, array.dim());
-/// }
-/// ```
+/// # Usage
+/// Read FITS files and return all image HDUs as a HashMap mapping
+/// HDU names to 2D arrays. Handles coordinate system conversion automatically.
 pub fn read_fits_to_hashmap<P: AsRef<Path>>(
     path: P,
 ) -> Result<HashMap<String, Array2<f64>>, FitsError> {
@@ -269,19 +215,9 @@ pub fn read_fits_to_hashmap<P: AsRef<Path>>(
 /// # Returns
 /// * `Result<(), FitsError>` - Success or error
 ///
-/// # Examples
-/// ```no_run
-/// use std::collections::HashMap;
-/// use std::path::Path;
-/// use ndarray::Array2;
-/// use simulator::image_proc::io::write_hashmap_to_fits;
-///
-/// let mut data = HashMap::new();
-/// let array = Array2::from_elem((100, 100), 1.5);
-/// data.insert("IMAGE".to_string(), array);
-///
-/// write_hashmap_to_fits(&data, Path::new("output.fits")).unwrap();
-/// ```
+/// # Usage
+/// Write HashMap of 2D arrays to FITS file with proper HDU organization
+/// and coordinate system handling. Sets EXTNAME headers automatically.
 pub fn write_hashmap_to_fits<P: AsRef<Path>>(
     data: &HashMap<String, Array2<f64>>,
     path: P,

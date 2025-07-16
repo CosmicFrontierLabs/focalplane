@@ -20,24 +20,10 @@
 //! - **Robust moments**: Handles various PSF sizes and brightness levels
 //! - **Otsu thresholding**: Automatic threshold selection when not specified
 //!
-//! # Examples
+//! # Usage
 //!
-//! ```rust
-//! use simulator::image_proc::detection::naive::{detect_stars, do_detections};
-//! use ndarray::Array2;
-//!
-//! // Method 1: Direct detection on f64 image
-//! let image_f64 = Array2::from_elem((100, 100), 10.0);
-//! let stars = detect_stars(&image_f64.view(), Some(50.0));
-//! println!("Found {} stars", stars.len());
-//!
-//! // Method 2: Full pipeline with optional smoothing
-//! let image_u16 = Array2::from_elem((100, 100), 100u16);
-//! let stars = do_detections(&image_u16, Some(1.5), None); // 1.5px Gaussian smooth
-//! for star in &stars {
-//!     println!("Star at ({:.2}, {:.2}) flux={:.1}", star.x, star.y, star.flux);
-//! }
-//! ```
+//! Use detect_stars() for direct detection on f64 images or do_detections()
+//! for the full pipeline with optional smoothing and automatic thresholding.
 
 use ndarray::{Array2, ArrayView2};
 
@@ -61,28 +47,9 @@ use starfield::image::starfinders::StellarSource;
 /// Objects are marked as valid stars if their aspect ratio is less than 2.5,
 /// which helps reject cosmic rays, hot pixels, and other elongated artifacts.
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::image_proc::detection::naive::StarDetection;
-///
-/// // Typical stellar detection
-/// let star = StarDetection {
-///     id: 0,
-///     x: 123.45,      // Sub-pixel precision
-///     y: 67.89,
-///     flux: 1500.0,   // Total brightness
-///     m_xx: 2.1,      // X-axis moment
-///     m_yy: 2.0,      // Y-axis moment  
-///     m_xy: 0.1,      // Cross-moment
-///     aspect_ratio: 1.05, // Nearly circular
-///     diameter: 3.2,   // ~3 pixel PSF
-///     is_valid: true,  // Passes shape filter
-/// };
-///
-/// assert!(star.is_valid);
-/// assert!(star.aspect_ratio < 2.5);
-/// ```
+/// # Usage
+/// Contains detection results with sub-pixel centroid coordinates, total flux,
+/// and shape parameters for quality assessment and filtering.
 #[derive(Debug, Clone)]
 pub struct StarDetection {
     /// Unique identifier for this detection (assigned sequentially)
@@ -274,22 +241,9 @@ pub fn calculate_star_centroid(
 /// # Returns
 /// Vector of valid StarDetection objects with sub-pixel centroids
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::naive::detect_stars;
-/// use ndarray::Array2;
-///
-/// let image = Array2::from_elem((100, 100), 10.0);
-///
-/// // With manual threshold
-/// let stars = detect_stars(&image.view(), Some(50.0));
-///
-/// // With automatic Otsu threshold
-/// let stars_auto = detect_stars(&image.view(), None);
-///
-/// println!("Manual: {} stars, Auto: {} stars",
-///          stars.len(), stars_auto.len());
-/// ```
+/// # Usage
+/// Core detection function using threshold segmentation and moment analysis.
+/// Returns StarDetection objects with sub-pixel centroid precision.
 pub fn detect_stars(image: &ArrayView2<f64>, threshold: Option<f64>) -> Vec<StarDetection> {
     use super::thresholding::{
         apply_threshold, connected_components, get_bounding_boxes, otsu_threshold,
@@ -331,19 +285,9 @@ pub fn detect_stars(image: &ArrayView2<f64>, threshold: Option<f64>) -> Vec<Star
 /// # Returns
 /// Vector of (x, y) centroid positions with sub-pixel precision
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::naive::{detect_stars, get_centroids};
-/// use ndarray::Array2;
-///
-/// let image = Array2::from_elem((100, 100), 10.0);
-/// let stars = detect_stars(&image.view(), Some(50.0));
-/// let positions = get_centroids(&stars);
-///
-/// for (x, y) in positions {
-///     println!("Star at ({:.2}, {:.2})", x, y);
-/// }
-/// ```
+/// # Usage
+/// Extracts position coordinates from star detections for algorithms
+/// that only need centroid locations without shape information.
 pub fn get_centroids(stars: &[StarDetection]) -> Vec<(f64, f64)> {
     stars.iter().map(|star| (star.x, star.y)).collect()
 }
@@ -373,22 +317,9 @@ pub fn get_centroids(stars: &[StarDetection]) -> Vec<(f64, f64)> {
 /// # Returns
 /// Vector of validated StarDetection objects with sub-pixel precision
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::detection::naive::do_detections;
-/// use ndarray::Array2;
-///
-/// let sensor_data = Array2::from_elem((512, 512), 1000u16);
-///
-/// // With smoothing for faint stars
-/// let smooth_stars = do_detections(&sensor_data, Some(1.5), None);
-///
-/// // Raw detection without smoothing
-/// let raw_stars = do_detections(&sensor_data, None, Some(5000.0));
-///
-/// println!("Smooth: {} stars, Raw: {} stars",
-///          smooth_stars.len(), raw_stars.len());
-/// ```
+/// # Usage
+/// Complete star detection pipeline with optional smoothing and automatic
+/// thresholding. Use for full workflow from sensor data to filtered detections.
 pub fn do_detections(
     sensor_image: &Array2<u16>,
     smooth_by: Option<f64>,

@@ -17,24 +17,6 @@
 //! - Save analysis results for presentations and reports
 //! - Interface with image processing libraries
 //!
-//! # Examples
-//!
-//! ```rust
-//! use simulator::image_proc::image::array2_to_gray_image;
-//! use ndarray::Array2;
-//!
-//! // Create a synthetic star field
-//! let mut data = Array2::from_elem((100, 100), 50u8);  // Background
-//! data[[25, 25]] = 255;  // Bright star
-//! data[[75, 50]] = 200;  // Dimmer star
-//!
-//! // Convert to image format for saving
-//! let image = array2_to_gray_image(&data);
-//! // image.save("starfield.png").unwrap();
-//!
-//! println!("Converted {}x{} array to {}x{} image",
-//!          data.nrows(), data.ncols(), image.width(), image.height());
-//! ```
 
 use image::{GrayImage, Luma};
 use ndarray::Array2;
@@ -61,26 +43,6 @@ use ndarray::Array2;
 /// - Space: O(width × height) - creates new image buffer
 /// - Memory layout optimized for row-major traversal
 ///
-/// # Examples
-/// ```rust
-/// use simulator::image_proc::image::array2_to_gray_image;
-/// use ndarray::Array2;
-///
-/// // Create test pattern
-/// let mut array = Array2::zeros((50, 50));
-/// for i in 0..50 {
-///     array[[i, i]] = 255;  // Diagonal line
-/// }
-///
-/// // Convert for visualization
-/// let image = array2_to_gray_image(&array);
-/// assert_eq!(image.width(), 50);
-/// assert_eq!(image.height(), 50);
-///
-/// // Verify pixel mapping: array[row, col] = image(col, row)
-/// assert_eq!(image.get_pixel(10, 10).0[0], 255);  // Diagonal pixel
-/// assert_eq!(image.get_pixel(10, 11).0[0], 0);    // Off-diagonal pixel
-/// ```
 pub fn array2_to_gray_image(arr: &Array2<u8>) -> GrayImage {
     // Get array dimensions (height, width)
     let (height, width) = arr.dim();

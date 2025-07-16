@@ -19,21 +19,6 @@ use std::f64;
 ///
 /// S(x) = a + b(x-xi) + c(x-xi)² + d(x-xi)³
 ///
-/// # Examples
-///
-/// ```rust
-/// use simulator::algo::spline::CubicSpline;
-///
-/// let x = vec![0.0, 1.0, 2.0, 3.0];
-/// let y = vec![0.0, 1.0, 4.0, 9.0];
-/// let spline = CubicSpline::new(x, y);
-///
-/// // Evaluate at intermediate point
-/// let interpolated = spline.evaluate(1.5);
-///
-/// // Generate smooth curve with 100 points
-/// let (x_smooth, y_smooth) = spline.interpolate(100);
-/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct CubicSpline {
     x: Vec<f64>,
@@ -276,14 +261,6 @@ impl CubicSpline {
 /// # Returns
 /// Tuple of (interpolated_x, interpolated_y) vectors
 ///
-/// # Example
-/// ```rust
-/// use simulator::algo::spline::cubic_spline_interpolate;
-///
-/// let x = vec![0.0, 1.0, 2.0];
-/// let y = vec![0.0, 1.0, 4.0];
-/// let (x_smooth, y_smooth) = cubic_spline_interpolate(x, y, 50);
-/// ```
 pub fn cubic_spline_interpolate(x: Vec<f64>, y: Vec<f64>, n_points: usize) -> (Vec<f64>, Vec<f64>) {
     let spline = CubicSpline::new(x, y);
     spline.interpolate(n_points)
