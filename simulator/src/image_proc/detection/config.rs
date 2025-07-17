@@ -43,7 +43,7 @@ use starfield::image::starfinders::{DAOStarFinderConfig, IRAFStarFinderConfig};
 /// - **Shape filters**: Moderate sharpness/roundness ranges for space telescope PSFs
 ///
 /// # Arguments
-/// * `scaled_airy_disk` - ScaledAiryDisk representing the PSF characteristics
+/// * `scaled_airy_disk` - PixelScaledAiryDisk representing the PSF characteristics
 /// * `background_rms` - RMS noise level of the background
 /// * `detection_sigma` - Detection threshold in units of sigma (typically 5.0)
 ///
@@ -90,7 +90,7 @@ pub fn dao_autoconfig(
 /// - **Shape filters**: Tighter roundness constraint for space telescope PSFs
 ///
 /// # Arguments
-/// * `scaled_airy_disk` - ScaledAiryDisk representing the PSF characteristics
+/// * `scaled_airy_disk` - PixelScaledAiryDisk representing the PSF characteristics
 /// * `background_rms` - RMS noise level of the background
 /// * `detection_sigma` - Detection threshold in units of sigma (typically 5.0)
 ///

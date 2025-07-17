@@ -90,7 +90,7 @@ impl std::str::FromStr for StarFinder {
 /// # Arguments
 /// * `image` - The input image as a 2D array view
 /// * `algorithm` - The star detection algorithm to use
-/// * `scaled_airy_disk` - ScaledAiryDisk representing the PSF characteristics
+/// * `scaled_airy_disk` - PixelScaledAiryDisk representing the PSF characteristics
 /// * `background_rms` - RMS noise level of the background
 /// * `detection_sigma` - Detection threshold in units of sigma (typically 5.0)
 ///

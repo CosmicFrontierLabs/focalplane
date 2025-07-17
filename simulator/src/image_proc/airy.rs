@@ -361,13 +361,13 @@ pub struct PixelScaledAiryDisk {
 }
 
 impl PixelScaledAiryDisk {
-    /// Creates a new ScaledAiryDisk with a default AiryDisk and given radius scale.
+    /// Creates a new PixelScaledAiryDisk with a default AiryDisk and given radius scale.
     ///
     /// # Arguments
     /// * `radius_scale` - Multiplicative factor applied to all radial distances
     ///
     /// # Returns
-    /// ScaledAiryDisk instance with specified scaling
+    /// PixelScaledAiryDisk instance with specified scaling
     fn new(radius_scale: f64) -> Self {
         PixelScaledAiryDisk {
             disk: *AIRY_DISK,
@@ -375,19 +375,19 @@ impl PixelScaledAiryDisk {
         }
     }
 
-    /// Create a new ScaledAiryDisk with specified radius scaling factor.
+    /// Create a new PixelScaledAiryDisk with specified radius scaling factor.
     ///
     /// # Arguments
     /// * `radius_scale` - Factor to scale all radial measurements
     ///
     /// # Returns
-    /// ScaledAiryDisk with the specified radius scaling
+    /// PixelScaledAiryDisk with the specified radius scaling
     ///
     pub fn with_radius_scale(radius_scale: f64) -> Self {
         Self::new(radius_scale)
     }
 
-    /// Create a new ScaledAiryDisk with specified FWHM.
+    /// Create a new PixelScaledAiryDisk with specified FWHM.
     ///
     /// Calculates the appropriate radius scaling to achieve the desired
     /// full-width-half-maximum value in user units (pixels, microns, etc.).
@@ -396,14 +396,14 @@ impl PixelScaledAiryDisk {
     /// * `fwhm` - Desired FWHM in target units
     ///
     /// # Returns
-    /// ScaledAiryDisk with scaling to match the specified FWHM
+    /// PixelScaledAiryDisk with scaling to match the specified FWHM
     ///
     pub fn with_fwhm(fwhm: f64) -> Self {
         let scalar = fwhm / AIRY_DISK.fwhm;
         Self::new(scalar)
     }
 
-    /// Create a new ScaledAiryDisk with specified first zero radius.
+    /// Create a new PixelScaledAiryDisk with specified first zero radius.
     ///
     /// Calculates the appropriate radius scaling to achieve the desired
     /// first dark ring location in user units.
@@ -412,7 +412,7 @@ impl PixelScaledAiryDisk {
     /// * `first_zero` - Desired first zero radius in target units
     ///
     /// # Returns
-    /// ScaledAiryDisk with scaling to match the specified first zero
+    /// PixelScaledAiryDisk with scaling to match the specified first zero
     ///
     pub fn with_first_zero(first_zero: f64) -> Self {
         let scalar = first_zero / AIRY_DISK.first_zero;
@@ -503,7 +503,7 @@ impl PixelScaledAiryDisk {
         self.disk.fwhm * self.radius_scale
     }
 
-    /// Compute pixel flux using 3x3 Simpson's rule for this ScaledAiryDisk PSF
+    /// Compute pixel flux using 3x3 Simpson's rule for this PixelScaledAiryDisk PSF
     ///
     /// # Arguments
     /// * `x_pixel` - Pixel center x coordinate relative to PSF center

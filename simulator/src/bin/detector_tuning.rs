@@ -112,7 +112,7 @@ enum Commands {
     },
 }
 
-/// Generate star image using ScaledAiryDisk
+/// Generate star image using PixelScaledAiryDisk
 fn generate_star_image(
     image_size: usize,
     position_x: f64,
@@ -122,7 +122,7 @@ fn generate_star_image(
 ) -> Array2<f64> {
     let mut image = Array2::<f64>::zeros((image_size, image_size));
 
-    // Create star using ScaledAiryDisk's Simpson integration
+    // Create star using PixelScaledAiryDisk's Simpson integration
     for y in 0..image_size {
         for x in 0..image_size {
             let x_pixel = x as f64 - position_x;

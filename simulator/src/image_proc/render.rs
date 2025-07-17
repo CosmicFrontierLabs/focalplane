@@ -429,7 +429,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 /// use starfield::catalogs::StarData;
 /// use starfield::Equatorial;
-/// use simulator::image_proc::airy::ScaledAiryDisk;
+/// use simulator::image_proc::airy::PixelScaledAiryDisk;
 /// let star_data = StarData {
 ///     id: 0,
 ///     magnitude: 10.0,
@@ -437,7 +437,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 ///     b_v: None,
 /// };
 /// let stars = vec![StarInFrame { x: 50.0, y: 50.0, flux: 1000.0, star: star_data }];
-/// let airy_pix = ScaledAiryDisk::with_fwhm(2.0);
+/// let airy_pix = PixelScaledAiryDisk::with_fwhm(2.0);
 /// let image = add_stars_to_image(100, 100, &stars, airy_pix);
 /// ```
 pub fn add_stars_to_image(
