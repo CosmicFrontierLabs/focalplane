@@ -108,6 +108,47 @@ pub fn interp(x: f64, xs: &[f64], ys: &[f64]) -> Result<f64, InterpError> {
     Ok(y1 + t * (y2 - y1))
 }
 
+/// Normalizes a vector of values to the range [0, 1] based on its maximum value.
+///
+/// This function finds the maximum value in the input vector and divides all
+/// elements by this maximum, resulting in a normalized vector where the largest
+/// value becomes 1.0. If all values are zero or negative, returns the original
+/// vector unchanged.
+///
+/// # Arguments
+///
+/// * `pts` - Vector of floating point values to normalize
+///
+/// # Returns
+///
+/// A new vector with normalized values in the range [0, 1]
+///
+/// # Example
+///
+/// ```
+/// use simulator::algo::misc::normalize;
+///
+/// let data = vec![0.5, 2.0, 1.0, 3.0];
+/// let normalized = normalize(data);
+/// assert_eq!(normalized, vec![0.5/3.0, 2.0/3.0, 1.0/3.0, 1.0]);
+/// ```
+pub fn normalize(pts: Vec<f64>) -> Vec<f64> {
+    // Find maximum value using iterator max_by
+    let max_val = pts
+        .iter()
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .copied()
+        .unwrap_or(0.0);
+
+    // If max is zero or negative, return original vector
+    if max_val <= 0.0 {
+        return pts;
+    }
+
+    // Normalize all values by the maximum
+    pts.into_iter().map(|val| val / max_val).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +210,29 @@ mod tests {
             interp(1.5, &xs, &ys),
             Err(InterpError::UnsortedData)
         ));
+    }
+
+    #[test]
+    fn test_normalize() {
+        // Basic normalization
+        let data = vec![0.5, 2.0, 1.0, 3.0];
+        let normalized = normalize(data);
+        assert_eq!(normalized, vec![0.5 / 3.0, 2.0 / 3.0, 1.0 / 3.0, 1.0]);
+
+        // All zeros
+        let zeros = vec![0.0, 0.0, 0.0];
+        let result = normalize(zeros.clone());
+        assert_eq!(result, zeros);
+
+        // Negative values
+        let negative = vec![-1.0, -2.0, -3.0];
+        let result = normalize(negative.clone());
+        assert_eq!(result, negative);
+
+        // Single value
+        let single = vec![5.0];
+        let result = normalize(single);
+        assert_eq!(result, vec![1.0]);
     }
 }
 
