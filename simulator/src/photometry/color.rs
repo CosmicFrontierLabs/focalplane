@@ -41,6 +41,7 @@
 
 use super::human::HumanVision;
 use super::spectrum::Spectrum;
+use plotters::style::RGBColor;
 use std::fmt;
 use std::time::Duration;
 
@@ -219,6 +220,35 @@ pub fn spectrum_to_rgb_values(spectrum: &impl Spectrum) -> (f64, f64, f64) {
     (red * scale, green * scale, blue * scale)
 }
 
+/// Convert normalized RGB values to plotters RGBColor.
+///
+/// Takes floating point RGB values in the range [0.0, 1.0] and converts
+/// them to plotters RGBColor with 8-bit components (0-255).
+///
+/// # Arguments
+/// * `r` - Red component in range [0.0, 1.0]
+/// * `g` - Green component in range [0.0, 1.0]
+/// * `b` - Blue component in range [0.0, 1.0]
+///
+/// # Returns
+/// RGBColor with components scaled to 0-255
+///
+/// # Examples
+/// ```
+/// use simulator::photometry::color::rgb_values_to_color;
+///
+/// let white = rgb_values_to_color(1.0, 1.0, 1.0);
+/// let red = rgb_values_to_color(1.0, 0.0, 0.0);
+/// let dim_blue = rgb_values_to_color(0.0, 0.0, 0.5);
+/// ```
+pub fn rgb_values_to_color(r: f64, g: f64, b: f64) -> RGBColor {
+    RGBColor(
+        (r * 255.0).min(255.0).round() as u8,
+        (g * 255.0).min(255.0).round() as u8,
+        (b * 255.0).min(255.0).round() as u8,
+    )
+}
+
 /// Calculate logarithmic blue-red color temperature index from stellar spectrum.
 ///
 /// Computes a quantitative color index similar to astronomical B-V photometry,
@@ -380,5 +410,52 @@ mod tests {
         // Index should decrease with temperature
         assert!(hot_index > sun_index);
         assert!(sun_index > cool_index);
+    }
+
+    #[test]
+    fn test_rgb_values_to_color() {
+        // Test basic colors
+        let white = rgb_values_to_color(1.0, 1.0, 1.0);
+        assert_eq!(white.0, 255);
+        assert_eq!(white.1, 255);
+        assert_eq!(white.2, 255);
+
+        let black = rgb_values_to_color(0.0, 0.0, 0.0);
+        assert_eq!(black.0, 0);
+        assert_eq!(black.1, 0);
+        assert_eq!(black.2, 0);
+
+        let red = rgb_values_to_color(1.0, 0.0, 0.0);
+        assert_eq!(red.0, 255);
+        assert_eq!(red.1, 0);
+        assert_eq!(red.2, 0);
+
+        let green = rgb_values_to_color(0.0, 1.0, 0.0);
+        assert_eq!(green.0, 0);
+        assert_eq!(green.1, 255);
+        assert_eq!(green.2, 0);
+
+        let blue = rgb_values_to_color(0.0, 0.0, 1.0);
+        assert_eq!(blue.0, 0);
+        assert_eq!(blue.1, 0);
+        assert_eq!(blue.2, 255);
+
+        // Test half values
+        let half_gray = rgb_values_to_color(0.5, 0.5, 0.5);
+        assert_eq!(half_gray.0, 128);
+        assert_eq!(half_gray.1, 128);
+        assert_eq!(half_gray.2, 128);
+
+        // Test clamping values over 1.0
+        let clamped = rgb_values_to_color(1.5, 2.0, 1.2);
+        assert_eq!(clamped.0, 255);
+        assert_eq!(clamped.1, 255);
+        assert_eq!(clamped.2, 255);
+
+        // Test rounding
+        let rounded = rgb_values_to_color(0.501, 0.499, 0.502);
+        assert_eq!(rounded.0, 128); // 0.501 * 255 = 127.755 rounds to 128
+        assert_eq!(rounded.1, 127); // 0.499 * 255 = 127.245 rounds to 127
+        assert_eq!(rounded.2, 128); // 0.502 * 255 = 128.01 rounds to 128
     }
 }
