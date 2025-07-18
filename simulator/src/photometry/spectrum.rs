@@ -424,6 +424,39 @@ pub trait Spectrum: Send + Sync {
     }
 }
 
+/// Simple flat spectrum for testing purposes.
+///
+/// Provides constant spectral irradiance across all wavelengths.
+/// Useful for unit tests and debugging spectrum-related functionality.
+pub struct FlatSpectrum {
+    /// Spectral irradiance value in erg s⁻¹ cm⁻² Hz⁻¹
+    pub irradiance_value: f64,
+}
+
+impl FlatSpectrum {
+    /// Create a new flat spectrum with specified irradiance
+    pub fn new(irradiance_value: f64) -> Self {
+        Self { irradiance_value }
+    }
+
+    /// Create a unit flat spectrum with irradiance = 1.0
+    pub fn unit() -> Self {
+        Self::new(CGS::JANSKY_IN_CGS) // 1 Jansky in CGS units
+    }
+}
+
+impl Spectrum for FlatSpectrum {
+    fn spectral_irradiance(&self, _wavelength: f64) -> f64 {
+        self.irradiance_value
+    }
+
+    fn irradiance(&self, band: &Band) -> f64 {
+        // For a flat spectrum in frequency space, integrate over the band
+        let (lower_freq, upper_freq) = band.frequency_bounds();
+        self.irradiance_value * (upper_freq - lower_freq)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,5 +615,21 @@ mod tests {
     fn test_band_as_n_subbands_zero() {
         let band = Band::from_nm_bounds(400.0, 700.0);
         let _ = band.as_n_subbands(0);
+    }
+
+    #[test]
+    fn test_flat_spectrum_creation() {
+        let spectrum = FlatSpectrum::new(1e-20);
+        assert_eq!(spectrum.irradiance_value, 1e-20);
+
+        let unit_spectrum = FlatSpectrum::unit();
+        assert_eq!(unit_spectrum.irradiance_value, CGS::JANSKY_IN_CGS);
+    }
+
+    #[test]
+    fn test_flat_spectrum_spectral_irradiance() {
+        let spectrum = FlatSpectrum::new(5e-23);
+        assert_eq!(spectrum.spectral_irradiance(500.0), 5e-23);
+        assert_eq!(spectrum.spectral_irradiance(1000.0), 5e-23);
     }
 }
