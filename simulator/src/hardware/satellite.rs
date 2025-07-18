@@ -146,7 +146,7 @@ impl SatelliteConfig {
         let airy_radius_pixels = airy_radius_um / self.sensor.pixel_size_um;
 
         // Create scaled Airy disk with pixel radius
-        PixelScaledAiryDisk::with_first_zero(airy_radius_pixels)
+        PixelScaledAiryDisk::with_first_zero(airy_radius_pixels, self.wavelength_nm)
     }
 
     /// Create a PixelScaledAiryDisk based on FWHM sampling for this satellite configuration
@@ -163,7 +163,7 @@ impl SatelliteConfig {
         let fwhm_pixels = self.fwhm_sampling_ratio();
 
         // Create scaled Airy disk with this FWHM size
-        PixelScaledAiryDisk::with_fwhm(fwhm_pixels)
+        PixelScaledAiryDisk::with_fwhm(fwhm_pixels, self.wavelength_nm)
     }
 
     /// Adjust telescope focal length to achieve specific FWHM sampling in pixels

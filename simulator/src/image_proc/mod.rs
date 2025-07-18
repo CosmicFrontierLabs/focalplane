@@ -62,7 +62,7 @@
 //! let with_noise = psf_convolved.mapv(|x| x as u16) + noise.mapv(|x| x as u16);
 //!
 //! // 4. Detect astronomical sources
-//! let airy_disk = PixelScaledAiryDisk::with_fwhm(2.5);
+//! let airy_disk = PixelScaledAiryDisk::with_fwhm(2.5, 550.0);
 //! let stars = detect_stars_unified(
 //!     with_noise.view(),
 //!     StarFinder::Dao,

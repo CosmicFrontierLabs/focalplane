@@ -142,7 +142,8 @@ fn test_algorithm(
         let detection_sigma = args.shared.noise_multiple;
 
         // Run detection algorithm
-        let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(airy_disk_pixels);
+        let scaled_airy_disk =
+            PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, satellite.wavelength_nm);
         let detected_stars: Vec<StarDetection> = match detect_stars_unified(
             quantized.view(),
             algorithm,

@@ -33,7 +33,7 @@
 //! let image = Array2::from_elem((100, 100), 10u16);
 //!
 //! // Method 1: Unified interface with automatic parameter tuning
-//! let airy_disk = PixelScaledAiryDisk::with_fwhm(2.5);
+//! let airy_disk = PixelScaledAiryDisk::with_fwhm(2.5, 550.0);
 //! let stars = detect_stars_unified(
 //!     image.view(),
 //!     StarFinder::Dao,

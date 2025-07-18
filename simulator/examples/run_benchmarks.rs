@@ -117,7 +117,7 @@ fn bench_add_stars_to_image() {
 
                 // Run the benchmark
                 let start = Instant::now();
-                let airy_pix = PixelScaledAiryDisk::with_fwhm(sigma);
+                let airy_pix = PixelScaledAiryDisk::with_fwhm(sigma, 550.0);
                 let _image = add_stars_to_image(size, size, &stars, airy_pix);
                 let duration = start.elapsed();
 

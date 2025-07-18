@@ -358,6 +358,8 @@ pub static AIRY_DISK: Lazy<AiryDisk> = Lazy::new(AiryDisk::new);
 pub struct PixelScaledAiryDisk {
     disk: AiryDisk,
     radius_scale: f64,
+    /// Reference wavelength in nanometers for chromatic calculations
+    pub reference_wavelength: f64,
 }
 
 impl PixelScaledAiryDisk {
@@ -368,10 +370,11 @@ impl PixelScaledAiryDisk {
     ///
     /// # Returns
     /// PixelScaledAiryDisk instance with specified scaling
-    fn new(radius_scale: f64) -> Self {
+    fn new(radius_scale: f64, reference_wavelength: f64) -> Self {
         PixelScaledAiryDisk {
             disk: *AIRY_DISK,
             radius_scale,
+            reference_wavelength,
         }
     }
 
@@ -379,12 +382,13 @@ impl PixelScaledAiryDisk {
     ///
     /// # Arguments
     /// * `radius_scale` - Factor to scale all radial measurements
+    /// * `reference_wavelength` - Reference wavelength in nm
     ///
     /// # Returns
     /// PixelScaledAiryDisk with the specified radius scaling
     ///
-    pub fn with_radius_scale(radius_scale: f64) -> Self {
-        Self::new(radius_scale)
+    pub fn with_radius_scale(radius_scale: f64, reference_wavelength: f64) -> Self {
+        Self::new(radius_scale, reference_wavelength)
     }
 
     /// Create a new PixelScaledAiryDisk with specified FWHM.
@@ -398,9 +402,9 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// PixelScaledAiryDisk with scaling to match the specified FWHM
     ///
-    pub fn with_fwhm(fwhm: f64) -> Self {
+    pub fn with_fwhm(fwhm: f64, reference_wavelength: f64) -> Self {
         let scalar = fwhm / AIRY_DISK.fwhm;
-        Self::new(scalar)
+        Self::new(scalar, reference_wavelength)
     }
 
     /// Create a new PixelScaledAiryDisk with specified first zero radius.
@@ -414,9 +418,9 @@ impl PixelScaledAiryDisk {
     /// # Returns
     /// PixelScaledAiryDisk with scaling to match the specified first zero
     ///
-    pub fn with_first_zero(first_zero: f64) -> Self {
+    pub fn with_first_zero(first_zero: f64, reference_wavelength: f64) -> Self {
         let scalar = first_zero / AIRY_DISK.first_zero;
-        Self::new(scalar)
+        Self::new(scalar, reference_wavelength)
     }
 
     /// Calculate the exact Airy disk intensity at scaled radius.
@@ -621,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_scaled_disk_unity() {
-        let unscaled = PixelScaledAiryDisk::new(1.0);
+        let unscaled = PixelScaledAiryDisk::new(1.0, 550.0);
         assert_relative_eq!(unscaled.fwhm(), AIRY_DISK.fwhm, epsilon = 1e-10);
 
         let zero_rad = unscaled.first_zero();
@@ -633,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_scaled_airy_disk_fwmh() {
-        let scaled = PixelScaledAiryDisk::with_fwhm(2.0);
+        let scaled = PixelScaledAiryDisk::with_fwhm(2.0, 550.0);
 
         let fwhm = scaled.fwhm();
         assert_relative_eq!(fwhm, 2.0, epsilon = 1e-10);
@@ -647,14 +651,14 @@ mod tests {
 
     #[test]
     fn test_scaled_airy_disk_first_zero() {
-        let scaled = PixelScaledAiryDisk::with_first_zero(2.0);
+        let scaled = PixelScaledAiryDisk::with_first_zero(2.0, 550.0);
         assert_relative_eq!(scaled.first_zero(), 2.0, epsilon = 1e-10);
     }
 
     #[test]
     fn test_pixel_flux_centered() {
         // Test flux when PSF is centered on pixel
-        let psf = PixelScaledAiryDisk::with_first_zero(1.0);
+        let psf = PixelScaledAiryDisk::with_first_zero(1.0, 550.0);
         let flux = 1000.0;
 
         let pixel_flux = psf.pixel_flux_simpson(0.0, 0.0, flux);
@@ -675,7 +679,7 @@ mod tests {
     #[test]
     fn test_flux_conservation() {
         // Test relative flux distribution for normalized PSF
-        let psf = PixelScaledAiryDisk::new(2.0);
+        let psf = PixelScaledAiryDisk::new(2.0, 550.0);
         let flux = 1.0; // Use unit flux to measure PSF normalization
 
         // First measure total PSF integral over large area
@@ -708,7 +712,7 @@ mod tests {
     #[test]
     fn test_offset_star() {
         // Test flux distribution when star is between pixels
-        let psf = PixelScaledAiryDisk::with_first_zero(1.0);
+        let psf = PixelScaledAiryDisk::with_first_zero(1.0, 550.0);
         let flux = 1000.0;
 
         // Star at (0.0, 0.0) - corner between 4 pixels

@@ -305,7 +305,8 @@ fn run_experiment<T: StarCatalog>(
             let detection_sigma = params.common_args.noise_multiple;
 
             // Do the star detection
-            let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(airy_disk_pixels);
+            let scaled_airy_disk =
+                PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, satellite.wavelength_nm);
             let detected_stars = match detect_stars_unified(
                 render_result.quantized_image.view(),
                 params.common_args.star_finder,
