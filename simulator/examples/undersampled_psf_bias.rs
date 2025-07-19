@@ -216,9 +216,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Storage for results
     let mut all_results = Vec::new();
 
-    println!("Testing PSF sampling values: {:?}", psf_sampling_values);
-    println!("Grid size: {}x{} positions per pixel", grid_size, grid_size);
-    println!("Trials per position: {}\n", num_trials);
+    println!("Testing PSF sampling values: {psf_sampling_values:?}");
+    println!("Grid size: {grid_size}x{grid_size} positions per pixel");
+    println!("Trials per position: {num_trials}\n");
 
     // Generate all experiment parameters
     let mut all_experiments = Vec::new();
@@ -278,7 +278,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Process results into arrays for each PSF sampling
     for &psf_sampling in &psf_sampling_values {
-        println!("\nTesting PSF sampling = {:.2} FWHM/pixel", psf_sampling);
+        println!("\nTesting PSF sampling = {psf_sampling:.2} FWHM/pixel");
 
         // Create satellite just to get FWHM info
         let base_satellite =
@@ -286,7 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let satellite = base_satellite.with_fwhm_sampling(psf_sampling);
         let airy_disk = satellite.airy_disk_fwhm_sampled();
         let psf_fwhm_pixels = airy_disk.fwhm();
-        println!("  Actual PSF FWHM: {:.3} pixels", psf_fwhm_pixels);
+        println!("  Actual PSF FWHM: {psf_fwhm_pixels:.3} pixels");
 
         // Storage for this sampling value
         let mut sampling_results = Array2::<f64>::zeros((grid_size, grid_size));
@@ -320,10 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mean_error = sampling_results.mean().unwrap_or(0.0);
 
         println!("  Error statistics (pixels):");
-        println!(
-            "    Min: {:.4}, Max: {:.4}, Mean: {:.4}",
-            min_error, max_error, mean_error
-        );
+        println!("    Min: {min_error:.4}, Max: {max_error:.4}, Mean: {mean_error:.4}");
         println!("    Range: {:.4} pixels\n", max_error - min_error);
 
         all_results.push((
@@ -391,10 +388,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             plot_data.push((x_pos, error));
         }
 
-        let color_clone = color.clone();
+        let color_clone = *color;
         chart
-            .draw_series(LineSeries::new(plot_data.clone(), color.clone()))?
-            .label(format!("PSF = {:.2} FWHM/px", psf_sampling))
+            .draw_series(LineSeries::new(plot_data.clone(), *color))?
+            .label(format!("PSF = {psf_sampling:.2} FWHM/px"))
             .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], color_clone));
 
         // Add points
@@ -402,17 +399,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             plot_data,
             3,
             color.filled(),
-            &|c, s, st| {
-                return EmptyElement::at(c) + Circle::new((0, 0), s, st);
-            },
+            &|c, s, st| EmptyElement::at(c) + Circle::new((0, 0), s, st),
         ))?;
     }
 
     chart
         .configure_series_labels()
         .position(SeriesLabelPosition::UpperRight)
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()?;
 
     root.present()?;
@@ -423,10 +418,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("\nCreating bias heatmaps for all PSF sampling values...");
 
     for (psf_sampling, _, x_bias, y_bias) in all_results.iter() {
-        let filename = format!(
-            "plots/psf_bias_heatmap_{:.2}_fwhm_per_pixel.png",
-            psf_sampling
-        );
+        let filename = format!("plots/psf_bias_heatmap_{psf_sampling:.2}_fwhm_per_pixel.png");
 
         let root_heatmap = BitMapBackend::new(&filename, (1000, 400)).into_drawing_area();
         root_heatmap.fill(&WHITE)?;
@@ -436,9 +428,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let areas_y = &areas[1];
 
         // X bias heatmap
-        let mut chart_x = ChartBuilder::on(&areas_x)
+        let mut chart_x = ChartBuilder::on(areas_x)
             .caption(
-                format!("X Centroid Bias (PSF = {:.2} FWHM/px)", psf_sampling),
+                format!("X Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
                 ("sans-serif", 20),
             )
             .margin(10)
@@ -473,9 +465,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }))?;
 
         // Y bias heatmap
-        let mut chart_y = ChartBuilder::on(&areas_y)
+        let mut chart_y = ChartBuilder::on(areas_y)
             .caption(
-                format!("Y Centroid Bias (PSF = {:.2} FWHM/px)", psf_sampling),
+                format!("Y Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
                 ("sans-serif", 20),
             )
             .margin(10)
@@ -511,7 +503,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         root_heatmap.present()?;
 
-        println!("  Saved heatmap: {}", filename);
+        println!("  Saved heatmap: {filename}");
     }
 
     println!("\nAll bias heatmaps saved to 'plots/' directory");

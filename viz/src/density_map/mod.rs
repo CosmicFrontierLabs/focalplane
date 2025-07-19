@@ -517,7 +517,7 @@ pub fn create_density_map<T: PositionData>(
 
     // Add title if provided
     if let Some(title) = config.title {
-        output.push_str(&format!("{}\n", title));
+        output.push_str(&format!("{title}\n"));
         output.push_str(&format!("{}\n", "=".repeat(title.len())));
     }
 
@@ -567,7 +567,7 @@ pub fn create_density_map<T: PositionData>(
 
     // Add x-axis label if provided
     if let Some(x_label) = config.x_label {
-        output.push_str(&format!("  {}\n", x_label));
+        output.push_str(&format!("  {x_label}\n"));
     }
 
     // Add legend

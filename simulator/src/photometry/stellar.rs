@@ -283,10 +283,10 @@ impl BlackbodyStellarSpectrum {
     /// A new BlackbodyStellarSpectrum with the specified temperature
     pub fn new(temperature: f64, scaling_factor: f64) -> Self {
         if temperature <= 0.0 {
-            panic!("Temperature must be positive, got: {}", temperature);
+            panic!("Temperature must be positive, got: {temperature}");
         }
         if scaling_factor <= 0.0 {
-            panic!("Scaling factor must be positive, got: {}", scaling_factor);
+            panic!("Scaling factor must be positive, got: {scaling_factor}");
         }
 
         Self {
@@ -433,10 +433,7 @@ mod tests {
 
             assert!(
                 error < 0.02,
-                "For mag {}: Got {} Expected ~{}",
-                mag,
-                electrons,
-                expected_electrons
+                "For mag {mag}: Got {electrons} Expected ~{expected_electrons}"
             );
         }
     }
@@ -464,10 +461,7 @@ mod tests {
 
             assert!(
                 error < 0.02,
-                "For mag {}: Got {} Expected ~{}",
-                mag,
-                photons,
-                expected_photons
+                "For mag {mag}: Got {photons} Expected ~{expected_photons}"
             );
         }
     }
@@ -509,10 +503,7 @@ mod tests {
             let band = Band::centered_on(wavelength, 1e12);
             let irradiance = spectrum.irradiance(&band);
             let photons = spectrum.photons(&band, aperture_cm2, duration);
-            println!(
-                "Wavelength: {} nm, Irradiance: {} Photons: {:.2}",
-                wavelength, irradiance, photons
-            );
+            println!("Wavelength: {wavelength} nm, Irradiance: {irradiance} Photons: {photons:.2}");
         }
     }
 
@@ -597,7 +588,7 @@ mod tests {
         let vis = sun_like.spectral_irradiance(500.0);
 
         // Sun-like star - in our frequency space representation, UV should be less than visible
-        assert!(vis > uv, "Vis {} should be greater than uv {}", vis, uv);
+        assert!(vis > uv, "Vis {vis} should be greater than uv {uv}");
 
         // Create a cool star (3500K)
         let cool_star = BlackbodyStellarSpectrum::new(3500.0, 1.0);
@@ -681,9 +672,9 @@ mod tests {
         let ratio = flat_photons / blackbody_photons;
         assert!(ratio > 0.1 && ratio < 10.0);
 
-        println!("Flat spectrum photons: {}", flat_photons);
-        println!("Blackbody spectrum photons: {}", blackbody_photons);
-        println!("Ratio (flat/blackbody): {}", ratio);
+        println!("Flat spectrum photons: {flat_photons}");
+        println!("Blackbody spectrum photons: {blackbody_photons}");
+        println!("Ratio (flat/blackbody): {ratio}");
     }
 
     #[test]

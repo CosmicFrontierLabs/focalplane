@@ -313,10 +313,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let detection_rate_array = detection_rates.get(&sensor_name).unwrap();
         let spurious_rate_array = spurious_rates.get(&sensor_name).unwrap();
 
-        println!("\n==== Sensor: {} ====", sensor_name);
+        println!("\n==== Sensor: {sensor_name} ====");
 
         // Write sensor name to CSV
-        writeln!(csv_file, "SENSOR: {}", sensor_name).unwrap();
+        writeln!(csv_file, "SENSOR: {sensor_name}").unwrap();
         writeln!(csv_file).unwrap();
 
         // Detection Rate Matrix - Console output (simplified, just show first exposure)
@@ -327,7 +327,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Print header row with magnitude values
         print!("  Q\\Mag |");
         for mag in &mags {
-            print!(" {:.2} |", mag);
+            print!(" {mag:.2} |");
         }
         println!();
 
@@ -340,7 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Print first exposure only for console
         for (disk_idx, disk) in disks.iter().enumerate() {
-            print!("  {:.1}      |", disk);
+            print!("  {disk:.1}      |");
             for mag_idx in 0..mags.len() {
                 let rate = detection_rate_array[[disk_idx, 0, mag_idx]]; // First exposure only
                 print!(" {:3.0}% |", rate * 100.0);
@@ -354,7 +354,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // CSV header: Disk, Exposure, then magnitude columns
         write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
         for mag in &mags {
-            write!(csv_file, "{:.2},", mag).unwrap();
+            write!(csv_file, "{mag:.2},").unwrap();
         }
         writeln!(csv_file).unwrap();
 
@@ -377,7 +377,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // CSV header: Disk, Exposure, then magnitude columns
         write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
         for mag in &mags {
-            write!(csv_file, "{:.2},", mag).unwrap();
+            write!(csv_file, "{mag:.2},").unwrap();
         }
         writeln!(csv_file).unwrap();
 
@@ -390,7 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if err.is_nan() {
                         write!(csv_file, ",").unwrap(); // Empty cell for NaN
                     } else {
-                        write!(csv_file, "{:.4},", err).unwrap();
+                        write!(csv_file, "{err:.4},").unwrap();
                     }
                 }
                 writeln!(csv_file).unwrap();
@@ -404,7 +404,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // CSV header: Disk, Exposure, then magnitude columns
         write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
         for mag in &mags {
-            write!(csv_file, "{:.2},", mag).unwrap();
+            write!(csv_file, "{mag:.2},").unwrap();
         }
         writeln!(csv_file).unwrap();
 
@@ -417,7 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if err.is_nan() {
                         write!(csv_file, ",").unwrap(); // Empty cell for NaN
                     } else {
-                        write!(csv_file, "{:.4},", err).unwrap();
+                        write!(csv_file, "{err:.4},").unwrap();
                     }
                 }
                 writeln!(csv_file).unwrap();
@@ -431,7 +431,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // CSV header: Disk, Exposure, then magnitude columns
         write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
         for mag in &mags {
-            write!(csv_file, "{:.2},", mag).unwrap();
+            write!(csv_file, "{mag:.2},").unwrap();
         }
         writeln!(csv_file).unwrap();
 

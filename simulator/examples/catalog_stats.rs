@@ -284,10 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let brightest_2000 = collector.stars();
     let num_brightest = brightest_2000.len();
 
-    println!(
-        "\n=== BINARY CATALOG ANALYSIS: {} BRIGHTEST STARS ===",
-        num_brightest
-    );
+    println!("\n=== BINARY CATALOG ANALYSIS: {num_brightest} BRIGHTEST STARS ===");
 
     // Detailed statistics
     let magnitudes: Vec<f64> = brightest_2000.iter().map(|s| s.magnitude).collect();
@@ -314,29 +311,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let std_dev = variance.sqrt();
 
     println!("Magnitude Statistics:");
-    println!("  Brightest (min):     {:.3}", min_mag);
-    println!("  Faintest (max):      {:.3}", max_mag);
+    println!("  Brightest (min):     {min_mag:.3}");
+    println!("  Faintest (max):      {max_mag:.3}");
     println!("  Range:               {:.3}", max_mag - min_mag);
-    println!("  Mean:                {:.3}", mean_mag);
-    println!("  Median:              {:.3}", median_mag);
-    println!("  Standard Deviation:  {:.3}", std_dev);
-    println!("  Total stars analyzed: {}", num_brightest);
+    println!("  Mean:                {mean_mag:.3}");
+    println!("  Median:              {median_mag:.3}");
+    println!("  Standard Deviation:  {std_dev:.3}");
+    println!("  Total stars analyzed: {num_brightest}");
 
     // Create and display magnitude histogram
     println!("\nMagnitude Distribution Histogram:");
     match create_magnitude_histogram(
         &magnitudes,
         Some(format!(
-            "Binary Catalog - {} Brightest Stars Magnitude Distribution",
-            num_brightest
+            "Binary Catalog - {num_brightest} Brightest Stars Magnitude Distribution"
         )),
         false, // Linear scale
     ) {
         Ok(hist) => match hist.format() {
-            Ok(formatted) => println!("{}", formatted),
-            Err(e) => println!("Error formatting histogram: {}", e),
+            Ok(formatted) => println!("{formatted}"),
+            Err(e) => println!("Error formatting histogram: {e}"),
         },
-        Err(e) => println!("Error creating histogram: {}", e),
+        Err(e) => println!("Error creating histogram: {e}"),
     }
 
     println!();
@@ -377,10 +373,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !all_mags.is_empty() {
         let all_mag_scan = MinMaxScan::new(&all_mags);
         if let Ok((min_mag, max_mag)) = all_mag_scan.min_max() {
-            println!(
-                "Binary catalog magnitude range: {:.2} to {:.2}",
-                min_mag, max_mag
-            );
+            println!("Binary catalog magnitude range: {min_mag:.2} to {max_mag:.2}");
         }
     }
 

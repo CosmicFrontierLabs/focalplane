@@ -816,8 +816,7 @@ mod tests {
                         if brightness.is_finite() {
                             assert!(
                                 (40.0..=10000.0).contains(&brightness),
-                                "Brightness at elongation={}, lat={} is {}, which is outside the expected range [40, 10000]",
-                                elong_f64, lat_f64, brightness
+                                "Brightness at elongation={elong_f64}, lat={lat_f64} is {brightness}, which is outside the expected range [40, 10000]"
                             );
                         }
                     }
@@ -870,8 +869,7 @@ mod tests {
                         if brightness.is_finite() {
                             assert!(
                     brightness >= min_brightness,
-                    "Brightness at elongation={}, lat={} is {:.3}, which is not greater than {:.3}",
-                    elong_f64, lat_f64, brightness, min_brightness
+                    "Brightness at elongation={elong_f64}, lat={lat_f64} is {brightness:.3}, which is not greater than {min_brightness:.3}"
                     );
                         }
                     }

@@ -216,55 +216,55 @@ mod tests {
 
         // Create basic SVG with various text rendering approaches
         let svg_data = format!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">
                 <!-- Background rectangle -->
-                <rect x="0" y="0" width="{}" height="{}" fill="{}" />
+                <rect x="0" y="0" width="{width}" height="{height}" fill="{bg_color}" />
                 
                 <!-- Standard text elements with different fonts -->
-                <rect x="20" y="20" width="760" height="30" fill="{}" />
-                <text x="30" y="40" font-family="sans-serif" font-size="20" fill="{}">Text Test 1: sans-serif font</text>
+                <rect x="20" y="20" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="40" font-family="sans-serif" font-size="20" fill="{text_color}">Text Test 1: sans-serif font</text>
                 
-                <rect x="20" y="60" width="760" height="30" fill="{}" />
-                <text x="30" y="80" font-family="serif" font-size="20" fill="{}">Text Test 2: serif font</text>
+                <rect x="20" y="60" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="80" font-family="serif" font-size="20" fill="{text_color}">Text Test 2: serif font</text>
                 
-                <rect x="20" y="100" width="760" height="30" fill="{}" />
-                <text x="30" y="120" font-family="monospace" font-size="20" fill="{}">Text Test 3: monospace font</text>
+                <rect x="20" y="100" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="120" font-family="monospace" font-size="20" fill="{text_color}">Text Test 3: monospace font</text>
                 
                 <!-- Text with explicit fallback fonts -->
-                <rect x="20" y="140" width="760" height="30" fill="{}" />
-                <text x="30" y="160" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="{}">
+                <rect x="20" y="140" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="160" font-family="Arial, Helvetica, sans-serif" font-size="20" fill="{text_color}">
                     Text Test 4: Multiple font fallbacks
                 </text>
                 
                 <!-- Text with path-based approach (should always work) -->
-                <rect x="20" y="180" width="760" height="30" fill="{}" />
-                <path d="M30 200 L50 200 L50 220 L30 220 Z" fill="{}" />
-                <path d="M60 200 L80 200 L80 220 L60 220 Z" fill="{}" />
-                <text x="100" y="215" font-family="sans-serif" font-size="20" fill="{}">
+                <rect x="20" y="180" width="760" height="30" fill="{highlight_color}" />
+                <path d="M30 200 L50 200 L50 220 L30 220 Z" fill="{text_color}" />
+                <path d="M60 200 L80 200 L80 220 L60 220 Z" fill="{text_color}" />
+                <text x="100" y="215" font-family="sans-serif" font-size="20" fill="{text_color}">
                     Text Test 5: With path objects nearby
                 </text>
                 
                 <!-- Styled text with different attributes -->
-                <rect x="20" y="240" width="760" height="30" fill="{}" />
-                <text x="30" y="260" font-family="sans-serif" font-size="20" font-weight="bold" fill="{}">
+                <rect x="20" y="240" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="260" font-family="sans-serif" font-size="20" font-weight="bold" fill="{text_color}">
                     Text Test 6: Bold text
                 </text>
                 
-                <rect x="20" y="280" width="760" height="30" fill="{}" />
-                <text x="30" y="300" font-family="sans-serif" font-size="20" font-style="italic" fill="{}">
+                <rect x="20" y="280" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="300" font-family="sans-serif" font-size="20" font-style="italic" fill="{text_color}">
                     Text Test 7: Italic text
                 </text>
                 
                 <!-- Text with explicit attributes -->
-                <rect x="20" y="320" width="760" height="30" fill="{}" />
+                <rect x="20" y="320" width="760" height="30" fill="{highlight_color}" />
                 <text x="30" y="340" font-family="sans-serif" font-size="20" font-weight="bold" 
-                      text-rendering="geometricPrecision" fill="{}">
+                      text-rendering="geometricPrecision" fill="{text_color}">
                     Text Test 8: With text-rendering attribute
                 </text>
                 
                 <!-- SVG doesn't have direct ttf embedding, but we can try system fonts -->
-                <rect x="20" y="360" width="760" height="30" fill="{}" />
-                <text x="30" y="380" font-family="Liberation Sans, Ubuntu, DejaVu Sans" font-size="20" fill="{}">
+                <rect x="20" y="360" width="760" height="30" fill="{highlight_color}" />
+                <text x="30" y="380" font-family="Liberation Sans, Ubuntu, DejaVu Sans" font-size="20" fill="{text_color}">
                     Text Test 9: Common Linux system fonts
                 </text>
                 
@@ -272,32 +272,7 @@ mod tests {
                 <rect x="30" y="420" width="200" height="50" stroke="black" stroke-width="2" fill="blue" />
                 <circle cx="400" cy="445" r="25" fill="red" />
                 <line x1="500" y1="420" x2="700" y2="470" stroke="green" stroke-width="5" />
-            </svg>"##,
-            width,
-            height,
-            width,
-            height,
-            bg_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            text_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color,
-            highlight_color,
-            text_color
+            </svg>"##
         );
 
         // Create a blank white image

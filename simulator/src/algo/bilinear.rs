@@ -37,12 +37,11 @@ impl fmt::Display for InterpolationError {
             } => {
                 write!(
                     f,
-                    "{} coordinate {} is outside valid range [{}, {}]",
-                    axis, value, min, max
+                    "{axis} coordinate {value} is outside valid range [{min}, {max}]"
                 )
             }
             InterpolationError::NoValidData(msg) => {
-                write!(f, "No valid data for interpolation: {}", msg)
+                write!(f, "No valid data for interpolation: {msg}")
             }
             InterpolationError::DimensionMismatch {
                 x_len,
@@ -51,8 +50,7 @@ impl fmt::Display for InterpolationError {
             } => {
                 write!(
                     f,
-                    "Data dimensions ({:?}) don't match coordinate lengths (x: {}, y: {})",
-                    data_shape, x_len, y_len
+                    "Data dimensions ({data_shape:?}) don't match coordinate lengths (x: {x_len}, y: {y_len})"
                 )
             }
         }
@@ -275,8 +273,7 @@ impl BilinearInterpolator {
             Ok(valid_sum / weight_sum)
         } else {
             Err(InterpolationError::NoValidData(format!(
-                "All corner points are invalid at ({}, {})",
-                x, y
+                "All corner points are invalid at ({x}, {y})"
             )))
         }
     }

@@ -204,7 +204,7 @@ pub fn parse_coordinates(s: &str) -> Result<SolarAngularCoordinates, String> {
         .map_err(|_| "Invalid latitude value".to_string())?;
 
     SolarAngularCoordinates::new(elongation, latitude)
-        .map_err(|e| format!("Invalid coordinates: {}", e))
+        .map_err(|e| format!("Invalid coordinates: {e}"))
 }
 
 /// Default solar angular coordinates for minimum zodiacal light brightness.
@@ -374,7 +374,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 
     let value: f64 = num_str
         .parse()
-        .map_err(|_| format!("Invalid numeric value: {}", num_str))?;
+        .map_err(|_| format!("Invalid numeric value: {num_str}"))?;
 
     if value < 0.0 {
         return Err("Duration cannot be negative".to_string());
@@ -386,7 +386,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
         "s" => Duration::from_secs_f64(value),
         "m" => Duration::from_secs_f64(value * 60.0),
         "h" => Duration::from_secs_f64(value * 3600.0),
-        _ => return Err(format!("Unknown time unit: {}", unit)),
+        _ => return Err(format!("Unknown time unit: {unit}")),
     };
 
     Ok(duration)
@@ -576,7 +576,7 @@ impl std::fmt::Display for DurationArg {
         } else if total_ms >= 1000 {
             write!(f, "{:.3}s", duration.as_secs_f64())
         } else {
-            write!(f, "{}ms", total_ms)
+            write!(f, "{total_ms}ms")
         }
     }
 }

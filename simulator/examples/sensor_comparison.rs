@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wavelength_end = 1100.0;
     let wavelength_step = 1.0; // 1nm steps
 
-    println!("Comparison at {}°C", temp_c);
+    println!("Comparison at {temp_c}°C");
     println!();
 
     // Markdown table header
@@ -126,8 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.width_px, config.height_px
         );
         println!(
-            "- **Sensor area:** {:.3} cm² ({:.2} × {:.2} cm)",
-            area_cm2, sensor_width_cm, sensor_height_cm
+            "- **Sensor area:** {area_cm2:.3} cm² ({sensor_width_cm:.2} × {sensor_height_cm:.2} cm)"
         );
         println!("- **Pixel size:** {:.2} μm", config.pixel_size_um);
         println!(
@@ -149,14 +148,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        println!("- **Peak QE:** {:.3} at {:.0}nm", peak_qe, peak_wavelength);
+        println!("- **Peak QE:** {peak_qe:.3} at {peak_wavelength:.0}nm");
 
         // Dark current at 0°C only
         let dc_0c = config
             .dark_current_estimator
             .estimate_at_temperature(0.0)
             .expect("Interpolation should be valid");
-        println!("- **Dark current @ 0°C:** {:.4} e⁻/pixel/s", dc_0c);
+        println!("- **Dark current @ 0°C:** {dc_0c:.4} e⁻/pixel/s");
     }
 
     Ok(())

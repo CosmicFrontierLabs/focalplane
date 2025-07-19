@@ -528,9 +528,9 @@ mod tests {
             assert!(pitch_recovered.is_finite());
             assert!(yaw_recovered.is_finite());
 
-            assert!(roll_recovered >= -180.0 && roll_recovered <= 180.0);
-            assert!(pitch_recovered >= -90.0 && pitch_recovered <= 90.0);
-            assert!(yaw_recovered >= -180.0 && yaw_recovered <= 180.0);
+            assert!((-180.0..=180.0).contains(&roll_recovered));
+            assert!((-90.0..=90.0).contains(&pitch_recovered));
+            assert!((-180.0..=180.0).contains(&yaw_recovered));
         }
     }
 

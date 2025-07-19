@@ -1098,26 +1098,26 @@ where
 
         // Mean
         match self.mean() {
-            Some(mean) => writeln!(output, "Mean: {:.6}", mean).unwrap(),
+            Some(mean) => writeln!(output, "Mean: {mean:.6}").unwrap(),
             None => writeln!(output, "Mean: insufficient data").unwrap(),
         }
 
         // Standard Deviation
         match self.std_dev() {
-            Some(std_dev) => writeln!(output, "Standard Deviation: {:.6}", std_dev).unwrap(),
+            Some(std_dev) => writeln!(output, "Standard Deviation: {std_dev:.6}").unwrap(),
             None => writeln!(output, "Standard Deviation: insufficient data").unwrap(),
         }
 
         // Median
         match self.median() {
-            Some(median) => writeln!(output, "Median: {:.6}", median).unwrap(),
+            Some(median) => writeln!(output, "Median: {median:.6}").unwrap(),
             None => writeln!(output, "Median: insufficient data").unwrap(),
         }
 
         // Skewness
         match self.skewness() {
             Some(skewness) => {
-                writeln!(output, "Skewness: {:.6}", skewness).unwrap();
+                writeln!(output, "Skewness: {skewness:.6}").unwrap();
 
                 // Add interpretation
                 if skewness.abs() < 0.5 {
@@ -1146,7 +1146,7 @@ where
         // Kurtosis (excess)
         match self.kurtosis() {
             Some(kurtosis) => {
-                writeln!(output, "Kurtosis (excess): {:.6}", kurtosis).unwrap();
+                writeln!(output, "Kurtosis (excess): {kurtosis:.6}").unwrap();
 
                 // Add interpretation
                 if kurtosis.abs() < 0.5 {
@@ -1226,7 +1226,7 @@ where
 
         // Add title if present
         if let Some(title) = &self.config.title {
-            writeln!(output, "{}", title)?;
+            writeln!(output, "{title}")?;
             writeln!(output, "{}", "=".repeat(title.len()))?;
         }
 
@@ -1237,7 +1237,7 @@ where
         let bin_column_width = self
             .bin_edges
             .iter()
-            .map(|e| format!("{}", e).len())
+            .map(|e| format!("{e}").len())
             .max()
             .unwrap_or(8)
             + 2;
@@ -1245,7 +1245,7 @@ where
         let count_column_width = if self.config.show_counts {
             self.counts
                 .iter()
-                .map(|c| format!("{}", c).len())
+                .map(|c| format!("{c}").len())
                 .max()
                 .unwrap_or(10)
                 + 2
@@ -1274,7 +1274,7 @@ where
 
         write!(header, "| Bar")?;
 
-        writeln!(output, "{}", header)?;
+        writeln!(output, "{header}")?;
         writeln!(output, "{}", "-".repeat(header.len()))?;
 
         // Print each bin
@@ -1318,11 +1318,11 @@ where
 
             // Write the bin with 3-4 sig figs and consistent sign handling
             let format_with_sign = |val: T| -> String {
-                let val_str = format!("{:.3}", val);
+                let val_str = format!("{val:.3}");
                 if val_str.starts_with('-') {
                     val_str
                 } else {
-                    format!("+{}", val_str)
+                    format!("+{val_str}")
                 }
             };
 
@@ -1335,14 +1335,14 @@ where
             )?;
 
             if self.config.show_counts {
-                write!(output, "| {:<width$} ", count, width = count_column_width)?;
+                write!(output, "| {count:<count_column_width$} ")?;
             }
 
             if self.config.show_percentage {
-                write!(output, "| {:5.2}%      ", percentage)?;
+                write!(output, "| {percentage:5.2}%      ")?;
             }
 
-            writeln!(output, "| {}", bar)?;
+            writeln!(output, "| {bar}")?;
         }
 
         // Print footer with scale information
@@ -1699,10 +1699,7 @@ mod tests {
             let actual_width = hist.bin_edges[i + 1] - hist.bin_edges[i];
             assert!(
                 (actual_width - expected_width).abs() < 1e-10,
-                "Bin {} width: expected {}, got {}",
-                i,
-                expected_width,
-                actual_width
+                "Bin {i} width: expected {expected_width}, got {actual_width}"
             );
         }
 
@@ -1733,8 +1730,7 @@ mod tests {
             let width = hist.bin_edges()[i + 1] - hist.bin_edges()[i];
             assert!(
                 (width - 1.0).abs() < 1e-6,
-                "Bin width should be 1.0 but was {}",
-                width
+                "Bin width should be 1.0 but was {width}"
             );
         }
 
@@ -1802,8 +1798,7 @@ mod tests {
             let width = hist.bin_edges()[i + 1] - hist.bin_edges()[i];
             assert!(
                 (width - 1.0).abs() < 1e-6,
-                "Bin width should be 1.0 but was {}",
-                width
+                "Bin width should be 1.0 but was {width}"
             );
         }
     }
@@ -1913,7 +1908,7 @@ mod tests {
 
         // Check that statistics_summary generates complete output
         let summary = hist.statistics_summary();
-        println!("Stats summary: {}", summary);
+        println!("Stats summary: {summary}");
 
         // Just check that we have values for everything, without caring about exact values
         assert!(summary.contains("Mean:"));

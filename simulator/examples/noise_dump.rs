@@ -38,7 +38,7 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
         .configure_mesh()
         .x_desc("Temperature (°C)")
         .y_desc("Dark Current (e⁻/pixel/second)")
-        .y_label_formatter(&|y| format!("{:.0e}", y))
+        .y_label_formatter(&|y| format!("{y:.0e}"))
         .axis_desc_style(("sans-serif", 20))
         .draw()?;
 
@@ -85,7 +85,7 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
                 .dark_current_estimator
                 .estimate_at_temperature(annotation_temp)
             {
-                let annotation_text = format!("{:.1}°C/2×", doubling_temp);
+                let annotation_text = format!("{doubling_temp:.1}°C/2×");
                 chart.draw_series(std::iter::once(Text::new(
                     annotation_text,
                     (annotation_temp, dark_current),
@@ -99,8 +99,8 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
     chart
         .configure_series_labels()
         .label_font(("sans-serif", 16))
-        .border_style(&BLACK)
-        .background_style(&WHITE.mix(0.8))
+        .border_style(BLACK)
+        .background_style(WHITE.mix(0.8))
         .draw()?;
 
     root.present()?;
@@ -127,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Print header row with temperatures
     print!("| Sensor | Parameter |");
     for temp in &temperatures {
-        print!(" {}°C |", temp);
+        print!(" {temp}°C |");
     }
     println!();
 
@@ -147,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .read_noise_estimator
                 .estimate(*temp, exposure_duration)
                 .unwrap_or(0.0);
-            print!(" {:.2} |", read_noise);
+            print!(" {read_noise:.2} |");
         }
         println!();
 
@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .dark_current_estimator
                 .estimate_at_temperature(*temp)
                 .expect("Temperature should be within interpolation range");
-            print!(" {:.4} |", dark_current);
+            print!(" {dark_current:.4} |");
         }
         println!();
     }

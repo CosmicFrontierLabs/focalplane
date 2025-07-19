@@ -397,9 +397,7 @@ mod tests {
 
         assert!(
             err < 0.01,
-            "Expected {} electrons, got {}",
-            photons_count,
-            electrons_count
+            "Expected {photons_count} electrons, got {electrons_count}"
         );
     }
 
@@ -446,13 +444,11 @@ mod tests {
         let angs = v_band.width() * 10.0; // Convert nm to angstroms
         let expected_photons = 1000.0 * angs * aperture_cm2;
 
-        println!("Photons: {}, Electrons: {}", photons_count, electrons_count);
+        println!("Photons: {photons_count}, Electrons: {electrons_count}");
         let err = f64::abs(photons_count - expected_photons) / photons_count;
         assert!(
             err < 0.05,
-            "Expected {} photons, got {}",
-            expected_photons,
-            photons_count
+            "Expected {expected_photons} photons, got {photons_count}"
         );
     }
 }

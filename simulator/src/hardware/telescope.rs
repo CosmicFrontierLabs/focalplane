@@ -275,8 +275,7 @@ mod tests {
         // Expected: 1617 cm²
         assert!(
             approx_eq!(f64, area_cm2, 1617.0, epsilon = 1.0),
-            "Expected 1617 cm², got {:.1} cm²",
-            area_cm2
+            "Expected 1617 cm², got {area_cm2:.1} cm²"
         );
     }
 }

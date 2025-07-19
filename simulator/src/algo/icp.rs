@@ -453,8 +453,7 @@ where
 
     if convergence_threshold <= 0.0 {
         return Err(ICPError::ArgumentError(format!(
-            "convergence_threshold must be positive, got {}",
-            convergence_threshold
+            "convergence_threshold must be positive, got {convergence_threshold}"
         )));
     }
 

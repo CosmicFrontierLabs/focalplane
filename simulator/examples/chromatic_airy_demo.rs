@@ -63,7 +63,7 @@ fn analyze_sensor_psf(
     airy_disk: &PixelScaledAiryDisk,
     stars: &[(&BlackbodyStellarSpectrum, &str, f64)],
 ) -> Vec<(String, f64, f64, f64, f64)> {
-    println!("\n{} Sensor Analysis", sensor_name);
+    println!("\n{sensor_name} Sensor Analysis");
     println!("{}", "=".repeat(sensor_name.len() + 16));
     println!(
         "\nNominal PSF wavelength: {:.0} nm",
@@ -100,10 +100,7 @@ fn analyze_sensor_psf(
     println!("{}", "-".repeat(65));
 
     for (star_type, temp, fwhm, broadening, eff_lambda) in &results {
-        println!(
-            "{:<20} {:>8.0} {:>10.3} {:>12.1} {:>12.0}",
-            star_type, temp, fwhm, broadening, eff_lambda
-        );
+        println!("{star_type:<20} {temp:>8.0} {fwhm:>10.3} {broadening:>12.1} {eff_lambda:>12.0}");
     }
 
     results
@@ -194,10 +191,7 @@ fn create_sensor_plot(
 
     let mut chart = ChartBuilder::on(&root)
         .caption(
-            &format!(
-                "{}: Chromatic vs Monochromatic Airy Disk Profiles",
-                sensor_name
-            ),
+            format!("{sensor_name}: Chromatic vs Monochromatic Airy Disk Profiles"),
             ("sans-serif", 50).into_font().color(&WHITE),
         )
         .margin(40)
@@ -211,14 +205,14 @@ fn create_sensor_plot(
         .y_desc("Normalized Intensity")
         .y_label_formatter(&|y| {
             if *y >= 0.1 {
-                format!("{:.1}", y)
+                format!("{y:.1}")
             } else {
-                format!("{:.0e}", y)
+                format!("{y:.0e}")
             }
         })
         .y_labels(11)
         .label_style(("sans-serif", 24).into_font().color(&WHITE))
-        .axis_style(&WHITE)
+        .axis_style(WHITE)
         .draw()?;
 
     // Plot monochromatic profiles
@@ -259,9 +253,9 @@ fn create_sensor_plot(
         let color = &star_colors[i];
         let eff_wavelength = star_psfs[i].disk.reference_wavelength;
         let label = if star_type.contains("B-V") {
-            format!("{} ({:.0}K, {:.0}nm)", star_type, temp, eff_wavelength)
+            format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)")
         } else {
-            format!("{} ({:.0}K, {:.0}nm)", star_type, temp, eff_wavelength)
+            format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)")
         };
 
         chart
@@ -280,8 +274,8 @@ fn create_sensor_plot(
 
     chart
         .configure_series_labels()
-        .background_style(&BLACK.mix(0.8))
-        .border_style(&WHITE)
+        .background_style(BLACK.mix(0.8))
+        .border_style(WHITE)
         .label_font(("sans-serif", 20).into_font().color(&WHITE))
         .draw()?;
 
@@ -378,7 +372,7 @@ fn create_2d_psf_comparison(
     // Plot chromatic PSF
     let mut chrom_chart = ChartBuilder::on(&right)
         .caption(
-            &format!("Chromatic PSF (Sun-like star, {})", sensor_name),
+            format!("Chromatic PSF (Sun-like star, {sensor_name})"),
             ("sans-serif", 20),
         )
         .margin(10)
@@ -426,7 +420,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Default catalog star with DEFAULT_BV
     let default_temp = temperature_from_bv(DEFAULT_BV);
     let default_star = BlackbodyStellarSpectrum::new(default_temp, 1e-10);
-    let default_label = format!("B-V={:.1}", DEFAULT_BV);
+    let default_label = format!("B-V={DEFAULT_BV:.1}");
 
     // Prepare star data - need references to avoid moves
     let stars = vec![
@@ -468,7 +462,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let n_points = 800; // 4x more interpolation points
     let max_radius = 2.0;
 
-    println!("\nTelescope aperture area: {:.1} cm²", aperture_cm2);
+    println!("\nTelescope aperture area: {aperture_cm2:.1} cm²");
 
     // Create plots directory if it doesn't exist
     std::fs::create_dir_all("plots")?;

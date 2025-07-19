@@ -214,7 +214,7 @@ impl STISZodiacalSpectrum {
     ///
     /// # Arguments
     /// * `scale_factor` - Multiplicative scaling for zodiacal light intensity
-    ///                   (1.0 = standard STIS calibration)
+    ///   (1.0 = standard STIS calibration)
     ///
     /// # Returns
     /// New STISZodiacalSpectrum instance with converted and scaled data

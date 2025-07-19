@@ -168,7 +168,7 @@ pub enum TestHelperError {
 /// - **Working directory**: Cannot determine current directory
 pub fn find_project_root() -> Result<PathBuf, TestHelperError> {
     let mut current_dir = env::current_dir().map_err(|e| {
-        TestHelperError::ProjectRootNotFound(format!("Failed to get current directory: {}", e))
+        TestHelperError::ProjectRootNotFound(format!("Failed to get current directory: {e}"))
     })?;
 
     // Search for workspace Cargo.toml
@@ -177,7 +177,7 @@ pub fn find_project_root() -> Result<PathBuf, TestHelperError> {
         if cargo_toml.exists() {
             // Check if this is the workspace root
             let content = std::fs::read_to_string(&cargo_toml).map_err(|e| {
-                TestHelperError::ProjectRootNotFound(format!("Failed to read Cargo.toml: {}", e))
+                TestHelperError::ProjectRootNotFound(format!("Failed to read Cargo.toml: {e}"))
             })?;
 
             if content.contains("[workspace]") {

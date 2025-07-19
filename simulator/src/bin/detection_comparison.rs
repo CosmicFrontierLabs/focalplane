@@ -106,7 +106,7 @@ fn test_algorithm(
         let star = StarInFrame {
             x: xpos,
             y: ypos,
-            spot: star_data_to_fluxes(&star_data, &satellite),
+            spot: star_data_to_fluxes(&star_data, satellite),
             star: star_data,
         };
 

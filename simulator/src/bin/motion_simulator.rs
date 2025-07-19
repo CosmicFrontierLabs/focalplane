@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration = args.duration.0;
     let total_steps = (duration.as_millis() / timestep.as_millis()) as usize;
 
-    println!("\nSimulation will run for {} steps", total_steps);
+    println!("\nSimulation will run for {total_steps} steps");
     println!("Each step represents {}", args.timestep);
 
     // Example of loading catalog using shared helper function

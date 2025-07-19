@@ -98,7 +98,7 @@ fn run_single_star_test(
             ) {
                 Ok(stars) => stars,
                 Err(e) => {
-                    println!("Detection failed: {}", e);
+                    println!("Detection failed: {e}");
                     return;
                 }
             }
@@ -119,14 +119,10 @@ fn run_single_star_test(
     let error_detected =
         ((position_x - detected_x).powi(2) + (position_y - detected_y).powi(2)).sqrt();
 
+    println!("Single Star Test [{detector:?}] (Image Size: {image_size}, Sigma: {sigma})");
+    println!("True Position: ({position_x:.3}, {position_y:.3})");
     println!(
-        "Single Star Test [{:?}] (Image Size: {}, Sigma: {})",
-        detector, image_size, sigma
-    );
-    println!("True Position: ({:.3}, {:.3})", position_x, position_y);
-    println!(
-        "Detected Position: ({:.3}, {:.3}), Error: {:.6} pixels",
-        detected_x, detected_y, error_detected
+        "Detected Position: ({detected_x:.3}, {detected_y:.3}), Error: {error_detected:.6} pixels"
     );
     println!("Star Properties: flux={:.2}", star.flux());
 }
@@ -137,8 +133,7 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
     let grid_size = 50;
 
     println!(
-        "=== Testing sub-pixel accuracy [{:?}] on a {}x{} grid within a single pixel ===",
-        detector, grid_size, grid_size
+        "=== Testing sub-pixel accuracy [{detector:?}] on a {grid_size}x{grid_size} grid within a single pixel ==="
     );
     println!("Running {} test cases...", grid_size * grid_size);
 
@@ -254,11 +249,11 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
     // Print summary
     if total_tests > 0 {
         println!("\nSummary:");
-        println!("Average Error: {:.6} pixels", avg_error);
-        println!("Maximum Error: {:.6} pixels", max_error);
-        println!("Total Tests: {}", total_tests);
+        println!("Average Error: {avg_error:.6} pixels");
+        println!("Maximum Error: {max_error:.6} pixels");
+        println!("Total Tests: {total_tests}");
         if failed_detections > 0 {
-            println!("Failed Detections: {}", failed_detections);
+            println!("Failed Detections: {failed_detections}");
         }
 
         // Show histogram range info
@@ -317,18 +312,9 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
         let errors_below_05_pct = (errors_below_05 as f64 / total_tests as f64) * 100.0;
         let errors_below_025_pct = (errors_below_025 as f64 / total_tests as f64) * 100.0;
 
-        println!(
-            "Errors < 0.1 pixels: {} ({:.2}%)",
-            errors_below_01, errors_below_01_pct
-        );
-        println!(
-            "Errors < 0.05 pixels: {} ({:.2}%)",
-            errors_below_05, errors_below_05_pct
-        );
-        println!(
-            "Errors < 0.025 pixels: {} ({:.2}%)",
-            errors_below_025, errors_below_025_pct
-        );
+        println!("Errors < 0.1 pixels: {errors_below_01} ({errors_below_01_pct:.2}%)");
+        println!("Errors < 0.05 pixels: {errors_below_05} ({errors_below_05_pct:.2}%)");
+        println!("Errors < 0.025 pixels: {errors_below_025} ({errors_below_025_pct:.2}%)");
 
         // Add finer precision levels if average error is very small
         if avg_error < 0.01 {
@@ -341,40 +327,31 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
             let errors_below_0025_pix_pct =
                 (errors_below_0025_pix as f64 / total_tests as f64) * 100.0;
 
+            println!("Errors < 0.01 pixels: {errors_below_01_pix} ({errors_below_01_pix_pct:.2}%)");
             println!(
-                "Errors < 0.01 pixels: {} ({:.2}%)",
-                errors_below_01_pix, errors_below_01_pix_pct
+                "Errors < 0.005 pixels: {errors_below_005_pix} ({errors_below_005_pix_pct:.2}%)"
             );
             println!(
-                "Errors < 0.005 pixels: {} ({:.2}%)",
-                errors_below_005_pix, errors_below_005_pix_pct
-            );
-            println!(
-                "Errors < 0.0025 pixels: {} ({:.2}%)",
-                errors_below_0025_pix, errors_below_0025_pix_pct
+                "Errors < 0.0025 pixels: {errors_below_0025_pix} ({errors_below_0025_pix_pct:.2}%)"
             );
         }
 
         // X bias analysis
         let mean_x_error = errors_x.iter().sum::<f64>() / errors_x.len() as f64;
         println!(
-            "Mean X Error: {:.6} pixels (negative = detected position is to the right)",
-            mean_x_error
+            "Mean X Error: {mean_x_error:.6} pixels (negative = detected position is to the right)"
         );
 
         // Y bias analysis
         let mean_y_error = errors_y.iter().sum::<f64>() / errors_y.len() as f64;
-        println!(
-            "Mean Y Error: {:.6} pixels (negative = detected position is below)",
-            mean_y_error
-        );
+        println!("Mean Y Error: {mean_y_error:.6} pixels (negative = detected position is below)");
     }
 }
 
 /// Print a histogram using the viz module
 fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val: f64) {
     // Format title with consistent styling
-    println!("\n{}", title);
+    println!("\n{title}");
     println!("-----------------------------------------------------------");
 
     use viz::histogram::{Histogram, HistogramConfig};
@@ -397,7 +374,7 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
 
         // Print the formatted histogram
         if let Ok(formatted) = hist.format() {
-            println!("{}", formatted);
+            println!("{formatted}");
         }
 
         // Print out of range count
@@ -405,7 +382,7 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
         let out_of_range = data.len() as u64 - total_in_hist;
 
         if out_of_range > 0 {
-            println!("Out of range: {} values", out_of_range);
+            println!("Out of range: {out_of_range} values");
         }
 
         // Print statistics summary using the new statistical methods
@@ -423,8 +400,8 @@ fn print_histogram(title: &str, data: &[f64], bins: usize, min_val: f64, max_val
         let mean_str = format_with_sign(mean);
         let median_str = format_with_sign(median);
 
-        println!("Mean: {}, Median: {}", mean_str, median_str);
-        println!("Std. Deviation: {:.6}", std_dev);
+        println!("Mean: {mean_str}, Median: {median_str}");
+        println!("Std. Deviation: {std_dev:.6}");
 
         // Only print skewness/kurtosis if we have enough data
         if data.len() >= 4 {
@@ -464,16 +441,14 @@ fn format_with_sign(value: f64) -> String {
     // Use more decimal places for very small values
     if value.abs() < 0.01 {
         if value >= 0.0 {
-            format!("+{:.6}", value)
+            format!("+{value:.6}")
         } else {
-            format!("{:.6}", value)
+            format!("{value:.6}")
         }
+    } else if value >= 0.0 {
+        format!("+{value:.3}")
     } else {
-        if value >= 0.0 {
-            format!("+{:.3}", value)
-        } else {
-            format!("{:.3}", value)
-        }
+        format!("{value:.3}")
     }
 }
 
@@ -484,11 +459,8 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
     let position_x = center_x + 0.3; // Test at a fixed 0.3 subpixel offset
     let position_y = center_y + 0.7; // Test at a fixed 0.7 subpixel offset
 
-    println!(
-        "=== Testing effect of PSF width (sigma) on centroid accuracy [{:?}] ===",
-        detector
-    );
-    println!("Fixed position: ({:.3}, {:.3})", position_x, position_y);
+    println!("=== Testing effect of PSF width (sigma) on centroid accuracy [{detector:?}] ===");
+    println!("Fixed position: ({position_x:.3}, {position_y:.3})");
     println!("Sigma\tDetected Position\t\tError\t\tAspect Ratio");
     println!("----------------------------------------------------------------------");
 
@@ -539,7 +511,7 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
                 ) {
                     Ok(stars) => stars,
                     Err(_) => {
-                        println!("{:.2}\tNo detection\t\t-\t\t-", sigma);
+                        println!("{sigma:.2}\tNo detection\t\t-\t\t-");
                         continue;
                     }
                 }
@@ -547,7 +519,7 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
         };
 
         if stars.is_empty() {
-            println!("{:.2}\tNo detection\t\t-\t\t-", sigma);
+            println!("{sigma:.2}\tNo detection\t\t-\t\t-");
             continue;
         }
 
@@ -559,10 +531,7 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
         let error_detected = ((position_x - star_x).powi(2) + (position_y - star_y).powi(2)).sqrt();
 
         // Print results
-        println!(
-            "{:.2}\t({:.3}, {:.3})\t{:.6}\t-",
-            sigma, star_x, star_y, error_detected
-        );
+        println!("{sigma:.2}\t({star_x:.3}, {star_y:.3})\t{error_detected:.6}\t-");
     }
 }
 
@@ -579,7 +548,7 @@ fn main() {
 
     for detector in &detectors {
         println!("\n{}", "=".repeat(80));
-        println!("Testing with {:?} detector", detector);
+        println!("Testing with {detector:?} detector");
         println!("{}\n", "=".repeat(80));
 
         // Run basic tests at specific positions

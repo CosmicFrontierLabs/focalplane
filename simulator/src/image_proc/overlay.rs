@@ -70,18 +70,17 @@ pub fn draw_bounding_boxes(
 
     // Create an SVG string with the bounding boxes
     let mut svg_data = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">
-        "#,
-        width, height
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">
+        "#
     );
 
     let (r, g, b) = color;
-    let color_str = format!("#{:02x}{:02x}{:02x}", r, g, b);
+    let color_str = format!("#{r:02x}{g:02x}{b:02x}");
 
     // Get circle color (use box color if not specified)
     let circle_color_str = if let Some(circle_color) = circle_color {
         let (cr, cg, cb) = circle_color;
-        format!("#{:02x}{:02x}{:02x}", cr, cg, cb)
+        format!("#{cr:02x}{cg:02x}{cb:02x}")
     } else {
         color_str.clone()
     };
@@ -95,8 +94,7 @@ pub fn draw_bounding_boxes(
         let box_height = (max_row - min_row) as f32;
 
         svg_data.push_str(&format!(
-            r#"<rect x="{}" y="{}" width="{}" height="{}" fill="none" stroke="{}" stroke-width="2"/>"#,
-            x, y, box_width, box_height, color_str
+            r#"<rect x="{x}" y="{y}" width="{box_width}" height="{box_height}" fill="none" stroke="{color_str}" stroke-width="2"/>"#
         ));
 
         // Add label if provided
@@ -128,8 +126,7 @@ pub fn draw_bounding_boxes(
 
             // Draw circle with solid stroke style as requested
             svg_data.push_str(&format!(
-                r#"<circle cx="{}" cy="{}" r="{}" fill="none" stroke="{}" stroke-width="1.5" />"#,
-                cx, cy, radius, circle_color_str
+                r#"<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{circle_color_str}" stroke-width="1.5" />"#
             ));
         }
     }
@@ -195,8 +192,8 @@ pub fn draw_stars_with_sizes(
 /// * `stars` - Map of labels to star positions and diameters: HashMap<String, (y, x, diameter)>
 /// * `marker_color` - RGB color tuple for the X markers
 /// * `arm_length_factor` - Factor to multiply with star diameter to determine arm length
-///                         (1.0 = same as diameter, 0.5 = half diameter)
-///                         A minimum of 1 pixel is enforced to ensure visibility
+///   (1.0 = same as diameter, 0.5 = half diameter)
+///   A minimum of 1 pixel is enforced to ensure visibility
 ///
 /// # Returns
 /// * Image with X markers and labeled stars
@@ -211,14 +208,13 @@ pub fn draw_stars_with_x_markers(
 
     // Create an SVG string with the X markers
     let mut svg_data = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}">
-        "#,
-        width, height
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">
+        "#
     );
 
     // Convert color to SVG format
     let (r, g, b) = marker_color;
-    let color_str = format!("#{:02x}{:02x}{:02x}", r, g, b);
+    let color_str = format!("#{r:02x}{g:02x}{b:02x}");
 
     // Draw X markers and labels for each star
     for (label, &(center_row, center_col, diameter)) in stars.iter() {
@@ -258,8 +254,7 @@ pub fn draw_stars_with_x_markers(
 
             // Draw the arm line with increased width for better visibility
             svg_data.push_str(&format!(
-                r#"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="2.5" />"#,
-                start_x, start_y, end_x, end_y, color_str
+                r#"<line x1="{start_x}" y1="{start_y}" x2="{end_x}" y2="{end_y}" stroke="{color_str}" stroke-width="2.5" />"#
             ));
 
             // Add star label at the end of top-right arm (index 2)
@@ -271,16 +266,14 @@ pub fn draw_stars_with_x_markers(
 
                 // Draw the label text
                 svg_data.push_str(&format!(
-                    r#"<text x="{}" y="{}" font-size="12" font-weight="bold" text-anchor="start" dominant-baseline="central" fill="{}">{}</text>"#,
-                    text_x, text_y, color_str, label
+                    r#"<text x="{text_x}" y="{text_y}" font-size="12" font-weight="bold" text-anchor="start" dominant-baseline="central" fill="{color_str}">{label}</text>"#
                 ));
             }
         }
 
         // Draw small dot at center for better visibility
         svg_data.push_str(&format!(
-            r#"<circle cx="{}" cy="{}" r="1" fill="{}" />"#,
-            cx, cy, color_str
+            r#"<circle cx="{cx}" cy="{cy}" r="1" fill="{color_str}" />"#
         ));
     }
 
@@ -317,7 +310,7 @@ pub fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
     let svg_tree = match Tree::from_str(svg_data, &options) {
         Ok(tree) => tree,
         Err(e) => {
-            panic!("SVG parsing failed: {:?}", e);
+            panic!("SVG parsing failed: {e:?}");
         }
     };
 

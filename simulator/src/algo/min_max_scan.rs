@@ -46,11 +46,9 @@ impl<T: Float + fmt::Debug> MinMaxScan<T> {
         let mut nan_index = None;
 
         for (index, &value) in data.iter().enumerate() {
-            if value.is_nan() {
-                if nan_index.is_none() {
-                    nan_index = Some(index);
-                    break; // Stop processing further if we find NaN
-                }
+            if value.is_nan() && nan_index.is_none() {
+                nan_index = Some(index);
+                break; // Stop processing further if we find NaN
             }
 
             match (min_value, max_value) {

@@ -71,10 +71,7 @@ use std::{f64::consts::PI, time::Duration};
 fn validate_psd_inputs(points: &[PsdPoint], axis: &Vector3<f64>) {
     // Validate axis vector
     if !axis.iter().all(|&x| x.is_finite()) {
-        panic!(
-            "PSD axis vector contains NaN or infinite values: {:?}",
-            axis
-        );
+        panic!("PSD axis vector contains NaN or infinite values: {axis:?}");
     }
     if axis.norm() == 0.0 {
         panic!("PSD axis vector cannot be zero vector");
@@ -471,8 +468,7 @@ fn validate_orthonormal_axes(curves: &[PsdCurve]) {
                 let dot_product = curve_i.axis.dot(&curve_j.axis);
                 if dot_product.abs() > 1e-10 {
                     panic!(
-                        "PSD curve axes {} and {} are not orthogonal: dot product = {}, expected near 0",
-                        i, j, dot_product
+                        "PSD curve axes {i} and {j} are not orthogonal: dot product = {dot_product}, expected near 0"
                     );
                 }
             }

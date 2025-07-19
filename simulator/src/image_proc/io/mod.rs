@@ -173,7 +173,7 @@ pub fn read_fits_to_hashmap<P: AsRef<Path>>(
         // Get HDU name, fallback to index-based name if no EXTNAME
         let hdu_name = match hdu.read_key::<String>(&mut fptr, "EXTNAME") {
             Ok(name) => name,
-            Err(_) => format!("HDU_{}", hdu_idx),
+            Err(_) => format!("HDU_{hdu_idx}"),
         };
 
         // Try to read as image data
@@ -189,8 +189,7 @@ pub fn read_fits_to_hashmap<P: AsRef<Path>>(
                 let fits_array =
                     Array2::from_shape_vec((naxis2, naxis1), image_data).map_err(|_| {
                         FitsError::InvalidDataType(format!(
-                            "Cannot reshape image data for HDU '{}'",
-                            hdu_name
+                            "Cannot reshape image data for HDU '{hdu_name}'"
                         ))
                     })?;
 

@@ -584,8 +584,7 @@ mod model_tests {
         let hwk_dc_20 = models::HWK4123.dark_current_at_temperature(20.0);
         assert!(
             hwk_dc_20 > 0.4 && hwk_dc_20 < 0.6,
-            "HWK4123 dark current at 20°C: {}",
-            hwk_dc_20
+            "HWK4123 dark current at 20°C: {hwk_dc_20}"
         );
         assert_eq!(models::HWK4123.max_frame_rate_fps, 120.0);
         // QE should be close to 0.8 at 550nm for this sensor

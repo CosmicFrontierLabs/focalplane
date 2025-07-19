@@ -83,11 +83,9 @@ struct Args {
 fn parse_range(range_str: &str) -> Result<Array1<f64>, Box<dyn std::error::Error>> {
     let parts: Vec<&str> = range_str.split(',').collect();
     if parts.len() != 3 {
-        return Err(format!(
-            "Invalid range format. Expected 'start,end,step', got '{}'",
-            range_str
-        )
-        .into());
+        return Err(
+            format!("Invalid range format. Expected 'start,end,step', got '{range_str}'").into(),
+        );
     }
 
     let start = parts[0].trim().parse::<f64>()?;
@@ -197,9 +195,9 @@ fn create_spectrum_plot(
     chart
         .configure_mesh()
         .x_labels(11)
-        .x_label_formatter(&|x| format!("{:.0}", x))
+        .x_label_formatter(&|x| format!("{x:.0}"))
         .y_labels(6)
-        .y_label_formatter(&|y| format!("{:.2e}", y))
+        .y_label_formatter(&|y| format!("{y:.2e}"))
         .x_desc("Wavelength (nm)")
         .y_desc("Spectral Irradiance (erg/(cm²·arcsec²·Hz))")
         .axis_desc_style(("sans-serif", 18))
@@ -234,7 +232,7 @@ fn create_spectrum_plot(
     // Save the plot
     root.present()?;
 
-    println!("Zodiacal spectrum plot saved to: {}", output_path);
+    println!("Zodiacal spectrum plot saved to: {output_path}");
 
     Ok(())
 }
@@ -276,7 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(ref_coords) = SolarAngularCoordinates::new(120.0, 15.0) {
         let plot_path = "plots/zodiacal_spectrum.png";
         if let Err(e) = create_spectrum_plot(&z_light, &ref_coords, plot_path) {
-            eprintln!("Warning: Failed to create spectrum plot: {}", e);
+            eprintln!("Warning: Failed to create spectrum plot: {e}");
         }
     }
 
@@ -324,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  DN/s Table:");
         print!("  Elong\\Lat |");
         for &lat in &latitudes {
-            print!(" {:8.1}° |", lat);
+            print!(" {lat:8.1}° |");
         }
         println!();
 
@@ -335,13 +333,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!();
 
         for (elong_idx, &elong) in elongations.iter().enumerate() {
-            print!("  {:6.1}°   |", elong);
+            print!("  {elong:6.1}°   |");
             for lat_idx in 0..latitudes.len() {
                 let dn_per_s = dn_matrix[[elong_idx, lat_idx]];
                 if dn_per_s.is_nan() {
                     print!("   ---    |");
                 } else {
-                    print!(" {:8.7} |", dn_per_s);
+                    print!(" {dn_per_s:8.7} |");
                 }
             }
             println!();
@@ -352,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Electrons/s Table:");
         print!("  Elong\\Lat |");
         for &lat in &latitudes {
-            print!(" {:8.1}° |", lat);
+            print!(" {lat:8.1}° |");
         }
         println!();
 
@@ -363,13 +361,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!();
 
         for (elong_idx, &elong) in elongations.iter().enumerate() {
-            print!("  {:6.1}°   |", elong);
+            print!("  {elong:6.1}°   |");
             for lat_idx in 0..latitudes.len() {
                 let electrons_per_s = electron_matrix[[elong_idx, lat_idx]];
                 if electrons_per_s.is_nan() {
                     print!("   ---    |");
                 } else {
-                    print!(" {:8.2e} |", electrons_per_s);
+                    print!(" {electrons_per_s:8.2e} |");
                 }
             }
             println!();

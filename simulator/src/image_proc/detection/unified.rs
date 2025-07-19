@@ -69,8 +69,7 @@ impl std::str::FromStr for StarFinder {
             "iraf" => Ok(StarFinder::Iraf),
             "naive" => Ok(StarFinder::Naive),
             _ => Err(format!(
-                "Unknown star finder: {}. Valid options: dao, iraf, naive",
-                s
+                "Unknown star finder: {s}. Valid options: dao, iraf, naive"
             )),
         }
     }
@@ -151,8 +150,8 @@ fn detect_dao(
     let config = dao_autoconfig(scaled_airy_disk, background_rms, detection_sigma);
 
     // Create DAO star finder and detect sources
-    let star_finder = DAOStarFinder::new(config)
-        .map_err(|e| format!("DAO star finder creation failed: {}", e))?;
+    let star_finder =
+        DAOStarFinder::new(config).map_err(|e| format!("DAO star finder creation failed: {e}"))?;
 
     let stars = star_finder
         .find_stars(&image_f64, None)
@@ -181,7 +180,7 @@ fn detect_iraf(
 
     // Create IRAF star finder and detect sources
     let star_finder = IRAFStarFinder::new(config)
-        .map_err(|e| format!("IRAF star finder creation failed: {}", e))?;
+        .map_err(|e| format!("IRAF star finder creation failed: {e}"))?;
 
     let stars = star_finder
         .find_stars(&image_f64, None)

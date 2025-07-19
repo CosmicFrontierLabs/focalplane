@@ -530,14 +530,12 @@ mod tests {
         // Overall statistics check
         assert!(
             avg_error < 0.05,
-            "Average centroid error too large: {}",
-            avg_error
+            "Average centroid error too large: {avg_error}"
         );
 
         assert!(
             max_error < 0.1,
-            "Maximum centroid error too large: {}",
-            max_error
+            "Maximum centroid error too large: {max_error}"
         );
     }
 
@@ -850,9 +848,7 @@ mod tests {
         let y_bias = star_swapped.y - 2.0;
         assert!(
             (x_bias - y_bias).abs() < 0.01,
-            "X bias ({}) should match Y bias ({})",
-            x_bias,
-            y_bias
+            "X bias ({x_bias}) should match Y bias ({y_bias})"
         );
     }
 
@@ -936,20 +932,14 @@ mod tests {
                 // Half-pixel positions should be very accurate
                 assert!(
                     error < 0.05,
-                    "Centroid error too large at half-pixel position ({}, {}): {}",
-                    offset_x,
-                    offset_y,
-                    error
+                    "Centroid error too large at half-pixel position ({offset_x}, {offset_y}): {error}"
                 );
             } else {
                 // For other positions, error should be within acceptable range
                 // Integer positions can actually have higher error in some implementations
                 assert!(
                     error < 0.5,
-                    "Centroid error too large at position ({}, {}): {}",
-                    offset_x,
-                    offset_y,
-                    error
+                    "Centroid error too large at position ({offset_x}, {offset_y}): {error}"
                 );
             }
 
@@ -1016,9 +1006,7 @@ mod tests {
             // A wider PSF (larger sigma) should still give reasonable results
             assert!(
                 error < 1.0 * sigma,
-                "Centroid error too large with sigma={}: {}",
-                sigma,
-                error
+                "Centroid error too large with sigma={sigma}: {error}"
             );
 
             // Star should be valid
@@ -1092,7 +1080,7 @@ mod tests {
         let mut sorted_ids: Vec<usize> = stars.iter().map(|s| s.id).collect();
         sorted_ids.sort();
         for (i, &id) in sorted_ids.iter().enumerate() {
-            assert_eq!(id, i, "Expected ID {}, found {} at position {}", i, id, i);
+            assert_eq!(id, i, "Expected ID {i}, found {id} at position {i}");
         }
     }
 }

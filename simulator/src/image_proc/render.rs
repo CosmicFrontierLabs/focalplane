@@ -480,14 +480,8 @@ mod tests {
             x,
             y,
             spot: SourceFlux {
-                photons: SpotFlux {
-                    disk: disk.clone(),
-                    flux: flux,
-                },
-                electrons: SpotFlux {
-                    disk: disk.clone(),
-                    flux: flux,
-                },
+                photons: SpotFlux { disk: disk, flux },
+                electrons: SpotFlux { disk: disk, flux },
             },
             star: test_star_data(),
         }
@@ -516,13 +510,13 @@ mod tests {
 
     #[test]
     fn test_add_star_total_flux() {
-        for sigma_pix in vec![2.0, 4.0, 8.0] {
+        for sigma_pix in [2.0, 4.0, 8.0] {
             let total_flux = 1000.0;
 
             let stars = vec![create_star_in_frame(25.0, 25.0, sigma_pix, total_flux)];
             let image = add_stars_to_image(50, 50, &stars, &Duration::from_secs(1), 1.0);
             let added_flux = image.sum();
-            println!("Sigma: {}, Added Flux: {}", sigma_pix, added_flux);
+            println!("Sigma: {sigma_pix}, Added Flux: {added_flux}");
             // assert_relative_eq!(added_flux, total_flux, epsilon = 1.0);
         }
     }
@@ -539,8 +533,7 @@ mod tests {
         // Expect very small flux contribution
         assert!(
             added_flux < 100.0,
-            "Out of bounds star flux too high: {}",
-            added_flux
+            "Out of bounds star flux too high: {added_flux}"
         );
     }
 
@@ -843,6 +836,6 @@ mod tests {
         // With mean noise ~15 electrons and dn_per_electron = 0.25
         // Expected RMS should be around 15 * 0.25 = 3.75 DN
         // Allow for some variation due to randomness
-        assert!(rms > 3.0 && rms < 4.5, "RMS {} not in expected range", rms);
+        assert!(rms > 3.0 && rms < 4.5, "RMS {rms} not in expected range");
     }
 }

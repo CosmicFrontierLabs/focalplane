@@ -24,7 +24,7 @@ fn main() {
     ];
 
     for &size in &sizes {
-        println!("\nImage size: {}x{}", size, size);
+        println!("\nImage size: {size}x{size}");
 
         // Create a test input array
         let mut input = Array2::zeros((size, size));
@@ -35,7 +35,7 @@ fn main() {
         }
 
         for (kernel_name, kernel) in &kernels {
-            println!("\n  Kernel: {}", kernel_name);
+            println!("\n  Kernel: {kernel_name}");
 
             // Sequential version
             let seq_options = ConvolveOptions {
@@ -46,7 +46,7 @@ fn main() {
             let _seq_result = convolve2d(&input.view(), &kernel.view(), Some(seq_options));
             let seq_duration = start.elapsed();
 
-            println!("    Sequential: {:?}", seq_duration);
+            println!("    Sequential: {seq_duration:?}");
 
             // Parallel version (with same options, using Rayon under the hood)
             let par_options = ConvolveOptions {
@@ -57,11 +57,11 @@ fn main() {
             let _par_result = convolve2d(&input.view(), &kernel.view(), Some(par_options));
             let par_duration = start.elapsed();
 
-            println!("    Parallel:   {:?}", par_duration);
+            println!("    Parallel:   {par_duration:?}");
 
             if seq_duration.as_micros() > 0 {
                 let speedup = seq_duration.as_secs_f64() / par_duration.as_secs_f64();
-                println!("    Speedup:    {:.2}x", speedup);
+                println!("    Speedup:    {speedup:.2}x");
             }
         }
     }

@@ -73,7 +73,7 @@ fn main() {
 
     // Threshold the image
     let threshold = otsu_threshold(&smoothed.view());
-    println!("Otsu threshold: {:.4}", threshold);
+    println!("Otsu threshold: {threshold:.4}");
 
     let binary = apply_threshold(&smoothed.view(), threshold);
 
@@ -114,7 +114,7 @@ fn main() {
         let diameter = if !box_stars.is_empty() {
             let avg_diameter =
                 box_stars.iter().map(|s| s.diameter).sum::<f64>() / box_stars.len() as f64;
-            format!("Φ{:.1}", avg_diameter)
+            format!("Φ{avg_diameter:.1}")
         } else {
             "?".to_string()
         };
@@ -181,7 +181,7 @@ fn main() {
     let mut labeled_stars = HashMap::new();
     for &(y, x, diameter) in &star_circles {
         // Format diameter to 1 decimal place
-        let label = format!("D={:.1}", diameter);
+        let label = format!("D={diameter:.1}");
         labeled_stars.insert(label, (y, x, diameter));
     }
 

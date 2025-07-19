@@ -363,8 +363,7 @@ mod tests {
         // High dark current should double: 10 -> ~20
         assert!(
             high_result > 18.0 && high_result < 22.0,
-            "Expected ~20, got {}",
-            high_result
+            "Expected ~20, got {high_result}"
         );
         // Low dark current should also double: 0.001 -> ~0.002
         assert_relative_eq!(low_result, 0.002, epsilon = 0.1); // 10% tolerance for interpolation

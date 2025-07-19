@@ -744,7 +744,7 @@ mod tests {
 
         for coord in &eq_coords {
             let pixel = projector.project(coord);
-            assert!(pixel.is_some(), "Projection failed for coord: {:?}", coord);
+            assert!(pixel.is_some(), "Projection failed for coord: {coord:?}");
 
             let (w, h) = pixel.unwrap();
 
@@ -869,10 +869,10 @@ mod tests {
             let dec = coord.dec_degrees();
 
             // RA should be in [0, 360)
-            assert!(ra >= 0.0 && ra < 360.0, "RA out of bounds: {}", ra);
+            assert!((0.0..360.0).contains(&ra), "RA out of bounds: {ra}");
 
             // Dec should be in [-90, 90]
-            assert!(dec >= -90.0 && dec <= 90.0, "Dec out of bounds: {}", dec);
+            assert!((-90.0..=90.0).contains(&dec), "Dec out of bounds: {dec}");
         }
     }
 
@@ -898,15 +898,11 @@ mod tests {
         // Should span a significant portion of the range
         assert!(
             max_ra - min_ra > 200.0,
-            "RA range too narrow: {} - {}",
-            min_ra,
-            max_ra
+            "RA range too narrow: {min_ra} - {max_ra}"
         );
         assert!(
             max_dec - min_dec > 100.0,
-            "Dec range too narrow: {} - {}",
-            min_dec,
-            max_dec
+            "Dec range too narrow: {min_dec} - {max_dec}"
         );
 
         // Rough check of means (should be around 180 for RA, 0 for Dec)
@@ -915,13 +911,11 @@ mod tests {
 
         assert!(
             mean_ra > 150.0 && mean_ra < 210.0,
-            "RA mean suspicious: {}",
-            mean_ra
+            "RA mean suspicious: {mean_ra}"
         );
         assert!(
             mean_dec > -10.0 && mean_dec < 10.0,
-            "Dec mean suspicious: {}",
-            mean_dec
+            "Dec mean suspicious: {mean_dec}"
         );
     }
 
@@ -1047,8 +1041,7 @@ mod tests {
         let expected_ratio = (large_telescope.aperture_m / small_telescope.aperture_m).powi(2);
 
         println!(
-            "Small telescope electrons: {}, Large telescope electrons: {}",
-            elec_small, elec_large
+            "Small telescope electrons: {elec_small}, Large telescope electrons: {elec_large}"
         );
         assert!(approx_eq!(
             f64,

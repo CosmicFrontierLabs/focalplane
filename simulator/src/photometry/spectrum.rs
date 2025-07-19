@@ -136,8 +136,7 @@ impl Band {
 
         if lower_nm > upper_nm {
             panic!(
-                "Invalid wavelength range: start must be less than end, got {}..{}",
-                lower_nm, upper_nm,
+                "Invalid wavelength range: start must be less than end, got {lower_nm}..{upper_nm}",
             );
         }
         if lower_nm < 0.0 || upper_nm < 0.0 {
@@ -160,10 +159,7 @@ impl Band {
     pub fn from_freq_bounds(lower_freq_hz: f64, upper_freq_hz: f64) -> Self {
         // Convert frequency bounds to wavelength bounds
         if lower_freq_hz <= 0.0 || upper_freq_hz <= 0.0 {
-            panic!(
-                "Frequencies must be positive, got {}..{}",
-                lower_freq_hz, upper_freq_hz
-            );
+            panic!("Frequencies must be positive, got {lower_freq_hz}..{upper_freq_hz}");
         }
 
         // Wavelength = speed of light / frequency
@@ -186,13 +182,10 @@ impl Band {
     pub fn centered_on(wavelength_nm: f64, frequency_spread: f64) -> Self {
         // Create a band centered on a wavelength with a given width
         if wavelength_nm <= 0.0 {
-            panic!("Wavelength must be positive, got: {}", wavelength_nm);
+            panic!("Wavelength must be positive, got: {wavelength_nm}");
         }
         if frequency_spread <= 0.0 {
-            panic!(
-                "Frequency spread must be positive, got: {}",
-                frequency_spread
-            );
+            panic!("Frequency spread must be positive, got: {frequency_spread}");
         }
         // Convert wavelength to frequency
         let center_freq = CGS::SPEED_OF_LIGHT / (wavelength_nm * 1e-7); // Convert nm to Hz
@@ -287,10 +280,7 @@ pub fn wavelength_to_ergs(wavelength_nm: f64) -> f64 {
     // Convert wavelength in nanometers to energy in erg
     // E = h * c / λ, where λ is in cm
     if wavelength_nm <= 0.0 {
-        panic!(
-            "WARNING!!! Wavelength must be positive, got: {}",
-            wavelength_nm
-        );
+        panic!("WARNING!!! Wavelength must be positive, got: {wavelength_nm}");
     }
     let wavelength_cm = wavelength_nm * 1e-7; // Convert nm to cm
     CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / wavelength_cm

@@ -396,7 +396,7 @@ mod wwt_tests {
         .unwrap();
 
         // Print URL for debugging
-        println!("Generated URL: {}", url);
+        println!("Generated URL: {url}");
 
         // Check that basic WWT parameters are present
         assert!(url.contains("worldwidetelescope.org"));

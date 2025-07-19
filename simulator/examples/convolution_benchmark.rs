@@ -27,7 +27,7 @@ fn main() {
 
     // Benchmark with different array sizes
     for &size in &sizes {
-        println!("\nInput array size: {}x{}", size, size);
+        println!("\nInput array size: {size}x{size}");
 
         // Create test array with sequential values
         let mut input = Array2::zeros((size, size));
@@ -39,7 +39,7 @@ fn main() {
 
         // Benchmark each kernel
         for (kernel_name, kernel) in &kernels {
-            println!("\n  Kernel: {}", kernel_name);
+            println!("\n  Kernel: {kernel_name}");
 
             // Benchmark each mode
             for mode in &modes {
@@ -50,7 +50,7 @@ fn main() {
                     ConvolveMode::Valid => "Valid",
                 };
 
-                println!("    Mode: {}", mode_name);
+                println!("    Mode: {mode_name}");
 
                 // Measure performance
                 let start = Instant::now();
@@ -59,8 +59,8 @@ fn main() {
 
                 // Output result dimensions and timing
                 let (rows, cols) = result.dim();
-                println!("    Result size: {}x{}", rows, cols);
-                println!("    Duration: {:?}", duration);
+                println!("    Result size: {rows}x{cols}");
+                println!("    Duration: {duration:?}");
             }
         }
     }
@@ -92,8 +92,8 @@ fn main() {
     let result_valid = convolve2d(&small_input.view(), &kernel.view(), Some(valid_options));
     let valid_duration = start.elapsed();
 
-    println!("  Same mode: {:?}", same_duration);
-    println!("  Valid mode: {:?}", valid_duration);
+    println!("  Same mode: {same_duration:?}");
+    println!("  Valid mode: {valid_duration:?}");
 
     // Edge values comparison
     println!("  First row comparison:");

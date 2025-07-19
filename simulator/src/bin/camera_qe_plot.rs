@@ -50,9 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     chart
         .configure_mesh()
         .x_labels(21) // 150, 200, 250, 300, ... 1050, 1100, 1150
-        .x_label_formatter(&|x| format!("{:.0}", x)) // Remove decimal places
+        .x_label_formatter(&|x| format!("{x:.0}")) // Remove decimal places
         .y_labels(11) // 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0
-        .y_label_formatter(&|y| format!("{:.1}", y)) // One decimal place for y-axis
+        .y_label_formatter(&|y| format!("{y:.1}")) // One decimal place for y-axis
         .x_desc("Wavelength (nm)")
         .y_desc("Quantum Efficiency")
         .axis_desc_style(("sans-serif", 18))
@@ -94,6 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Save the plot
     root.present()?;
 
-    println!("Plot saved to: {}", OUTPUT_PATH);
+    println!("Plot saved to: {OUTPUT_PATH}");
     Ok(())
 }

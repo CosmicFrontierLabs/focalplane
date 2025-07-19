@@ -25,15 +25,13 @@ impl std::fmt::Display for ReadNoiseError {
             ReadNoiseError::TemperatureOutOfBounds { value, min, max } => {
                 write!(
                     f,
-                    "Temperature {:.1}°C is outside valid range [{:.1}°C, {:.1}°C]",
-                    value, min, max
+                    "Temperature {value:.1}°C is outside valid range [{min:.1}°C, {max:.1}°C]"
                 )
             }
             ReadNoiseError::FrameRateOutOfBounds { value, min, max } => {
                 write!(
                     f,
-                    "Frame rate {:.1} Hz is outside valid range [{:.1} Hz, {:.1} Hz]",
-                    value, min, max
+                    "Frame rate {value:.1} Hz is outside valid range [{min:.1} Hz, {max:.1} Hz]"
                 )
             }
         }

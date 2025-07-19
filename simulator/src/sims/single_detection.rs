@@ -438,12 +438,7 @@ mod tests {
         for (i, ((x1, y1), (x2, y2))) in result1.xy_err.iter().zip(&result2.xy_err).enumerate() {
             assert!(
                 (x1 - x2).abs() < 1e-10 && (y1 - y2).abs() < 1e-10,
-                "Detection {} positions should be identical: ({:.6}, {:.6}) vs ({:.6}, {:.6})",
-                i,
-                x1,
-                y1,
-                x2,
-                y2
+                "Detection {i} positions should be identical: ({x1:.6}, {y1:.6}) vs ({x2:.6}, {y2:.6})"
             );
         }
     }

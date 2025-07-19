@@ -51,10 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Debug: Check intensity at FWHM/2
     let fwhm_half = airy_disk.fwhm / 2.0;
     let intensity_at_fwhm_half = airy_disk.intensity(fwhm_half);
-    println!(
-        "  Debug: Intensity at FWHM/2 ({:.4}): {:.6}",
-        fwhm_half, intensity_at_fwhm_half
-    );
+    println!("  Debug: Intensity at FWHM/2 ({fwhm_half:.4}): {intensity_at_fwhm_half:.6}");
     println!();
 
     // Generate comparison samples with high resolution
@@ -83,14 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sum();
 
     println!("Approximation Quality:");
-    println!("  Gaussian MSE: {:.6}", gaussian_mse);
-    println!("  Triangle MSE: {:.6}", triangle_mse);
-    println!("  Gaussian Total Summed Error: {:.6}", gaussian_total_error);
-    println!("  Triangle Total Summed Error: {:.6}", triangle_total_error);
-    println!(
-        "  Gaussian vs Triangle Total Summed Error: {:.6}",
-        approximations_total_error
-    );
+    println!("  Gaussian MSE: {gaussian_mse:.6}");
+    println!("  Triangle MSE: {triangle_mse:.6}");
+    println!("  Gaussian Total Summed Error: {gaussian_total_error:.6}");
+    println!("  Triangle Total Summed Error: {triangle_total_error:.6}");
+    println!("  Gaussian vs Triangle Total Summed Error: {approximations_total_error:.6}");
     println!();
 
     // Find maximum errors for each approximation
@@ -101,10 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         AiryDisk::find_max_error(&radii, &gaussian, &triangle);
 
     println!("Gaussian Approximation Error Analysis:");
-    println!(
-        "  Maximum error: {:.4} at r = {:.4}",
-        gauss_max_err, gauss_max_r
-    );
+    println!("  Maximum error: {gauss_max_err:.4} at r = {gauss_max_r:.4}");
     if let Some(r) = gauss_5pct_r {
         println!(
             "  First 5% error at: r = {:.4} ({:.1}% of r₀)",
@@ -115,10 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("Triangle Approximation Error Analysis:");
-    println!(
-        "  Maximum error: {:.4} at r = {:.4}",
-        tri_max_err, tri_max_r
-    );
+    println!("  Maximum error: {tri_max_err:.4} at r = {tri_max_r:.4}");
     if let Some(r) = tri_5pct_r {
         println!(
             "  First 5% error at: r = {:.4} ({:.1}% of r₀)",
@@ -129,10 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("Gaussian vs Triangle Approximation Difference:");
-    println!(
-        "  Maximum difference: {:.4} at r = {:.4}",
-        approx_max_err, approx_max_r
-    );
+    println!("  Maximum difference: {approx_max_err:.4} at r = {approx_max_r:.4}");
     if let Some(r) = approx_5pct_r {
         println!(
             "  First 5% difference at: r = {:.4} ({:.1}% of r₀)",
@@ -150,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    Triangle: {:.6}", airy_disk.triangle_approximation(0.0));
 
     let r_half = airy_disk.first_zero * 0.5;
-    println!("  At r = r₀/2 ({:.4}):", r_half);
+    println!("  At r = r₀/2 ({r_half:.4}):");
     println!("    Exact: {:.6}", airy_disk.intensity(r_half));
     println!(
         "    Gaussian: {:.6}",
@@ -176,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let r_1_5 = airy_disk.first_zero * 1.5;
-    println!("  At r = 1.5×r₀ ({:.4}):", r_1_5);
+    println!("  At r = 1.5×r₀ ({r_1_5:.4}):");
     println!("    Exact: {:.6}", airy_disk.intensity(r_1_5));
     println!(
         "    Gaussian: {:.6}",
@@ -197,7 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plot_path = "plots/airy_disk_comparison.png";
     create_airy_comparison_plot(&radii, &exact, &gaussian, &triangle, &airy_disk, plot_path)?;
 
-    println!("Plot saved to: {}", plot_path);
+    println!("Plot saved to: {plot_path}");
 
     // Create 2D Airy disk comparison images
     let exact_path = "plots/airy_disk_exact.png";
@@ -209,9 +194,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     create_airy_disk_image(&airy_disk, triangle_path, ImageType::Triangle)?;
 
     println!("2D Airy disk images saved:");
-    println!("  Exact: {}", exact_path);
-    println!("  Gaussian: {}", gaussian_path);
-    println!("  Triangle: {}", triangle_path);
+    println!("  Exact: {exact_path}");
+    println!("  Gaussian: {gaussian_path}");
+    println!("  Triangle: {triangle_path}");
     println!();
 
     println!("Summary:");
@@ -219,17 +204,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  • The first zero (dark ring) occurs at r₀ = {:.4} radians",
         airy_disk.first_zero
     );
+    println!("  • Gaussian approximation works best near the center (MSE: {gaussian_mse:.6})");
+    println!("  • Triangle approximation is simpler but less accurate (MSE: {triangle_mse:.6})");
     println!(
-        "  • Gaussian approximation works best near the center (MSE: {:.6})",
-        gaussian_mse
-    );
-    println!(
-        "  • Triangle approximation is simpler but less accurate (MSE: {:.6})",
-        triangle_mse
-    );
-    println!(
-        "  • Total summed error: Gaussian = {:.3}, Triangle = {:.3}, Difference = {:.3}",
-        gaussian_total_error, triangle_total_error, approximations_total_error
+        "  • Total summed error: Gaussian = {gaussian_total_error:.3}, Triangle = {triangle_total_error:.3}, Difference = {approximations_total_error:.3}"
     );
     println!("  • Both approximations break down significantly beyond r₀");
 
@@ -486,7 +464,7 @@ fn create_airy_disk_image(
                 RGBColor(grey_value, grey_value, grey_value)
             };
 
-            root.draw_pixel((x as i32, y as i32), &color)?;
+            root.draw_pixel((x, y), &color)?;
         }
     }
 

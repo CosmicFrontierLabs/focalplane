@@ -208,7 +208,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 ///
 /// # Arguments
 /// * `args` - Configuration parameters including output path, wavelength range,
-///           temperature range, and sampling parameters
+///   temperature range, and sampling parameters
 ///
 /// # Returns
 /// * `Result<(), Box<dyn Error>>` - Success or plotting error
@@ -259,7 +259,7 @@ fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
         .x_labels(x_label_count) // Compute from wavelength range and desired spacing
         .y_labels(y_label_count) // Will show 0.0, 0.1, 0.2, ... 1.0
         .x_label_formatter(&|x| format!("{}", *x as i32)) // Integer labels
-        .y_label_formatter(&|y| format!("{:.1}", y)) // One decimal point for y-axis labels
+        .y_label_formatter(&|y| format!("{y:.1}")) // One decimal point for y-axis labels
         .axis_desc_style(("sans-serif", 18).into_font().color(&WHITE))
         .label_style(("sans-serif", 14).into_font().color(&WHITE))
         .x_desc("Wavelength (nm)")

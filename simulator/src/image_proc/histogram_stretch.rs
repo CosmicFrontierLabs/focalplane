@@ -262,9 +262,7 @@ mod tests {
         let tolerance = 0.05 * (v2 - v1);
         assert!(
             (actual_7000 - expected_7000).abs() < tolerance,
-            "Mid-range value not mapped proportionally. Expected: {}, Actual: {}",
-            expected_7000,
-            actual_7000
+            "Mid-range value not mapped proportionally. Expected: {expected_7000}, Actual: {actual_7000}"
         );
     }
 

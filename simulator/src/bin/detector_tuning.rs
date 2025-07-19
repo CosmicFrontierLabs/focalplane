@@ -221,10 +221,7 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
     let mut total_tests = 0;
     let mut failed_detections = 0;
 
-    println!(
-        "Running {}x{} grid test for {} detector...",
-        grid_size, grid_size, detector
-    );
+    println!("Running {grid_size}x{grid_size} grid test for {detector} detector...");
 
     for i in 0..grid_size {
         for j in 0..grid_size {
@@ -255,7 +252,7 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
                     test_iraf_single(config, position_x, position_y, &image)
                 }
                 "naive" => test_naive_single(position_x, position_y, &image),
-                _ => panic!("Unknown detector: {}", detector),
+                _ => panic!("Unknown detector: {detector}"),
             };
 
             if let Some(error) = error_opt {
@@ -275,8 +272,8 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
     };
 
     println!("\nResults:");
-    println!("Average Error: {:.6} pixels", avg_error);
-    println!("Maximum Error: {:.6} pixels", max_error);
+    println!("Average Error: {avg_error:.6} pixels");
+    println!("Maximum Error: {max_error:.6} pixels");
     println!(
         "Success Rate: {:.2}% ({}/{})",
         100.0 * total_tests as f64 / (grid_size * grid_size) as f64,
@@ -284,7 +281,7 @@ fn run_grid_test(detector: &str, grid_size: usize, image_size: usize) {
         grid_size * grid_size
     );
     if failed_detections > 0 {
-        println!("Failed Detections: {}", failed_detections);
+        println!("Failed Detections: {failed_detections}");
     }
 }
 
@@ -297,7 +294,7 @@ fn sweep_dao_parameter(param: &str) {
     let image_size = 51;
     let flux = 1000.0;
 
-    println!("Sweeping {} parameter for DAO detector\n", param);
+    println!("Sweeping {param} parameter for DAO detector\n");
     println!("Value\tError (pixels)\tNotes");
     println!("-----\t--------------\t-----");
 
@@ -319,7 +316,7 @@ fn sweep_dao_parameter(param: &str) {
         "fwhm" => vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0],
         "sigma_radius" => vec![0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0],
         "threshold" => vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0],
-        _ => panic!("Unknown parameter: {}", param),
+        _ => panic!("Unknown parameter: {param}"),
     };
 
     // Generate the image once outside the loop
@@ -342,9 +339,9 @@ fn sweep_dao_parameter(param: &str) {
             } else {
                 ""
             };
-            println!("{:.2}\t{:.6}\t{}", value, error, note);
+            println!("{value:.2}\t{error:.6}\t{note}");
         } else {
-            println!("{:.2}\tNo detection", value);
+            println!("{value:.2}\tNo detection");
         }
     }
 }
@@ -358,7 +355,7 @@ fn sweep_iraf_parameter(param: &str) {
     let image_size = 51;
     let flux = 1000.0;
 
-    println!("Sweeping {} parameter for IRAF detector\n", param);
+    println!("Sweeping {param} parameter for IRAF detector\n");
     println!("Value\tError (pixels)\tNotes");
     println!("-----\t--------------\t-----");
 
@@ -379,7 +376,7 @@ fn sweep_iraf_parameter(param: &str) {
         "fwhm" => vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
         "sigma_radius" => vec![0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0],
         "threshold" => vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0],
-        _ => panic!("Unknown parameter: {}", param),
+        _ => panic!("Unknown parameter: {param}"),
     };
 
     // Generate the image once outside the loop
@@ -402,9 +399,9 @@ fn sweep_iraf_parameter(param: &str) {
             } else {
                 ""
             };
-            println!("{:.2}\t{:.6}\t{}", value, error, note);
+            println!("{value:.2}\t{error:.6}\t{note}");
         } else {
-            println!("{:.2}\tNo detection", value);
+            println!("{value:.2}\tNo detection");
         }
     }
 }
@@ -420,10 +417,7 @@ fn main() {
             let test_y = 25.7;
             let image_size = 51;
 
-            println!(
-                "Quick test of {} detector at position ({:.1}, {:.1})",
-                detector, test_x, test_y
-            );
+            println!("Quick test of {detector} detector at position ({test_x:.1}, {test_y:.1})");
 
             let base_fwhm = sigma * 2.355;
             let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(base_fwhm, 550.0);
@@ -458,11 +452,11 @@ fn main() {
                     test_iraf_single(config, test_x, test_y, &image)
                 }
                 "naive" => test_naive_single(test_x, test_y, &image),
-                _ => panic!("Unknown detector: {}", detector),
+                _ => panic!("Unknown detector: {detector}"),
             };
 
             if let Some(error) = error_opt {
-                println!("\nError: {:.6} pixels", error);
+                println!("\nError: {error:.6} pixels");
                 if error < 0.002 {
                     println!("★ Excellent centroid accuracy!");
                 } else if error < 0.02 {

@@ -74,7 +74,6 @@ impl SatelliteConfig {
 
     /// Get the effective collecting area accounting for telescope efficiency.
     ///
-
     /// Get the plate scale in arcseconds per millimeter at the focal plane.
     ///
     /// Fundamental optical property relating angular sky coordinates

@@ -666,13 +666,11 @@ mod tests {
         // Most flux should be in center pixel for small PSF
         assert!(
             pixel_flux > 0.5 * flux,
-            "Expected >90% flux in center pixel, got {}",
-            pixel_flux
+            "Expected >90% flux in center pixel, got {pixel_flux}"
         );
         assert!(
             pixel_flux <= flux,
-            "Flux should not exceed total flux, got {}",
-            pixel_flux
+            "Flux should not exceed total flux, got {pixel_flux}"
         );
     }
 
@@ -730,7 +728,7 @@ mod tests {
 
         // Each pixel should get significant flux
         for f in &fluxes {
-            assert!(*f > 0.1 * flux, "Expected flux > 0.1 * {}, got {}", flux, f);
+            assert!(*f > 0.1 * flux, "Expected flux > 0.1 * {flux}, got {f}");
         }
     }
 }

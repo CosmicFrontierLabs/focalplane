@@ -459,7 +459,7 @@ fn write_results_to_csv(
         "Exposures: [{}] seconds",
         exposure_durations
             .iter()
-            .map(|d| format!("{}", d))
+            .map(|d| format!("{d}"))
             .collect::<Vec<_>>()
             .join(" ")
     )?;
@@ -496,8 +496,7 @@ fn write_results_to_csv(
     if let Some(pixel_sampling) = args.match_pixel_sampling {
         writeln!(
             csv_file,
-            "FWHM Sampling Mode: Matched at {:.3} pixels per FWHM",
-            pixel_sampling
+            "FWHM Sampling Mode: Matched at {pixel_sampling:.3} pixels per FWHM"
         )?;
     } else {
         writeln!(
@@ -574,7 +573,7 @@ fn write_results_to_csv(
     for result in results {
         grouped_results
             .entry(result.experiment_num)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(result);
     }
 
@@ -628,22 +627,22 @@ fn write_results_to_csv(
         // Exposure times for star counts
         for exposure in &exposure_keys {
             let exposure_ms = exposure.as_secs_f64() * 1000.0;
-            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+            write!(csv_file, ",{exposure_ms:.0}ms")?;
         }
         // Exposure times for brightest mags
         for exposure in &exposure_keys {
             let exposure_ms = exposure.as_secs_f64() * 1000.0;
-            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+            write!(csv_file, ",{exposure_ms:.0}ms")?;
         }
         // Exposure times for faintest mags
         for exposure in &exposure_keys {
             let exposure_ms = exposure.as_secs_f64() * 1000.0;
-            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+            write!(csv_file, ",{exposure_ms:.0}ms")?;
         }
         // Exposure times for errors
         for exposure in &exposure_keys {
             let exposure_ms = exposure.as_secs_f64() * 1000.0;
-            write!(csv_file, ",{:.0}ms", exposure_ms)?;
+            write!(csv_file, ",{exposure_ms:.0}ms")?;
         }
         write!(csv_file, ",")?; // Empty for WWT URL column
     }
@@ -739,7 +738,7 @@ fn write_results_to_csv(
             )
             .unwrap_or_else(|_| "Error generating URL".to_string());
 
-            write!(csv_file, ",{}", wwt_url)?;
+            write!(csv_file, ",{wwt_url}")?;
         }
         writeln!(csv_file)?;
     }
@@ -1007,7 +1006,7 @@ fn save_image_outputs(
     let u8_image = u16_to_u8_scaled(&render_result.quantized_image, max_bit_value);
 
     // Save the raw image
-    let regular_path = output_path.join(format!("{}_regular.png", prefix));
+    let regular_path = output_path.join(format!("{prefix}_regular.png"));
     save_u8_image(&u8_image, &regular_path).expect("Failed to save image");
 
     // Create and save histogram stretched version
@@ -1017,7 +1016,7 @@ fn save_image_outputs(
     let img_flt = stretched_image.mapv(|x| x as f64);
     let normed = sigma_stretch(&img_flt, 5.0, Some(5));
     let u8_stretched = normed.mapv(|x| (x * 255.0).round() as u8);
-    let stretched_path = output_path.join(format!("{}_stretched.png", prefix));
+    let stretched_path = output_path.join(format!("{prefix}_stretched.png"));
     save_u8_image(&u8_stretched, &stretched_path).expect("Failed to save stretched image");
 
     // Use light blue (135, 206, 250) for X markers
@@ -1038,7 +1037,7 @@ fn save_image_outputs(
         1.0,             // Arm length factor (1.0 = full diameter)
     );
 
-    let overlay_path = output_path.join(format!("{}_overlay.png", prefix));
+    let overlay_path = output_path.join(format!("{prefix}_overlay.png"));
     x_markers_image
         .save(&overlay_path)
         .expect("Failed to save image with X markers");
@@ -1057,7 +1056,7 @@ fn save_image_outputs(
     );
 
     // Save FITS file with both datasets
-    let fits_path = output_path.join(format!("{}_data.fits", prefix));
+    let fits_path = output_path.join(format!("{prefix}_data.fits"));
     write_hashmap_to_fits(&fits_data, &fits_path).expect("Failed to save FITS file");
 }
 
@@ -1118,8 +1117,7 @@ fn debug_stats(
 
     let full_config = HistogramConfig {
         title: Some(format!(
-            "Electron Count Histogram (Full Range: {:.2} - {:.2}e-)",
-            min_val, max_val
+            "Electron Count Histogram (Full Range: {min_val:.2} - {max_val:.2}e-)"
         )),
         width: 80,
         height: None,
