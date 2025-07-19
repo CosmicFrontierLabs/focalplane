@@ -275,7 +275,6 @@ fn run_experiment<T: StarCatalog>(
                 satellite.clone(),
                 stars.clone(),
                 params.ra_dec,
-                *exposure_duration,
                 params.common_args.coordinates,
             );
 
@@ -290,7 +289,7 @@ fn run_experiment<T: StarCatalog>(
             );
 
             // Render the scene
-            let render_result = scene.render();
+            let render_result = scene.render(&exposure_duration);
 
             let prefix = format!(
                 "{}_{}_{:.1}s_",

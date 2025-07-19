@@ -93,10 +93,10 @@ fn run_bias_experiment(params: &BiasExperimentParams) -> BiasExperimentResults {
             params.satellite.clone(),
             vec![star],
             Equatorial::from_degrees(0.0, 0.0), // Dummy pointing
-            params.exposure,
             params.coordinates,
         );
-        let render_result = scene.render_with_seed(Some(params.seed + trial as u64));
+        let render_result =
+            scene.render_with_seed(&params.exposure, Some(params.seed + trial as u64));
 
         // Calculate background RMS
         let background_rms = render_result.background_rms();

@@ -149,13 +149,12 @@ pub fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
             params.satellite.clone(),
             vec![star],
             Equatorial::from_degrees(0.0, 0.0), // Dummy pointing (not used for pre-positioned stars)
-            params.exposure,
             params.coordinates,
         );
 
         // Render the scene with a unique seed for this iteration
         let render_seed = rng.gen::<u64>();
-        let render_result = scene.render_with_seed(Some(render_seed));
+        let render_result = scene.render_with_seed(&params.exposure, Some(render_seed));
 
         // Use consistent background RMS calculation
         let background_rms = render_result.background_rms();
@@ -250,7 +249,6 @@ mod tests {
     use super::*;
     use crate::hardware::sensor::models::{ALL_SENSORS, GSENSE4040BSI, HWK4123};
     use crate::hardware::telescope::models::DEMO_50CM;
-    use crate::hardware::telescope::TelescopeConfig;
     use crate::photometry::zodical::SolarAngularCoordinates;
     use std::time::Duration;
 

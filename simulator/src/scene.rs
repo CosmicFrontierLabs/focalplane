@@ -226,13 +226,6 @@ pub struct Scene {
     /// calculations. Typically the optical axis direction.
     pub pointing_center: Equatorial,
 
-    /// Integration time for the exposure.
-    ///
-    /// Determines the total photon collection time, affecting signal levels,
-    /// noise statistics, and detector artifacts (dark current, cosmic rays).
-    /// Used for scaling flux calculations and noise models.
-    pub exposure_time: Duration,
-
     /// Solar angular coordinates for zodiacal light calculation.
     ///
     /// Defines the angular position of the observation relative to the Sun,
@@ -279,7 +272,6 @@ impl Scene {
         satellite_config: SatelliteConfig,
         catalog_stars: Vec<StarData>,
         pointing_center: Equatorial,
-        exposure_time: Duration,
         zodiacal_coordinates: SolarAngularCoordinates,
     ) -> Self {
         // Calculate PSF padding for edge handling (same as render_star_field)
@@ -297,7 +289,6 @@ impl Scene {
             satellite_config,
             stars: projected_stars,
             pointing_center,
-            exposure_time,
             zodiacal_coordinates,
         }
     }
@@ -334,14 +325,12 @@ impl Scene {
         satellite_config: SatelliteConfig,
         stars: Vec<StarInFrame>,
         pointing_center: Equatorial,
-        exposure_time: Duration,
         zodiacal_coordinates: SolarAngularCoordinates,
     ) -> Self {
         Self {
             satellite_config,
             stars,
             pointing_center,
-            exposure_time,
             zodiacal_coordinates,
         }
     }
@@ -383,16 +372,15 @@ impl Scene {
     /// Render the scene to produce a complete astronomical image with realistic detector effects.
     /// The output includes the quantized detector image, zodiacal background map, and metadata
     /// about rendered stars. Use the stored zodiacal coordinates for background calculation.
-    pub fn render(&self) -> RenderingResult {
-        self.render_with_seed(None)
+    pub fn render(&self, exposure: &Duration) -> RenderingResult {
+        self.render_with_seed(exposure, None)
     }
 
     /// Render the scene with a specific RNG seed for reproducible results
-    pub fn render_with_seed(&self, seed: Option<u64>) -> RenderingResult {
+    pub fn render_with_seed(&self, exposure: &Duration, seed: Option<u64>) -> RenderingResult {
         // Use the new Renderer for the actual work
         let renderer = Renderer::from_stars(&self.stars, self.satellite_config.clone());
-        let rendered =
-            renderer.render_with_seed(&self.exposure_time, &self.zodiacal_coordinates, seed);
+        let rendered = renderer.render_with_seed(exposure, &self.zodiacal_coordinates, seed);
 
         // Convert back to RenderingResult for backwards compatibility
         RenderingResult {
@@ -403,48 +391,5 @@ impl Scene {
             rendered_stars: rendered.rendered_stars,
             sensor_config: self.satellite_config.sensor.clone(),
         }
-    }
-
-    /// Create optimized renderer for efficient multi-exposure simulations.
-    ///
-    /// Constructs a specialized Renderer that pre-computes the 1-second base
-    /// stellar image, enabling rapid generation of multiple exposures with
-    /// different integration times while maintaining independent noise
-    /// realizations for each frame.
-    ///
-    /// # Performance Benefits
-    /// - **PSF pre-computation**: Star convolution performed once
-    /// - **Coordinate caching**: Pixel projections reused across exposures
-    /// - **Memory efficiency**: Base image scaled rather than recomputed
-    /// - **Noise independence**: Fresh random number generation per exposure
-    ///
-    /// # Use Cases
-    /// - **Time series**: Multiple exposures of same field
-    /// - **Exposure optimization**: Testing different integration times
-    /// - **Noise analysis**: Statistical studies with repeated observations
-    /// - **Survey simulation**: Efficient large-scale image generation
-    ///
-    /// # Computational Scaling
-    /// - **Setup cost**: O(N) star projection and PSF convolution
-    /// - **Per-exposure cost**: O(1) scaling + O(M) noise generation
-    /// - **Memory usage**: Single base image + temporary noise arrays
-    /// - **Thread safety**: Multiple renderers can operate concurrently
-    ///
-    /// # Returns
-    /// Optimized Renderer configured for this scene's stellar field
-    ///
-    /// # Examples
-    /// # Usage
-    /// Create an optimized renderer for efficient multi-exposure simulations. The renderer
-    /// pre-computes the base stellar image, allowing rapid generation of multiple exposures
-    /// with different integration times while maintaining independent noise realizations.
-    pub fn create_renderer(&self) -> Renderer {
-        let star_data_refs: Vec<&StarData> = self.stars.iter().map(|s| &s.star).collect();
-
-        Renderer::from_catalog(
-            &star_data_refs,
-            &self.pointing_center,
-            self.satellite_config.clone(),
-        )
     }
 }

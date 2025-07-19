@@ -121,9 +121,6 @@ pub struct RenderedImage {
 
     /// Stars that were rendered in the image (not clipped)
     pub rendered_stars: Vec<StarInFrame>,
-
-    /// Satellite configuration for quantization
-    satellite_config: SatelliteConfig,
 }
 
 impl Renderer {
@@ -257,7 +254,6 @@ impl Renderer {
             sensor_noise_image,
             quantized_image,
             rendered_stars: self.rendered_stars.clone(),
-            satellite_config: self.satellite_config.clone(),
         }
     }
 }
@@ -266,33 +262,6 @@ impl RenderedImage {
     /// Compute the total electron image from all components
     pub fn mean_electron_image(&self) -> Array2<f64> {
         &self.star_image + &self.zodiacal_image + &self.sensor_noise_image
-    }
-
-    /// Apply Poisson arrival time statistics to the star image
-    ///
-    /// This creates a new RenderedImage with Poisson-sampled star photons
-    /// while keeping other components unchanged.
-    ///
-    /// # Arguments
-    /// * `rng_seed` - Optional seed for random number generation
-    ///
-    /// # Returns
-    /// * New RenderedImage with Poisson noise applied to star photons
-    pub fn with_poisson_star_noise(&self, rng_seed: Option<u64>) -> RenderedImage {
-        let poisson_star_image = apply_poisson_photon_noise(&self.star_image, rng_seed);
-
-        // Recompute quantized image with new star noise
-        let total_electrons = &poisson_star_image + &self.zodiacal_image + &self.sensor_noise_image;
-        let quantized_image = quantize_image(&total_electrons, &self.satellite_config.sensor);
-
-        RenderedImage {
-            star_image: poisson_star_image,
-            zodiacal_image: self.zodiacal_image.clone(),
-            sensor_noise_image: self.sensor_noise_image.clone(),
-            quantized_image,
-            rendered_stars: self.rendered_stars.clone(),
-            satellite_config: self.satellite_config.clone(),
-        }
     }
 }
 
@@ -414,17 +383,25 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// ```
 /// use ndarray::Array2;
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
-/// use simulator::photometry::photoconversion::PhotoElectronSpot;
+/// use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
+/// use simulator::image_proc::airy::PixelScaledAiryDisk;
 /// use starfield::catalogs::StarData;
 /// use starfield::Equatorial;
+/// use std::time::Duration;
+///
 /// let star_data = StarData {
 ///     id: 0,
 ///     magnitude: 10.0,
 ///     position: Equatorial::from_degrees(0.0, 0.0),
 ///     b_v: None,
 /// };
-/// let stars = vec![StarInFrame { x: 50.0, y: 50.0, spot: PhotoElectronSpot::with_fwhm_quantity(2.0, 550.0, 1000.0), star: star_data }];
-/// let image = add_stars_to_image(100, 100, &stars);
+/// let disk = PixelScaledAiryDisk::with_fwhm(2.0, 550.0);
+/// let source_flux = SourceFlux {
+///     photons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
+///     electrons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
+/// };
+/// let stars = vec![StarInFrame { x: 50.0, y: 50.0, spot: source_flux, star: star_data }];
+/// let image = add_stars_to_image(100, 100, &stars, &Duration::from_secs(1), 1.0);
 /// ```
 pub fn add_stars_to_image(
     width: usize,
