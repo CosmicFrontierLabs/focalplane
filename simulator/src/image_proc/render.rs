@@ -77,11 +77,7 @@ impl RenderingResult {
         let noise_electrons = &self.sensor_noise_image + &self.zodiacal_image;
 
         // Calculate RMS (root mean square) of the noise
-        let noise_rms_electrons = noise_electrons
-            .mapv(|x| x * x)
-            .mean()
-            .expect("Failed to calculate mean of noise array - array is empty")
-            .sqrt();
+        let noise_rms_electrons = noise_electrons.std(0.0);
 
         // Convert from electrons to DN units
         noise_rms_electrons * self.sensor_config.dn_per_electron()
@@ -462,6 +458,7 @@ mod tests {
         dark_current::DarkCurrentEstimator, read_noise::ReadNoiseEstimator, sensor::create_flat_qe,
     };
     use crate::image_proc::airy::PixelScaledAiryDisk;
+    use crate::image_proc::noise::simple_normal_array;
     use crate::photometry::photoconversion::SpotFlux;
 
     fn test_star_data() -> StarData {
@@ -492,10 +489,9 @@ mod tests {
         dn_per_electron: f64,
         max_well_depth_e: f64,
     ) -> SensorConfig {
-        let qe = create_flat_qe(0.5);
         SensorConfig::new(
             "Test",
-            qe,
+            create_flat_qe(0.5),
             1024,
             1024,
             5.5,
@@ -728,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn test_background_rms_uniform_noise() {
+    fn test_background_rms_constant_noise() {
         // Test with uniform noise values
         let sensor = create_test_sensor(12, 1.0, 1000.0);
 
@@ -741,101 +737,75 @@ mod tests {
             sensor_config: sensor,
         };
 
-        // Total noise per pixel: 5 + 3 = 8 electrons
-        // RMS of uniform distribution is just the value itself
-        // With dn_per_electron = 1.0, expect 8.0 DN
-        assert_relative_eq!(result.background_rms(), 8.0, epsilon = 1e-6);
+        assert_eq!(result.background_rms(), 0.0);
+    }
+
+    #[test]
+    fn test_background_rms_normal() {
+        for std_dev in vec![4.0, 8.0, 10.0] {
+            // Test DN conversion factor
+            let sensor = create_test_sensor(12, 1.0, 10000.0); // 0.5 DN per electron
+
+            let result = RenderingResult {
+                quantized_image: Array2::zeros((100, 100)),
+                star_image: Array2::zeros((100, 100)),
+                zodiacal_image: Array2::zeros((100, 100)),
+                sensor_noise_image: simple_normal_array((100, 100), 1000.0, std_dev, 33),
+                rendered_stars: vec![],
+                sensor_config: sensor,
+            };
+
+            println!("std_dev: {std_dev}. Result: {:?}", result.background_rms());
+            assert_relative_eq!(result.background_rms(), std_dev, epsilon = 0.1);
+        }
     }
 
     #[test]
     fn test_background_rms_with_dn_conversion() {
-        // Test DN conversion factor
-        let sensor = create_test_sensor(12, 0.5, 1000.0); // 0.5 DN per electron
+        let std_dev = 5.0;
+        for dn in vec![4.0, 8.0, 10.0] {
+            // Test DN conversion factor
+            let sensor = create_test_sensor(12, dn, 10000.0); // 0.5 DN per electron
 
-        let result = RenderingResult {
-            quantized_image: Array2::zeros((10, 10)),
-            star_image: Array2::zeros((10, 10)),
-            zodiacal_image: Array2::from_elem((10, 10), 4.0),
-            sensor_noise_image: Array2::from_elem((10, 10), 4.0),
-            rendered_stars: vec![],
-            sensor_config: sensor,
-        };
+            let result = RenderingResult {
+                quantized_image: Array2::zeros((100, 100)),
+                star_image: Array2::zeros((100, 100)),
+                zodiacal_image: Array2::zeros((100, 100)),
+                sensor_noise_image: simple_normal_array((100, 100), 1000.0, std_dev, 33),
+                rendered_stars: vec![],
+                sensor_config: sensor,
+            };
 
-        // Total noise: 8 electrons per pixel
-        // With dn_per_electron = 0.5, expect 4.0 DN
-        assert_relative_eq!(result.background_rms(), 4.0, epsilon = 1e-6);
-    }
-
-    #[test]
-    fn test_background_rms_varying_noise() {
-        // Test with varying noise levels
-        let sensor = create_test_sensor(12, 1.0, 1000.0);
-
-        let mut zodiacal = Array2::zeros((2, 2));
-        let mut sensor_noise = Array2::zeros((2, 2));
-
-        // Create a simple pattern: total noise of 0, 2, 4, 6 electrons
-        zodiacal[[0, 0]] = 0.0;
-        sensor_noise[[0, 0]] = 0.0; // Total: 0
-
-        zodiacal[[0, 1]] = 1.0;
-        sensor_noise[[0, 1]] = 1.0; // Total: 2
-
-        zodiacal[[1, 0]] = 2.0;
-        sensor_noise[[1, 0]] = 2.0; // Total: 4
-
-        zodiacal[[1, 1]] = 3.0;
-        sensor_noise[[1, 1]] = 3.0; // Total: 6
-
-        let result = RenderingResult {
-            quantized_image: Array2::zeros((2, 2)),
-            star_image: Array2::zeros((2, 2)),
-            zodiacal_image: zodiacal,
-            sensor_noise_image: sensor_noise,
-            rendered_stars: vec![],
-            sensor_config: sensor,
-        };
-
-        // RMS = sqrt(mean(x^2)) = sqrt((0^2 + 2^2 + 4^2 + 6^2) / 4)
-        //     = sqrt((0 + 4 + 16 + 36) / 4) = sqrt(56/4) = sqrt(14)
-        let expected_rms = (14.0_f64).sqrt();
-        assert_relative_eq!(result.background_rms(), expected_rms, epsilon = 1e-6);
+            println!(
+                "Testing with DN conversion: {dn}, std_dev: {std_dev}. Result: {:?}",
+                result.background_rms()
+            );
+            assert_relative_eq!(result.background_rms() / dn, std_dev, epsilon = 0.1);
+        }
     }
 
     #[test]
     fn test_background_rms_realistic_values() {
         // Test with realistic noise values from a sensor
-        let sensor = create_test_sensor(12, 0.25, 50000.0); // 0.25 DN/e-, 50k well depth
+        let sensor = create_test_sensor(12, 1.0, 50000.0); // 0.25 DN/e-, 50k well depth
 
-        // Simulate realistic noise levels in electrons
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut zodiacal = Array2::zeros((100, 100));
-        let mut sensor_noise = Array2::zeros((100, 100));
-
-        // Add some Gaussian-like noise (simplified)
-        for i in 0..100 {
-            for j in 0..100 {
-                // Zodiacal: ~10 electrons with some variation
-                zodiacal[[i, j]] = 10.0 + rng.gen_range(-2.0..2.0);
-                // Sensor noise: ~5 electrons with some variation
-                sensor_noise[[i, j]] = 5.0 + rng.gen_range(-1.0..1.0);
-            }
-        }
+        let zodical_std = 1.0;
+        let sensor_std = 5.0;
 
         let result = RenderingResult {
             quantized_image: Array2::zeros((100, 100)),
             star_image: Array2::zeros((100, 100)),
-            zodiacal_image: zodiacal,
-            sensor_noise_image: sensor_noise,
+            zodiacal_image: simple_normal_array((100, 100), 100.0, zodical_std, 7),
+            sensor_noise_image: simple_normal_array((100, 100), 100.0, sensor_std, 8),
             rendered_stars: vec![],
             sensor_config: sensor,
         };
 
         let rms = result.background_rms();
-
-        // With mean noise ~15 electrons and dn_per_electron = 0.25
-        // Expected RMS should be around 15 * 0.25 = 3.75 DN
-        // Allow for some variation due to randomness
-        assert!(rms > 3.0 && rms < 4.5, "RMS {rms} not in expected range");
+        assert_relative_eq!(
+            rms,
+            (sensor_std.powf(2.0) + zodical_std.powf(2.0)).sqrt(),
+            epsilon = 0.1
+        );
     }
 }

@@ -33,8 +33,56 @@ use std::time::Duration;
 use crate::algo::process_array_in_parallel_chunks;
 use crate::SensorConfig;
 use ndarray::Array2;
-use rand::{thread_rng, RngCore};
+use rand::{thread_rng, RngCore, SeedableRng};
 use rand_distr::{Distribution, Normal, Poisson};
+
+/// Generate a 2D array of normally distributed values for testing purposes.
+///
+/// This function creates a deterministic array filled with values sampled from
+/// a normal (Gaussian) distribution. It's specifically designed for unit tests
+/// and simulation validation where reproducible noise patterns are needed.
+///
+/// # Design Purpose
+/// This is a testing utility, not intended for production noise simulation.
+/// For realistic sensor noise, use `generate_sensor_noise` or `generate_noise_with_precomputed_params`.
+/// This function provides:
+/// - Deterministic output for test reproducibility
+/// - Simple interface without sensor physics
+/// - Fast generation without parallel processing
+///
+/// # Arguments
+/// * `size` - Tuple of (height, width) for the output array dimensions
+/// * `mean` - Mean value of the normal distribution
+/// * `std_dev` - Standard deviation of the normal distribution
+/// * `seed` - Random seed for deterministic output
+///
+/// # Returns
+/// A 2D array with values sampled from Normal(mean, std_dev)
+///
+/// # Example
+/// ```
+/// use simulator::image_proc::noise::simple_normal_array;
+///
+/// // Create 10x10 array with mean=100, std_dev=10, seed=42
+/// let noise = simple_normal_array((10, 10), 100.0, 10.0, 42);
+/// assert_eq!(noise.dim(), (10, 10));
+/// ```
+///
+/// # Use Cases
+/// - Unit testing algorithms that need controlled noise input
+/// - Validating statistical properties of image processing functions
+/// - Creating reproducible test scenarios for detector simulations
+/// - Debugging noise-related issues with known patterns
+pub fn simple_normal_array(
+    size: (usize, usize),
+    mean: f64,
+    std_dev: f64,
+    seed: u64,
+) -> Array2<f64> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let normal_dist = Normal::new(mean, std_dev).unwrap();
+    Array2::from_shape_fn(size, |_| normal_dist.sample(&mut rng))
+}
 
 /// Generate realistic sensor noise field for astronomical detector simulation.
 ///
@@ -249,53 +297,6 @@ pub fn apply_poisson_photon_noise(
     )
 }
 
-/// Estimates the noise floor for a given sensor and exposure time.
-///
-/// Uses a smaller sensor size for faster estimation while maintaining accuracy.
-///
-/// # Arguments
-/// * `sensor` - Configuration of the sensor
-/// * `exposure_time` - Exposure time as Duration
-/// * `temp_c` - Sensor temperature in degrees Celsius
-/// * `rng_seed` - Optional seed for random number generator
-///
-/// # Returns
-/// * The estimated noise floor value (mean noise)
-pub fn est_noise_floor(
-    sensor: &SensorConfig,
-    exposure_time: &Duration,
-    temp_c: f64,
-    rng_seed: Option<u64>,
-) -> f64 {
-    // Create a smaller sensor with the same noise characteristics for faster estimation
-    let width = 64;
-    let height = 64;
-
-    // Calculate dark current mean directly at specified temperature
-    let dark_current = sensor.dark_current_at_temperature(temp_c);
-    let dark_electrons_mean = dark_current * exposure_time.as_secs_f64();
-
-    // Get read noise estimate for the given temperature and exposure time
-    let read_noise = sensor
-        .read_noise_estimator
-        .estimate(temp_c, *exposure_time)
-        .unwrap_or(2.0); // Fallback value if estimation fails
-
-    // Generate the noise field using the optimized function
-    let noise_field = generate_noise_with_precomputed_params(
-        width,
-        height,
-        read_noise,
-        dark_electrons_mean,
-        rng_seed,
-    );
-
-    // Return the mean of the noise field as the estimated noise floor
-    noise_field
-        .mean()
-        .expect("Failed to calculate mean noise value?")
-}
-
 #[cfg(test)]
 mod tests {
     use approx::assert_relative_eq;
@@ -329,25 +330,6 @@ mod tests {
             1.0,
             60.0, // default frame rate for test
         )
-    }
-
-    #[test]
-    fn test_est_noise_floor() {
-        // Test that the estimated noise floor is close to the expected value
-        let shape = (100, 100);
-        let read_noise = 5.0;
-        let dark_current = 10.0;
-        let exposure_time = Duration::from_secs_f64(0.2); // 5 Hz
-
-        let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
-
-        let noise_floor = est_noise_floor(&sensor, &exposure_time, 20.0, Some(42));
-
-        // Calculate the expected noise floor (mean)
-        let expected_noise_floor = read_noise + dark_current * exposure_time.as_secs_f64();
-
-        // Assert that the estimated noise floor is close to the expected value
-        assert_relative_eq!(noise_floor, expected_noise_floor, epsilon = 0.05);
     }
 
     #[test]
@@ -602,6 +584,118 @@ mod tests {
             any_different,
             "Different seeds should produce different results"
         );
+    }
+
+    #[test]
+    fn test_simple_normal_array_dimensions() {
+        // Test correct dimensions
+        let size = (10, 20);
+        let mean = 5.0;
+        let stddev = 2.0;
+        let seed = 42;
+
+        let array = simple_normal_array(size, mean, stddev, seed);
+        assert_eq!(array.dim(), size);
+    }
+
+    #[test]
+    fn test_simple_normal_array_deterministic() {
+        // Test same seed produces same results
+        let size = (5, 5);
+        let mean = 10.0;
+        let stddev = 3.0;
+        let seed = 123;
+
+        let array1 = simple_normal_array(size, mean, stddev, seed);
+        let array2 = simple_normal_array(size, mean, stddev, seed);
+
+        // Should be identical
+        for (v1, v2) in array1.iter().zip(array2.iter()) {
+            assert_eq!(*v1, *v2, "Same seed should produce identical values");
+        }
+
+        // Different seed should produce different results
+        let array3 = simple_normal_array(size, mean, stddev, seed + 1);
+        let mut any_different = false;
+        for (v1, v3) in array1.iter().zip(array3.iter()) {
+            if (*v1 - *v3).abs() > 1e-10 {
+                any_different = true;
+                break;
+            }
+        }
+        assert!(
+            any_different,
+            "Different seeds should produce different values"
+        );
+    }
+
+    #[test]
+    fn test_simple_normal_array_statistics() {
+        // Test statistical properties with large sample
+        let size = (100, 100);
+        let mean = 50.0;
+        let stddev = 10.0;
+        let seed = 456;
+
+        let array = simple_normal_array(size, mean, stddev, seed);
+
+        // Calculate sample statistics
+        let sample_mean = array.mean().unwrap();
+        let sample_var = array.var(0.0);
+        let sample_stddev = sample_var.sqrt();
+
+        // Should be close to expected values (within reasonable tolerance for 10k samples)
+        assert_relative_eq!(sample_mean, mean, epsilon = 0.5);
+        assert_relative_eq!(sample_stddev, stddev, epsilon = 0.5);
+    }
+
+    #[test]
+    fn test_simple_normal_array_edge_cases() {
+        // Test with zero stddev (should produce constant array)
+        let size = (3, 3);
+        let mean = 7.0;
+        let stddev = 0.0;
+        let seed = 789;
+
+        let array = simple_normal_array(size, mean, stddev, seed);
+
+        // All values should be exactly the mean
+        for value in array.iter() {
+            assert_eq!(*value, mean, "Zero stddev should produce constant values");
+        }
+
+        // Test with negative mean
+        let negative_mean = -15.0;
+        let array_neg = simple_normal_array(size, negative_mean, 1.0, seed);
+        assert!(
+            array_neg.mean().unwrap() < 0.0,
+            "Negative mean should produce negative average"
+        );
+    }
+
+    #[test]
+    fn test_simple_normal_array_large_values() {
+        // Test with very large mean and stddev
+        let size = (50, 50);
+        let mean = 1e6;
+        let stddev = 1e5;
+        let seed = 999;
+
+        let array = simple_normal_array(size, mean, stddev, seed);
+
+        // Check values are in reasonable range (within 4 sigma)
+        let min_expected = mean - 4.0 * stddev;
+        let max_expected = mean + 4.0 * stddev;
+
+        for value in array.iter() {
+            assert!(
+                *value > min_expected && *value < max_expected,
+                "Value {} outside expected range [{}, {}]",
+                value,
+                min_expected,
+                max_expected
+            );
+        }
     }
 
     #[test]

@@ -120,7 +120,7 @@ pub fn detect_stars(
     let result = match algorithm {
         StarFinder::Dao => detect_dao(image, scaled_airy_disk, background_rms, detection_sigma),
         StarFinder::Iraf => detect_iraf(image, scaled_airy_disk, background_rms, detection_sigma),
-        StarFinder::Naive => detect_naive(image, detection_sigma * background_rms),
+        StarFinder::Naive => detect_naive(image, background_rms, detection_sigma),
     };
 
     let duration = start_time.elapsed();
@@ -197,11 +197,15 @@ fn detect_iraf(
 /// Fastest algorithm but least sophisticated.
 fn detect_naive(
     image: ArrayView2<u16>,
-    threshold: f64,
+    background_rms: f64,
+    detection_sigma: f64,
 ) -> Result<Vec<Box<dyn StellarSource>>, String> {
     // Convert u16 image to f64 for centroiding algorithm
     let image_f64 = image.mapv(|x| x as f64);
     let image_view = image_f64.view();
+
+    let mean = image_f64.mean().expect("Image must not be empty");
+    let threshold = mean + detection_sigma * background_rms;
 
     // Use the existing centroiding detection from the centroid module
     let detections = super::naive::detect_stars(&image_view, Some(threshold));
