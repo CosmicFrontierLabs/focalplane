@@ -458,19 +458,23 @@ pub mod models {
     /// which is just past the knee where the read noise is very low, and well depth is still broad enough to
     /// support a wide range of source brightnesses. See this document for more details:
     /// <https://docs.google.com/spreadsheets/d/16WdFvMo3rj3Z9252pq32agsLV-wm7YNacvqfkEgSOAI/edit?gid=1094380256#gid=1094380256>
+    /// QE data from 300-400nm is from Ajay/Tohovavohu, past that is the QXY measurements
     pub static IMX455: Lazy<SensorConfig> = Lazy::new(|| {
         // QE curve from manufacturer data
         // Note: We already have zero at the endpoints as required by QuantumEfficiency
         let wavelengths = vec![
-            300.0, 320.0, 340.0, 360.0, 380.0, 400.0, 420.0, 440.0, 460.0, 480.0, 500.0, 520.0,
-            540.0, 560.0, 580.0, 600.0, 620.0, 640.0, 660.0, 680.0, 700.0, 720.0, 740.0, 760.0,
-            780.0, 800.0, 820.0, 840.0, 860.0, 880.0, 900.0, 920.0, 940.0, 960.0, 980.0, 1000.0,
+            300.0, 320.0, 340.0, 360.0, 380.0, 400.0, 401.689, 415.2006, 423.6453, 431.2456,
+            445.6017, 460.8023, 472.2027, 489.5144, 500.4926, 522.8712, 581.14, 610.6967, 644.4757,
+            672.7657, 682.4771, 691.7664, 697.6777, 718.3673, 733.1457, 741.1682, 754.2576,
+            774.1027, 799.0148, 809.993, 826.038, 837.4384, 857.2836, 872.9064, 886.8403, 902.4631,
+            923.9972, 941.7312, 959.0429, 982.6882, 1000.8445,
         ];
 
         let efficiencies = vec![
-            0.0, 0.05, 0.05, 0.12, 0.22, 0.35, 0.52, 0.68, 0.82, 0.90, 0.94, 0.94, 0.92, 0.86,
-            0.80, 0.72, 0.64, 0.56, 0.48, 0.42, 0.36, 0.30, 0.25, 0.22, 0.18, 0.16, 0.14, 0.12,
-            0.10, 0.09, 0.08, 0.06, 0.05, 0.04, 0.03, 0.0,
+            0.0, 0.05, 0.05, 0.12, 0.22, 0.35, 0.7186, 0.8003, 0.8428, 0.8711, 0.9057, 0.9198,
+            0.9088, 0.8868, 0.9057, 0.8774, 0.7704, 0.684, 0.6053, 0.5393, 0.5173, 0.4921, 0.4654,
+            0.423, 0.4025, 0.3852, 0.3601, 0.327, 0.2846, 0.2799, 0.2516, 0.2437, 0.1965, 0.1934,
+            0.1509, 0.1557, 0.1148, 0.1148, 0.0723, 0.0692, 0.0,
         ];
 
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
