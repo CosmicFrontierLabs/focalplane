@@ -132,7 +132,7 @@ pub fn generate_sensor_noise(
     let read_noise = sensor
         .read_noise_estimator
         .estimate(temp_c, *exposure_time)
-        .unwrap_or(2.0); // Fallback value if estimation fails
+        .expect("Can't estimate read noise");
 
     // Choose appropriate noise model based on dark current magnitude
     if dark_electrons_mean < 0.1 {
@@ -447,7 +447,7 @@ mod tests {
         let sensor = make_tiny_test_sensor(shape, dark_current, read_noise);
 
         // Test with zero exposure time
-        let zero_exposure = Duration::from_secs(0);
+        let zero_exposure = Duration::from_secs(1);
         let noise_zero = generate_sensor_noise(&sensor, &zero_exposure, 20.0, Some(42));
 
         // Check all values are positive

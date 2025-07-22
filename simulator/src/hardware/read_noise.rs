@@ -115,6 +115,9 @@ impl ReadNoiseEstimator {
         // Convert exposure time to frame rate (Hz = 1/seconds)
         let frame_rate = 1.0 / exposure_time.as_secs_f64();
 
+        // At frame rates lower than 5Hz we use the 5Hz value
+        let frame_rate = frame_rate.max(5.0);
+
         // Use bilinear interpolator
         match self.interpolator.interpolate(frame_rate, temperature) {
             Ok(value) => Ok(value),
@@ -210,14 +213,6 @@ mod tests {
     #[test]
     fn test_frame_rate_out_of_bounds() {
         let interp = test_hwk4123();
-
-        // Test below minimum frame rate (too long exposure)
-        let result = interp.estimate(0.0, Duration::from_secs_f64(1.0)); // 1 Hz
-        assert!(matches!(
-            result,
-            Err(ReadNoiseError::FrameRateOutOfBounds { value, min, max })
-            if value == 1.0 && min == 5.0 && max == 1000.0
-        ));
 
         // Test above maximum frame rate (too short exposure)
         let result = interp.estimate(0.0, Duration::from_secs_f64(1.0 / 1500.0));
@@ -322,9 +317,6 @@ mod tests {
             .estimate(20.1, Duration::from_secs_f64(1.0 / 100.0))
             .is_err());
         assert!(interp
-            .estimate(0.0, Duration::from_secs_f64(1.0 / 4.99))
-            .is_err());
-        assert!(interp
             .estimate(0.0, Duration::from_secs_f64(1.0 / 1001.0))
             .is_err());
     }
@@ -375,5 +367,17 @@ mod tests {
             .unwrap();
         assert_eq!(const_cold, const_hot);
         assert_eq!(const_cold, 3.0);
+    }
+
+    #[test]
+    fn test_hwk4123_oob() {
+        // The slowest framerate in the table is 5 hz, which corresponds to a 200 ms exposure
+        let interp = ReadNoiseEstimator::hwk4123();
+        // Test below minimum frame rate (too long exposure)
+        let result_capped = interp.estimate(0.0, Duration::from_secs_f64(1.0)); // 1 Hz
+        println!("Result: {:?}", result_capped);
+        let expected = interp.estimate(0.0, Duration::from_millis(200));
+
+        assert_eq!(result_capped, expected);
     }
 }
