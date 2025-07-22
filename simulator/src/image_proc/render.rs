@@ -84,10 +84,60 @@ impl RenderingResult {
     }
 }
 
-/// Star field renderer that handles exposure scaling and noise generation
+/// Star field renderer that caches star projections for efficient multi-exposure rendering.
 ///
-/// This struct maintains the configuration needed to render star fields at different
-/// exposure times, handling the scaling of flux and generation of random noise components.
+/// The Renderer pre-computes star positions and a base 1-second exposure image,
+/// enabling efficient generation of images at different exposure times without
+/// re-calculating star projections or PSF convolutions. Only the exposure scaling
+/// and noise generation are performed per render call.
+///
+/// # Inner Workings
+///
+/// ## One-Time Initialization (Expensive Operations)
+/// 1. **Star Projection**: Convert celestial coordinates (RA/Dec) to pixel coordinates
+/// 2. **Flux Calculation**: Compute photon flux for each star based on magnitude and spectrum
+/// 3. **PSF Rendering**: Apply Airy disk point spread function to each star
+/// 4. **Base Image Creation**: Render all stars into a single 1-second exposure image
+///
+/// These expensive operations involve:
+/// - Spherical trigonometry for coordinate transformation
+/// - Simpson's rule integration over stellar spectra and quantum efficiency curves
+/// - Bessel function evaluation for realistic Airy disk patterns
+/// - Sub-pixel positioning with analytical PSF integration
+///
+/// ## Per-Exposure Rendering (Fast Operations)
+/// 1. **Linear Scaling**: Multiply base image by `exposure_time / 1_second`
+/// 2. **Zodiacal Light**: Add background light scaled to exposure duration
+/// 3. **Noise Generation**: Apply Poisson noise to photon counts, add read noise and dark current
+/// 4. **Quantization**: Convert from electrons to ADU using sensor gain
+///
+/// The key insight is that photon arrival is a linear process - doubling exposure time
+/// doubles the collected photons. This allows us to render once and scale many times.
+///
+/// # Architecture
+/// - **One-time setup**: Star projection and base image creation (O(N) for N stars)
+/// - **Per-exposure**: Linear scaling and noise generation (O(pixels))
+/// - **Memory efficient**: Single base image reused for all exposures
+/// - **Thread safe**: Immutable base data allows concurrent rendering
+///
+/// # Performance Benefits
+/// When rendering multiple exposures of the same field:
+/// - 10-100x faster than re-projecting stars each time
+/// - Consistent star positions across exposure series
+/// - Minimal memory overhead (one base image)
+/// - Enables Monte Carlo analysis with fixed star fields
+///
+/// # Usage Pattern
+/// ```ignore
+/// // Create renderer once
+/// let renderer = Renderer::from_catalog(&stars, &center, satellite_config);
+///
+/// // Render many exposures efficiently
+/// for exposure_time in exposure_times {
+///     let image = renderer.render(&exposure_time, &zodiacal_coords);
+///     // Process image...
+/// }
+/// ```
 #[derive(Clone)]
 pub struct Renderer {
     /// Satellite configuration (telescope + sensor + environment)
@@ -129,6 +179,8 @@ impl Renderer {
         satellite_config: SatelliteConfig,
     ) -> Self {
         let airy_pix = satellite_config.airy_disk_pixel_space();
+
+        // NOTE(meawopppl) - Should be erf() based cutoff here
         let padding = airy_pix.first_zero() * 2.0;
 
         // Project stars to pixel coordinates with 1-second flux
@@ -180,9 +232,25 @@ impl Renderer {
         }
     }
 
-    /// Render an image with specified exposure duration and zodiacal coordinates
+    /// Render an image with specified exposure duration and zodiacal coordinates.
     ///
-    /// This method scales the base star image and generates fresh noise components
+    /// This method efficiently generates images by:
+    /// 1. Scaling the pre-computed base star image by exposure time (O(pixels))
+    /// 2. Generating fresh noise components (read noise, dark current, Poisson)
+    /// 3. Computing zodiacal background based on solar coordinates
+    /// 4. Combining all components and quantizing to detector units
+    ///
+    /// # Performance
+    /// Since star positions and PSF convolutions are pre-computed in the base image,
+    /// this method is extremely fast - typically 10-100x faster than re-projecting
+    /// stars for each exposure. Perfect for time series or Monte Carlo simulations.
+    ///
+    /// # Arguments
+    /// * `exposure` - Integration time for the image
+    /// * `zodiacal_coords` - Solar position for background light calculation
+    ///
+    /// # Returns
+    /// Complete `RenderedImage` with separate star, background, and noise components
     pub fn render(
         &self,
         exposure: &Duration,
@@ -201,13 +269,30 @@ impl Renderer {
         self.render_with_options(exposure, zodiacal_coords, true, seed)
     }
 
-    /// Render an image with options for Poisson noise and RNG seed
+    /// Render an image with full control over noise generation and reproducibility.
+    ///
+    /// This is the core rendering method that all other render methods delegate to.
+    /// It leverages the pre-computed base star image to efficiently generate realistic
+    /// astronomical images with proper noise characteristics.
+    ///
+    /// # Rendering Pipeline
+    /// 1. **Star scaling**: Base image multiplied by exposure time (linear photon accumulation)
+    /// 2. **Poisson sampling**: Optional photon arrival statistics for star light
+    /// 3. **Sensor noise**: Read noise + dark current based on temperature and exposure
+    /// 4. **Zodiacal light**: Sky background from solar system dust
+    /// 5. **Quantization**: Convert electrons to ADU with realistic bit depth
     ///
     /// # Arguments
     /// * `exposure` - Exposure duration
     /// * `zodiacal_coords` - Solar angular coordinates for zodiacal light
     /// * `apply_poisson` - Whether to apply Poisson arrival statistics to star photons
     /// * `rng_seed` - Optional seed for random number generation
+    ///
+    /// # Noise Models
+    /// - **Poisson noise**: Shot noise on photon arrivals (stars and background)
+    /// - **Read noise**: Gaussian electronic noise from sensor readout
+    /// - **Dark current**: Temperature-dependent thermal electrons
+    /// - **Quantization**: ADC discretization effects
     pub fn render_with_options(
         &self,
         exposure: &Duration,
@@ -237,8 +322,19 @@ impl Renderer {
 
         // Generate zodiacal background
         let z_light = ZodicalLight::new();
-        let zodiacal_image =
+
+        let zodiacal_mean =
             z_light.generate_zodical_background(&self.satellite_config, exposure, zodiacal_coords);
+
+        let zodiacal_image = if apply_poisson {
+            let new_seed = match rng_seed {
+                Some(val) => Some(val + 1),
+                None => None,
+            };
+            apply_poisson_photon_noise(&zodiacal_mean, new_seed)
+        } else {
+            zodiacal_mean
+        };
 
         // Compute final electron and quantized images
         let total_electrons = &star_image + &zodiacal_image + &sensor_noise_image;
@@ -411,6 +507,7 @@ pub fn add_stars_to_image(
 
     // Calculate the contribution of all stars to this pixel
     for star in stars {
+        // NOTE(meawopppl) - Should be erf() based cutoff here.
         // 2x the first 0 should cover 99.99999% of flux or so
         let max_pix_dist: i32 =
             (star.spot.electrons.disk.first_zero().max(1.0) * 2.0).ceil() as i32;

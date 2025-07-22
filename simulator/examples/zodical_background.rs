@@ -32,11 +32,11 @@ struct Args {
     domain: usize,
 
     /// Elongation range: start,end,step (degrees)
-    #[arg(long, default_value = "60.0,120.0,5.0")]
+    #[arg(long, default_value = "0.0,180.0,10.0")]
     elongation_range: String,
 
     /// Latitude range: start,end,step (degrees)
-    #[arg(long, default_value = "0.0,30.0,5.0")]
+    #[arg(long, default_value = "0.0,90.0,10.0")]
     latitude_range: String,
 
     /// Exposure time for averaging (e.g., "1s", "500ms", "0.1s", "10m")
@@ -313,6 +313,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("===========================================================");
     println!();
 
+    // Output zodiacal minimum coordinates
+    let min_coords = SolarAngularCoordinates::zodiacal_minimum();
+    println!("Zodiacal Light Minimum Coordinates:");
+    println!("  Elongation: {:.1}°", min_coords.elongation());
+    println!("  Latitude: {:.1}°", min_coords.latitude());
+    println!();
+
     let z_light = ZodicalLight::new();
 
     // Create plots directory if it doesn't exist
@@ -341,6 +348,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             550.0, // Default wavelength for example
         );
 
+        // Calculate zodical minimum e-/s for this sensor
+        let min_zodical_e = z_light.generate_zodical_background(&satellite, &exposure, &min_coords);
+        let min_electrons_total = min_zodical_e.mean().unwrap();
+        let min_electrons_per_s = min_electrons_total / exposure.as_secs_f64();
+        println!("  Zodical minimum: {:.2e} e-/s", min_electrons_per_s);
+
         // Compute DN/s and electrons/s for each coordinate combination
         for (elong_idx, &elongation) in elongations.iter().enumerate() {
             for (lat_idx, &latitude) in latitudes.iter().enumerate() {
@@ -348,21 +361,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let coords = SolarAngularCoordinates::new(elongation, latitude)
                     .expect("Invalid solar angular coordinates from parsed ranges");
 
-                // Generate zodiacal background in electrons
-                let zodical_e = z_light.generate_zodical_background(&satellite, &exposure, &coords);
+                // Try to generate zodiacal background, handle interpolation errors
+                match z_light.get_zodical_spectrum(&coords) {
+                    Ok(_) => {
+                        // Generate zodiacal background in electrons
+                        let zodical_e =
+                            z_light.generate_zodical_background(&satellite, &exposure, &coords);
 
-                // Calculate mean electrons/s (divide by exposure time to get per second)
-                let mean_electrons_total = zodical_e.mean().unwrap();
-                let mean_electrons_per_s = mean_electrons_total / exposure.as_secs_f64();
-                electron_matrix[[elong_idx, lat_idx]] = mean_electrons_per_s;
+                        // Calculate mean electrons/s (divide by exposure time to get per second)
+                        let mean_electrons_total = zodical_e.mean().unwrap();
+                        let mean_electrons_per_s = mean_electrons_total / exposure.as_secs_f64();
+                        electron_matrix[[elong_idx, lat_idx]] = mean_electrons_per_s;
 
-                // Convert to DN
-                let zodical_dn = quantize_image(&zodical_e, &satellite.sensor);
+                        // Convert to DN
+                        let zodical_dn = quantize_image(&zodical_e, &satellite.sensor);
 
-                // Calculate mean DN/s (divide by exposure time to get per second)
-                let mean_dn_total = zodical_dn.map(|&x| x as f64).mean().unwrap();
-                let mean_dn_per_s = mean_dn_total / exposure.as_secs_f64();
-                dn_matrix[[elong_idx, lat_idx]] = mean_dn_per_s;
+                        // Calculate mean DN/s (divide by exposure time to get per second)
+                        let mean_dn_total = zodical_dn.map(|&x| x as f64).mean().unwrap();
+                        let mean_dn_per_s = mean_dn_total / exposure.as_secs_f64();
+                        dn_matrix[[elong_idx, lat_idx]] = mean_dn_per_s;
+                    }
+                    Err(_) => {
+                        // Set NaN for invalid interpolation points
+                        electron_matrix[[elong_idx, lat_idx]] = f64::NAN;
+                        dn_matrix[[elong_idx, lat_idx]] = f64::NAN;
+                    }
+                }
             }
         }
 
@@ -385,7 +409,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for lat_idx in 0..latitudes.len() {
                 let dn_per_s = dn_matrix[[elong_idx, lat_idx]];
                 if dn_per_s.is_nan() {
-                    print!("   ---    |");
+                    print!("     -    |");
                 } else {
                     print!(" {dn_per_s:8.7} |");
                 }
@@ -413,7 +437,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for lat_idx in 0..latitudes.len() {
                 let electrons_per_s = electron_matrix[[elong_idx, lat_idx]];
                 if electrons_per_s.is_nan() {
-                    print!("   ---    |");
+                    print!("     -    |");
                 } else {
                     print!(" {electrons_per_s:8.2e} |");
                 }

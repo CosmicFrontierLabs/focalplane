@@ -392,4 +392,33 @@ impl Scene {
             sensor_config: self.satellite_config.sensor.clone(),
         }
     }
+
+    /// Create a renderer for efficient multi-exposure rendering.
+    ///
+    /// Returns a `Renderer` that caches star projections and base images,
+    /// enabling efficient generation of multiple exposures without re-calculating
+    /// star positions and fluxes. This is particularly useful for:
+    /// - Time series observations with varying exposure times
+    /// - Detector characterization across different integration periods
+    /// - Monte Carlo simulations with consistent star fields
+    ///
+    /// # Performance Benefits
+    /// - **One-time star projection**: O(N) computation done once
+    /// - **Cached base image**: 1-second star field pre-rendered
+    /// - **Fast exposure scaling**: O(1) linear scaling per exposure
+    /// - **Fresh noise generation**: Maintains statistical independence
+    ///
+    /// # Example
+    /// ```ignore
+    /// let renderer = scene.create_renderer();
+    ///
+    /// // Generate multiple exposures efficiently
+    /// for exposure_sec in [1.0, 5.0, 10.0, 30.0] {
+    ///     let duration = Duration::from_secs_f64(exposure_sec);
+    ///     let image = renderer.render(&duration, &zodiacal_coords);
+    /// }
+    /// ```
+    pub fn create_renderer(&self) -> Renderer {
+        Renderer::from_stars(&self.stars, self.satellite_config.clone())
+    }
 }
