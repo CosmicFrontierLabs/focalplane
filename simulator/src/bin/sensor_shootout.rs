@@ -32,7 +32,6 @@ use simulator::algo::{
     MinMaxScan,
 };
 use simulator::hardware::sensor::models as sensor_models;
-use simulator::hardware::telescope::models::IDEAL_50CM;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::airy::PixelScaledAiryDisk;
 use simulator::image_proc::detection::{detect_stars_unified, StarFinder};
@@ -45,7 +44,7 @@ use simulator::image_proc::{
 };
 use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::scene::Scene;
-use simulator::shared_args::{RangeArg, SharedSimulationArgs};
+use simulator::shared_args::{parse_f_number, RangeArg, SharedSimulationArgs};
 use simulator::star_math::EquatorialRandomizer;
 use simulator::{star_math::field_diameter, SensorConfig};
 use starfield::catalogs::{StarCatalog, StarData};
@@ -160,13 +159,13 @@ struct Args {
     #[arg(long, default_value_t = false)]
     serial: bool,
 
-    /// Match FWHM sampling across all sensors using this value (pixels per FWHM). If not specified, uses base IDEAL_50CM telescope with each sensor
+    /// Match FWHM sampling across all sensors using this value (pixels per FWHM).
+    /// If not specified, uses the selected telescope (from --telescope) with each sensor
     #[arg(long)]
     match_pixel_sampling: Option<f64>,
 
     /// Exposure duration range in milliseconds (start:stop:step format)
     /// Example: --exposure_range_ms 10000:120000:10000 for 10s to 120s in 10s steps
-    /// Default: 100:500:100 (100ms to 500ms in 100ms steps)
     #[arg(long, default_value = "50:1000:50")]
     exposure_range_ms: RangeArg,
 
@@ -181,6 +180,11 @@ struct Args {
     /// Star detection algorithm to use (dao, iraf, naive)
     #[arg(long, default_value = "naive")]
     star_finder: StarFinder,
+
+    /// Telescope f-number override (format: "f/14.2" or "f/12")
+    /// When specified, adjusts the telescope focal length to achieve this f-number
+    #[arg(long, value_parser = parse_f_number)]
+    f_number: Option<f64>,
 }
 
 /// Prints histogram of star magnitudes
@@ -263,6 +267,14 @@ fn run_experiment<T: StarCatalog>(
 
         let mut exposure_results = HashMap::new();
 
+        // Create scene with star projection for this satellite
+        let scene = Scene::from_catalog(
+            satellite.clone(),
+            stars.clone(),
+            params.ra_dec,
+            params.common_args.coordinates,
+        );
+
         // Loop through each exposure duration
         for exposure_duration in params.common_args.exposures.iter() {
             debug!(
@@ -270,17 +282,9 @@ fn run_experiment<T: StarCatalog>(
                 exposure_duration.as_secs_f64()
             );
 
-            // Create scene with star projection for this satellite and exposure
-            let scene = Scene::from_catalog(
-                satellite.clone(),
-                stars.clone(),
-                params.ra_dec,
-                params.common_args.coordinates,
-            );
-
             // Log rendering start
             info!(
-                "Rendering: Exp {} | Sensor {} | RA {:.2}° Dec {:.2}° | Exposure {:.1}s",
+                "Rendering: Exp {} | Sensor {} | RA {:.2}° Dec {:.2}° | Exposure {:.3}s",
                 params.experiment_num,
                 satellite.sensor.name,
                 params.ra_dec.ra_degrees(),
@@ -313,6 +317,8 @@ fn run_experiment<T: StarCatalog>(
                 background_rms,
                 detection_sigma,
             ) {
+                // TODO: Is there a way to make StellarSource impl Locatable2d?
+                // This transform seems needless
                 Ok(stars) => stars
                     .into_iter()
                     .map(|star| {
@@ -456,6 +462,16 @@ fn write_results_to_csv(
     writeln!(csv_file, "Configuration Parameters:")?;
     writeln!(
         csv_file,
+        "Base Telescope: {} (aperture: {:.2}m, f/{:.1})",
+        args.shared.telescope.to_config().name,
+        args.shared.telescope.to_config().aperture_m,
+        args.shared.telescope.to_config().f_number()
+    )?;
+    if let Some(f_num) = args.f_number {
+        writeln!(csv_file, "Custom F-number Override: f/{f_num:.1}")?;
+    }
+    writeln!(
+        csv_file,
         "Exposures: [{}] seconds",
         exposure_durations
             .iter()
@@ -493,6 +509,7 @@ fn write_results_to_csv(
     )?;
     writeln!(csv_file, "Save Images: {}", args.no_save_images)?;
 
+    let telescope_name = args.shared.telescope.to_config().name.clone();
     if let Some(pixel_sampling) = args.match_pixel_sampling {
         writeln!(
             csv_file,
@@ -501,7 +518,7 @@ fn write_results_to_csv(
     } else {
         writeln!(
             csv_file,
-            "FWHM Sampling Mode: Individual telescopes (IDEAL_50CM base with each sensor)"
+            "FWHM Sampling Mode: Individual telescopes ({telescope_name} base with each sensor)"
         )?;
     }
 
@@ -769,18 +786,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         exposure_durations
     );
 
-    let all_sensors = &*sensor_models::ALL_SENSORS;
+    // Use only IMX455 and HWK4123 sensors
+    let selected_sensors = [&*sensor_models::IMX455, &*sensor_models::HWK4123];
+
+    // Get telescope from shared args
+    let selected_telescope = args.shared.telescope.to_config();
+    info!(
+        "Using telescope: {} (aperture: {:.2}m, f/{:.1})",
+        selected_telescope.name,
+        selected_telescope.aperture_m,
+        selected_telescope.f_number()
+    );
+
+    // Apply f-number override if specified
+    let base_telescope = if let Some(f_number) = args.f_number {
+        // Calculate new focal length based on specified f-number
+        let new_focal_length = selected_telescope.aperture_m * f_number;
+        info!(
+            "Applying custom f-number: f/{:.1} (focal length: {:.2}m)",
+            f_number, new_focal_length
+        );
+        selected_telescope.with_focal_length(new_focal_length)
+    } else {
+        selected_telescope.clone()
+    };
 
     // Create satellite configurations directly from sensors and base telescope
     let satellites: Vec<SatelliteConfig> = if let Some(pixel_sampling) = args.match_pixel_sampling {
         // Use with_fwhm_sampling() to match pixel sampling across all sensors
-        all_sensors
+        selected_sensors
             .iter()
             .map(|sensor| {
-                // Create base satellite with IDEAL_50CM telescope
+                // Create base satellite with (potentially modified) telescope
                 let base_satellite = SatelliteConfig::new(
-                    IDEAL_50CM.clone(),
-                    sensor.clone(),
+                    base_telescope.clone(),
+                    (*sensor).clone(),
                     args.shared.temperature,
                     args.shared.wavelength,
                 );
@@ -790,13 +830,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect()
     } else {
-        // Use base IDEAL_50CM telescope with each sensor (no resampling)
-        all_sensors
+        // Use base telescope with each sensor (no resampling)
+        selected_sensors
             .iter()
             .map(|sensor| {
                 SatelliteConfig::new(
-                    IDEAL_50CM.clone(),
-                    sensor.clone(),
+                    base_telescope.clone(),
+                    (*sensor).clone(),
                     args.shared.temperature,
                     args.shared.wavelength,
                 )

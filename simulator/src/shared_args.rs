@@ -155,9 +155,10 @@ use crate::hardware::sensor::SensorConfig;
 use crate::hardware::telescope::TelescopeConfig;
 use crate::photometry::zodical::SolarAngularCoordinates;
 use clap::{Parser, ValueEnum};
+use log::info;
 use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Parse solar angular coordinates from command-line string format.
 ///
@@ -205,6 +206,49 @@ pub fn parse_coordinates(s: &str) -> Result<SolarAngularCoordinates, String> {
 
     SolarAngularCoordinates::new(elongation, latitude)
         .map_err(|e| format!("Invalid coordinates: {e}"))
+}
+
+/// Parse f-number string in format "f/X" or "f/X.Y"
+///
+/// Accepts f-number notation commonly used in photography and optics.
+/// The numeric value after "f/" represents the focal ratio.
+///
+/// # Examples
+/// Valid formats:
+/// - "f/2.8" - f-number 2.8
+/// - "f/14" - f-number 14.0
+/// - "f/1.4" - f-number 1.4
+/// - "f/22.5" - f-number 22.5
+///
+/// Invalid formats that return errors:
+/// - "2.8" - Missing "f/" prefix
+/// - "f2.8" - Missing "/" separator
+/// - "f/-2.8" - Negative f-numbers not allowed
+/// - "f/0" - Zero f-number not allowed
+pub fn parse_f_number(s: &str) -> Result<f64, String> {
+    // Check for "f/" prefix
+    if !s.starts_with("f/") {
+        return Err("F-number must start with 'f/' (e.g., 'f/2.8')".to_string());
+    }
+
+    // Extract numeric part after "f/"
+    let num_str = &s[2..];
+
+    // Parse the number
+    let f_number = num_str
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid f-number value: '{num_str}'"))?;
+
+    // Validate the f-number
+    if f_number <= 0.0 {
+        return Err("F-number must be positive".to_string());
+    }
+
+    if f_number > 100.0 {
+        return Err("F-number seems unreasonably large (>100)".to_string());
+    }
+
+    Ok(f_number)
 }
 
 /// Default solar angular coordinates for minimum zodiacal light brightness.
@@ -605,12 +649,24 @@ pub enum SensorModel {
 pub enum TelescopeModel {
     /// Small 50mm telescope (0.05m aperture, f/10)
     Small50mm,
-    /// 50cm Demo telescope (0.5m aperture, f/20) - Default
+    /// 50cm Demo telescope (0.5m aperture, f/20)
     Demo50cm,
     /// 1m Final telescope (1.0m aperture, f/10) - Production system
     Final1m,
     /// Weasel telescope (0.47m aperture, f/7.3) - Multi-spectral
     Weasel,
+    /// Officina Stellare Weasel (0.5m aperture, f/6.9) - Catadioptric
+    OfficinaStelareWeasel,
+    /// Optech/Lina LS50 (0.5m aperture, f/10) - Catadioptric
+    OptechLinaLs50,
+    /// Optech/Lina LS35 (0.35m aperture, f/10) - Catadioptric
+    OptechLinaLs35,
+    /// Cosmic Frontier JBT .5m (0.485m aperture, f/12.3) - Reflective - Default
+    CosmicFrontierJbt50cm,
+    /// Cosmic Frontier JBT MAX (0.65m aperture, f/12.3) - Reflective
+    CosmicFrontierJbtMax,
+    /// Cosmic Frontier JBT 1.0m (1.0m aperture, f/12.3) - Reflective
+    CosmicFrontierJbt1m,
 }
 
 impl std::fmt::Display for SensorModel {
@@ -630,6 +686,12 @@ impl std::fmt::Display for TelescopeModel {
             TelescopeModel::Demo50cm => write!(f, "demo50cm"),
             TelescopeModel::Final1m => write!(f, "final1m"),
             TelescopeModel::Weasel => write!(f, "weasel"),
+            TelescopeModel::OfficinaStelareWeasel => write!(f, "officina-stellare-weasel"),
+            TelescopeModel::OptechLinaLs50 => write!(f, "optech-lina-ls50"),
+            TelescopeModel::OptechLinaLs35 => write!(f, "optech-lina-ls35"),
+            TelescopeModel::CosmicFrontierJbt50cm => write!(f, "cosmic-frontier-jbt50cm"),
+            TelescopeModel::CosmicFrontierJbtMax => write!(f, "cosmic-frontier-jbt-max"),
+            TelescopeModel::CosmicFrontierJbt1m => write!(f, "cosmic-frontier-jbt-1m"),
         }
     }
 }
@@ -656,6 +718,12 @@ impl TelescopeModel {
             TelescopeModel::Demo50cm => &IDEAL_50CM,
             TelescopeModel::Final1m => &IDEAL_100CM,
             TelescopeModel::Weasel => &WEASEL,
+            TelescopeModel::OfficinaStelareWeasel => &OFFICINA_STELLARE_WEASEL,
+            TelescopeModel::OptechLinaLs50 => &OPTECH_LINA_LS50,
+            TelescopeModel::OptechLinaLs35 => &OPTECH_LINA_LS35,
+            TelescopeModel::CosmicFrontierJbt50cm => &COSMIC_FRONTIER_JBT_50CM,
+            TelescopeModel::CosmicFrontierJbtMax => &COSMIC_FRONTIER_JBT_MAX,
+            TelescopeModel::CosmicFrontierJbt1m => &COSMIC_FRONTIER_JBT_1M,
         }
     }
 }
@@ -676,7 +744,7 @@ pub struct SharedSimulationArgs {
     pub temperature: f64,
 
     /// Telescope model to use for simulations
-    #[arg(long, default_value_t = TelescopeModel::Demo50cm)]
+    #[arg(long, default_value_t = TelescopeModel::CosmicFrontierJbt50cm)]
     pub telescope: TelescopeModel,
 
     /// Solar elongation and coordinates for zodiacal background (format: "elongation,latitude")
@@ -708,6 +776,12 @@ impl SharedSimulationArgs {
     /// - Returns a combined catalog with collision-free star IDs
     /// - Reports clear error messages if catalog loading fails
     pub fn load_catalog(&self) -> Result<BinaryCatalog, Box<dyn std::error::Error>> {
+        info!(
+            "Loading binary star catalog from: {}",
+            self.catalog.display()
+        );
+        let start_time = Instant::now();
+
         let mut catalog = BinaryCatalog::load(&self.catalog).map_err(|e| {
             format!(
                 "Failed to load catalog from '{}': {}",
@@ -716,9 +790,23 @@ impl SharedSimulationArgs {
             )
         })?;
 
+        let load_duration = start_time.elapsed();
+        let stars_per_second = catalog.len() as f64 / load_duration.as_secs_f64();
+
+        info!(
+            "Loaded catalog with {} stars in {:.2}s ({:.0} stars/second)",
+            catalog.len(),
+            load_duration.as_secs_f64(),
+            stars_per_second
+        );
+
         // Parse and add additional bright stars
         let additional_stars =
             parse_additional_stars().expect("Failed to parse embedded additional bright stars CSV");
+        info!(
+            "Parsed {} additional bright stars from embedded CSV",
+            additional_stars.len()
+        );
 
         // Get existing stars and combine with additional ones
         let mut all_stars = catalog.stars().to_vec();
@@ -762,6 +850,32 @@ mod tests {
 
         // Also verify the string format is what we expect
         assert_eq!(DEFAULT_ZODIACAL_COORDINATES, "165.0,75.0");
+    }
+
+    #[test]
+    fn test_f_number_parsing() {
+        // Test valid f-number formats
+        assert_eq!(parse_f_number("f/2.8").unwrap(), 2.8);
+        assert_eq!(parse_f_number("f/14").unwrap(), 14.0);
+        assert_eq!(parse_f_number("f/1.4").unwrap(), 1.4);
+        assert_eq!(parse_f_number("f/22.5").unwrap(), 22.5);
+        assert_eq!(parse_f_number("f/8").unwrap(), 8.0);
+
+        // Test edge cases
+        assert_eq!(parse_f_number("f/0.95").unwrap(), 0.95);
+        assert_eq!(parse_f_number("f/100").unwrap(), 100.0);
+
+        // Test error cases
+        assert!(parse_f_number("2.8").is_err()); // Missing f/ prefix
+        assert!(parse_f_number("f2.8").is_err()); // Missing slash
+        assert!(parse_f_number("f/-2.8").is_err()); // Negative f-number
+        assert!(parse_f_number("f/0").is_err()); // Zero f-number
+        assert!(parse_f_number("f/0.0").is_err()); // Zero f-number (float)
+        assert!(parse_f_number("f/101").is_err()); // Too large
+        assert!(parse_f_number("f/abc").is_err()); // Non-numeric
+        assert!(parse_f_number("F/2.8").is_err()); // Capital F
+        assert!(parse_f_number("").is_err()); // Empty string
+        assert!(parse_f_number("f/").is_err()); // Missing value
     }
 
     #[test]
