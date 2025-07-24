@@ -43,6 +43,7 @@ plotters = "0.3"                                             # Plotting library
 rustfft = "6.3.0"
 num-complex = "0.4.6"
 scilib = "1.0"                                                    # Scientific computing library for Bessel functions
+chrono = "0.4.41"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] } # Benchmarking

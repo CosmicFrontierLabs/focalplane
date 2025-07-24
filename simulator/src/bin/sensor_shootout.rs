@@ -20,6 +20,7 @@
 //!
 //! See --help for detailed options.
 
+use chrono::Local;
 use clap::Parser;
 use core::f64;
 use image::DynamicImage;
@@ -639,21 +640,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let catalog = args.shared.load_catalog().expect("Could not load catalog?");
     info!("Loaded catalog with {} stars", catalog.len());
 
+    // Generate timestamp for file/directory naming
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+    // Add timestamp to output directory
+    let output_dir_with_timestamp = format!("{}_{}", args.output_dir, timestamp);
+
+    // Add timestamp to CSV filename only if default is being used (no override specified)
+    let output_csv_path = if args.output_csv == "experiment_log.csv" {
+        format!("experiment_log_{}.csv", timestamp)
+    } else {
+        args.output_csv.clone()
+    };
+
     // Ensure the output directory exists
-    let output_path = Path::new(&args.output_dir);
+    let output_path = Path::new(&output_dir_with_timestamp);
     if !output_path.exists() {
         std::fs::create_dir_all(output_path).expect("Failed to create output directory");
     }
 
     // Create CSV writer
-    let csv_writer = Arc::new(CsvWriter::new(&args.output_csv)?);
+    let csv_writer = Arc::new(CsvWriter::new(&output_csv_path)?);
 
     // Create common experiment arguments
     let common_args = ExperimentCommonArgs {
         exposures: exposure_durations_vec.clone(),
         coordinates: args.shared.coordinates,
         noise_multiple: args.shared.noise_multiple,
-        output_dir: args.output_dir.clone(),
+        output_dir: output_dir_with_timestamp.clone(),
         save_images: !args.no_save_images,
         icp_max_iterations: args.icp_max_iterations,
         icp_convergence_threshold: args.icp_convergence_threshold,
@@ -746,7 +760,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing results...");
 
     // Results are written on-the-fly during experiments
-    info!("Results written to CSV file: {}", args.output_csv);
+    info!("Results written to CSV file: {}", output_csv_path);
 
     // Calculate and report timing statistics
     let wallclock_duration = wallclock_start.elapsed();
