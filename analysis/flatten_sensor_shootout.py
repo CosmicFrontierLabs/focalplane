@@ -104,7 +104,7 @@ def process_single_file(input_file, aperture_cm, rows_data):
                         continue
                         
                     rows_data.append([
-                        exp_num, ra, dec, focal_length_m, sensor_name,
+                        exp_num, ra, dec, f"{focal_length_m:.6f}", sensor_name,
                         exposure, star_count, bright_mag, faint_mag, error_px
                     ])
                 except IndexError:
