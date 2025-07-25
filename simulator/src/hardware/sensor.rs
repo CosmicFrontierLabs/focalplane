@@ -40,6 +40,7 @@
 #![allow(clippy::approx_constant)]
 
 use once_cell::sync::Lazy;
+use std::time::Duration;
 
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
@@ -266,11 +267,11 @@ mod tests {
         assert_eq!(
             resized
                 .read_noise_estimator
-                .estimate(20.0, std::time::Duration::from_secs_f64(0.2))
+                .estimate(20.0, Duration::from_secs_f64(0.2))
                 .unwrap(),
             original
                 .read_noise_estimator
-                .estimate(20.0, std::time::Duration::from_secs_f64(0.2))
+                .estimate(20.0, Duration::from_secs_f64(0.2))
                 .unwrap()
         );
         assert_eq!(
@@ -531,7 +532,7 @@ mod model_tests {
         assert_eq!(
             models::GSENSE4040BSI
                 .read_noise_estimator
-                .estimate(20.0, std::time::Duration::from_secs_f64(0.2))
+                .estimate(20.0, Duration::from_secs_f64(0.2))
                 .unwrap(),
             2.3
         );
@@ -553,7 +554,7 @@ mod model_tests {
         assert_eq!(
             models::GSENSE6510BSI
                 .read_noise_estimator
-                .estimate(20.0, std::time::Duration::from_secs_f64(0.2))
+                .estimate(20.0, Duration::from_secs_f64(0.2))
                 .unwrap(),
             0.7
         );
@@ -575,7 +576,7 @@ mod model_tests {
         // For HWK4123, this should be ~0.301 based on the calibration data at 20°C, 5Hz
         let hwk_read_noise = models::HWK4123
             .read_noise_estimator
-            .estimate(20.0, std::time::Duration::from_secs_f64(1.0 / 5.0))
+            .estimate(20.0, Duration::from_secs_f64(1.0 / 5.0))
             .unwrap();
         assert!((hwk_read_noise - 0.301).abs() < 0.01);
         assert_relative_eq!(
@@ -603,7 +604,7 @@ mod model_tests {
         assert_eq!(
             models::IMX455
                 .read_noise_estimator
-                .estimate(20.0, std::time::Duration::from_secs_f64(0.2))
+                .estimate(20.0, Duration::from_secs_f64(0.2))
                 .unwrap(),
             1.58
         );

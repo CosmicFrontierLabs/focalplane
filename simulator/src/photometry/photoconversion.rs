@@ -1,6 +1,8 @@
 //! Photon to electron conversion utilities for detector modeling.
 
 use crate::image_proc::airy::PixelScaledAiryDisk;
+#[cfg(test)]
+use crate::photometry::spectrum::FlatSpectrum;
 use crate::photometry::{
     spectrum::{wavelength_to_ergs, Band},
     QuantumEfficiency, Spectrum,
@@ -268,7 +270,7 @@ mod tests {
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
         // Create flat spectrum
-        let spectrum = crate::photometry::spectrum::FlatSpectrum::unit();
+        let spectrum = FlatSpectrum::unit();
 
         // Get effective PSF for narrow band - should be close to monochromatic
         let fluxes = photon_electron_fluxes(&achromatic_disk, &spectrum, &qe);
@@ -296,7 +298,7 @@ mod tests {
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
         // Create flat spectrum
-        let spectrum = crate::photometry::spectrum::FlatSpectrum::unit();
+        let spectrum = FlatSpectrum::unit();
 
         // Get effective PSF
         let fluxes = photon_electron_fluxes(&airy, &spectrum, &qe);
@@ -325,7 +327,7 @@ mod tests {
         let airy = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
 
         // Create a sun-like blackbody spectrum
-        let spectrum = crate::photometry::stellar::BlackbodyStellarSpectrum::new(5780.0, 1e-10);
+        let spectrum = BlackbodyStellarSpectrum::new(5780.0, 1e-10);
 
         // Create visible-only QE (400-700nm)
         let visible_wavelengths = vec![350.0, 400.0, 500.0, 600.0, 700.0, 750.0];

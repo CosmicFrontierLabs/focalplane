@@ -26,6 +26,8 @@
 //! for the full pipeline with optional smoothing and automatic thresholding.
 
 use ndarray::{Array2, ArrayView2};
+#[cfg(test)]
+use std::collections::HashSet;
 
 use crate::algo::icp::Locatable2d;
 use starfield::image::starfinders::StellarSource;
@@ -1025,8 +1027,8 @@ mod tests {
 
         // Add three separate star patterns with Gaussian-like profiles
         // Star 1: centered at (3, 3)
-        for dy in -1..=1 {
-            for dx in -1..=1 {
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
                 let x = 3 + dx;
                 let y = 3 + dy;
                 if x >= 0 && y >= 0 && x < 15 && y < 15 {
@@ -1037,8 +1039,8 @@ mod tests {
         }
 
         // Star 2: centered at (3, 11)
-        for dy in -1..=1 {
-            for dx in -1..=1 {
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
                 let x = 11 + dx;
                 let y = 3 + dy;
                 if x >= 0 && y >= 0 && x < 15 && y < 15 {
@@ -1049,8 +1051,8 @@ mod tests {
         }
 
         // Star 3: centered at (11, 3)
-        for dy in -1..=1 {
-            for dx in -1..=1 {
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
                 let x = 3 + dx;
                 let y = 11 + dy;
                 if x >= 0 && y >= 0 && x < 15 && y < 15 {
@@ -1064,7 +1066,7 @@ mod tests {
         let stars = detect_stars(&image.view(), Some(1.0));
 
         // Verify that all IDs are unique
-        let mut ids = std::collections::HashSet::new();
+        let mut ids = HashSet::new();
         for star in &stars {
             assert!(ids.insert(star.id), "Duplicate ID found: {}", star.id);
         }

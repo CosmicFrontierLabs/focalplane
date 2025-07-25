@@ -32,6 +32,7 @@
 
 use ndarray::ArrayView2;
 use starfield::image::starfinders::{DAOStarFinder, IRAFStarFinder, StellarSource};
+use std::time::Instant;
 
 use super::config::{dao_autoconfig, iraf_autoconfig};
 use crate::image_proc::airy::PixelScaledAiryDisk;
@@ -113,7 +114,7 @@ pub fn detect_stars(
     background_rms: f64,
     detection_sigma: f64,
 ) -> Result<Vec<Box<dyn StellarSource>>, String> {
-    let start_time = std::time::Instant::now();
+    let start_time = Instant::now();
     let (height, width) = image.dim();
     let total_pixels = height * width;
 

@@ -426,7 +426,7 @@ mod tests {
 
             // Assume 1 cm² aperture and 1 second duration
             let aperture_cm2 = 1.0;
-            let duration = std::time::Duration::from_secs_f64(1.0);
+            let duration = Duration::from_secs_f64(1.0);
             let electrons = spectrum.photo_electrons(&qe, aperture_cm2, &duration);
 
             let error = f64::abs(electrons - *expected_electrons) / *expected_electrons;
@@ -454,7 +454,7 @@ mod tests {
 
             // Assume 1 cm² aperture and 1 second duration
             let aperture_cm2 = 1.0;
-            let duration = std::time::Duration::from_secs(1);
+            let duration = Duration::from_secs(1);
             let photons = spectrum.photons(&band, aperture_cm2, duration);
 
             let error = f64::abs(photons - *expected_photons) / *expected_photons;
@@ -496,7 +496,7 @@ mod tests {
         let wavelengths = vec![400.0, 500.0, 600.0, 700.0];
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
         let aperture_cm2 = 1.0; // 1 cm² aperture
-        let duration = std::time::Duration::from_secs(1); // 1 second observation
+        let duration = Duration::from_secs(1); // 1 second observation
 
         for wavelength in wavelengths {
             // Make a band that is at the wavelength +- 1THz
@@ -515,8 +515,8 @@ mod tests {
         let band2 = Band::centered_on(800.0, 1e12);
 
         // Calculate photons in each band
-        let photons1 = spectrum.photons(&band1, 1.0, std::time::Duration::from_secs(1));
-        let photons2 = spectrum.photons(&band2, 1.0, std::time::Duration::from_secs(1));
+        let photons1 = spectrum.photons(&band1, 1.0, Duration::from_secs(1));
+        let photons2 = spectrum.photons(&band2, 1.0, Duration::from_secs(1));
 
         // Should be the same number 2x frequency == 1/2 wavelength == 2x photons
         println!(
@@ -659,7 +659,7 @@ mod tests {
 
         let band = Band::from_nm_bounds(400.0, 700.0);
         let aperture_cm2 = 1.0;
-        let duration = std::time::Duration::from_secs(1);
+        let duration = Duration::from_secs(1);
 
         let flat_photons = flat.photons(&band, aperture_cm2, duration);
         let blackbody_photons = blackbody.photons(&band, aperture_cm2, duration);

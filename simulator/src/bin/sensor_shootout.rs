@@ -648,7 +648,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add timestamp to CSV filename only if default is being used (no override specified)
     let output_csv_path = if args.output_csv == "experiment_log.csv" {
-        format!("experiment_log_{}.csv", timestamp)
+        format!("experiment_log_{timestamp}.csv")
     } else {
         args.output_csv.clone()
     };

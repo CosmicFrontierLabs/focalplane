@@ -30,6 +30,7 @@
 
 use image::{DynamicImage, Rgb, RgbImage};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tiny_skia::{Pixmap, Transform};
 use usvg::{self, fontdb, Options, Tree};
 
@@ -298,7 +299,7 @@ pub fn overlay_to_image(image: &DynamicImage, svg_data: &str) -> DynamicImage {
 
     // Create options with the font database and high quality rendering settings
     let options = Options {
-        fontdb: std::sync::Arc::new(fontdb),
+        fontdb: Arc::new(fontdb),
         font_family: "DejaVu Sans".to_string(), // Widely available on Linux
         text_rendering: usvg::TextRendering::GeometricPrecision,
         shape_rendering: usvg::ShapeRendering::GeometricPrecision,

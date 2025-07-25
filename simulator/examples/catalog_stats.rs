@@ -263,7 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load Hipparcos catalog from cache
     println!("Loading Hipparcos catalog...");
-    let hipparcos_path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+    let hipparcos_path = PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".cache/starfield/hip_main.dat");
     let hipparcos = HipparcosCatalog::from_dat_file(&hipparcos_path, args.threshold)?;
     println!("Loaded {} stars from Hipparcos", hipparcos.len());
