@@ -67,7 +67,7 @@ impl CsvWriter {
     fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut file = File::create(path)?;
         // Write header
-        writeln!(file, "experiment_num,ra,dec,focal_length_m,sensor,exposure_ms,star_count,brightest_mag,faintest_mag,pixel_error")?;
+        writeln!(file, "experiment_num,ra,dec,focal_length_m,sensor,exposure_ms,star_count,brightest_mag,faintest_mag,pixel_error,brightest_star_pixel_error")?;
         Ok(CsvWriter {
             file: Arc::new(Mutex::new(file)),
         })
@@ -86,7 +86,7 @@ impl CsvWriter {
             let exposure_ms = duration.as_millis();
             writeln!(
                 file,
-                "{},{:.6},{:.6},{:.2},{},{},{},{:.2},{:.2},{:.4}",
+                "{},{:.6},{:.6},{:.2},{},{},{},{:.2},{:.2},{:.4},{:.4}",
                 result.experiment_num,
                 result.coordinates.ra_degrees(),
                 result.coordinates.dec_degrees(),
@@ -96,7 +96,8 @@ impl CsvWriter {
                 exposure_result.detected_count,
                 exposure_result.brightest_magnitude,
                 exposure_result.faintest_magnitude,
-                exposure_result.alignment_error
+                exposure_result.alignment_error,
+                exposure_result.brightest_star_pixel_error
             )?;
         }
         Ok(())
@@ -152,6 +153,7 @@ struct ExposureResult {
     brightest_magnitude: f64,
     faintest_magnitude: f64,
     alignment_error: f64,
+    brightest_star_pixel_error: f64, // Distance from brightest star to its ICP-aligned position
 }
 
 /// Results from all exposures for one experiment/sensor combination
@@ -476,11 +478,29 @@ fn run_experiment<T: StarCatalog>(
                         let alignment_error =
                             icp_result.translation.map(|disp| disp * disp).sum().sqrt();
 
+                        // Find the brightest star (lowest magnitude) and calculate its pixel error
+                        let brightest_star_pixel_error = if !matches.is_empty() {
+                            matches
+                                .iter()
+                                .min_by(|(_, a), (_, b)| {
+                                    a.star.magnitude.partial_cmp(&b.star.magnitude).unwrap()
+                                })
+                                .map(|(detected, catalog)| {
+                                    let dx = detected.x() - catalog.x();
+                                    let dy = detected.y() - catalog.y();
+                                    (dx * dx + dy * dy).sqrt()
+                                })
+                                .unwrap_or(f64::NAN)
+                        } else {
+                            f64::NAN
+                        };
+
                         ExposureResult {
                             detected_count: magnitudes.len(),
                             brightest_magnitude: brightest_mag,
                             faintest_magnitude: faintest_mag,
                             alignment_error,
+                            brightest_star_pixel_error,
                         }
                     }
                     Err(e) => {
@@ -495,6 +515,7 @@ fn run_experiment<T: StarCatalog>(
                             brightest_magnitude: f64::NAN,
                             faintest_magnitude: f64::NAN,
                             alignment_error: f64::NAN,
+                            brightest_star_pixel_error: f64::NAN,
                         }
                     }
                 };
