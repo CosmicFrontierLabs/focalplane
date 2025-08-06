@@ -51,8 +51,10 @@ pub mod dark_current;
 pub mod read_noise;
 pub mod satellite;
 pub mod sensor;
+pub mod sensor_array;
 pub mod telescope;
 
 pub use satellite::SatelliteConfig;
 pub use sensor::SensorConfig;
+pub use sensor_array::SensorArray;
 pub use telescope::TelescopeConfig;

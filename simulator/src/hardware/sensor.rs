@@ -40,7 +40,6 @@
 #![allow(clippy::approx_constant)]
 
 use once_cell::sync::Lazy;
-use std::time::Duration;
 
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
@@ -233,6 +232,7 @@ mod tests {
 
     #[test]
     fn test_with_dimensions() {
+        use std::time::Duration;
         let qe = create_flat_qe(0.5);
         let original = SensorConfig::new(
             "Test",
@@ -518,6 +518,7 @@ pub mod models {
 #[cfg(test)]
 mod model_tests {
     use approx::assert_relative_eq;
+    use std::time::Duration;
 
     use super::*;
 
