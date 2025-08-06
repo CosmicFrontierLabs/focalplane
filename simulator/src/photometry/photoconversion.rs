@@ -9,6 +9,30 @@ use crate::photometry::{
 };
 use std::time::Duration;
 
+/// Calculate photon flux for each nm sub-band of a wavelength band.
+///
+/// For each nm sub-band, calculates the photon flux (photons/s/cm²)
+/// from the spectrum's irradiance.
+///
+/// # Arguments
+/// * `spectrum` - The spectrum to calculate photon flux from
+/// * `band` - The wavelength band to subdivide and calculate over
+///
+/// # Returns
+/// Iterator of (Band, photon_flux) pairs where photon_flux is in photons/s/cm²
+pub fn sub_band_photon_fluxes<'a, S: Spectrum + ?Sized>(
+    spectrum: &'a S,
+    band: &Band,
+) -> impl Iterator<Item = (Band, f64)> + 'a {
+    let sub_bands = band.sub_nm_bands();
+    sub_bands.into_iter().map(move |sub_band| {
+        let energy_per_photon = wavelength_to_ergs(sub_band.center());
+        let irradiance = spectrum.irradiance(&sub_band);
+        let photon_flux = irradiance / energy_per_photon;
+        (sub_band, photon_flux)
+    })
+}
+
 /// Represents a point source flux with associated PSF characteristics.
 ///
 /// Combines an effective PSF (point spread function) with a flux rate,
@@ -121,13 +145,8 @@ pub fn photon_electron_fluxes<S: Spectrum>(
     let mut p_weighted_fwhm_sum = 0.0;
     let mut p_weight_total = 0.0;
 
-    let sub_bands = band.sub_nm_bands();
-
-    for sub_band in sub_bands {
-        // Compute the photons and photo-electrons flux for this sub-band
-        let energy_per_photon = wavelength_to_ergs(sub_band.center());
-        let irradiance = spectrum.irradiance(&sub_band);
-        let p_flux = irradiance / energy_per_photon;
+    for (sub_band, p_flux) in sub_band_photon_fluxes(spectrum, &band) {
+        // Compute the photo-electrons flux for this sub-band
         let pe_flux = p_flux * qe.at(sub_band.center());
 
         total_p_flux += p_flux;
@@ -194,18 +213,9 @@ pub fn photons<S: Spectrum + ?Sized>(
     // Convert power to photons per second
     // E = h * c / λ, so N = P / (h * c / λ)
     // where P is power in erg/s, h is Planck's constant, c is speed of light, and λ is wavelength in cm
-    let mut total_photons = 0.0;
-
-    // Decompose the band into integer nanometer bands
-    // Special case the first and last bands
-    let bands = band.sub_nm_bands();
-
-    // Integrate over each wavelength in the band
-    for band in bands {
-        let energy_per_photon = wavelength_to_ergs(band.center());
-        let irradiance = spectrum.irradiance(&band);
-        total_photons += irradiance / energy_per_photon;
-    }
+    let total_photons: f64 = sub_band_photon_fluxes(spectrum, band)
+        .map(|(_, photon_flux)| photon_flux)
+        .sum();
 
     // Multiply by duration to get total photons detected
     total_photons * duration.as_secs_f64() * aperture_cm2
@@ -231,24 +241,10 @@ pub fn photo_electrons<S: Spectrum + ?Sized>(
     // Convert power to photons per second
     // E = h * c / λ, so N = P / (h * c / λ)
     // where P is power in erg/s, h is Planck's constant, c is speed of light, and λ is wavelength in cm
-    let mut total_electrons = 0.0;
-
-    // Decompose the band into integer nanometer bands
-    // Special case the first and last bands
-    let bands = {
-        let band: &Band = &qe.band();
-        // Calculate the number of 1nm sub-bands needed to cover the band
-        // Use the Band subdivision method to create equally-sized sub-bands
-        // This ensures consistent subdivision behavior and avoids code duplication
-        band.sub_nm_bands()
-    };
-
-    // Integrate over each wavelength in the band
-    for band in bands {
-        let energy_per_photon = wavelength_to_ergs(band.center());
-        let photons_in_band = spectrum.irradiance(&band) / energy_per_photon;
-        total_electrons += qe.at(band.center()) * photons_in_band;
-    }
+    let band = qe.band();
+    let total_electrons: f64 = sub_band_photon_fluxes(spectrum, &band)
+        .map(|(sub_band, photon_flux)| photon_flux * qe.at(sub_band.center()))
+        .sum();
 
     // Multiply by duration to get total photons detected
     total_electrons * duration.as_secs_f64() * aperture_cm2
