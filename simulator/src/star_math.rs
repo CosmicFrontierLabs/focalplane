@@ -138,9 +138,6 @@ use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::photon_electron_fluxes;
 use crate::photometry::BlackbodyStellarSpectrum;
 
-#[cfg(test)]
-use crate::algo::MinMaxScan;
-
 // A majority of stars have a B-V color index around 1.4
 // This is used when the catalog does not provide a B-V value
 // In practice this is mostly for faint stars, but this is a
@@ -237,7 +234,7 @@ pub fn star_data_to_fluxes(star_data: &StarData, satellite: &SatelliteConfig) ->
     photon_electron_fluxes(
         &satellite.airy_disk_pixel_space(),
         &spectrum,
-        &satellite.sensor.quantum_efficiency,
+        &satellite.combined_qe,
     )
 }
 
@@ -522,6 +519,9 @@ mod tests {
 
     use crate::hardware::sensor::models as sensor_models;
     use crate::hardware::telescope::models as telescope_models;
+    use crate::photometry::{
+        photon_electron_fluxes, Band, BlackbodyStellarSpectrum, QuantumEfficiency,
+    };
     use std::f64::consts::PI;
     use std::time::Duration;
 
@@ -872,5 +872,69 @@ mod tests {
             expected_ratio,
             epsilon = 0.01 // Allow 1% tolerance for QE differences
         ));
+    }
+
+    #[test]
+    fn test_star_data_to_fluxes_uses_combined_qe() {
+        // Test that star_data_to_fluxes correctly uses the combined QE
+        // from telescope and sensor, not just sensor QE alone
+
+        // Create telescope with 50% efficiency
+        let mut telescope = telescope_models::IDEAL_50CM.clone();
+        let band = Band::from_nm_bounds(400.0, 700.0);
+        telescope.quantum_efficiency = QuantumEfficiency::from_notch(&band, 0.5).unwrap();
+
+        // Create sensor with 80% QE
+        let mut sensor = sensor_models::GSENSE4040BSI.clone();
+        sensor.quantum_efficiency = QuantumEfficiency::from_notch(&band, 0.8).unwrap();
+
+        // Combined QE should be 0.5 * 0.8 = 0.4 (40%)
+        let satellite = SatelliteConfig::new(telescope.clone(), sensor.clone(), -10.0, 550.0);
+
+        // Verify combined QE is correct
+        let combined_qe_value = satellite.combined_qe.at(550.0);
+        assert_relative_eq!(combined_qe_value, 0.4, epsilon = 0.001);
+
+        // Create a bright star
+        let star_data = StarData::new(0, 0.0, 0.0, 5.0, Some(0.65)); // G-type star
+
+        // Get fluxes using the function (which should use combined QE)
+        let fluxes = star_data_to_fluxes(&star_data, &satellite);
+
+        // Create same spectrum manually to compare
+        let spectrum = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(
+            star_data.b_v.unwrap_or(DEFAULT_BV),
+            star_data.magnitude,
+        );
+
+        // Calculate expected fluxes with combined QE
+        let expected_fluxes = photon_electron_fluxes(
+            &satellite.airy_disk_pixel_space(),
+            &spectrum,
+            &satellite.combined_qe,
+        );
+
+        // Verify the fluxes match
+        let second = Duration::from_secs_f64(1.0);
+        let area = telescope.collecting_area_cm2();
+
+        let actual_electrons = fluxes.electrons.integrated_over(&second, area);
+        let expected_electrons = expected_fluxes.electrons.integrated_over(&second, area);
+
+        assert_relative_eq!(actual_electrons, expected_electrons, epsilon = 1e-10);
+
+        // Also verify it's different from using sensor QE alone
+        let wrong_fluxes = photon_electron_fluxes(
+            &satellite.airy_disk_pixel_space(),
+            &spectrum,
+            &sensor.quantum_efficiency,
+        );
+        let wrong_electrons = wrong_fluxes.electrons.integrated_over(&second, area);
+
+        // Should be different (sensor QE is 0.8, combined is 0.4)
+        assert!(
+            (actual_electrons - wrong_electrons).abs() > 0.1,
+            "Should use combined QE, not sensor QE alone"
+        );
     }
 }
