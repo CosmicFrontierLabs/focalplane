@@ -204,11 +204,11 @@ pub fn photon_electron_fluxes<S: Spectrum>(
 /// # Returns
 ///
 /// The number of photons detected in the specified band
-pub fn photons<S: Spectrum + ?Sized>(
+pub fn photons<S: Spectrum>(
     spectrum: &S,
     band: &Band,
     aperture_cm2: f64,
-    duration: Duration,
+    exposure: &Duration,
 ) -> f64 {
     // Convert power to photons per second
     // E = h * c / λ, so N = P / (h * c / λ)
@@ -218,7 +218,7 @@ pub fn photons<S: Spectrum + ?Sized>(
         .sum();
 
     // Multiply by duration to get total photons detected
-    total_photons * duration.as_secs_f64() * aperture_cm2
+    total_photons * exposure.as_secs_f64() * aperture_cm2
 }
 
 /// Calculate the photo-electrons obtained from this spectrum when using a sensor with a given quantum efficiency
@@ -232,7 +232,7 @@ pub fn photons<S: Spectrum + ?Sized>(
 /// # Returns
 ///
 /// The number of electrons detected in the specified band
-pub fn photo_electrons<S: Spectrum + ?Sized>(
+pub fn photo_electrons<S: Spectrum>(
     spectrum: &S,
     qe: &QuantumEfficiency,
     aperture_cm2: f64,
@@ -387,7 +387,7 @@ mod tests {
         // Create a flat spectrum with a known flux density
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
 
-        let photons_count = photons(&spectrum, &band, aperture_cm2, duration);
+        let photons_count = photons(&spectrum, &band, aperture_cm2, &duration);
         let electrons_count = photo_electrons(&spectrum, &qe, aperture_cm2, &duration);
 
         // For a perfect QE, the number of electrons should equal the number of photons
@@ -411,7 +411,7 @@ mod tests {
         // Create a flat spectrum with a known flux density
         let spectrum = FlatStellarSpectrum::from_ab_mag(0.0);
 
-        let photons_count = photons(&spectrum, &band, aperture_cm2, duration);
+        let photons_count = photons(&spectrum, &band, aperture_cm2, &duration);
         let electrons_count = photo_electrons(&spectrum, &qe, aperture_cm2, &duration);
 
         // For 50% QE, electrons should be ~50% of photons
@@ -447,6 +447,42 @@ mod tests {
         assert!(
             err < 0.05,
             "Expected {expected_photons} photons, got {photons_count}"
+        );
+    }
+
+    #[test]
+    fn test_chromatic_achromatic_flux_match() {
+        // Test that chromatic PSF effective scale reflects wavelength averaging
+        let airy = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+
+        // Create broad-band filter (400-700nm)
+        let band = Band::from_nm_bounds(400.0, 700.0);
+        let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
+
+        // Create flat spectrum
+        let spectrum = FlatSpectrum::unit();
+
+        // Get effective PSF
+        let fluxes = photon_electron_fluxes(&airy, &spectrum, &qe);
+
+        let e_spot = fluxes.electrons;
+        let pe_spot = fluxes.photons;
+
+        let aperture_cm2 = 100.0; // 1 cm² aperture
+        let exposure = Duration::from_secs(1); // 1 second observation
+
+        let photons_direct = photons(&spectrum, &band, aperture_cm2, &exposure);
+        let electrons_direct = photo_electrons(&spectrum, &qe, aperture_cm2, &exposure);
+
+        assert_relative_eq!(
+            e_spot.integrated_over(&exposure, aperture_cm2),
+            electrons_direct,
+            epsilon = 0.1
+        );
+        assert_relative_eq!(
+            pe_spot.integrated_over(&exposure, aperture_cm2),
+            photons_direct,
+            epsilon = 0.1
         );
     }
 }

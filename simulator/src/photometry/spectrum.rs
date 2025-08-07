@@ -357,8 +357,11 @@ pub trait Spectrum: Send + Sync {
     /// # Returns
     ///
     /// The number of photons detected in the specified band
-    fn photons(&self, band: &Band, aperture_cm2: f64, duration: Duration) -> f64 {
-        crate::photometry::photoconversion::photons(self, band, aperture_cm2, duration)
+    fn photons(&self, band: &Band, aperture_cm2: f64, duration: Duration) -> f64
+    where
+        Self: Sized,
+    {
+        crate::photometry::photoconversion::photons(self, band, aperture_cm2, &duration)
     }
 
     /// Calculate the photo-electrons obtained from this spectrum when using a sensor with a given quantum efficiency
@@ -371,12 +374,10 @@ pub trait Spectrum: Send + Sync {
     /// # Returns
     ///
     /// The number of electrons detected in the specified band
-    fn photo_electrons(
-        &self,
-        qe: &QuantumEfficiency,
-        aperture_cm2: f64,
-        duration: &Duration,
-    ) -> f64 {
+    fn photo_electrons(&self, qe: &QuantumEfficiency, aperture_cm2: f64, duration: &Duration) -> f64
+    where
+        Self: Sized,
+    {
         crate::photometry::photoconversion::photo_electrons(self, qe, aperture_cm2, duration)
     }
 }
