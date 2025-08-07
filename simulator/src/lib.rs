@@ -125,6 +125,7 @@ pub mod scene;
 pub mod shared_args;
 pub mod sims;
 pub mod star_math;
+pub mod units;
 
 // Re-exports for easier access
 pub use algo::icp::{iterative_closest_point, ICPResult};

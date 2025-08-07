@@ -79,7 +79,7 @@ fn find_zero_point(
 
     // Combine telescope and sensor quantum efficiencies
     let combined_qe = QuantumEfficiency::product(&telescope.quantum_efficiency, sensor_qe)
-        .map_err(|e| format!("Failed to combine QE curves: {}", e))?;
+        .map_err(|e| format!("Failed to combine QE curves: {e}"))?;
 
     // 1 second exposure
     let exposure = Duration::from_secs(1);

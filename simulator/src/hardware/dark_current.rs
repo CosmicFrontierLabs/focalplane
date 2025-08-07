@@ -4,6 +4,7 @@
 //! temperatures based on sensor specifications and thermal models.
 
 use crate::algo::misc::{interp, InterpError};
+use crate::units::{Temperature, TemperatureExt};
 
 /// Minimum temperature for dark current interpolation table (°C)
 pub const MIN_TEMP_C: f64 = -40.0;
@@ -166,7 +167,7 @@ impl DarkCurrentEstimator {
     /// to provide estimates at any temperature.
     ///
     /// # Arguments
-    /// * `target_temp_c` - Target temperature in degrees Celsius
+    /// * `temperature` - Target temperature as a Temperature type
     ///
     /// # Returns
     /// * `Ok(f64)` - Estimated dark current in electrons/pixel/second at target temperature
@@ -175,13 +176,15 @@ impl DarkCurrentEstimator {
     /// # Example
     /// ```
     /// use simulator::hardware::dark_current::DarkCurrentEstimator;
+    /// use simulator::units::{Temperature, TemperatureExt};
     ///
     /// let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
-    /// let dark_current_at_28c = estimator.estimate_at_temperature(28.0).expect("Temperature out of range");
-    /// // Should be ~0.2 e-/pixel/s (doubled for 8°C increase)
+    /// let temp = Temperature::from_celsius(28.0);
+    /// let dark_current = estimator.estimate_at_temperature(temp).expect("Temperature out of range");
     /// ```
-    pub fn estimate_at_temperature(&self, target_temp_c: f64) -> Result<f64, InterpError> {
+    pub fn estimate_at_temperature(&self, temperature: Temperature) -> Result<f64, InterpError> {
         // Interpolate in log space to preserve exponential nature
+        let target_temp_c = temperature.as_celsius();
         let log_result = interp(target_temp_c, &self.temperatures, &self.log_dark_currents)?;
         // Convert back from log space
         Ok(log_result.exp())
@@ -207,8 +210,12 @@ impl DarkCurrentEstimator {
         let temp2 = 10.0;
 
         // Get dark currents at these temperatures (should always succeed for these temps)
-        let dc1 = self.estimate_at_temperature(temp1).unwrap_or(1.0);
-        let dc2 = self.estimate_at_temperature(temp2).unwrap_or(2.0);
+        let dc1 = self
+            .estimate_at_temperature(Temperature::from_celsius(temp1))
+            .unwrap_or(1.0);
+        let dc2 = self
+            .estimate_at_temperature(Temperature::from_celsius(temp2))
+            .unwrap_or(2.0);
 
         // Calculate doubling temperature
         // dc2 = dc1 * 2^(delta_T / doubling_T)
@@ -248,7 +255,7 @@ mod tests {
     fn test_same_temperature() {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         let result = estimator
-            .estimate_at_temperature(20.0)
+            .estimate_at_temperature(Temperature::from_celsius(20.0))
             .expect("Temperature should be in range");
         // With interpolation, we might not get exact match
         assert_relative_eq!(result, 0.1, epsilon = 0.05); // 5% tolerance for interpolation
@@ -259,7 +266,7 @@ mod tests {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         // 28°C is within our table range (-40 to +40)
         let result = estimator
-            .estimate_at_temperature(28.0)
+            .estimate_at_temperature(Temperature::from_celsius(28.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.2, epsilon = 0.1); // 10% tolerance for interpolation
     }
@@ -268,7 +275,7 @@ mod tests {
     fn test_8_degree_decrease_halves() {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         let result = estimator
-            .estimate_at_temperature(12.0)
+            .estimate_at_temperature(Temperature::from_celsius(12.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.05, epsilon = 0.05); // 5% tolerance for interpolation
     }
@@ -278,7 +285,7 @@ mod tests {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         // 36°C is within our table range (-40 to +40)
         let result = estimator
-            .estimate_at_temperature(36.0)
+            .estimate_at_temperature(Temperature::from_celsius(36.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.4, epsilon = 0.1); // 10% tolerance for interpolation
     }
@@ -287,7 +294,7 @@ mod tests {
     fn test_16_degree_decrease_quarters() {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         let result = estimator
-            .estimate_at_temperature(4.0)
+            .estimate_at_temperature(Temperature::from_celsius(4.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.025, epsilon = 1e-3);
     }
@@ -297,7 +304,7 @@ mod tests {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
         // 24°C is within our table range (-40 to +40)
         let result = estimator
-            .estimate_at_temperature(24.0)
+            .estimate_at_temperature(Temperature::from_celsius(24.0))
             .expect("Temperature should be in range");
         let expected = 0.1 * 2.0_f64.powf(0.5); // sqrt(2) increase for 4°C
         assert_relative_eq!(result, expected, epsilon = 0.06); // 6% tolerance for interpolation
@@ -308,12 +315,12 @@ mod tests {
         let estimator = DarkCurrentEstimator::from_reference_point(0.04, -40.0);
         // -40°C is at the edge of our table range (-40 to +40)
         let result = estimator
-            .estimate_at_temperature(-40.0)
+            .estimate_at_temperature(Temperature::from_celsius(-40.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.04, epsilon = 1e-6);
         // -32°C should double from -40°C reference
         let result = estimator
-            .estimate_at_temperature(-32.0)
+            .estimate_at_temperature(Temperature::from_celsius(-32.0))
             .expect("Temperature should be in range");
         assert_relative_eq!(result, 0.08, epsilon = 0.03); // 3% tolerance for interpolation
     }
@@ -322,11 +329,13 @@ mod tests {
     fn test_large_temperature_difference() {
         let estimator = DarkCurrentEstimator::from_reference_point(0.001, -20.0);
         // 60°C is outside our table range (-40 to +40), should return Err
-        assert!(estimator.estimate_at_temperature(60.0).is_err());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(60.0))
+            .is_err());
         // Test within range: 40°C is 60°C increase from -20°C
         // That's 7.5 doubling periods, so result should be 0.001 * 2^7.5
         let result = estimator
-            .estimate_at_temperature(40.0)
+            .estimate_at_temperature(Temperature::from_celsius(40.0))
             .expect("Temperature should be in range");
         let expected = 0.001 * 2.0_f64.powf(7.5);
         assert_relative_eq!(result, expected, epsilon = 1e-2);
@@ -338,7 +347,7 @@ mod tests {
         // 6°C increase = 6/8 = 0.75 doubling periods
         // Should be 1.0 * 2^0.75 = 1.0 * 1.6817928... ≈ 1.6818
         let result = estimator
-            .estimate_at_temperature(6.0)
+            .estimate_at_temperature(Temperature::from_celsius(6.0))
             .expect("Temperature should be in range");
         let expected = 2.0_f64.powf(0.75);
         assert_relative_eq!(result, expected, epsilon = 0.1); // 10% tolerance for interpolation
@@ -354,10 +363,10 @@ mod tests {
         let temp_change = 33.0; // 8°C increase, should double
                                 // 33°C is within our table range (-40 to +40)
         let high_result = high_dc
-            .estimate_at_temperature(temp_change)
+            .estimate_at_temperature(Temperature::from_celsius(temp_change))
             .expect("Temperature should be in range");
         let low_result = low_dc
-            .estimate_at_temperature(temp_change)
+            .estimate_at_temperature(Temperature::from_celsius(temp_change))
             .expect("Temperature should be in range");
 
         // High dark current should double: 10 -> ~20
@@ -379,21 +388,21 @@ mod tests {
         // Should interpolate through the given points
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(-20.0)
+                .estimate_at_temperature(Temperature::from_celsius(-20.0))
                 .expect("Temperature should be in range"),
             0.01,
             epsilon = 1e-6
         );
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(0.0)
+                .estimate_at_temperature(Temperature::from_celsius(0.0))
                 .expect("Temperature should be in range"),
             0.1,
             epsilon = 1e-6
         );
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(20.0)
+                .estimate_at_temperature(Temperature::from_celsius(20.0))
                 .expect("Temperature should be in range"),
             1.0,
             epsilon = 1e-6
@@ -401,7 +410,7 @@ mod tests {
 
         // Test interpolation between points
         let mid_value = estimator
-            .estimate_at_temperature(10.0)
+            .estimate_at_temperature(Temperature::from_celsius(10.0))
             .expect("Temperature should be in range");
         assert!(mid_value > 0.1 && mid_value < 1.0);
     }
@@ -412,17 +421,35 @@ mod tests {
         let estimator = DarkCurrentEstimator::from_reference_point(0.1, 0.0);
 
         // Should work for temps between -40 and +40
-        assert!(estimator.estimate_at_temperature(-40.0).is_ok());
-        assert!(estimator.estimate_at_temperature(-20.0).is_ok());
-        assert!(estimator.estimate_at_temperature(-10.0).is_ok());
-        assert!(estimator.estimate_at_temperature(0.0).is_ok());
-        assert!(estimator.estimate_at_temperature(10.0).is_ok());
-        assert!(estimator.estimate_at_temperature(20.0).is_ok());
-        assert!(estimator.estimate_at_temperature(40.0).is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(-40.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(-20.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(-10.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(0.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(10.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(20.0))
+            .is_ok());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(40.0))
+            .is_ok());
 
         // Should fail outside range
-        assert!(estimator.estimate_at_temperature(-41.0).is_err());
-        assert!(estimator.estimate_at_temperature(41.0).is_err());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(-41.0))
+            .is_err());
+        assert!(estimator
+            .estimate_at_temperature(Temperature::from_celsius(41.0))
+            .is_err());
     }
 
     #[test]
@@ -436,7 +463,7 @@ mod tests {
         // Check that it interpolates correctly at the reference points
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(0.0)
+                .estimate_at_temperature(Temperature::from_celsius(0.0))
                 .expect("Should be in range"),
             0.1,
             epsilon = 0.1 // Allow 10% tolerance due to interpolation
@@ -445,11 +472,39 @@ mod tests {
         // Check intermediate value (8°C should be ~0.2)
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(8.0)
+                .estimate_at_temperature(Temperature::from_celsius(8.0))
                 .expect("Should be in range"),
             0.2,
             epsilon = 0.1 // Allow 10% tolerance due to interpolation
         );
+    }
+
+    #[test]
+    fn test_type_safe_temperature() {
+        use crate::units::{Temperature, TemperatureExt};
+
+        let estimator = DarkCurrentEstimator::from_reference_point(0.1, 20.0);
+
+        // Test with Celsius
+        let temp_c = Temperature::from_celsius(28.0);
+        let dark_current_c = estimator
+            .estimate_at_temperature(temp_c)
+            .expect("Should work");
+
+        // Test with Kelvin - should give same result
+        let temp_k = Temperature::from_kelvin(301.15); // 28°C in Kelvin
+        let dark_current_k = estimator
+            .estimate_at_temperature(temp_k)
+            .expect("Should work");
+
+        assert_relative_eq!(dark_current_c, dark_current_k, epsilon = 1e-10);
+
+        // Should be ~0.2 e-/pixel/s (doubled for 8°C increase from 20°C)
+        assert_relative_eq!(dark_current_c, 0.2, epsilon = 0.01);
+
+        // Test that we can't accidentally mix units
+        // This would be a compile error if we tried to pass a raw f64:
+        // estimator.estimate_at_temperature(28.0); // Won't compile!
     }
 
     #[test]
@@ -464,14 +519,14 @@ mod tests {
         // Verify it fits through both points
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(-10.0)
+                .estimate_at_temperature(Temperature::from_celsius(-10.0))
                 .expect("Should be in range"),
             0.025,
             epsilon = 0.1 // Allow 10% tolerance due to interpolation
         );
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(0.0)
+                .estimate_at_temperature(Temperature::from_celsius(0.0))
                 .expect("Should be in range"),
             0.1,
             epsilon = 0.1 // Allow 10% tolerance due to interpolation
@@ -480,7 +535,7 @@ mod tests {
         // Check that at 5°C it should be ~0.2 (double of 0°C value)
         assert_relative_eq!(
             estimator
-                .estimate_at_temperature(5.0)
+                .estimate_at_temperature(Temperature::from_celsius(5.0))
                 .expect("Should be in range"),
             0.2,
             epsilon = 0.1 // Allow 10% tolerance due to interpolation

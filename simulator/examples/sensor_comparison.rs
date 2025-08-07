@@ -36,6 +36,7 @@
 //! - Understanding trade-offs between resolution, noise, and sensitivity
 
 use simulator::hardware::sensor::models::ALL_SENSORS;
+use simulator::units::{Temperature, TemperatureExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor Comparison Table");
@@ -66,9 +67,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Calculate and display data for each sensor
     for config in sensors {
         // Dark current at 0°C
+        let temperature = Temperature::from_celsius(temp_c);
         let dark_current = config
             .dark_current_estimator
-            .estimate_at_temperature(temp_c)
+            .estimate_at_temperature(temperature)
             .expect("Interpolation should be valid");
 
         // Read noise - estimate at room temperature with 1s exposure for comparison
@@ -151,9 +153,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("- **Peak QE:** {peak_qe:.3} at {peak_wavelength:.0}nm");
 
         // Dark current at 0°C only
+        let temp_0c = Temperature::from_celsius(0.0);
         let dc_0c = config
             .dark_current_estimator
-            .estimate_at_temperature(0.0)
+            .estimate_at_temperature(temp_0c)
             .expect("Interpolation should be valid");
         println!("- **Dark current @ 0°C:** {dc_0c:.4} e⁻/pixel/s");
     }

@@ -18,6 +18,7 @@
 use plotters::prelude::*;
 use simulator::hardware::dark_current::{MAX_TEMP_C, MIN_TEMP_C};
 use simulator::hardware::sensor::models::ALL_SENSORS;
+use simulator::units::{Temperature, TemperatureExt};
 
 fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
     // Create plot
@@ -59,7 +60,11 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
 
         for temp in &temps {
             // Only plot points within the valid range
-            if let Ok(dark_current) = sensor.dark_current_estimator.estimate_at_temperature(*temp) {
+            let temperature = Temperature::from_celsius(*temp);
+            if let Ok(dark_current) = sensor
+                .dark_current_estimator
+                .estimate_at_temperature(temperature)
+            {
                 curve_points.push((*temp, dark_current));
             }
         }
@@ -83,7 +88,7 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
             let annotation_temp = 10.0; // Place annotation at 10°C
             if let Ok(dark_current) = sensor
                 .dark_current_estimator
-                .estimate_at_temperature(annotation_temp)
+                .estimate_at_temperature(Temperature::from_celsius(annotation_temp))
             {
                 let annotation_text = format!("{doubling_temp:.1}°C/2×");
                 chart.draw_series(std::iter::once(Text::new(
@@ -156,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for temp in &temperatures {
             let dark_current = config
                 .dark_current_estimator
-                .estimate_at_temperature(*temp)
+                .estimate_at_temperature(Temperature::from_celsius(*temp))
                 .expect("Temperature should be within interpolation range");
             print!(" {dark_current:.4} |");
         }

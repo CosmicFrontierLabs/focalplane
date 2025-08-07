@@ -44,6 +44,7 @@ use once_cell::sync::Lazy;
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
+use crate::units::{Temperature, TemperatureExt};
 
 /// Complete sensor configuration for astronomical detector simulation.
 ///
@@ -162,8 +163,9 @@ impl SensorConfig {
 
     /// Get dark current at a specific temperature in electrons/pixel/second
     pub fn dark_current_at_temperature(&self, temp_c: f64) -> f64 {
+        let temperature = Temperature::from_celsius(temp_c);
         self.dark_current_estimator
-            .estimate_at_temperature(temp_c)
+            .estimate_at_temperature(temperature)
             .expect("Temperature out of interpolation range")
     }
 }
