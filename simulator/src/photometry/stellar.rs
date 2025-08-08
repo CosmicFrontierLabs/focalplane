@@ -70,6 +70,7 @@ use once_cell::sync::Lazy;
 
 use super::gaia::GAIA_PASSBAND;
 use super::spectrum::{Band, Spectrum, CGS};
+use crate::units::{LengthExt, Wavelength};
 
 /// Flat spectral energy distribution for calibration and reference sources.
 ///
@@ -145,7 +146,8 @@ impl FlatStellarSpectrum {
 }
 
 impl Spectrum for FlatStellarSpectrum {
-    fn spectral_irradiance(&self, wavelength_nm: f64) -> f64 {
+    fn spectral_irradiance(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // For a flat spectrum in frequency space, the spectral flux density
         // constant spectral irradiance
 
@@ -346,7 +348,8 @@ impl BlackbodyStellarSpectrum {
     /// # Returns
     ///
     /// Spectral irradiance in erg s⁻¹ cm⁻² Hz⁻¹
-    fn radiance_to_irradiance(&self, wavelength_nm: f64, radiance: f64) -> f64 {
+    fn radiance_to_irradiance(&self, wavelength: Wavelength, radiance: f64) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // Convert from per wavelength to per frequency
         // F_ν = (λ^2/c) * B_λ
         let wavelength_cm = wavelength_nm * 1e-7; // nm to cm
@@ -358,7 +361,8 @@ impl BlackbodyStellarSpectrum {
 }
 
 impl Spectrum for BlackbodyStellarSpectrum {
-    fn spectral_irradiance(&self, wavelength_nm: f64) -> f64 {
+    fn spectral_irradiance(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // Ensure wavelength is positive
         if wavelength_nm <= 0.0 {
             return 0.0;
@@ -371,7 +375,7 @@ impl Spectrum for BlackbodyStellarSpectrum {
         let radiance = self.planck_spectral_radiance(wavelength_cm);
 
         // Convert to spectral irradiance in frequency space
-        self.radiance_to_irradiance(wavelength_nm, radiance)
+        self.radiance_to_irradiance(wavelength, radiance)
     }
 
     fn irradiance(&self, band: &Band) -> f64 {
@@ -387,10 +391,10 @@ impl Spectrum for BlackbodyStellarSpectrum {
         let mut total_irradiance = 0.0;
         for sub_band in bands {
             // For each narrow band, calculate irradiance at center wavelength
-            let center_nm = sub_band.center();
-            let center_cm = center_nm * 1e-7;
+            let center_wavelength = sub_band.center();
+            let center_cm = center_wavelength.as_nanometers() * 1e-7;
             let spectral_radiance = self.planck_spectral_radiance(center_cm);
-            let spectral_irr = self.radiance_to_irradiance(center_nm, spectral_radiance);
+            let spectral_irr = self.radiance_to_irradiance(center_wavelength, spectral_radiance);
 
             // Convert from per frequency to per wavelength for integration
             let (lower_freq, upper_freq) = sub_band.frequency_bounds();
@@ -405,6 +409,7 @@ impl Spectrum for BlackbodyStellarSpectrum {
 
 #[cfg(test)]
 mod tests {
+    use crate::units::{LengthExt, Wavelength};
     use crate::QuantumEfficiency;
 
     use super::*;
@@ -474,8 +479,8 @@ mod tests {
         // Test irradiance at different wavelengths
         // The spectral irradiance in wavelength units varies with wavelength
         // even though the frequency spectrum is flat
-        let spec_irr_500 = spectrum.spectral_irradiance(500.0);
-        let spec_irr_1000 = spectrum.spectral_irradiance(1000.0);
+        let spec_irr_500 = spectrum.spectral_irradiance(Wavelength::from_nanometers(500.0));
+        let spec_irr_1000 = spectrum.spectral_irradiance(Wavelength::from_nanometers(1000.0));
 
         // Irradiance should be higher at shorter wavelengths (F_λ ∝ 1/λ²)
         assert_eq!(spec_irr_500, spec_irr_1000);
@@ -485,7 +490,7 @@ mod tests {
 
         // AB mag of 0 should give the same result as 3631 Jy
         assert_relative_eq!(
-            spectrum_ab.spectral_irradiance(500.0),
+            spectrum_ab.spectral_irradiance(Wavelength::from_nanometers(500.0)),
             CGS::JANSKY_IN_CGS * 3631.0,
             epsilon = 1e-5
         );
@@ -534,7 +539,8 @@ mod tests {
 
         // Should be 100x dimmer (5 mags = factor of 100)
         assert_relative_eq!(
-            spectrum.spectral_irradiance(500.0) / spectrum_dim.spectral_irradiance(500.0),
+            spectrum.spectral_irradiance(Wavelength::from_nanometers(500.0))
+                / spectrum_dim.spectral_irradiance(Wavelength::from_nanometers(500.0)),
             100.0,
             epsilon = 1e-5
         );
@@ -573,9 +579,9 @@ mod tests {
         let cool_star = BlackbodyStellarSpectrum::new(3500.0, 1.0); // Cool M-type star
 
         // Verify all of them return positive irradiance values
-        assert!(hot_star.spectral_irradiance(500.0) > 0.0);
-        assert!(sun_like.spectral_irradiance(500.0) > 0.0);
-        assert!(cool_star.spectral_irradiance(500.0) > 0.0);
+        assert!(hot_star.spectral_irradiance(Wavelength::from_nanometers(500.0)) > 0.0);
+        assert!(sun_like.spectral_irradiance(Wavelength::from_nanometers(500.0)) > 0.0);
+        assert!(cool_star.spectral_irradiance(Wavelength::from_nanometers(500.0)) > 0.0);
     }
 
     #[test]
@@ -584,8 +590,8 @@ mod tests {
         let sun_like = BlackbodyStellarSpectrum::new(5778.0, 1.0);
 
         // Check irradiance at different wavelengths
-        let uv = sun_like.spectral_irradiance(200.0);
-        let vis = sun_like.spectral_irradiance(500.0);
+        let uv = sun_like.spectral_irradiance(Wavelength::from_nanometers(200.0));
+        let vis = sun_like.spectral_irradiance(Wavelength::from_nanometers(500.0));
 
         // Sun-like star - in our frequency space representation, UV should be less than visible
         assert!(vis > uv, "Vis {vis} should be greater than uv {uv}");
@@ -594,8 +600,8 @@ mod tests {
         let cool_star = BlackbodyStellarSpectrum::new(3500.0, 1.0);
 
         // Cool stars peak in red, so red irradiance should be higher than blue
-        let cool_blue = cool_star.spectral_irradiance(400.0);
-        let cool_red = cool_star.spectral_irradiance(700.0);
+        let cool_blue = cool_star.spectral_irradiance(Wavelength::from_nanometers(400.0));
+        let cool_red = cool_star.spectral_irradiance(Wavelength::from_nanometers(700.0));
 
         assert!(cool_red > cool_blue);
 
@@ -603,8 +609,8 @@ mod tests {
         let hot_star = BlackbodyStellarSpectrum::new(30000.0, 1.0);
 
         // Hot stars peak in blue/UV, so blue irradiance should be higher than red
-        let hot_blue = hot_star.spectral_irradiance(400.0);
-        let hot_red = hot_star.spectral_irradiance(700.0);
+        let hot_blue = hot_star.spectral_irradiance(Wavelength::from_nanometers(400.0));
+        let hot_red = hot_star.spectral_irradiance(Wavelength::from_nanometers(700.0));
 
         assert!(hot_blue > hot_red);
     }

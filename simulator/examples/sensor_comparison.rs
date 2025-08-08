@@ -36,7 +36,7 @@
 //! - Understanding trade-offs between resolution, noise, and sensitivity
 
 use simulator::hardware::sensor::models::ALL_SENSORS;
-use simulator::units::{LengthExt, Temperature, TemperatureExt};
+use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor Comparison Table");
@@ -91,7 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut wavelength = wavelength_start;
         while wavelength <= wavelength_end {
-            qe_sum += config.quantum_efficiency.at(wavelength);
+            qe_sum += config
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(wavelength));
             count += 1;
             wavelength += wavelength_step;
         }
@@ -148,7 +150,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut peak_wavelength = 0.0;
 
         for wavelength_nm in 300..=1000 {
-            let qe = config.quantum_efficiency.at(wavelength_nm as f64);
+            let qe = config
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(wavelength_nm as f64));
             if qe > peak_qe {
                 peak_qe = qe;
                 peak_wavelength = wavelength_nm as f64;

@@ -39,6 +39,7 @@ use once_cell::sync::Lazy;
 use std::f64::consts::PI;
 
 use crate::photometry::QuantumEfficiency;
+use crate::units::{LengthExt, Wavelength};
 
 /// Complete telescope optical system configuration.
 ///
@@ -128,11 +129,12 @@ impl TelescopeConfig {
     /// - λ is the wavelength
     /// - f is the focal length
     /// - D is the aperture diameter
-    pub fn airy_disk_radius_um(&self, wavelength_nm: f64) -> f64 {
-        self.fwhm_image_spot_um(wavelength_nm) * 1.22
+    pub fn airy_disk_radius_um(&self, wavelength: Wavelength) -> f64 {
+        self.fwhm_image_spot_um(wavelength) * 1.22
     }
 
-    pub fn fwhm_image_spot_um(&self, wavelength_nm: f64) -> f64 {
+    pub fn fwhm_image_spot_um(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // Convert wavelength from nm to m
         let wavelength_m = wavelength_nm * 1.0e-9;
 
@@ -150,7 +152,8 @@ impl TelescopeConfig {
     /// - θ is the angular radius (in radians)
     /// - λ is the wavelength
     /// - D is the aperture diameter
-    pub fn airy_disk_radius_mas(&self, wavelength_nm: f64) -> f64 {
+    pub fn airy_disk_radius_mas(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // Convert wavelength from nm to m
         let wavelength_m = wavelength_nm * 1.0e-9;
 
@@ -162,8 +165,8 @@ impl TelescopeConfig {
     }
 
     /// Calculate the diffraction-limited resolution in milliarcseconds at given wavelength
-    pub fn diffraction_limited_resolution_mas(&self, wavelength_nm: f64) -> f64 {
-        self.airy_disk_radius_mas(wavelength_nm) * 2.0
+    pub fn diffraction_limited_resolution_mas(&self, wavelength: Wavelength) -> f64 {
+        self.airy_disk_radius_mas(wavelength) * 2.0
     }
 
     /// Calculate the plate scale in arcseconds per mm
@@ -223,13 +226,13 @@ mod tests {
 
         assert!(approx_eq!(
             f64,
-            telescope.airy_disk_radius_um(wavelength_nm),
+            telescope.airy_disk_radius_um(Wavelength::from_nanometers(wavelength_nm)),
             expected_radius_um,
             epsilon = 1e-6
         ));
         assert!(approx_eq!(
             f64,
-            telescope.airy_disk_radius_mas(wavelength_nm),
+            telescope.airy_disk_radius_mas(Wavelength::from_nanometers(wavelength_nm)),
             expected_radius_mas,
             epsilon = 1e-6
         ));
@@ -464,14 +467,24 @@ mod model_tests {
         assert_eq!(models::IDEAL_50CM.name, "Ideal 50cm");
         assert_eq!(models::IDEAL_50CM.aperture_m, 0.5);
         assert_eq!(models::IDEAL_50CM.focal_length_m, 10.0);
-        assert_eq!(models::IDEAL_50CM.quantum_efficiency.at(550.0), 0.815);
+        assert_eq!(
+            models::IDEAL_50CM
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(550.0)),
+            0.815
+        );
         assert_eq!(models::IDEAL_50CM.f_number(), 20.0);
 
         // Test 1m Final telescope
         assert_eq!(models::IDEAL_100CM.name, "Ideal 100cm");
         assert_eq!(models::IDEAL_100CM.aperture_m, 1.0);
         assert_eq!(models::IDEAL_100CM.focal_length_m, 10.0);
-        assert_eq!(models::IDEAL_100CM.quantum_efficiency.at(550.0), 0.815);
+        assert_eq!(
+            models::IDEAL_100CM
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(550.0)),
+            0.815
+        );
         assert_eq!(models::IDEAL_100CM.f_number(), 10.0);
     }
 
@@ -490,12 +503,19 @@ mod model_tests {
         // Linear interpolation: 0.77 - (600-545)/(680-545) * (0.77-0.73) ≈ 0.754
         assert!(approx_eq!(
             f64,
-            weasel.quantum_efficiency.at(600.0),
+            weasel
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(600.0)),
             0.754,
             epsilon = 1e-2
         ));
         // At 400nm, slightly out of main band but still has some interpolated value
-        assert!(weasel.quantum_efficiency.at(400.0) < 0.1); // Near zero but not exactly
+        assert!(
+            weasel
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(400.0))
+                < 0.1
+        ); // Near zero but not exactly
 
         // Test Optech/Lina LS50
         let ls50 = &*models::OPTECH_LINA_LS50;
@@ -507,7 +527,8 @@ mod model_tests {
         // At 600nm, interpolate between 545nm (0.78) and 680nm (0.77) ≈ 0.778
         assert!(approx_eq!(
             f64,
-            ls50.quantum_efficiency.at(600.0),
+            ls50.quantum_efficiency
+                .at(Wavelength::from_nanometers(600.0)),
             0.778,
             epsilon = 1e-2
         ));
@@ -527,7 +548,12 @@ mod model_tests {
         assert!(approx_eq!(f64, jbt50.focal_length_m, 5.987, epsilon = 1e-6));
         assert!(approx_eq!(f64, jbt50.f_number(), 12.344, epsilon = 1e-2));
         assert_eq!(jbt50.obscuration_ratio, 0.35); // 35% linear obscuration ratio
-        assert_eq!(jbt50.quantum_efficiency.at(550.0), 0.70);
+        assert_eq!(
+            jbt50
+                .quantum_efficiency
+                .at(Wavelength::from_nanometers(550.0)),
+            0.70
+        );
 
         // Test Cosmic Frontier JBT MAX
         let jbt_max = &*models::COSMIC_FRONTIER_JBT_MAX;

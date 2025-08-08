@@ -20,6 +20,7 @@ use simulator::photometry::stellar::BlackbodyStellarSpectrum;
 use simulator::photometry::{
     generate_temperature_sequence, spectrum_to_rgb_values, temperature_to_spectral_class,
 };
+use simulator::units::{LengthExt, Wavelength};
 use std::error::Error;
 
 /// Command line arguments for stellar spectrum plotting
@@ -280,9 +281,10 @@ fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
     let all_irradiances: Vec<f64> = stellar_info
         .iter()
         .flat_map(|info| {
-            wavelengths
-                .iter()
-                .map(|&wl| info.spectrum.spectral_irradiance(wl))
+            wavelengths.iter().map(|&wl| {
+                info.spectrum
+                    .spectral_irradiance(Wavelength::from_nanometers(wl))
+            })
         })
         .collect();
     let irr_scan = MinMaxScan::new(&all_irradiances);
@@ -294,7 +296,9 @@ fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
         let data_points: Vec<(f64, f64)> = wavelengths
             .iter()
             .map(|&wavelength| {
-                let irradiance = star.spectrum.spectral_irradiance(wavelength);
+                let irradiance = star
+                    .spectrum
+                    .spectral_irradiance(Wavelength::from_nanometers(wavelength));
                 (wavelength, irradiance / max_irr)
             })
             .collect();

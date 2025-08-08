@@ -53,6 +53,7 @@
 use thiserror::Error;
 
 use super::Band;
+use crate::units::{LengthExt, Wavelength};
 
 /// Errors that can occur with quantum efficiency calculations
 #[derive(Debug, Error)]
@@ -208,22 +209,24 @@ impl QuantumEfficiency {
     /// QE(λ) = QEᵢ + (QEᵢ₊₁ - QEᵢ) × (λ - λᵢ) / (λᵢ₊₁ - λᵢ)
     ///
     /// # Arguments
-    /// * `wavelength` - Photon wavelength in nanometers
+    /// * `wavelength` - Photon wavelength
     ///
     /// # Returns
     /// Quantum efficiency [0.0, 1.0] or 0.0 if outside detector range
     ///
-    pub fn at(&self, wavelength: f64) -> f64 {
+    pub fn at(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         // Return 0.0 if outside the range
-        if wavelength < self.wavelengths[0] || wavelength > *self.wavelengths.last().unwrap() {
+        if wavelength_nm < self.wavelengths[0] || wavelength_nm > *self.wavelengths.last().unwrap()
+        {
             return 0.0;
         }
 
         // Find the segment that contains the wavelength
         for i in 0..self.wavelengths.len() - 1 {
-            if wavelength >= self.wavelengths[i] && wavelength <= self.wavelengths[i + 1] {
+            if wavelength_nm >= self.wavelengths[i] && wavelength_nm <= self.wavelengths[i + 1] {
                 // Linear interpolation
-                let t = (wavelength - self.wavelengths[i])
+                let t = (wavelength_nm - self.wavelengths[i])
                     / (self.wavelengths[i + 1] - self.wavelengths[i]);
 
                 return self.efficiencies[i] * (1.0 - t) + self.efficiencies[i + 1] * t;
@@ -281,6 +284,7 @@ impl QuantumEfficiency {
     /// # Examples
     /// ```rust
     /// use simulator::photometry::{QuantumEfficiency, Band};
+    /// use simulator::units::{LengthExt, Wavelength};
     ///
     /// // Create a detector QE curve
     /// let detector_wavelengths = vec![300.0, 400.0, 700.0, 900.0];
@@ -298,9 +302,9 @@ impl QuantumEfficiency {
     /// let combined = QuantumEfficiency::product(&detector, &filter).unwrap();
     ///
     /// // Check results
-    /// assert_eq!(combined.at(450.0), 0.0);  // Outside filter band
-    /// assert!(combined.at(550.0) > 0.0);    // Within both ranges
-    /// assert_eq!(combined.at(650.0), 0.0);  // Outside filter band
+    /// assert_eq!(combined.at(Wavelength::from_nanometers(450.0)), 0.0);  // Outside filter band
+    /// assert!(combined.at(Wavelength::from_nanometers(550.0)) > 0.0);    // Within both ranges
+    /// assert_eq!(combined.at(Wavelength::from_nanometers(650.0)), 0.0);  // Outside filter band
     /// ```
     pub fn product(
         qe1: &QuantumEfficiency,
@@ -354,7 +358,7 @@ impl QuantumEfficiency {
                     // Force boundaries to zero
                     0.0
                 } else {
-                    qe1.at(w) * qe2.at(w)
+                    qe1.at(Wavelength::from_nanometers(w)) * qe2.at(Wavelength::from_nanometers(w))
                 }
             })
             .collect();
@@ -395,6 +399,7 @@ impl QuantumEfficiency {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
@@ -405,17 +410,25 @@ mod tests {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
 
         // Test values at specific points
-        assert_eq!(qe.at(300.0), 0.0);
-        assert_eq!(qe.at(800.0), 0.0);
-        assert_eq!(qe.at(500.0), 0.8);
+        assert_eq!(qe.at(Wavelength::from_nanometers(300.0)), 0.0);
+        assert_eq!(qe.at(Wavelength::from_nanometers(800.0)), 0.0);
+        assert_eq!(qe.at(Wavelength::from_nanometers(500.0)), 0.8);
 
         // Test interpolated values
-        assert_relative_eq!(qe.at(450.0), 0.65, epsilon = 1e-5);
-        assert_relative_eq!(qe.at(550.0), 0.75, epsilon = 1e-5);
+        assert_relative_eq!(
+            qe.at(Wavelength::from_nanometers(450.0)),
+            0.65,
+            epsilon = 1e-5
+        );
+        assert_relative_eq!(
+            qe.at(Wavelength::from_nanometers(550.0)),
+            0.75,
+            epsilon = 1e-5
+        );
 
         // Test values outside range
-        assert_eq!(qe.at(200.0), 0.0);
-        assert_eq!(qe.at(900.0), 0.0);
+        assert_eq!(qe.at(Wavelength::from_nanometers(200.0)), 0.0);
+        assert_eq!(qe.at(Wavelength::from_nanometers(900.0)), 0.0);
     }
 
     #[test]
@@ -484,15 +497,19 @@ mod tests {
         assert_eq!(band.upper_nm, 650.0); // Min of upper bounds
 
         // Check some values
-        assert_eq!(product.at(350.0), 0.0); // Boundary
-        assert_eq!(product.at(650.0), 0.0); // Boundary
+        assert_eq!(product.at(Wavelength::from_nanometers(350.0)), 0.0); // Boundary
+        assert_eq!(product.at(Wavelength::from_nanometers(650.0)), 0.0); // Boundary
 
         // At 500nm: qe1 = 0.8, qe2 = 0.5, product = 0.4
-        assert_relative_eq!(product.at(500.0), 0.4, epsilon = 1e-5);
+        assert_relative_eq!(
+            product.at(Wavelength::from_nanometers(500.0)),
+            0.4,
+            epsilon = 1e-5
+        );
 
         // Outside the overlapping range
-        assert_eq!(product.at(300.0), 0.0);
-        assert_eq!(product.at(700.0), 0.0);
+        assert_eq!(product.at(Wavelength::from_nanometers(300.0)), 0.0);
+        assert_eq!(product.at(Wavelength::from_nanometers(700.0)), 0.0);
     }
 
     #[test]
@@ -510,13 +527,17 @@ mod tests {
         let combined = QuantumEfficiency::product(&detector, &filter).unwrap();
 
         // Check the combined response
-        assert_eq!(combined.at(450.0), 0.0); // Outside filter
-        assert_eq!(combined.at(650.0), 0.0); // Outside filter
+        assert_eq!(combined.at(Wavelength::from_nanometers(450.0)), 0.0); // Outside filter
+        assert_eq!(combined.at(Wavelength::from_nanometers(650.0)), 0.0); // Outside filter
 
         // At 550nm: detector ≈ 0.7, filter = 0.9, product ≈ 0.63
-        let detector_at_550 = detector.at(550.0);
+        let detector_at_550 = detector.at(Wavelength::from_nanometers(550.0));
         let expected = detector_at_550 * 0.9;
-        assert_relative_eq!(combined.at(550.0), expected, epsilon = 1e-5);
+        assert_relative_eq!(
+            combined.at(Wavelength::from_nanometers(550.0)),
+            expected,
+            epsilon = 1e-5
+        );
     }
 
     #[test]
@@ -533,8 +554,8 @@ mod tests {
         let product = QuantumEfficiency::product(&qe1, &qe2).unwrap();
 
         // Product should be zero everywhere
-        assert_eq!(product.at(500.0), 0.0);
-        assert_eq!(product.at(800.0), 0.0);
+        assert_eq!(product.at(Wavelength::from_nanometers(500.0)), 0.0);
+        assert_eq!(product.at(Wavelength::from_nanometers(800.0)), 0.0);
     }
 
     #[test]
@@ -548,8 +569,12 @@ mod tests {
         let product = QuantumEfficiency::product(&qe1, &qe2).unwrap();
 
         // Product should be square of original
-        assert_eq!(product.at(400.0), 0.0); // Boundary
-        assert_eq!(product.at(700.0), 0.0); // Boundary
-        assert_relative_eq!(product.at(550.0), 0.64, epsilon = 1e-5); // 0.8 * 0.8
+        assert_eq!(product.at(Wavelength::from_nanometers(400.0)), 0.0); // Boundary
+        assert_eq!(product.at(Wavelength::from_nanometers(700.0)), 0.0); // Boundary
+        assert_relative_eq!(
+            product.at(Wavelength::from_nanometers(550.0)),
+            0.64,
+            epsilon = 1e-5
+        ); // 0.8 * 0.8
     }
 }

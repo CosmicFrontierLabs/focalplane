@@ -7,6 +7,7 @@ use crate::photometry::{
     spectrum::{wavelength_to_ergs, Band},
     QuantumEfficiency, Spectrum,
 };
+use crate::units::LengthExt;
 use std::time::Duration;
 
 /// Calculate photon flux for each nm sub-band of a wavelength band.
@@ -152,12 +153,13 @@ pub fn photon_electron_fluxes<S: Spectrum>(
         total_p_flux += p_flux;
         total_pe_flux += pe_flux;
 
-        let scale = if sub_band.center() < psf.reference_wavelength {
+        let scale = if sub_band.center().as_nanometers() < psf.reference_wavelength.as_nanometers()
+        {
             // Below the reference wavelength, we cant assume better focusing
             1.0
         } else {
             // Airy disk radius scales linearly with wavelength
-            sub_band.center() / psf.reference_wavelength
+            sub_band.center().as_nanometers() / psf.reference_wavelength.as_nanometers()
         };
 
         // Accrue the total relative FWHM weighted by subband PE
@@ -254,12 +256,14 @@ pub fn photo_electrons<S: Spectrum>(
 mod tests {
     use super::*;
     use crate::photometry::{stellar::FlatStellarSpectrum, Band, BlackbodyStellarSpectrum};
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
     fn test_chromatic_monochromatic_limit() {
         // Test that chromatic PSF reduces to monochromatic when spectrum is narrow
-        let achromatic_disk = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+        let achromatic_disk =
+            PixelScaledAiryDisk::with_fwhm(1.0, Wavelength::from_nanometers(550.0));
 
         // Create narrow-band filter centered at 550nm
         let band = Band::from_nm_bounds(549.0, 551.0);
@@ -287,7 +291,7 @@ mod tests {
     #[test]
     fn test_chromatic_broadening() {
         // Test that chromatic PSF effective scale reflects wavelength averaging
-        let airy = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+        let airy = PixelScaledAiryDisk::with_fwhm(1.0, Wavelength::from_nanometers(550.0));
 
         // Create broad-band filter (400-700nm)
         let band = Band::from_nm_bounds(400.0, 700.0);
@@ -320,7 +324,7 @@ mod tests {
     fn test_ir_sensitive_detector_broadening() {
         // Test that IR-sensitive detectors see wider PSF than visible-only detectors
         // due to chromatic effects - longer wavelengths have larger Airy disks
-        let airy = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+        let airy = PixelScaledAiryDisk::with_fwhm(1.0, Wavelength::from_nanometers(550.0));
 
         // Create a sun-like blackbody spectrum
         let spectrum = BlackbodyStellarSpectrum::new(5780.0, 1e-10);
@@ -432,7 +436,7 @@ mod tests {
         // Create a flat spectrum with a known flux density
         let spectrum = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(0.0, 0.0);
 
-        let disk = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+        let disk = PixelScaledAiryDisk::with_fwhm(1.0, Wavelength::from_nanometers(550.0));
 
         let fluxes = photon_electron_fluxes(&disk, &spectrum, &qe);
         let photons_count = fluxes.photons.integrated_over(&duration, aperture_cm2);
@@ -453,7 +457,7 @@ mod tests {
     #[test]
     fn test_chromatic_achromatic_flux_match() {
         // Test that chromatic PSF effective scale reflects wavelength averaging
-        let airy = PixelScaledAiryDisk::with_fwhm(1.0, 550.0);
+        let airy = PixelScaledAiryDisk::with_fwhm(1.0, Wavelength::from_nanometers(550.0));
 
         // Create broad-band filter (400-700nm)
         let band = Band::from_nm_bounds(400.0, 700.0);

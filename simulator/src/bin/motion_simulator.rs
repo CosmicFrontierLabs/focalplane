@@ -19,7 +19,7 @@ use clap::{Parser, ValueEnum};
 use log::debug;
 use simulator::hardware::telescope::{models, TelescopeConfig};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
-use simulator::units::LengthExt;
+use simulator::units::{LengthExt, Wavelength};
 
 /// Available telescope models for selection
 #[derive(Debug, Clone, ValueEnum)]
@@ -118,7 +118,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Focal length: {:.1} m", telescope.focal_length_m);
     println!(
         "  Light efficiency: {:.1}%",
-        telescope.quantum_efficiency.at(550.0) * 100.0
+        telescope
+            .quantum_efficiency
+            .at(Wavelength::from_nanometers(550.0))
+            * 100.0
     );
     println!();
     println!("Sensor configuration:");

@@ -263,6 +263,7 @@ pub fn ubv_filters() -> (QuantumEfficiency, QuantumEfficiency, QuantumEfficiency
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
@@ -284,12 +285,12 @@ mod tests {
         assert_eq!(band.upper_nm, 450.0);
 
         // Check transmission at key wavelengths
-        assert_eq!(u.at(250.0), 0.0);
-        assert_eq!(u.at(350.0), 1.0);
-        assert_eq!(u.at(450.0), 0.0);
+        assert_eq!(u.at(Wavelength::from_nanometers(250.0)), 0.0);
+        assert_eq!(u.at(Wavelength::from_nanometers(350.0)), 1.0);
+        assert_eq!(u.at(Wavelength::from_nanometers(450.0)), 0.0);
 
         // Check interpolated value
-        assert_relative_eq!(u.at(335.0), 0.9, epsilon = 0.1);
+        assert_relative_eq!(u.at(Wavelength::from_nanometers(335.0)), 0.9, epsilon = 0.1);
     }
 
     #[test]
@@ -302,13 +303,25 @@ mod tests {
         assert_eq!(band.upper_nm, 570.0);
 
         // Check transmission at key wavelengths
-        assert_eq!(b.at(350.0), 0.0);
-        assert_eq!(b.at(440.0), 1.0);
-        assert_eq!(b.at(450.0), 1.0);
-        assert_eq!(b.at(570.0), 0.0);
+        assert_eq!(b.at(Wavelength::from_nanometers(350.0)), 0.0);
+        assert_relative_eq!(
+            b.at(Wavelength::from_nanometers(440.0)),
+            1.0,
+            epsilon = 1e-10
+        );
+        assert_relative_eq!(
+            b.at(Wavelength::from_nanometers(450.0)),
+            1.0,
+            epsilon = 1e-10
+        );
+        assert_eq!(b.at(Wavelength::from_nanometers(570.0)), 0.0);
 
         // Check interpolated value
-        assert_relative_eq!(b.at(500.0), 0.4, epsilon = 0.01);
+        assert_relative_eq!(
+            b.at(Wavelength::from_nanometers(500.0)),
+            0.4,
+            epsilon = 0.01
+        );
     }
 
     #[test]
@@ -321,12 +334,16 @@ mod tests {
         assert_eq!(band.upper_nm, 710.0);
 
         // Check transmission at key wavelengths
-        assert_eq!(v.at(450.0), 0.0);
-        assert_eq!(v.at(540.0), 1.0);
-        assert_eq!(v.at(550.0), 1.0);
-        assert_eq!(v.at(710.0), 0.0);
+        assert_eq!(v.at(Wavelength::from_nanometers(450.0)), 0.0);
+        assert_eq!(v.at(Wavelength::from_nanometers(540.0)), 1.0);
+        assert_eq!(v.at(Wavelength::from_nanometers(550.0)), 1.0);
+        assert_eq!(v.at(Wavelength::from_nanometers(710.0)), 0.0);
 
         // Check interpolated value
-        assert_relative_eq!(v.at(600.0), 0.45, epsilon = 0.01);
+        assert_relative_eq!(
+            v.at(Wavelength::from_nanometers(600.0)),
+            0.45,
+            epsilon = 0.01
+        );
     }
 }

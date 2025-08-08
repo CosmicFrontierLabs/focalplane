@@ -34,7 +34,7 @@ use crate::algo::process_array_in_parallel_chunks;
 #[cfg(test)]
 use crate::hardware::read_noise::ReadNoiseEstimator;
 #[cfg(test)]
-use crate::units::{Length, LengthExt};
+use crate::units::Length;
 use crate::SensorConfig;
 use ndarray::Array2;
 use rand::{thread_rng, RngCore, SeedableRng};
@@ -303,6 +303,7 @@ pub fn apply_poisson_photon_noise(
 
 #[cfg(test)]
 mod tests {
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     use crate::{
@@ -719,8 +720,8 @@ mod tests {
         let temp_satellite = SatelliteConfig::new(
             telescope.clone(),
             sensor.clone(),
-            -10.0, // Default temperature for test
-            550.0, // Default wavelength for test
+            -10.0,                              // Default temperature for test
+            Wavelength::from_nanometers(550.0), // Default wavelength for test
         );
         let zodical_noise =
             z_light.generate_zodical_background(&temp_satellite, &exposure_time, &coords);

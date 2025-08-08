@@ -14,6 +14,12 @@ pub type Temperature = ThermodynamicTemperature;
 /// Type alias for length measurements with convenient methods
 pub type Length = uom::si::f64::Length;
 
+/// Type alias for wavelength measurements (specialized Length for optical wavelengths)
+///
+/// While physically identical to Length, this type alias improves code clarity
+/// when dealing with electromagnetic wavelengths in nanometers.
+pub type Wavelength = Length;
+
 /// Extension trait for temperature conversions
 pub trait TemperatureExt {
     /// Create temperature from degrees Celsius

@@ -18,7 +18,7 @@ use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodical::SolarAngularCoordinates, ZodicalLight};
 use simulator::shared_args::{DurationArg, TelescopeModel};
-use simulator::units::LengthExt;
+use simulator::units::{LengthExt, Wavelength};
 
 /// Command line arguments for zodiacal background computation
 #[derive(Parser, Debug)]
@@ -159,7 +159,7 @@ fn create_spectrum_plot(
     let mut irradiances = Vec::new();
 
     for &wavelength in &wavelengths {
-        let irradiance = spectrum.spectral_irradiance(wavelength);
+        let irradiance = spectrum.spectral_irradiance(Wavelength::from_nanometers(wavelength));
         // Convert from erg s⁻¹ cm⁻² Hz⁻¹ to erg s⁻¹ cm⁻² arcsec⁻² Hz⁻¹
         // Since we have spectrum per unit solid angle, multiply by 1 arcsec²
         let irradiance_per_arcsec2 = irradiance;
@@ -348,8 +348,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let satellite = SatelliteConfig::new(
             telescope.clone(),
             sensor.clone(),
-            -10.0, // Default temperature for example
-            550.0, // Default wavelength for example
+            -10.0,                              // Default temperature for example
+            Wavelength::from_nanometers(550.0), // Default wavelength for example
         );
 
         // Calculate zodical minimum e-/s for this sensor

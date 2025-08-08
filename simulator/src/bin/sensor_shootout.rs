@@ -45,7 +45,11 @@ use simulator::image_proc::{
 use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
-use simulator::{star_math::field_diameter, SensorConfig};
+use simulator::{
+    star_math::field_diameter,
+    units::{LengthExt, Wavelength},
+    SensorConfig,
+};
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield::framelib::random::RandomEquatorial;
 use starfield::Equatorial;
@@ -337,7 +341,10 @@ fn run_experiment<T: StarCatalog>(
         for satellite in params.satellites.iter() {
             debug!(
                 "Running experiment for satellite: {} at f/{:.1} (T: {:.1}°C, λ: {:.0}nm)",
-                satellite.sensor.name, f_number, satellite.temperature_c, satellite.wavelength_nm
+                satellite.sensor.name,
+                f_number,
+                satellite.temperature_c,
+                satellite.wavelength.as_nanometers()
             );
 
             let mut exposure_results = HashMap::new();
@@ -349,7 +356,7 @@ fn run_experiment<T: StarCatalog>(
                 modified_telescope,
                 satellite.sensor.clone(),
                 satellite.temperature_c,
-                satellite.wavelength_nm,
+                satellite.wavelength,
             );
 
             // Create scene with star projection for this satellite and f-number
@@ -395,7 +402,7 @@ fn run_experiment<T: StarCatalog>(
 
                 // Do the star detection
                 let scaled_airy_disk =
-                    PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, satellite.wavelength_nm);
+                    PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, satellite.wavelength);
                 let detected_stars = match detect_stars_unified(
                     render_result.quantized_image.view(),
                     params.common_args.star_finder,
@@ -616,7 +623,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     base_telescope.clone(),
                     (*sensor).clone(),
                     args.shared.temperature,
-                    args.shared.wavelength,
+                    Wavelength::from_nanometers(args.shared.wavelength),
                 );
 
                 // Adjust to match the desired pixel sampling
@@ -632,7 +639,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     base_telescope.clone(),
                     (*sensor).clone(),
                     args.shared.temperature,
-                    args.shared.wavelength,
+                    Wavelength::from_nanometers(args.shared.wavelength),
                 )
             })
             .collect()

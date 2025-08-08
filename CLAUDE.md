@@ -57,12 +57,15 @@ IMPORTANT: Always run `cargo fmt` before committing any code changes!
 - **Space context**: Avoid terrestrial telescope conventions (elevation/azimuth, horizon coordinates) - use generic pointing directions, celestial coordinates, or instrument-relative axes instead.
 
 ## Git Commits
+- **NEVER use `git add -A` or `git add .`** - These commands can accidentally add build artifacts, temporary files, and generated outputs
+- Always use specific file patterns or `git add -u` (for modified files only)
 - Do NOT include attribution in commit messages
 - Do NOT include "Created with Claude Code" or any Claude attribution in commit messages
 - Follow the project commit style: short subject line, blank line, body with bullet points
 - Focus on explaining the WHY (purpose) not just the WHAT (changes)
 - Prefer shorter, more focused commits over large monolithic ones
 - Reference issue numbers when applicable
+- Always check `git status` before committing to ensure no unwanted files are staged
 
 ## Commonly Worked Files
 ### sensor_shootout.rs (simulator/src/bin/sensor_shootout.rs)

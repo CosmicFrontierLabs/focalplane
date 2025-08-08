@@ -2,6 +2,7 @@ use clap::Parser;
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::telescope::models::IDEAL_50CM;
 use simulator::hardware::SatelliteConfig;
+use simulator::units::{LengthExt, Wavelength};
 
 #[derive(Parser, Debug)]
 #[command(name = "Telescope Sampling Info")]
@@ -42,7 +43,7 @@ fn main() {
             IDEAL_50CM.clone(),
             sensor.clone(),
             0.0, // Temperature doesn't affect optical calculations
-            args.wavelength,
+            Wavelength::from_nanometers(args.wavelength),
         );
 
         // Adjust to match desired sampling

@@ -125,12 +125,14 @@ pub fn iraf_autoconfig(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
     fn test_space_telescope_configs() {
         // Create a scaled Airy disk with FWHM of 2.5 pixels
-        let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(2.5, 550.0);
+        let scaled_airy_disk =
+            PixelScaledAiryDisk::with_fwhm(2.5, Wavelength::from_nanometers(550.0));
         let background_rms = 1.2;
         let detection_sigma = 5.0;
 

@@ -17,6 +17,7 @@ use simulator::photometry::{
     QuantumEfficiency,
 };
 use simulator::star_math::DEFAULT_BV;
+use simulator::units::{LengthExt, Wavelength};
 use std::error::Error;
 use std::time::Duration;
 
@@ -67,11 +68,11 @@ fn analyze_sensor_psf(
     println!("{}", "=".repeat(sensor_name.len() + 16));
     println!(
         "\nNominal PSF wavelength: {:.0} nm",
-        airy_disk.reference_wavelength
+        airy_disk.reference_wavelength.as_nanometers()
     );
     println!(
         "Monochromatic FWHM at {:.0}nm: {:.3}",
-        airy_disk.reference_wavelength,
+        airy_disk.reference_wavelength.as_nanometers(),
         airy_disk.fwhm()
     );
 
@@ -81,7 +82,7 @@ fn analyze_sensor_psf(
         let pe = photon_electron_fluxes(airy_disk, *star, detector_qe).electrons;
 
         let broadening = (pe.disk.fwhm() / airy_disk.fwhm() - 1.0) * 100.0;
-        let effective_wavelength = pe.disk.reference_wavelength;
+        let effective_wavelength = pe.disk.reference_wavelength.as_nanometers();
 
         results.push((
             star_type.to_string(),
@@ -251,7 +252,7 @@ fn create_sensor_plot(
     // Plot star profiles
     for (i, ((_, star_type, temp), profile)) in stars.iter().zip(star_profiles.iter()).enumerate() {
         let color = &star_colors[i];
-        let eff_wavelength = star_psfs[i].disk.reference_wavelength;
+        let eff_wavelength = star_psfs[i].disk.reference_wavelength.as_nanometers();
         let label = if star_type.contains("B-V") {
             format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)")
         } else {
@@ -397,7 +398,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Telescope parameters - 50cm diameter telescope
     let aperture = 0.5; // 0.5 meter diameter (50cm)
-    let reference_wavelength = 550.0; // 550nm (green)
+    let reference_wavelength = Wavelength::from_nanometers(550.0); // 550nm (green)
 
     // Calculate aperture area in cm² for photon calculations
     let aperture_cm2 = std::f64::consts::PI * (aperture * 100.0 / 2.0_f64).powi(2); // π × (25cm)²

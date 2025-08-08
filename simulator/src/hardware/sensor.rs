@@ -138,8 +138,10 @@ impl SensorConfig {
 
     /// Get quantum efficiency at specified wavelength (nm)
     pub fn qe_at_wavelength(&self, wavelength_nm: u32) -> f64 {
-        // Convert u32 to f64 for our QuantumEfficiency type
-        self.quantum_efficiency.at(wavelength_nm as f64)
+        // Convert u32 to Wavelength for our QuantumEfficiency type
+        use crate::units::{Length, LengthExt};
+        self.quantum_efficiency
+            .at(Length::from_nanometers(wavelength_nm as f64))
     }
 
     /// Get sensor dimensions in microns

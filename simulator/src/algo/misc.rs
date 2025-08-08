@@ -325,6 +325,7 @@ pub fn generate_wwt_overlay_url(
 mod wwt_tests {
     use super::*;
     use crate::hardware::{sensor::models::GSENSE6510BSI, telescope::models::IDEAL_50CM};
+    use crate::units::{LengthExt, Wavelength};
 
     #[test]
     fn test_ra_hms_to_deg() {
@@ -351,8 +352,8 @@ mod wwt_tests {
         let satellite = SatelliteConfig::new(
             IDEAL_50CM.clone(),
             GSENSE6510BSI.clone(),
-            -10.0, // temperature
-            550.0, // wavelength
+            -10.0,                              // temperature
+            Wavelength::from_nanometers(550.0), // wavelength
         );
 
         let url = generate_wwt_overlay_url(
@@ -380,8 +381,8 @@ mod wwt_tests {
         let satellite = SatelliteConfig::new(
             IDEAL_50CM.clone(),
             GSENSE6510BSI.clone(),
-            -10.0, // temperature
-            550.0, // wavelength
+            -10.0,                              // temperature
+            Wavelength::from_nanometers(550.0), // wavelength
         );
 
         let url = generate_wwt_overlay_url(

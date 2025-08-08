@@ -17,6 +17,7 @@ use ndarray::Array2;
 use simulator::algo::min_max_scan::MinMaxScan;
 use simulator::image_proc::airy::PixelScaledAiryDisk;
 use simulator::image_proc::detection::StarFinder;
+use simulator::units::{Length, LengthExt};
 use starfield::image::starfinders::StellarSource;
 
 /// Generate a 2D Gaussian PSF with specified parameters
@@ -88,7 +89,8 @@ fn run_single_star_test(
         _ => {
             // Use the unified interface for DAO and IRAF
             use simulator::image_proc::detection::detect_stars_unified;
-            let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, 550.0);
+            let scaled_airy_disk =
+                PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, Length::from_nanometers(550.0));
             match detect_stars_unified(
                 u16_image.view(),
                 *detector,
@@ -195,7 +197,10 @@ fn run_subpixel_grid_test(image_size: usize, sigma: f64, detector: &StarFinder) 
                 _ => {
                     // Use the unified interface for DAO and IRAF
                     use simulator::image_proc::detection::detect_stars_unified;
-                    let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, 550.0);
+                    let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(
+                        airy_disk_pixels,
+                        Length::from_nanometers(550.0),
+                    );
                     match detect_stars_unified(
                         u16_image.view(),
                         *detector,
@@ -501,7 +506,10 @@ fn test_sigma_effect(image_size: usize, detector: &StarFinder) {
             _ => {
                 // Use the unified interface for DAO and IRAF
                 use simulator::image_proc::detection::detect_stars_unified;
-                let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(airy_disk_pixels, 550.0);
+                let scaled_airy_disk = PixelScaledAiryDisk::with_fwhm(
+                    airy_disk_pixels,
+                    Length::from_nanometers(550.0),
+                );
                 match detect_stars_unified(
                     u16_image.view(),
                     *detector,

@@ -31,13 +31,14 @@
 //! use simulator::hardware::{SatelliteConfig, TelescopeConfig, SensorConfig};
 //! use simulator::hardware::telescope::models::IDEAL_50CM;
 //! use simulator::hardware::sensor::models::GSENSE6510BSI;
+//! use simulator::units::{LengthExt, Wavelength};
 //!
 //! // Create a satellite configuration
 //! let satellite = SatelliteConfig::new(
 //!     IDEAL_50CM.clone(),
 //!     GSENSE6510BSI.clone(),
 //!     -10.0,  // Temperature in °C
-//!     550.0,  // Wavelength in nm
+//!     Wavelength::from_nanometers(550.0),  // Wavelength in nm
 //! );
 //!
 //! // Calculate field of view

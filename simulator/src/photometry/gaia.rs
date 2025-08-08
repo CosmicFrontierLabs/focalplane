@@ -902,6 +902,7 @@ pub static GAIA_PASSBAND: Lazy<QuantumEfficiency> = Lazy::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
 
     #[test]
     fn test_gaia_passband_construction() {
@@ -909,6 +910,6 @@ mod tests {
         let passband = &*GAIA_PASSBAND;
 
         // Check some QE values
-        assert!(passband.at(2000.0) < 0.00001); // Very low at wavelengths outside range
+        assert!(passband.at(Wavelength::from_nanometers(2000.0)) < 0.00001); // Very low at wavelengths outside range
     }
 }

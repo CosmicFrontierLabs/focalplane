@@ -474,6 +474,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 /// use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
 /// use simulator::image_proc::airy::PixelScaledAiryDisk;
+/// use simulator::units::{LengthExt, Wavelength};
 /// use starfield::catalogs::StarData;
 /// use starfield::Equatorial;
 /// use std::time::Duration;
@@ -484,7 +485,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 ///     position: Equatorial::from_degrees(0.0, 0.0),
 ///     b_v: None,
 /// };
-/// let disk = PixelScaledAiryDisk::with_fwhm(2.0, 550.0);
+/// let disk = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
 /// let source_flux = SourceFlux {
 ///     photons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
 ///     electrons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
@@ -566,7 +567,8 @@ mod tests {
     }
 
     fn create_star_in_frame(x: f64, y: f64, sigma: f64, flux: f64) -> StarInFrame {
-        let disk = PixelScaledAiryDisk::with_fwhm(sigma, 550.0);
+        let disk =
+            PixelScaledAiryDisk::with_fwhm(sigma, crate::units::Wavelength::from_nanometers(550.0));
 
         StarInFrame {
             x,

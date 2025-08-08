@@ -10,6 +10,7 @@ use simulator::hardware::sensor::models::{
 };
 use simulator::photometry::quantum_efficiency::QuantumEfficiency;
 use simulator::photometry::spectrum::Band;
+use simulator::units::{LengthExt, Wavelength};
 
 /// Spectral band definition with name and wavelength bounds.
 ///
@@ -64,7 +65,7 @@ fn mean_qe_in_band(qe: &QuantumEfficiency, band: &Band) -> f64 {
     for i in 0..=n_samples {
         let wavelength = band.lower_nm + i as f64;
         if wavelength <= band.upper_nm {
-            sum += qe.at(wavelength);
+            sum += qe.at(Wavelength::from_nanometers(wavelength));
         }
     }
 

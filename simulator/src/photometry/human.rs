@@ -292,6 +292,7 @@ impl HumanVision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
@@ -325,16 +326,16 @@ mod tests {
         let green_blue_qe = HumanVision::green_blue();
 
         // Red peak should be around 600nm
-        assert_relative_eq!(red_qe.at(600.0), 0.32);
+        assert_relative_eq!(red_qe.at(Wavelength::from_nanometers(600.0)), 0.32);
 
         // Blue peak should be around 450nm
-        assert_relative_eq!(blue_qe.at(450.0), 0.33);
+        assert_relative_eq!(blue_qe.at(Wavelength::from_nanometers(450.0)), 0.33);
 
         // Green-Red peak should be around 550nm
-        assert_relative_eq!(green_red_qe.at(550.0), 0.19);
+        assert_relative_eq!(green_red_qe.at(Wavelength::from_nanometers(550.0)), 0.19);
 
         // Green-Blue peak should be around 500nm
-        assert_relative_eq!(green_blue_qe.at(500.0), 0.40);
+        assert_relative_eq!(green_blue_qe.at(Wavelength::from_nanometers(500.0)), 0.40);
     }
 
     #[test]
@@ -343,8 +344,14 @@ mod tests {
         let red_lookup = HumanVision::for_receptor(HumanPhotoreceptor::Red);
 
         // Both methods should give identical curves
-        assert_relative_eq!(red_direct.at(500.0), red_lookup.at(500.0));
-        assert_relative_eq!(red_direct.at(600.0), red_lookup.at(600.0));
+        assert_relative_eq!(
+            red_direct.at(Wavelength::from_nanometers(500.0)),
+            red_lookup.at(Wavelength::from_nanometers(500.0))
+        );
+        assert_relative_eq!(
+            red_direct.at(Wavelength::from_nanometers(600.0)),
+            red_lookup.at(Wavelength::from_nanometers(600.0))
+        );
     }
 
     #[test]
@@ -362,6 +369,10 @@ mod tests {
 
         // Test interpolation between known points
         let expected_425nm = (0.025 + 0.035) / 2.0; // Average of 400nm (0.025) and 450nm (0.035)
-        assert_relative_eq!(red_qe.at(425.0), expected_425nm, epsilon = 1e-5);
+        assert_relative_eq!(
+            red_qe.at(Wavelength::from_nanometers(425.0)),
+            expected_425nm,
+            epsilon = 1e-5
+        );
     }
 }

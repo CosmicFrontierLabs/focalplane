@@ -51,6 +51,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 use super::QuantumEfficiency;
+use crate::units::{LengthExt, Wavelength};
 
 /// Physical constants in CGS units for astronomical calculations.
 ///
@@ -207,13 +208,13 @@ impl Band {
         self.upper_nm - self.lower_nm
     }
 
-    /// Return the center of a band in nanometers
+    /// Return the center of a band
     ///
     /// # Returns
     ///
-    /// The center wavelength of the band in nanometers
-    pub fn center(&self) -> f64 {
-        (self.lower_nm + self.upper_nm) / 2.0
+    /// The center wavelength of the band
+    pub fn center(&self) -> Wavelength {
+        Wavelength::from_nanometers((self.lower_nm + self.upper_nm) / 2.0)
     }
 
     /// Get the frequency bounds of the band in Hz
@@ -276,11 +277,12 @@ impl Band {
         self.as_n_subbands(self.width().ceil() as usize)
     }
 }
-pub fn wavelength_to_ergs(wavelength_nm: f64) -> f64 {
-    // Convert wavelength in nanometers to energy in erg
+pub fn wavelength_to_ergs(wavelength: Wavelength) -> f64 {
+    // Convert wavelength to energy in erg
     // E = h * c / λ, where λ is in cm
+    let wavelength_nm = wavelength.as_nanometers();
     if wavelength_nm <= 0.0 {
-        panic!("WARNING!!! Wavelength must be positive, got: {wavelength_nm}");
+        panic!("WARNING!!! Wavelength must be positive, got: {wavelength_nm} nm");
     }
     let wavelength_cm = wavelength_nm * 1e-7; // Convert nm to cm
     CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT / wavelength_cm
@@ -333,7 +335,7 @@ pub trait Spectrum: Send + Sync {
     /// # Usage
     /// Evaluate power per unit area per unit frequency at specific wavelengths
     /// for fundamental spectral quantity calculations and photometric analysis.
-    fn spectral_irradiance(&self, wavelength_nm: f64) -> f64;
+    fn spectral_irradiance(&self, wavelength: Wavelength) -> f64;
 
     /// Calculate the integrated power within a wavelength range and aperture
     ///
@@ -404,7 +406,7 @@ impl FlatSpectrum {
 }
 
 impl Spectrum for FlatSpectrum {
-    fn spectral_irradiance(&self, _wavelength: f64) -> f64 {
+    fn spectral_irradiance(&self, _wavelength: Wavelength) -> f64 {
         self.irradiance_value
     }
 
@@ -418,6 +420,7 @@ impl Spectrum for FlatSpectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
@@ -539,7 +542,13 @@ mod tests {
     #[test]
     fn test_flat_spectrum_spectral_irradiance() {
         let spectrum = FlatSpectrum::new(5e-23);
-        assert_eq!(spectrum.spectral_irradiance(500.0), 5e-23);
-        assert_eq!(spectrum.spectral_irradiance(1000.0), 5e-23);
+        assert_eq!(
+            spectrum.spectral_irradiance(Wavelength::from_nanometers(500.0)),
+            5e-23
+        );
+        assert_eq!(
+            spectrum.spectral_irradiance(Wavelength::from_nanometers(1000.0)),
+            5e-23
+        );
     }
 }

@@ -513,6 +513,7 @@ impl StarProjector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
     use float_cmp::approx_eq;
     use rand::rngs::StdRng;
@@ -846,10 +847,18 @@ mod tests {
         let large_telescope = telescope_models::IDEAL_100CM.clone();
         let sensor = sensor_models::GSENSE4040BSI.clone();
 
-        let small_satellite =
-            SatelliteConfig::new(small_telescope.clone(), sensor.clone(), -10.0, 550.0);
-        let large_satellite =
-            SatelliteConfig::new(large_telescope.clone(), sensor.clone(), -10.0, 550.0);
+        let small_satellite = SatelliteConfig::new(
+            small_telescope.clone(),
+            sensor.clone(),
+            -10.0,
+            Wavelength::from_nanometers(550.0),
+        );
+        let large_satellite = SatelliteConfig::new(
+            large_telescope.clone(),
+            sensor.clone(),
+            -10.0,
+            Wavelength::from_nanometers(550.0),
+        );
 
         let star_data = StarData::new(0, 0.0, 0.0, 2.0, None);
 
@@ -890,10 +899,15 @@ mod tests {
         sensor.quantum_efficiency = QuantumEfficiency::from_notch(&band, 0.8).unwrap();
 
         // Combined QE should be 0.5 * 0.8 = 0.4 (40%)
-        let satellite = SatelliteConfig::new(telescope.clone(), sensor.clone(), -10.0, 550.0);
+        let satellite = SatelliteConfig::new(
+            telescope.clone(),
+            sensor.clone(),
+            -10.0,
+            Wavelength::from_nanometers(550.0),
+        );
 
         // Verify combined QE is correct
-        let combined_qe_value = satellite.combined_qe.at(550.0);
+        let combined_qe_value = satellite.combined_qe.at(Wavelength::from_nanometers(550.0));
         assert_relative_eq!(combined_qe_value, 0.4, epsilon = 0.001);
 
         // Create a bright star

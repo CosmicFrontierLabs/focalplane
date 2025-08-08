@@ -17,7 +17,9 @@ use crate::image_proc::detection::{detect_stars_unified, StarDetection, StarFind
 use crate::image_proc::render::StarInFrame;
 use crate::photometry::zodical::SolarAngularCoordinates;
 use crate::star_data_to_fluxes;
-use crate::units::LengthExt;
+#[allow(unused_imports)]
+// Wavelength is needed for type alias, even though trait provides the method
+use crate::units::{LengthExt, Wavelength};
 use crate::Scene;
 use core::f64;
 use rand::rngs::StdRng;
@@ -275,8 +277,8 @@ mod tests {
             let satellite = SatelliteConfig::new(
                 telescope.clone(),
                 sized_sensor,
-                0.0,   // 0°C
-                550.0, // 550nm wavelength
+                0.0,                                // 0°C
+                Wavelength::from_nanometers(550.0), // 550nm wavelength
             );
 
             // Adjust for reasonable PSF sampling
@@ -346,7 +348,12 @@ mod tests {
 
         let telescope = IDEAL_50CM.clone();
         let sensor = HWK4123.with_dimensions(domain, domain);
-        let satellite = SatelliteConfig::new(telescope, sensor.clone(), 0.0, 550.0);
+        let satellite = SatelliteConfig::new(
+            telescope,
+            sensor.clone(),
+            0.0,
+            Wavelength::from_nanometers(550.0),
+        );
         let adjusted_satellite = satellite.with_fwhm_sampling(2.0);
 
         let params = ExperimentParams {
@@ -385,7 +392,8 @@ mod tests {
         let domain = 64;
         let telescope = IDEAL_50CM.clone();
         let sensor = GSENSE4040BSI.with_dimensions(domain, domain);
-        let satellite = SatelliteConfig::new(telescope, sensor, 0.0, 550.0);
+        let satellite =
+            SatelliteConfig::new(telescope, sensor, 0.0, Wavelength::from_nanometers(550.0));
         let adjusted_satellite = satellite.with_fwhm_sampling(2.0);
 
         let params = ExperimentParams {

@@ -80,6 +80,7 @@
 //! 59 wavelength points from 1000-11000 Å with surface brightness measurements
 
 use crate::algo::misc::interp;
+use crate::units::{LengthExt, Wavelength};
 
 use super::spectrum::{Band, Spectrum, CGS};
 
@@ -315,7 +316,8 @@ impl Spectrum for STISZodiacalSpectrum {
     /// # Usage
     /// Sample zodiacal light spectral irradiance at key astronomical wavelengths
     /// with linear interpolation and out-of-range boundary checking.
-    fn spectral_irradiance(&self, wavelength_nm: f64) -> f64 {
+    fn spectral_irradiance(&self, wavelength: Wavelength) -> f64 {
+        let wavelength_nm = wavelength.as_nanometers();
         if wavelength_nm < *self.wavelengths.first().unwrap()
             || wavelength_nm > *self.wavelengths.last().unwrap()
         {
@@ -377,8 +379,8 @@ impl Spectrum for STISZodiacalSpectrum {
 
         while current_wl < end_wl {
             let next_wl = (current_wl + step).min(end_wl);
-            let irr1 = self.spectral_irradiance(current_wl);
-            let irr2 = self.spectral_irradiance(next_wl);
+            let irr1 = self.spectral_irradiance(Wavelength::from_nanometers(current_wl));
+            let irr2 = self.spectral_irradiance(Wavelength::from_nanometers(next_wl));
 
             // Trapezoid rule: average height * width * frequency conversion
             let avg_irradiance = (irr1 + irr2) / 2.0;
@@ -399,6 +401,7 @@ impl Spectrum for STISZodiacalSpectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]
@@ -409,7 +412,7 @@ mod tests {
 
         // Check a known value at 500 nm
         let expected_irradiance = 5.15e-18 * (1e-8 / CGS::SPEED_OF_LIGHT); // Convert to per Hz
-        let actual_irradiance = spec.spectral_irradiance(500.0);
+        let actual_irradiance = spec.spectral_irradiance(Wavelength::from_nanometers(500.0));
         assert_relative_eq!(actual_irradiance, expected_irradiance, epsilon = 1e-10);
     }
 
@@ -426,12 +429,18 @@ mod tests {
         let spectrum = STISZodiacalSpectrum::new(1.0);
 
         // Should return 0 outside bounds
-        assert_eq!(spectrum.spectral_irradiance(50.0), 0.0);
-        assert_eq!(spectrum.spectral_irradiance(1500.0), 0.0);
+        assert_eq!(
+            spectrum.spectral_irradiance(Wavelength::from_nanometers(50.0)),
+            0.0
+        );
+        assert_eq!(
+            spectrum.spectral_irradiance(Wavelength::from_nanometers(1500.0)),
+            0.0
+        );
 
         // Should return non-zero within bounds
-        assert!(spectrum.spectral_irradiance(400.0) > 0.0);
-        assert!(spectrum.spectral_irradiance(700.0) > 0.0);
+        assert!(spectrum.spectral_irradiance(Wavelength::from_nanometers(400.0)) > 0.0);
+        assert!(spectrum.spectral_irradiance(Wavelength::from_nanometers(700.0)) > 0.0);
     }
 
     #[test]
@@ -439,9 +448,9 @@ mod tests {
         let spectrum = STISZodiacalSpectrum::new(1.0);
 
         // Test interpolation between two known points
-        let irr_400 = spectrum.spectral_irradiance(400.0);
-        let irr_425 = spectrum.spectral_irradiance(425.0);
-        let irr_412_5 = spectrum.spectral_irradiance(412.5);
+        let irr_400 = spectrum.spectral_irradiance(Wavelength::from_nanometers(400.0));
+        let irr_425 = spectrum.spectral_irradiance(Wavelength::from_nanometers(425.0));
+        let irr_412_5 = spectrum.spectral_irradiance(Wavelength::from_nanometers(412.5));
 
         // Should be approximately average of endpoints
         let expected = (irr_400 + irr_425) / 2.0;
@@ -467,7 +476,7 @@ mod tests {
 
         // Units should be in CGS: erg s⁻¹ cm⁻² Hz⁻¹
         // Values should be much smaller than original surface brightness
-        let irradiance = spectrum.spectral_irradiance(550.0);
+        let irradiance = spectrum.spectral_irradiance(Wavelength::from_nanometers(550.0));
 
         // Should be positive and in reasonable range for zodiacal light
         assert!(irradiance > 0.0);
@@ -479,11 +488,11 @@ mod tests {
         let zodi = STISZodiacalSpectrum::new(1.0);
 
         // Sample at key astronomical wavelengths
-        let uv_flux = zodi.spectral_irradiance(300.0); // Near-UV
-        let blue_flux = zodi.spectral_irradiance(450.0); // B-band
-        let visual_flux = zodi.spectral_irradiance(550.0); // V-band peak
-        let red_flux = zodi.spectral_irradiance(650.0); // R-band
-        let ir_flux = zodi.spectral_irradiance(900.0); // Near-IR
+        let uv_flux = zodi.spectral_irradiance(Wavelength::from_nanometers(300.0)); // Near-UV
+        let blue_flux = zodi.spectral_irradiance(Wavelength::from_nanometers(450.0)); // B-band
+        let visual_flux = zodi.spectral_irradiance(Wavelength::from_nanometers(550.0)); // V-band peak
+        let red_flux = zodi.spectral_irradiance(Wavelength::from_nanometers(650.0)); // R-band
+        let ir_flux = zodi.spectral_irradiance(Wavelength::from_nanometers(900.0)); // Near-IR
 
         // Verify expected spectral distribution in frequency units
         // Due to λ²/c conversion, longer wavelengths have higher flux in Hz units
