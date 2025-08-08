@@ -554,6 +554,7 @@ mod tests {
     use crate::image_proc::airy::PixelScaledAiryDisk;
     use crate::image_proc::noise::simple_normal_array;
     use crate::photometry::photoconversion::SpotFlux;
+    use crate::units::{Length, LengthExt};
 
     fn test_star_data() -> StarData {
         StarData {
@@ -588,7 +589,7 @@ mod tests {
             create_flat_qe(0.5),
             1024,
             1024,
-            5.5,
+            Length::from_micrometers(5.5),
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, 20.0),
             bit_depth,

@@ -18,6 +18,7 @@ use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodical::SolarAngularCoordinates, ZodicalLight};
 use simulator::shared_args::{DurationArg, TelescopeModel};
+use simulator::units::LengthExt;
 
 /// Command line arguments for zodiacal background computation
 #[derive(Parser, Debug)]
@@ -301,7 +302,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for sensor in &sensors {
         println!(
             "  - {} ({:.1}μm pitch, {}x{} pixels)",
-            sensor.name, sensor.pixel_size_um, sensor.width_px, sensor.height_px
+            sensor.name,
+            sensor.pixel_size.as_micrometers(),
+            sensor.width_px,
+            sensor.height_px
         );
     }
     println!();

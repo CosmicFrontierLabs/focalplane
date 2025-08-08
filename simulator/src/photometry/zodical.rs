@@ -151,6 +151,7 @@ use thiserror::Error;
 use crate::algo::bilinear::{BilinearInterpolator, InterpolationError};
 use crate::hardware::SatelliteConfig;
 use crate::photometry::{spectrum::Spectrum, STISZodiacalSpectrum};
+use crate::units::LengthExt;
 
 /// Ecliptic latitude/elongation of minimum measurable zodiacal light brightness.
 ///
@@ -726,7 +727,7 @@ impl ZodicalLight {
         // Pixel scale = (206265 * pixel_size) / focal_length
         // where 206265 is the number of arcseconds in a radian
         let pixel_scale_arcsec_per_pixel =
-            206265.0 * (satellite.sensor.pixel_size_um / 1000.0) / focal_length_mm;
+            206265.0 * satellite.sensor.pixel_size.as_millimeters() / focal_length_mm;
 
         let z_spect = self
             .get_zodical_spectrum(coords)

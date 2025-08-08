@@ -19,6 +19,7 @@ use clap::{Parser, ValueEnum};
 use log::debug;
 use simulator::hardware::telescope::{models, TelescopeConfig};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
+use simulator::units::LengthExt;
 
 /// Available telescope models for selection
 #[derive(Debug, Clone, ValueEnum)]
@@ -127,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  Resolution: {}x{} pixels",
         sensor.width_px, sensor.height_px
     );
-    println!("  Pixel size: {:.1} μm", sensor.pixel_size_um);
+    println!("  Pixel size: {:.1} μm", sensor.pixel_size.as_micrometers());
     // Get read noise estimate at operating temperature with exposure time
     let read_noise = sensor
         .read_noise_estimator

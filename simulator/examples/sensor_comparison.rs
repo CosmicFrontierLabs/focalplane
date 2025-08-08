@@ -36,7 +36,7 @@
 //! - Understanding trade-offs between resolution, noise, and sensitivity
 
 use simulator::hardware::sensor::models::ALL_SENSORS;
-use simulator::units::{Temperature, TemperatureExt};
+use simulator::units::{LengthExt, Temperature, TemperatureExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor Comparison Table");
@@ -81,8 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Resolution and area
         let resolution = format!("{}×{}", config.width_px, config.height_px);
-        let sensor_width_cm = (config.width_px as f64 * config.pixel_size_um) / 10000.0; // μm to cm
-        let sensor_height_cm = (config.height_px as f64 * config.pixel_size_um) / 10000.0; // μm to cm
+        let sensor_width_cm = config.width_px as f64 * config.pixel_size.as_centimeters();
+        let sensor_height_cm = config.height_px as f64 * config.pixel_size.as_centimeters();
         let area_cm2 = sensor_width_cm * sensor_height_cm;
 
         // Calculate average QE from 150nm to 1100nm
@@ -117,8 +117,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for config in sensors {
         println!();
-        let sensor_width_cm = (config.width_px as f64 * config.pixel_size_um) / 10000.0;
-        let sensor_height_cm = (config.height_px as f64 * config.pixel_size_um) / 10000.0;
+        let sensor_width_cm =
+            (config.width_px as f64 * config.pixel_size.as_micrometers()) / 10000.0;
+        let sensor_height_cm =
+            (config.height_px as f64 * config.pixel_size.as_micrometers()) / 10000.0;
         let area_cm2 = sensor_width_cm * sensor_height_cm;
 
         println!();
@@ -130,7 +132,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "- **Sensor area:** {area_cm2:.3} cm² ({sensor_width_cm:.2} × {sensor_height_cm:.2} cm)"
         );
-        println!("- **Pixel size:** {:.2} μm", config.pixel_size_um);
+        println!(
+            "- **Pixel size:** {:.2} μm",
+            config.pixel_size.as_micrometers()
+        );
         println!(
             "- **Max well depth:** {} e⁻",
             config.max_well_depth_e as u64

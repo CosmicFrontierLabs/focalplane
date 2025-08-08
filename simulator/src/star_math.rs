@@ -137,6 +137,7 @@ use crate::hardware::{SatelliteConfig, SensorConfig, TelescopeConfig};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::photon_electron_fluxes;
 use crate::photometry::BlackbodyStellarSpectrum;
+use crate::units::LengthExt;
 
 // A majority of stars have a B-V color index around 1.4
 // This is used when the catalog does not provide a B-V value
@@ -198,7 +199,7 @@ pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
     let plate_scale_arcsec_per_mm = telescope.plate_scale_arcsec_per_mm();
 
     // Convert to arcsec/pixel using the pixel size
-    plate_scale_arcsec_per_mm * (sensor.pixel_size_um / 1000.0)
+    plate_scale_arcsec_per_mm * sensor.pixel_size.as_millimeters()
 }
 
 /// Convert stellar magnitude and color to photon and electron flux rates.
@@ -771,7 +772,7 @@ mod tests {
 
         // Calculate expected pixel scale
         let arcsec_per_mm = telescope.plate_scale_arcsec_per_mm();
-        let expected_scale = arcsec_per_mm * (sensor.pixel_size_um / 1000.0);
+        let expected_scale = arcsec_per_mm * sensor.pixel_size.as_millimeters();
 
         let calculated = pixel_scale(&telescope, &sensor);
 

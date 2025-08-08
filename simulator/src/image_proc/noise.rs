@@ -33,6 +33,8 @@ use std::time::Duration;
 use crate::algo::process_array_in_parallel_chunks;
 #[cfg(test)]
 use crate::hardware::read_noise::ReadNoiseEstimator;
+#[cfg(test)]
+use crate::units::{Length, LengthExt};
 use crate::SensorConfig;
 use ndarray::Array2;
 use rand::{thread_rng, RngCore, SeedableRng};
@@ -324,7 +326,7 @@ mod tests {
             qe,
             size.1,
             size.0,
-            5.0,
+            Length::from_micrometers(5.0),
             ReadNoiseEstimator::constant(read_noise),
             DarkCurrentEstimator::from_reference_point(dark_current, 20.0),
             8,

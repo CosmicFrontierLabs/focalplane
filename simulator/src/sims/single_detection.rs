@@ -17,6 +17,7 @@ use crate::image_proc::detection::{detect_stars_unified, StarDetection, StarFind
 use crate::image_proc::render::StarInFrame;
 use crate::photometry::zodical::SolarAngularCoordinates;
 use crate::star_data_to_fluxes;
+use crate::units::LengthExt;
 use crate::Scene;
 use core::f64;
 use rand::rngs::StdRng;
@@ -103,7 +104,7 @@ impl ExperimentResults {
 
     pub fn rms_error_radians(&self) -> f64 {
         let pix_err = self.rms_error();
-        let err_m = self.params.satellite.sensor.pixel_size_um * pix_err / 1_000_000.0;
+        let err_m = self.params.satellite.sensor.pixel_size.as_meters() * pix_err;
         (err_m / self.params.satellite.telescope.focal_length_m).tan()
     }
 

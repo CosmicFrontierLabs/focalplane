@@ -44,7 +44,7 @@ use once_cell::sync::Lazy;
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
-use crate::units::{Temperature, TemperatureExt};
+use crate::units::{Length, LengthExt, Temperature, TemperatureExt};
 
 /// Complete sensor configuration for astronomical detector simulation.
 ///
@@ -72,8 +72,8 @@ pub struct SensorConfig {
     /// Sensor height in pixels (active imaging area)
     pub height_px: usize,
 
-    /// Physical pixel size in micrometers (square pixels assumed)
-    pub pixel_size_um: f64,
+    /// Physical pixel size (square pixels assumed)
+    pub pixel_size: Length,
 
     /// Read noise estimator for temperature and exposure-dependent noise
     pub read_noise_estimator: ReadNoiseEstimator,
@@ -105,7 +105,7 @@ impl SensorConfig {
         quantum_efficiency: QuantumEfficiency,
         width_px: usize,
         height_px: usize,
-        pixel_size_um: f64,
+        pixel_size: Length,
         read_noise_estimator: ReadNoiseEstimator,
         dark_current_estimator: DarkCurrentEstimator,
         bit_depth: u8,
@@ -118,7 +118,7 @@ impl SensorConfig {
             quantum_efficiency,
             width_px,
             height_px,
-            pixel_size_um,
+            pixel_size,
             read_noise_estimator,
             dark_current_estimator,
             bit_depth,
@@ -145,8 +145,8 @@ impl SensorConfig {
     /// Get sensor dimensions in microns
     pub fn dimensions_um(&self) -> (f64, f64) {
         (
-            self.width_px as f64 * self.pixel_size_um,
-            self.height_px as f64 * self.pixel_size_um,
+            self.width_px as f64 * self.pixel_size.as_micrometers(),
+            self.height_px as f64 * self.pixel_size.as_micrometers(),
         )
     }
 
@@ -187,7 +187,7 @@ mod tests {
             qe,
             1024,
             1024,
-            5.5,
+            Length::from_micrometers(5.5),
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, 20.0),
             8,
@@ -218,7 +218,7 @@ mod tests {
             qe,
             1024,
             768,
-            5.5,
+            Length::from_micrometers(5.5),
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, 20.0),
             8,
@@ -241,7 +241,7 @@ mod tests {
             qe,
             1024,
             768,
-            5.5,
+            Length::from_micrometers(5.5),
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, 20.0),
             8,
@@ -264,7 +264,7 @@ mod tests {
 
         // Verify other properties remain the same
         assert_eq!(resized.name, original.name);
-        assert_eq!(resized.pixel_size_um, original.pixel_size_um);
+        assert_eq!(resized.pixel_size, original.pixel_size);
         // Read noise estimator should be cloned properly
         assert_eq!(
             resized
@@ -357,7 +357,7 @@ pub mod models {
             qe,
             4096,
             4096,
-            9.0,
+            Length::from_micrometers(9.0),
             ReadNoiseEstimator::constant(2.3),
             DarkCurrentEstimator::from_reference_point(0.04, -40.0), // 0.04 e-/px/s at -40°C
             12,
@@ -399,7 +399,7 @@ pub mod models {
             qe,
             3200,
             3200,
-            6.5,
+            Length::from_micrometers(6.5),
             ReadNoiseEstimator::constant(0.7),
             DarkCurrentEstimator::from_reference_point(0.2, -10.0), // 0.2 e-/px/s at -10°C
             12,
@@ -441,7 +441,7 @@ pub mod models {
             qe,
             4096,
             2300,
-            4.6,
+            Length::from_micrometers(4.6),
             ReadNoiseEstimator::hwk4123(),
             DarkCurrentEstimator::from_two_points(-20.0, 0.0198, 0.0, 0.1), // 0.0198 e-/px/s at -20°C, 0.1 e-/px/s at 0°C
             12,
@@ -491,7 +491,7 @@ pub mod models {
             qe,
             9568,
             6380,
-            3.76, // Pixel pitch in microns
+            Length::from_micrometers(3.76), // Pixel pitch
             ReadNoiseEstimator::constant(1.58),
             DarkCurrentEstimator::from_curve(
                 vec![-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0],
@@ -530,7 +530,10 @@ mod model_tests {
         assert_eq!(models::GSENSE4040BSI.name, "GSENSE4040BSI");
         assert_eq!(models::GSENSE4040BSI.width_px, 4096);
         assert_eq!(models::GSENSE4040BSI.height_px, 4096);
-        assert_eq!(models::GSENSE4040BSI.pixel_size_um, 9.0);
+        assert_eq!(
+            models::GSENSE4040BSI.pixel_size,
+            Length::from_micrometers(9.0)
+        );
         // Check read noise at room temperature with 1s exposure
         assert_eq!(
             models::GSENSE4040BSI
@@ -552,7 +555,10 @@ mod model_tests {
         assert_eq!(models::GSENSE6510BSI.name, "GSENSE6510BSI");
         assert_eq!(models::GSENSE6510BSI.width_px, 3200);
         assert_eq!(models::GSENSE6510BSI.height_px, 3200);
-        assert_eq!(models::GSENSE6510BSI.pixel_size_um, 6.5);
+        assert_eq!(
+            models::GSENSE6510BSI.pixel_size,
+            Length::from_micrometers(6.5)
+        );
         // Check read noise at room temperature with 1s exposure
         assert_eq!(
             models::GSENSE6510BSI
@@ -574,7 +580,7 @@ mod model_tests {
         assert_eq!(models::HWK4123.name, "HWK4123");
         assert_eq!(models::HWK4123.width_px, 4096);
         assert_eq!(models::HWK4123.height_px, 2300);
-        assert_eq!(models::HWK4123.pixel_size_um, 4.6);
+        assert_eq!(models::HWK4123.pixel_size, Length::from_micrometers(4.6));
         // Check read noise at room temperature with 1s exposure
         // For HWK4123, this should be ~0.301 based on the calibration data at 20°C, 5Hz
         let hwk_read_noise = models::HWK4123
@@ -602,7 +608,7 @@ mod model_tests {
         assert_eq!(models::IMX455.name, "IMX455");
         assert_eq!(models::IMX455.width_px, 9568);
         assert_eq!(models::IMX455.height_px, 6380);
-        assert_eq!(models::IMX455.pixel_size_um, 3.76);
+        assert_eq!(models::IMX455.pixel_size, Length::from_micrometers(3.76));
         // Check read noise at room temperature with 0.2s exposure
         assert_eq!(
             models::IMX455

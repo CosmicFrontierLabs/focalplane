@@ -2,6 +2,30 @@
 
 This document tracks the migration to type-safe units using the `uom` crate to prevent unit confusion errors.
 
+## Completed Migrations
+
+### ✅ Temperature Functions (Priority 1)
+- **Completed**: All functions taking `temp_c: f64`
+- **Implementation**: Using `ThermodynamicTemperature` type from uom
+- **Extension trait**: `TemperatureExt` for convenient Celsius/Kelvin/Fahrenheit conversions
+- **Files updated**: 
+  - `simulator/src/units.rs` - Core Temperature type and TemperatureExt trait
+  - `simulator/src/hardware/dark_current.rs` - Dark current temperature calculations
+  - All sensor models and temperature-dependent calculations
+
+### ✅ Pixel Size Units (Priority 2 - Partial)
+- **Completed**: `pixel_size_um: f64` → `pixel_size: Length`
+- **Implementation**: Using `Length` type from uom with micrometers as common unit
+- **Extension trait**: `LengthExt` for nm/μm/mm/cm/m conversions
+- **Files updated**:
+  - `simulator/src/units.rs` - Core Length type and LengthExt trait  
+  - `simulator/src/hardware/sensor.rs` - All sensor models updated
+  - All usage sites updated to use `Length::from_micrometers()`
+- **Refactored conversions**:
+  - Manual `/1000.0` → `as_millimeters()`
+  - Manual `/10000.0` → `as_centimeters()`
+  - Manual `/1_000_000.0` → `as_meters()`
+
 ## Priority 1: Critical Unit Confusion Areas
 
 These are areas where unit mix-ups are most likely and dangerous:
@@ -11,10 +35,6 @@ These are areas where unit mix-ups are most likely and dangerous:
   - **Risk**: Arguments can be swapped (already happened!)
   - **Solution**: Use `ColorIndex` and `Magnitude` types
 
-### Temperature Functions  
-- [ ] All functions taking `temp_c: f64`
-  - **Risk**: Could pass Kelvin or Fahrenheit by mistake
-  - **Solution**: Use `ThermodynamicTemperature` type
 
 ### Wavelength Parameters
 - [ ] Functions with `wavelength_nm: f64`
@@ -31,7 +51,7 @@ These are areas where unit mix-ups are most likely and dangerous:
 ### Length Units
 - [ ] Telescope aperture (`aperture_m: f64`)
 - [ ] Focal length (`focal_length_m: f64`)
-- [ ] Pixel size (`pixel_size_um: f64`)
+- [x] ~~Pixel size (`pixel_size_um: f64`)~~ ✅ COMPLETED
 - [ ] Sensor dimensions (`width_um`, `height_um`)
 - [ ] Wavelength bands (`lower_nm`, `upper_nm`)
 

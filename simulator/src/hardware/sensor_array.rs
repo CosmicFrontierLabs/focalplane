@@ -5,6 +5,7 @@
 //! and survey instruments.
 
 use crate::hardware::sensor::SensorConfig;
+use crate::units::{Length, LengthExt};
 
 /// Position of a sensor in the array focal plane.
 ///
@@ -70,8 +71,8 @@ impl SensorArray {
     pub fn sensor_aabb_mm(&self, index: usize) -> Option<(f64, f64, f64, f64)> {
         self.sensors.get(index).map(|ps| {
             let (width_um, height_um) = ps.sensor.dimensions_um();
-            let width_mm = width_um / 1000.0;
-            let height_mm = height_um / 1000.0;
+            let width_mm = Length::from_micrometers(width_um).as_millimeters();
+            let height_mm = Length::from_micrometers(height_um).as_millimeters();
 
             let min_x = ps.position.x_mm - width_mm / 2.0;
             let max_x = ps.position.x_mm + width_mm / 2.0;
@@ -136,8 +137,8 @@ impl SensorArray {
     pub fn mm_to_pixel(&self, x_mm: f64, y_mm: f64) -> Option<(f64, f64, usize)> {
         for (index, ps) in self.sensors.iter().enumerate() {
             let (width_um, height_um) = ps.sensor.dimensions_um();
-            let width_mm = width_um / 1000.0;
-            let height_mm = height_um / 1000.0;
+            let width_mm = Length::from_micrometers(width_um).as_millimeters();
+            let height_mm = Length::from_micrometers(height_um).as_millimeters();
 
             // Check if point is within this sensor's bounds
             let rel_x = x_mm - ps.position.x_mm;
@@ -145,8 +146,8 @@ impl SensorArray {
 
             if rel_x.abs() <= width_mm / 2.0 && rel_y.abs() <= height_mm / 2.0 {
                 // Convert to pixel coordinates (0,0 at top-left of sensor)
-                let pixel_x = (rel_x + width_mm / 2.0) / (ps.sensor.pixel_size_um / 1000.0);
-                let pixel_y = (height_mm / 2.0 - rel_y) / (ps.sensor.pixel_size_um / 1000.0);
+                let pixel_x = (rel_x + width_mm / 2.0) / ps.sensor.pixel_size.as_millimeters();
+                let pixel_y = (height_mm / 2.0 - rel_y) / ps.sensor.pixel_size.as_millimeters();
 
                 return Some((pixel_x, pixel_y, index));
             }
