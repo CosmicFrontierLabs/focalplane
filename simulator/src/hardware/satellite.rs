@@ -1,7 +1,7 @@
 use super::{sensor::SensorConfig, telescope::TelescopeConfig};
 use crate::image_proc::airy::PixelScaledAiryDisk;
 use crate::photometry::QuantumEfficiency;
-use crate::units::{LengthExt, Temperature, Wavelength};
+use crate::units::{Length, LengthExt, Temperature, Wavelength};
 
 /// Complete satellite configuration combining telescope optics and sensor.
 ///
@@ -184,7 +184,7 @@ impl SatelliteConfig {
             / self.sensor.pixel_size.as_micrometers();
 
         let ratio = q / current_q;
-        let new_focal_length = self.telescope.focal_length_m * ratio;
+        let new_focal_length = Length::from_meters(self.telescope.focal_length.as_meters() * ratio);
 
         SatelliteConfig::new(
             self.telescope.with_focal_length(new_focal_length),
@@ -219,7 +219,7 @@ impl SatelliteConfig {
         format!(
             "{} ({:.2}m f/{:.1}) + {}",
             self.telescope.name,
-            self.telescope.aperture_m,
+            self.telescope.aperture.as_meters(),
             self.telescope.f_number(),
             self.sensor.name
         )
@@ -233,7 +233,12 @@ mod tests {
 
     #[test]
     fn test_satellite_config_creation() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
         let temp = Temperature::from_celsius(-10.0);
 
@@ -246,7 +251,12 @@ mod tests {
 
     #[test]
     fn test_field_of_view_calculation() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::GSENSE6510BSI.clone();
 
         let satellite = SatelliteConfig::new(
@@ -263,7 +273,12 @@ mod tests {
 
     #[test]
     fn test_airy_disk_pixel_space() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::HWK4123.clone();
 
         let satellite = SatelliteConfig::new(
@@ -282,7 +297,12 @@ mod tests {
 
     #[test]
     fn test_with_fwhm_sampling() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
 
         let satellite = SatelliteConfig::new(
@@ -308,19 +328,25 @@ mod tests {
         assert_eq!(resampled.temperature, satellite.temperature);
         assert_eq!(resampled.wavelength, satellite.wavelength);
         assert_eq!(
-            resampled.telescope.aperture_m,
-            satellite.telescope.aperture_m
+            resampled.telescope.aperture.as_meters(),
+            satellite.telescope.aperture.as_meters()
         );
 
         // Focal length should have changed proportionally
         let expected_ratio = target_sampling / original_sampling;
-        let actual_ratio = resampled.telescope.focal_length_m / satellite.telescope.focal_length_m;
+        let actual_ratio = resampled.telescope.focal_length.as_meters()
+            / satellite.telescope.focal_length.as_meters();
         assert!((actual_ratio - expected_ratio).abs() < 1e-10);
     }
 
     #[test]
     fn test_fwhm_sampling_ratio() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::HWK4123.clone();
 
         let satellite = SatelliteConfig::new(
@@ -343,7 +369,12 @@ mod tests {
 
     #[test]
     fn test_airy_disk_fwhm_sampled() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
 
         let satellite = SatelliteConfig::new(
@@ -373,7 +404,12 @@ mod tests {
 
     #[test]
     fn test_description() {
-        let telescope = TelescopeConfig::new("Test Scope", 0.5, 2.5, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
         let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
 
         let satellite = SatelliteConfig::new(

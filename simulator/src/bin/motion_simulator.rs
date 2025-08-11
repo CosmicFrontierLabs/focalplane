@@ -114,8 +114,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Telescope configuration:");
     println!("  Model: {:?}", args.telescope);
     println!("  Name: {}", telescope.name);
-    println!("  Aperture: {:.1} m", telescope.aperture_m);
-    println!("  Focal length: {:.1} m", telescope.focal_length_m);
+    println!("  Aperture: {:.1} m", telescope.aperture.as_meters());
+    println!(
+        "  Focal length: {:.1} m",
+        telescope.focal_length.as_meters()
+    );
     println!(
         "  Light efficiency: {:.1}%",
         telescope

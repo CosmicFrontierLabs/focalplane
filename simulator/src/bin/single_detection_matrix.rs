@@ -280,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(
         csv_file,
         "Aperture diameter: {} m",
-        telescope_config.aperture_m
+        telescope_config.aperture.as_meters()
     )
     .unwrap();
     writeln!(

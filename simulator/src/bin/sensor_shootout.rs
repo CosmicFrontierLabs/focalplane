@@ -47,7 +47,7 @@ use simulator::scene::Scene;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
 use simulator::{
     star_math::field_diameter,
-    units::{LengthExt, Temperature, TemperatureExt, Wavelength},
+    units::{Length, LengthExt, Temperature, TemperatureExt, Wavelength},
     SensorConfig,
 };
 use starfield::catalogs::{StarCatalog, StarData};
@@ -350,7 +350,8 @@ fn run_experiment<T: StarCatalog>(
             let mut exposure_results = HashMap::new();
 
             // Create a modified satellite config with the new f-number
-            let focal_length = satellite.telescope.aperture_m * f_number;
+            let focal_length =
+                Length::from_meters(satellite.telescope.aperture.as_meters() * f_number);
             let modified_telescope = satellite.telescope.with_focal_length(focal_length);
             let modified_satellite = SatelliteConfig::new(
                 modified_telescope,
@@ -588,7 +589,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "Using telescope: {} (aperture: {:.2}m, f/{:.1})",
         selected_telescope.name,
-        selected_telescope.aperture_m,
+        selected_telescope.aperture.as_meters(),
         selected_telescope.f_number()
     );
 
@@ -651,7 +652,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for satellite in satellites.iter() {
         // Create telescope with smallest f-number for FOV calculation
-        let focal_length = satellite.telescope.aperture_m * min_f_number;
+        let focal_length =
+            Length::from_meters(satellite.telescope.aperture.as_meters() * min_f_number);
         let telescope_min_f = satellite.telescope.with_focal_length(focal_length);
         let fov_deg = field_diameter(&telescope_min_f, &satellite.sensor);
 
@@ -701,7 +703,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         icp_convergence_threshold: args.icp_convergence_threshold,
         star_finder: args.star_finder,
         csv_writer,
-        aperture_m: base_telescope.aperture_m,
+        aperture_m: base_telescope.aperture.as_meters(),
     };
 
     // Build all experiment parameters upfront

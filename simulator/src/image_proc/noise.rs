@@ -763,9 +763,9 @@ mod tests {
         let sensor = make_tiny_test_sensor((64, 64), 0.1, 2.0);
         let telescope = TelescopeConfig::new(
             "Test Telescope",
-            1.0,  // 1 meter aperture
-            10.0, // 10 meters focal length
-            1.0,  // light efficiency
+            Length::from_meters(1.0),  // 1 meter aperture
+            Length::from_meters(10.0), // 10 meters focal length
+            1.0,                       // light efficiency
         );
         let exposure_time = Duration::from_secs(60);
         let coords = SolarAngularCoordinates::new(90.0, 0.0).expect("Invalid coordinates");

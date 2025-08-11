@@ -180,7 +180,7 @@ pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64
 
     // Use the plate scale to convert to an angle
     // angle in radians = diagonal / focal_length
-    let angle_rad = diagonal_m / telescope.focal_length_m;
+    let angle_rad = diagonal_m / telescope.focal_length.as_meters();
 
     // Convert to degrees
     angle_rad.to_degrees()
@@ -753,7 +753,7 @@ mod tests {
         let (width_um, height_um) = sensor.dimensions_um();
         let diagonal_um = (width_um.powi(2) + height_um.powi(2)).sqrt();
         let diagonal_m = diagonal_um * 1.0e-6;
-        let expected_angle_rad = diagonal_m / telescope.focal_length_m;
+        let expected_angle_rad = diagonal_m / telescope.focal_length.as_meters();
         let expected_angle_deg = expected_angle_rad.to_degrees();
 
         let calculated = field_diameter(&telescope, &sensor);
@@ -871,7 +871,8 @@ mod tests {
             .integrated_over(&second, large_telescope.collecting_area_cm2());
 
         // Aperture ratio squared: 1.0^2 / 0.5^2 = 4.0
-        let expected_ratio = (large_telescope.aperture_m / small_telescope.aperture_m).powi(2);
+        let expected_ratio =
+            (large_telescope.aperture.as_meters() / small_telescope.aperture.as_meters()).powi(2);
 
         println!(
             "Small telescope electrons: {elec_small}, Large telescope electrons: {elec_large}"

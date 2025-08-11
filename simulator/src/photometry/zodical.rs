@@ -721,7 +721,7 @@ impl ZodicalLight {
         coords: &SolarAngularCoordinates,
     ) -> Array2<f64> {
         // Convert telescope focal length from meters to mm
-        let focal_length_mm = satellite.telescope.focal_length_m * 1000.0;
+        let focal_length_mm = satellite.telescope.focal_length.as_meters() * 1000.0;
 
         // Calculate pixel scale in arcseconds per pixel
         // Pixel scale = (206265 * pixel_size) / focal_length
@@ -736,7 +736,7 @@ impl ZodicalLight {
         let pixel_solid_angle_arcsec2 = pixel_scale_arcsec_per_pixel * pixel_scale_arcsec_per_pixel;
 
         // Compute the photoelectrons per solid angle and multiply by the pixel solid angle
-        let aperture_cmsq = satellite.telescope.aperture_m * 10000.0;
+        let aperture_cmsq = satellite.telescope.aperture.as_meters() * 10000.0;
         let mean_pe = z_spect.photo_electrons(&satellite.combined_qe, aperture_cmsq, exposure)
             * pixel_solid_angle_arcsec2;
 

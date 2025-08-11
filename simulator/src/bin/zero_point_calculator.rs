@@ -23,6 +23,7 @@ use simulator::{
         TelescopeConfig,
     },
     star_math::DEFAULT_BV,
+    units::LengthExt,
 };
 use std::time::Duration;
 
@@ -205,7 +206,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(zero_point) => {
                     println!(
                         "{:<15} {:<20} {:<15.3} {:<15.2}",
-                        telescope_name, sensor.name, zero_point, telescope.aperture_m
+                        telescope_name,
+                        sensor.name,
+                        zero_point,
+                        telescope.aperture.as_meters()
                     );
                 }
                 Err(e) => {

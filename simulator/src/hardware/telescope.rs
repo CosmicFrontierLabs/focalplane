@@ -39,7 +39,7 @@ use once_cell::sync::Lazy;
 use std::f64::consts::PI;
 
 use crate::photometry::QuantumEfficiency;
-use crate::units::{LengthExt, Wavelength};
+use crate::units::{Length, LengthExt, Wavelength};
 
 /// Complete telescope optical system configuration.
 ///
@@ -58,10 +58,10 @@ use crate::units::{LengthExt, Wavelength};
 ///
 #[derive(Debug, Clone)]
 pub struct TelescopeConfig {
-    /// Primary mirror or lens diameter in meters (clear aperture)
-    pub aperture_m: f64,
-    /// Effective focal length in meters (including optical train)
-    pub focal_length_m: f64,
+    /// Primary mirror or lens diameter (clear aperture)
+    pub aperture: Length,
+    /// Effective focal length (including optical train)
+    pub focal_length: Length,
     /// Telescope model name or identifier
     pub name: String,
     /// Central obscuration ratio (0.0-1.0, fraction of aperture radius blocked)
@@ -80,8 +80,8 @@ impl TelescopeConfig {
     /// using the provided light_efficiency value.
     pub fn new(
         name: impl Into<String>,
-        aperture_m: f64,
-        focal_length_m: f64,
+        aperture: Length,
+        focal_length: Length,
         light_efficiency: f64,
     ) -> Self {
         // Create flat QE curve from 150nm to 1100nm
@@ -92,8 +92,8 @@ impl TelescopeConfig {
 
         Self {
             name: name.into(),
-            aperture_m,
-            focal_length_m,
+            aperture,
+            focal_length,
             obscuration_ratio: 0.0,
             quantum_efficiency,
         }
@@ -102,15 +102,15 @@ impl TelescopeConfig {
     /// Create a new telescope configuration with custom quantum efficiency curve
     pub fn new_with_qe(
         name: impl Into<String>,
-        aperture_m: f64,
-        focal_length_m: f64,
+        aperture: Length,
+        focal_length: Length,
         quantum_efficiency: QuantumEfficiency,
         obscuration_ratio: f64,
     ) -> Self {
         Self {
             name: name.into(),
-            aperture_m,
-            focal_length_m,
+            aperture,
+            focal_length,
             obscuration_ratio,
             quantum_efficiency,
         }
@@ -118,7 +118,7 @@ impl TelescopeConfig {
 
     /// Get the f-number of the telescope
     pub fn f_number(&self) -> f64 {
-        self.focal_length_m / self.aperture_m
+        self.focal_length.as_meters() / self.aperture.as_meters()
     }
 
     /// Calculate the radius of the Airy disk in microns at the focal plane for given wavelength
@@ -139,7 +139,7 @@ impl TelescopeConfig {
         let wavelength_m = wavelength_nm * 1.0e-9;
 
         // Calculate radius in meters
-        let radius_m = wavelength_m * self.focal_length_m / self.aperture_m;
+        let radius_m = wavelength_m * self.focal_length.as_meters() / self.aperture.as_meters();
 
         // Convert to microns
         radius_m * 1.0e6
@@ -158,7 +158,7 @@ impl TelescopeConfig {
         let wavelength_m = wavelength_nm * 1.0e-9;
 
         // Calculate angular radius in radians
-        let radius_rad = 1.22 * wavelength_m / self.aperture_m;
+        let radius_rad = 1.22 * wavelength_m / self.aperture.as_meters();
 
         // Convert to milliarcseconds (1 radian = 206,264,806.247 mas)
         radius_rad * MAS_PER_RAD
@@ -173,14 +173,15 @@ impl TelescopeConfig {
     pub fn plate_scale_arcsec_per_mm(&self) -> f64 {
         // 1 radian = 206,264.8 arcseconds
         // plate scale = (1/f) * 206,264.8 arcsec/radian
-        // focal_length_m needs to be converted to mm
-        (1.0 / (self.focal_length_m * 1000.0)) * 206_264.8
+        // focal_length needs to be converted to mm
+        (1.0 / (self.focal_length.as_meters() * 1000.0)) * 206_264.8
     }
 
     /// Calculate the collecting area in square meters
     pub fn collecting_area_m2(&self) -> f64 {
-        let outer_area = PI * (self.aperture_m / 2.0).powi(2);
-        let obscured_diameter = self.aperture_m * self.obscuration_ratio;
+        let aperture_m = self.aperture.as_meters();
+        let outer_area = PI * (aperture_m / 2.0).powi(2);
+        let obscured_diameter = aperture_m * self.obscuration_ratio;
         let obscured_area = PI * (obscured_diameter / 2.0).powi(2);
         outer_area - obscured_area
     }
@@ -191,11 +192,11 @@ impl TelescopeConfig {
     }
 
     /// Create a new telescope configuration with modified focal length
-    pub fn with_focal_length(&self, focal_length_m: f64) -> TelescopeConfig {
+    pub fn with_focal_length(&self, focal_length: Length) -> TelescopeConfig {
         TelescopeConfig {
             name: self.name.clone(),
-            aperture_m: self.aperture_m,
-            focal_length_m,
+            aperture: self.aperture,
+            focal_length,
             quantum_efficiency: self.quantum_efficiency.clone(),
             obscuration_ratio: self.obscuration_ratio,
         }
@@ -209,13 +210,23 @@ mod tests {
 
     #[test]
     fn test_f_number() {
-        let telescope = TelescopeConfig::new("Test", 0.5, 4.0, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test",
+            Length::from_meters(0.5),
+            Length::from_meters(4.0),
+            0.8,
+        );
         assert_eq!(telescope.f_number(), 8.0);
     }
 
     #[test]
     fn test_airy_disk_radii() {
-        let telescope = TelescopeConfig::new("Test", 0.5, 4.0, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test",
+            Length::from_meters(0.5),
+            Length::from_meters(4.0),
+            0.8,
+        );
         let wavelength_nm = 550.0; // Green light
 
         // Calculate expected values
@@ -240,7 +251,12 @@ mod tests {
 
     #[test]
     fn test_plate_scale() {
-        let telescope = TelescopeConfig::new("Test", 0.5, 4.0, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test",
+            Length::from_meters(0.5),
+            Length::from_meters(4.0),
+            0.8,
+        );
 
         // Calculate expected plate scale (focal length 4m = 4000mm)
         let expected_plate_scale = (1.0 / 4000.0) * 206_264.8;
@@ -255,7 +271,12 @@ mod tests {
 
     #[test]
     fn test_collecting_area() {
-        let telescope = TelescopeConfig::new("Test", 0.5, 4.0, 0.8);
+        let telescope = TelescopeConfig::new(
+            "Test",
+            Length::from_meters(0.5),
+            Length::from_meters(4.0),
+            0.8,
+        );
 
         // Calculate expected areas
         let radius = 0.5 / 2.0;
@@ -271,7 +292,12 @@ mod tests {
     #[test]
     fn test_obscuration_ratio() {
         // Test case from user: 50cm aperture with 42% obscuration should have 1617 cm² clear area
-        let mut telescope = TelescopeConfig::new("Test Obscured", 0.5, 4.0, 1.0);
+        let mut telescope = TelescopeConfig::new(
+            "Test Obscured",
+            Length::from_meters(0.5),
+            Length::from_meters(4.0),
+            1.0,
+        );
         telescope.obscuration_ratio = 0.42;
 
         let area_cm2 = telescope.collecting_area_cm2();
@@ -290,9 +316,10 @@ pub mod models {
 
     pub static SMALL_50MM: Lazy<TelescopeConfig> = Lazy::new(|| {
         TelescopeConfig::new(
-            "50mm", 0.05,  // 50mm aperture
-            0.5,   // 50mm
-            0.615, // light efficiency
+            "50mm",
+            Length::from_meters(0.05), // 50mm aperture
+            Length::from_meters(0.5),  // 0.5m focal length
+            0.615,                     // light efficiency
         )
     });
 
@@ -300,9 +327,9 @@ pub mod models {
     pub static IDEAL_50CM: Lazy<TelescopeConfig> = Lazy::new(|| {
         TelescopeConfig::new(
             "Ideal 50cm",
-            0.5,   // 50cm aperture
-            10.0,  // 1m focal length
-            0.815, // light efficiency
+            Length::from_meters(0.5),  // 50cm aperture
+            Length::from_meters(10.0), // 10m focal length
+            0.815,                     // light efficiency
         )
     });
 
@@ -310,9 +337,9 @@ pub mod models {
     pub static IDEAL_100CM: Lazy<TelescopeConfig> = Lazy::new(|| {
         TelescopeConfig::new(
             "Ideal 100cm",
-            1.0,   // 1m aperture
-            10.0,  // 10m focal length
-            0.815, // light efficiency
+            Length::from_meters(1.0),  // 1m aperture
+            Length::from_meters(10.0), // 10m focal length
+            0.815,                     // light efficiency
         )
     });
 
@@ -332,8 +359,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Officina Stellare Weasel",
-            0.5,  // 50cm aperture
-            3.45, // 345cm focal length (f/6.9)
+            Length::from_meters(0.5),  // 50cm aperture
+            Length::from_meters(3.45), // 345cm focal length (f/6.9)
             quantum_efficiency,
             0.42, // 42% linear obscuration ratio
         )
@@ -354,8 +381,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Optech/Lina LS50",
-            0.5, // 50cm aperture
-            5.0, // 500cm focal length (f/10)
+            Length::from_meters(0.5), // 50cm aperture
+            Length::from_meters(5.0), // 500cm focal length (f/10)
             quantum_efficiency,
             0.37, // 37% linear obscuration ratio
         )
@@ -376,8 +403,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Optech/Lina LS35",
-            0.35, // 35cm aperture
-            3.5,  // 350cm focal length (f/10)
+            Length::from_meters(0.35), // 35cm aperture
+            Length::from_meters(3.5),  // 350cm focal length (f/10)
             quantum_efficiency,
             0.37, // 37% linear obscuration ratio
         )
@@ -397,8 +424,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Cosmic Frontier JBT .5m",
-            0.485, // 48.5cm aperture
-            5.987, // 598.7cm focal length (f/12.3)
+            Length::from_meters(0.485), // 48.5cm aperture
+            Length::from_meters(5.987), // 598.7cm focal length (f/12.3)
             quantum_efficiency,
             0.35, // 35% linear obscuration ratio
         )
@@ -418,8 +445,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Cosmic Frontier JBT MAX",
-            0.65,  // 65cm aperture
-            8.024, // 802.4cm focal length (f/12.3)
+            Length::from_meters(0.65),  // 65cm aperture
+            Length::from_meters(8.024), // 802.4cm focal length (f/12.3)
             quantum_efficiency,
             0.35, // 35% linear obscuration ratio
         )
@@ -439,8 +466,8 @@ pub mod models {
 
         TelescopeConfig::new_with_qe(
             "Cosmic Frontier JBT 1.0m",
-            1.0,    // 100cm aperture
-            12.344, // 1234.4cm focal length (f/12.3)
+            Length::from_meters(1.0),    // 100cm aperture
+            Length::from_meters(12.344), // 1234.4cm focal length (f/12.3)
             quantum_efficiency,
             0.35, // 35% linear obscuration ratio
         )
@@ -450,9 +477,10 @@ pub mod models {
     /// Spectral ranges: PAN: 0.45 – 0.9 um, RGB: 0.45 – 0.68 um, SWIR: 0.9 – 1.7 um
     pub static WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
         TelescopeConfig::new(
-            "Weasel", 0.47, // 470mm aperture
-            3.45, // 3450mm focal length
-            0.70, // TODO: Confirm light efficiency value
+            "Weasel",
+            Length::from_meters(0.47), // 470mm aperture
+            Length::from_meters(3.45), // 3450mm focal length
+            0.70,                      // TODO: Confirm light efficiency value
         )
     });
 }
@@ -465,8 +493,8 @@ mod model_tests {
     fn test_predefined_telescopes() {
         // Test 50cm Demo telescope
         assert_eq!(models::IDEAL_50CM.name, "Ideal 50cm");
-        assert_eq!(models::IDEAL_50CM.aperture_m, 0.5);
-        assert_eq!(models::IDEAL_50CM.focal_length_m, 10.0);
+        assert_eq!(models::IDEAL_50CM.aperture.as_meters(), 0.5);
+        assert_eq!(models::IDEAL_50CM.focal_length.as_meters(), 10.0);
         assert_eq!(
             models::IDEAL_50CM
                 .quantum_efficiency
@@ -477,8 +505,8 @@ mod model_tests {
 
         // Test 1m Final telescope
         assert_eq!(models::IDEAL_100CM.name, "Ideal 100cm");
-        assert_eq!(models::IDEAL_100CM.aperture_m, 1.0);
-        assert_eq!(models::IDEAL_100CM.focal_length_m, 10.0);
+        assert_eq!(models::IDEAL_100CM.aperture.as_meters(), 1.0);
+        assert_eq!(models::IDEAL_100CM.focal_length.as_meters(), 10.0);
         assert_eq!(
             models::IDEAL_100CM
                 .quantum_efficiency
@@ -495,8 +523,13 @@ mod model_tests {
         // Test Officina Stellare Weasel
         let weasel = &*models::OFFICINA_STELLARE_WEASEL;
         assert_eq!(weasel.name, "Officina Stellare Weasel");
-        assert_eq!(weasel.aperture_m, 0.5);
-        assert!(approx_eq!(f64, weasel.focal_length_m, 3.45, epsilon = 1e-6));
+        assert_eq!(weasel.aperture.as_meters(), 0.5);
+        assert!(approx_eq!(
+            f64,
+            weasel.focal_length.as_meters(),
+            3.45,
+            epsilon = 1e-6
+        ));
         assert!(approx_eq!(f64, weasel.f_number(), 6.9, epsilon = 1e-6));
         assert_eq!(weasel.obscuration_ratio, 0.42);
         // At 600nm, interpolate between 545nm (0.77) and 680nm (0.73)
@@ -520,8 +553,8 @@ mod model_tests {
         // Test Optech/Lina LS50
         let ls50 = &*models::OPTECH_LINA_LS50;
         assert_eq!(ls50.name, "Optech/Lina LS50");
-        assert_eq!(ls50.aperture_m, 0.5);
-        assert_eq!(ls50.focal_length_m, 5.0);
+        assert_eq!(ls50.aperture.as_meters(), 0.5);
+        assert_eq!(ls50.focal_length.as_meters(), 5.0);
         assert_eq!(ls50.f_number(), 10.0);
         assert_eq!(ls50.obscuration_ratio, 0.37);
         // At 600nm, interpolate between 545nm (0.78) and 680nm (0.77) ≈ 0.778
@@ -536,16 +569,21 @@ mod model_tests {
         // Test Optech/Lina LS35
         let ls35 = &*models::OPTECH_LINA_LS35;
         assert_eq!(ls35.name, "Optech/Lina LS35");
-        assert_eq!(ls35.aperture_m, 0.35);
-        assert_eq!(ls35.focal_length_m, 3.5);
+        assert_eq!(ls35.aperture.as_meters(), 0.35);
+        assert_eq!(ls35.focal_length.as_meters(), 3.5);
         assert_eq!(ls35.f_number(), 10.0);
         assert_eq!(ls35.obscuration_ratio, 0.37);
 
         // Test Cosmic Frontier JBT .5m
         let jbt50 = &*models::COSMIC_FRONTIER_JBT_50CM;
         assert_eq!(jbt50.name, "Cosmic Frontier JBT .5m");
-        assert_eq!(jbt50.aperture_m, 0.485);
-        assert!(approx_eq!(f64, jbt50.focal_length_m, 5.987, epsilon = 1e-6));
+        assert_eq!(jbt50.aperture.as_meters(), 0.485);
+        assert!(approx_eq!(
+            f64,
+            jbt50.focal_length.as_meters(),
+            5.987,
+            epsilon = 1e-6
+        ));
         assert!(approx_eq!(f64, jbt50.f_number(), 12.344, epsilon = 1e-2));
         assert_eq!(jbt50.obscuration_ratio, 0.35); // 35% linear obscuration ratio
         assert_eq!(
@@ -558,10 +596,10 @@ mod model_tests {
         // Test Cosmic Frontier JBT MAX
         let jbt_max = &*models::COSMIC_FRONTIER_JBT_MAX;
         assert_eq!(jbt_max.name, "Cosmic Frontier JBT MAX");
-        assert_eq!(jbt_max.aperture_m, 0.65);
+        assert_eq!(jbt_max.aperture.as_meters(), 0.65);
         assert!(approx_eq!(
             f64,
-            jbt_max.focal_length_m,
+            jbt_max.focal_length.as_meters(),
             8.024,
             epsilon = 1e-6
         ));
@@ -571,10 +609,10 @@ mod model_tests {
         // Test Cosmic Frontier JBT 1.0m
         let jbt1m = &*models::COSMIC_FRONTIER_JBT_1M;
         assert_eq!(jbt1m.name, "Cosmic Frontier JBT 1.0m");
-        assert_eq!(jbt1m.aperture_m, 1.0);
+        assert_eq!(jbt1m.aperture.as_meters(), 1.0);
         assert!(approx_eq!(
             f64,
-            jbt1m.focal_length_m,
+            jbt1m.focal_length.as_meters(),
             12.344,
             epsilon = 1e-6
         ));
