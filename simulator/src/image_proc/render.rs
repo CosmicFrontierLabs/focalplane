@@ -8,6 +8,7 @@ use crate::{
     hardware::SatelliteConfig,
     photometry::{photoconversion::SourceFlux, zodical::SolarAngularCoordinates, ZodicalLight},
     star_math::{field_diameter, star_data_to_fluxes, StarProjector},
+    units::AngleExt,
     SensorConfig,
 };
 
@@ -383,10 +384,10 @@ pub fn project_stars_to_pixels(
     let image_height = satellite.sensor.height_px;
 
     // Calculate field of view from telescope and sensor
-    let fov_deg = field_diameter(&satellite.telescope, &satellite.sensor);
+    let fov_angle = field_diameter(&satellite.telescope, &satellite.sensor);
 
     // Create star projector for coordinate transformation
-    let fov_rad = fov_deg.to_radians();
+    let fov_rad = fov_angle.as_radians();
     let radians_per_pixel = fov_rad / image_width.max(image_height) as f64;
     let projector = StarProjector::new(
         center,

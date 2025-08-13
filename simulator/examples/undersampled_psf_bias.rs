@@ -16,7 +16,7 @@ use simulator::image_proc::render::StarInFrame;
 use simulator::photometry::zodical::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::star_data_to_fluxes;
-use simulator::units::{LengthExt, Wavelength};
+use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::error::Error;
@@ -201,7 +201,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let telescope = IDEAL_50CM.clone();
     let sensor = IMX455.with_dimensions(image_size, image_size);
     let wavelength = Wavelength::from_nanometers(550.0); // nm (green light)
-    let temperature = 0.0; // 0°C in sensor's expected range
+    let temperature = Temperature::from_celsius(0.0); // 0°C in sensor's expected range
 
     // Test parameters
     let psf_sampling_values = vec![0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0]; // In units of FWHM/pixel, steps of 0.25

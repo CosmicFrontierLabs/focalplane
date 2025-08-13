@@ -1,7 +1,7 @@
 use super::{sensor::SensorConfig, telescope::TelescopeConfig};
 use crate::image_proc::airy::PixelScaledAiryDisk;
 use crate::photometry::QuantumEfficiency;
-use crate::units::{Length, LengthExt, Temperature, Wavelength};
+use crate::units::{Angle, AngleExt, Length, LengthExt, Temperature, Wavelength};
 
 /// Complete satellite configuration combining telescope optics and sensor.
 ///
@@ -75,6 +75,11 @@ impl SatelliteConfig {
 
     /// Get the effective collecting area accounting for telescope efficiency.
     ///
+    /// Get the plate scale (angular size per unit focal plane distance)
+    pub fn plate_scale(&self) -> Angle {
+        self.telescope.plate_scale()
+    }
+
     /// Get the plate scale in arcseconds per millimeter at the focal plane.
     ///
     /// Fundamental optical property relating angular sky coordinates
@@ -86,6 +91,14 @@ impl SatelliteConfig {
         self.telescope.plate_scale_arcsec_per_mm()
     }
 
+    /// Get the plate scale per pixel (angular size subtended by one pixel)
+    pub fn plate_scale_per_pixel(&self) -> Angle {
+        let plate_scale_rad_per_m = self.telescope.plate_scale().as_radians();
+        let pixel_size_m = self.sensor.pixel_size.as_meters();
+        let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
+        Angle::from_radians(angular_size_rad)
+    }
+
     /// Get the plate scale in arcseconds per pixel.
     ///
     /// Critical parameter for astrometric accuracy and detection algorithms.
@@ -95,8 +108,17 @@ impl SatelliteConfig {
     /// Plate scale in arcseconds per pixel
     ///
     pub fn plate_scale_arcsec_per_pixel(&self) -> f64 {
-        let pixel_size_mm = self.sensor.pixel_size.as_millimeters();
-        self.plate_scale_arcsec_per_mm() * pixel_size_mm
+        self.plate_scale_per_pixel().as_arcseconds()
+    }
+
+    /// Get the field of view for the sensor
+    ///
+    /// Returns the angular dimensions of the full sensor array
+    pub fn field_of_view(&self) -> (Angle, Angle) {
+        let angular_per_pixel = self.plate_scale_per_pixel();
+        let width_angle = angular_per_pixel * (self.sensor.width_px as f64);
+        let height_angle = angular_per_pixel * (self.sensor.height_px as f64);
+        (width_angle, height_angle)
     }
 
     /// Get the field of view in arcminutes for the sensor.
@@ -108,10 +130,11 @@ impl SatelliteConfig {
     /// Tuple of (width, height) field of view in arcminutes
     ///
     pub fn field_of_view_arcmin(&self) -> (f64, f64) {
-        let arcsec_per_pixel = self.plate_scale_arcsec_per_pixel();
-        let width_arcmin = (self.sensor.width_px as f64 * arcsec_per_pixel) / 60.0;
-        let height_arcmin = (self.sensor.height_px as f64 * arcsec_per_pixel) / 60.0;
-        (width_arcmin, height_arcmin)
+        let (width_angle, height_angle) = self.field_of_view();
+        (
+            width_angle.as_arcseconds() / 60.0,
+            height_angle.as_arcseconds() / 60.0,
+        )
     }
 
     /// Calculate the field of view in steradians
@@ -123,12 +146,9 @@ impl SatelliteConfig {
     /// Field of view in steradians
     ///
     pub fn field_of_view_steradians(&self) -> f64 {
-        let (width_arcmin, height_arcmin) = self.field_of_view_arcmin();
-        // Convert to radians
-        let width_rad = (width_arcmin / 60.0) * (std::f64::consts::PI / 180.0);
-        let height_rad = (height_arcmin / 60.0) * (std::f64::consts::PI / 180.0);
+        let (width_angle, height_angle) = self.field_of_view();
         // Small angle approximation for solid angle
-        width_rad * height_rad
+        width_angle.as_radians() * height_angle.as_radians()
     }
 
     /// Create a PixelScaledAiryDisk in pixel space for this satellite configuration

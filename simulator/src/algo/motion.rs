@@ -9,6 +9,7 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::quaternion::Quaternion;
+use crate::units::{Angle, AngleExt};
 
 /// A trait defining a motion model that produces quaternion orientation as a function of time
 pub trait MotionModel {
@@ -56,10 +57,9 @@ pub struct XYWobble {
 }
 
 impl XYWobble {
-    /// Create a new XYWobble with the given amplitude in arcseconds and frequency in Hz
-    pub fn new(amplitude_arcsec: f64, frequency_hz: f64) -> Self {
-        // Convert arcseconds to radians: arcsec * (π/180) * (1/3600)
-        let amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+    /// Create a new XYWobble with the given amplitude and frequency in Hz
+    pub fn new(amplitude: Angle, frequency_hz: f64) -> Self {
+        let amplitude_rad = amplitude.as_radians();
 
         // Default phase offset puts X and Y 90 degrees out of phase for elliptical motion
         Self {
@@ -70,6 +70,12 @@ impl XYWobble {
         }
     }
 
+    /// Create a new XYWobble with the given amplitude in arcseconds and frequency in Hz (backward compatibility)
+    pub fn new_arcsec(amplitude_arcsec: f64, frequency_hz: f64) -> Self {
+        let amplitude = Angle::from_arcseconds(amplitude_arcsec);
+        Self::new(amplitude, frequency_hz)
+    }
+
     /// Create a new XYWobble with custom phase offsets
     ///
     /// This allows for more complex wobble patterns:
@@ -77,13 +83,12 @@ impl XYWobble {
     /// - When x_phase_offset - y_phase_offset == π/2: circular/elliptical wobble
     /// - Other values create more complex Lissajous patterns
     pub fn with_phase_offsets(
-        amplitude_arcsec: f64,
+        amplitude: Angle,
         frequency_hz: f64,
         x_phase_offset: f64,
         y_phase_offset: f64,
     ) -> Self {
-        // Convert arcseconds to radians: arcsec * (π/180) * (1/3600)
-        let amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+        let amplitude_rad = amplitude.as_radians();
 
         Self {
             amplitude_rad,
@@ -91,6 +96,17 @@ impl XYWobble {
             x_phase_offset,
             y_phase_offset,
         }
+    }
+
+    /// Create a new XYWobble with custom phase offsets using arcsecond amplitude (backward compatibility)
+    pub fn with_phase_offsets_arcsec(
+        amplitude_arcsec: f64,
+        frequency_hz: f64,
+        x_phase_offset: f64,
+        y_phase_offset: f64,
+    ) -> Self {
+        let amplitude = Angle::from_arcseconds(amplitude_arcsec);
+        Self::with_phase_offsets(amplitude, frequency_hz, x_phase_offset, y_phase_offset)
     }
 }
 
@@ -175,12 +191,13 @@ mod tests {
     #[test]
     fn test_xy_wobble_creation() {
         // Test with 100 milliarcseconds and 3Hz
-        let amplitude_arcsec = 100.0 / 1000.0; // 100 milliarcsec = 0.1 arcsec
+        let amplitude_mas = 100.0; // 100 milliarcsec
         let frequency_hz = 3.0;
-        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+        let amplitude = Angle::from_milliarcseconds(amplitude_mas);
+        let wobble = XYWobble::new(amplitude, frequency_hz);
 
         // Check internal values
-        let expected_amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+        let expected_amplitude_rad = amplitude.as_radians();
         assert_relative_eq!(
             wobble.amplitude_rad,
             expected_amplitude_rad,
@@ -198,7 +215,8 @@ mod tests {
         let x_phase = 0.1;
         let y_phase = 0.2;
 
-        let wobble = XYWobble::with_phase_offsets(amplitude_arcsec, frequency_hz, x_phase, y_phase);
+        let amplitude = Angle::from_arcseconds(amplitude_arcsec);
+        let wobble = XYWobble::with_phase_offsets(amplitude, frequency_hz, x_phase, y_phase);
 
         assert_relative_eq!(wobble.x_phase_offset, x_phase, epsilon = 1e-15);
         assert_relative_eq!(wobble.y_phase_offset, y_phase, epsilon = 1e-15);
@@ -208,14 +226,15 @@ mod tests {
     fn test_xy_wobble_orientation() {
         let amplitude_arcsec = 0.1; // 100 milliarcsec
         let frequency_hz = 3.0;
-        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+        let amplitude = Angle::from_arcseconds(amplitude_arcsec);
+        let wobble = XYWobble::new(amplitude, frequency_hz);
 
         // Test initial orientation (t=0)
         let initial = wobble.orientation_at(0.0);
 
         // At t=0, sin(phase) of X is 0, and sin(π/2) of Y is 1
         // So we should see a small rotation around X axis of amplitude*sin(π/2)
-        let expected_amplitude_rad = amplitude_arcsec * (PI / 180.0) * (1.0 / 3600.0);
+        let expected_amplitude_rad = amplitude.as_radians();
         let expected_initial =
             Quaternion::from_axis_angle(&Vector3::new(1.0, 0.0, 0.0), expected_amplitude_rad);
 
@@ -242,7 +261,8 @@ mod tests {
     fn test_xy_wobble_circular_path() {
         let amplitude_arcsec = 1.0; // Use larger amplitude to make test more reliable
         let frequency_hz = 1.0;
-        let wobble = XYWobble::new(amplitude_arcsec, frequency_hz);
+        let amplitude = Angle::from_arcseconds(amplitude_arcsec);
+        let wobble = XYWobble::new(amplitude, frequency_hz);
 
         // Test vector pointing in Z direction
         let v = Vector3::new(0.0, 0.0, 1.0);

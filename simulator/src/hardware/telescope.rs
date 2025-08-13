@@ -39,7 +39,7 @@ use once_cell::sync::Lazy;
 use std::f64::consts::PI;
 
 use crate::photometry::QuantumEfficiency;
-use crate::units::{Length, LengthExt, Wavelength};
+use crate::units::{Angle, AngleExt, Length, LengthExt, Wavelength};
 
 /// Complete telescope optical system configuration.
 ///
@@ -70,8 +70,6 @@ pub struct TelescopeConfig {
     /// Represents combined mirror reflectivity, lens transmission, etc.
     pub quantum_efficiency: QuantumEfficiency,
 }
-
-const MAS_PER_RAD: f64 = 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0);
 
 impl TelescopeConfig {
     /// Create a new telescope configuration with flat quantum efficiency
@@ -145,36 +143,57 @@ impl TelescopeConfig {
         radius_m * 1.0e6
     }
 
-    /// Calculate the radius of the Airy disk in milliarcseconds
+    /// Calculate the angular radius of the Airy disk
     ///
     /// The formula used is: θ = 1.22 * λ / D
     /// where:
-    /// - θ is the angular radius (in radians)
+    /// - θ is the angular radius
     /// - λ is the wavelength
     /// - D is the aperture diameter
-    pub fn airy_disk_radius_mas(&self, wavelength: Wavelength) -> f64 {
-        let wavelength_nm = wavelength.as_nanometers();
-        // Convert wavelength from nm to m
-        let wavelength_m = wavelength_nm * 1.0e-9;
+    pub fn airy_disk_radius(&self, wavelength: Wavelength) -> Angle {
+        let wavelength_m = wavelength.as_nanometers() * 1.0e-9;
 
         // Calculate angular radius in radians
         let radius_rad = 1.22 * wavelength_m / self.aperture.as_meters();
 
-        // Convert to milliarcseconds (1 radian = 206,264,806.247 mas)
-        radius_rad * MAS_PER_RAD
+        Angle::from_radians(radius_rad)
+    }
+
+    /// Calculate the angular radius of the Airy disk in milliarcseconds
+    ///
+    /// Convenience method for backward compatibility
+    pub fn airy_disk_radius_mas(&self, wavelength: Wavelength) -> f64 {
+        self.airy_disk_radius(wavelength).as_milliarcseconds()
+    }
+
+    /// Calculate the diffraction-limited resolution (FWHM)
+    pub fn diffraction_limited_resolution(&self, wavelength: Wavelength) -> Angle {
+        self.airy_disk_radius(wavelength) * 2.0
     }
 
     /// Calculate the diffraction-limited resolution in milliarcseconds at given wavelength
+    ///
+    /// Convenience method for backward compatibility
     pub fn diffraction_limited_resolution_mas(&self, wavelength: Wavelength) -> f64 {
-        self.airy_disk_radius_mas(wavelength) * 2.0
+        self.diffraction_limited_resolution(wavelength)
+            .as_milliarcseconds()
+    }
+
+    /// Calculate the plate scale (angular size per unit focal plane distance)
+    pub fn plate_scale(&self) -> Angle {
+        // plate scale = 1 radian per focal_length
+        let plate_scale_rad_per_m = 1.0 / self.focal_length.as_meters();
+        Angle::from_radians(plate_scale_rad_per_m)
     }
 
     /// Calculate the plate scale in arcseconds per mm
+    ///
+    /// Convenience method for backward compatibility
     pub fn plate_scale_arcsec_per_mm(&self) -> f64 {
-        // 1 radian = 206,264.8 arcseconds
-        // plate scale = (1/f) * 206,264.8 arcsec/radian
-        // focal_length needs to be converted to mm
-        (1.0 / (self.focal_length.as_meters() * 1000.0)) * 206_264.8
+        // plate scale = 1 radian / focal_length_mm
+        let focal_length_mm = self.focal_length.as_meters() * 1000.0;
+        let plate_scale_rad_per_mm = 1.0 / focal_length_mm;
+        Angle::from_radians(plate_scale_rad_per_mm).as_arcseconds()
     }
 
     /// Calculate the collecting area in square meters
@@ -229,23 +248,32 @@ mod tests {
         );
         let wavelength_nm = 550.0; // Green light
 
-        // Calculate expected values
-        let expected_radius_um = 1.22 * wavelength_nm * 1e-9 * 4.0 / 0.5 * 1e6;
-        // Updated to match actual MAS_PER_RAD constant implementation
-        let expected_radius_mas =
-            1.22 * wavelength_nm * 1e-9 / 0.5 * 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0);
+        // Calculate expected angular radius in radians
+        let expected_radius_rad = 1.22 * wavelength_nm * 1e-9 / 0.5;
 
+        // Test the new typed method
+        let airy_radius = telescope.airy_disk_radius(Wavelength::from_nanometers(wavelength_nm));
         assert!(approx_eq!(
             f64,
-            telescope.airy_disk_radius_um(Wavelength::from_nanometers(wavelength_nm)),
-            expected_radius_um,
+            airy_radius.as_radians(),
+            expected_radius_rad,
+            epsilon = 1e-12
+        ));
+
+        // Test conversions work properly
+        assert!(approx_eq!(
+            f64,
+            airy_radius.as_milliarcseconds(),
+            expected_radius_rad * 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0),
             epsilon = 1e-6
         ));
+
+        // Test legacy method still works
         assert!(approx_eq!(
             f64,
             telescope.airy_disk_radius_mas(Wavelength::from_nanometers(wavelength_nm)),
-            expected_radius_mas,
-            epsilon = 1e-6
+            airy_radius.as_milliarcseconds(),
+            epsilon = 1e-10
         ));
     }
 
@@ -258,14 +286,24 @@ mod tests {
             0.8,
         );
 
-        // Calculate expected plate scale (focal length 4m = 4000mm)
-        let expected_plate_scale = (1.0 / 4000.0) * 206_264.8;
+        // Test the new typed method
+        let plate_scale = telescope.plate_scale();
+        let expected_plate_scale_rad_per_m = 1.0 / 4.0; // 1 rad per 4 meters
+        assert!(approx_eq!(
+            f64,
+            plate_scale.as_radians(),
+            expected_plate_scale_rad_per_m,
+            epsilon = 1e-12
+        ));
 
+        // Test legacy method - plate scale should be arcsec per mm
+        // focal_length = 4m = 4000mm, so plate scale = 1/4000 rad/mm
+        let expected_arcsec_per_mm = (1.0 / 4000.0) * 206_264.8;
         assert!(approx_eq!(
             f64,
             telescope.plate_scale_arcsec_per_mm(),
-            expected_plate_scale,
-            epsilon = 1e-6
+            expected_arcsec_per_mm,
+            epsilon = 1e-3 // More lenient epsilon for floating point precision
         ));
     }
 

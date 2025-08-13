@@ -18,7 +18,7 @@ use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodical::SolarAngularCoordinates, ZodicalLight};
 use simulator::shared_args::{DurationArg, TelescopeModel};
-use simulator::units::{LengthExt, Wavelength};
+use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
 
 /// Command line arguments for zodiacal background computation
 #[derive(Parser, Debug)]
@@ -268,8 +268,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Telescope Configuration:");
     println!("  Model Selected: {}", args.telescope);
     println!("  Name: {}", telescope.name);
-    println!("  Aperture: {:.2} m", telescope.aperture_m);
-    println!("  Focal Length: {:.2} m", telescope.focal_length_m);
+    println!("  Aperture: {:.2} m", telescope.aperture.as_meters());
+    println!(
+        "  Focal Length: {:.2} m",
+        telescope.focal_length.as_meters()
+    );
     println!("  F-number: f/{:.1}", telescope.f_number());
     println!(
         "  Plate Scale: {:.2} arcsec/mm",
@@ -348,7 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let satellite = SatelliteConfig::new(
             telescope.clone(),
             sensor.clone(),
-            -10.0,                              // Default temperature for example
+            Temperature::from_celsius(-10.0), // Default temperature for example
             Wavelength::from_nanometers(550.0), // Default wavelength for example
         );
 

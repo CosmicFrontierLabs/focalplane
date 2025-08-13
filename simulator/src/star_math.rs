@@ -137,7 +137,7 @@ use crate::hardware::{SatelliteConfig, SensorConfig, TelescopeConfig};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::photon_electron_fluxes;
 use crate::photometry::BlackbodyStellarSpectrum;
-use crate::units::LengthExt;
+use crate::units::{Angle, AngleExt, LengthExt};
 
 // A majority of stars have a B-V color index around 1.4
 // This is used when the catalog does not provide a B-V value
@@ -163,12 +163,12 @@ pub const DEFAULT_BV: f64 = 1.4;
 /// * `sensor` - Sensor geometry (width, height, pixel size)
 ///
 /// # Returns
-/// Field of view diameter in degrees
+/// Field of view diameter as an Angle
 ///
 /// # Usage
 /// Calculates the diagonal field of view diameter based on sensor dimensions
 /// and telescope focal length. Essential for survey planning and coverage analysis.
-pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
+pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Angle {
     // Get sensor dimensions in microns
     let (width_um, height_um) = sensor.dimensions_um();
 
@@ -182,24 +182,25 @@ pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64
     // angle in radians = diagonal / focal_length
     let angle_rad = diagonal_m / telescope.focal_length.as_meters();
 
-    // Convert to degrees
-    angle_rad.to_degrees()
+    Angle::from_radians(angle_rad)
 }
 
-/// Calculate the projected pixel scale in arcseconds per pixel
-///
-/// # Arguments
-/// * `telescope` - The telescope configuration
-/// * `sensor` - The sensor configuration
-///
-/// # Returns
-/// Pixel scale in arcseconds per pixel
-pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
-    // Get the plate scale in arcsec/mm
-    let plate_scale_arcsec_per_mm = telescope.plate_scale_arcsec_per_mm();
+/// Calculate the circular field of view diameter in degrees (backward compatibility)
+pub fn field_diameter_degrees(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
+    field_diameter(telescope, sensor).as_degrees()
+}
 
-    // Convert to arcsec/pixel using the pixel size
-    plate_scale_arcsec_per_mm * sensor.pixel_size.as_millimeters()
+/// Calculate the angular size subtended by one pixel
+pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Angle {
+    let plate_scale_rad_per_m = telescope.plate_scale().as_radians();
+    let pixel_size_m = sensor.pixel_size.as_meters();
+    let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
+    Angle::from_radians(angular_size_rad)
+}
+
+/// Calculate the projected pixel scale in arcseconds per pixel (backward compatibility)
+pub fn pixel_scale_arcsec(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
+    pixel_scale(telescope, sensor).as_arcseconds()
 }
 
 /// Convert stellar magnitude and color to photon and electron flux rates.
@@ -760,7 +761,7 @@ mod tests {
 
         assert!(approx_eq!(
             f64,
-            calculated,
+            calculated.as_degrees(),
             expected_angle_deg,
             epsilon = 1e-6
         ));
@@ -777,7 +778,12 @@ mod tests {
 
         let calculated = pixel_scale(&telescope, &sensor);
 
-        assert!(approx_eq!(f64, calculated, expected_scale, epsilon = 1e-6));
+        assert!(approx_eq!(
+            f64,
+            calculated.as_arcseconds(),
+            expected_scale,
+            epsilon = 1e-6
+        ));
     }
 
     // Test struct for StarPosition trait

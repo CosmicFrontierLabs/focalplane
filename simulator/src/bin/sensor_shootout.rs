@@ -47,7 +47,7 @@ use simulator::scene::Scene;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
 use simulator::{
     star_math::field_diameter,
-    units::{Length, LengthExt, Temperature, TemperatureExt, Wavelength},
+    units::{AngleExt, Length, LengthExt, Temperature, TemperatureExt, Wavelength},
     SensorConfig,
 };
 use starfield::catalogs::{StarCatalog, StarData};
@@ -655,7 +655,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let focal_length =
             Length::from_meters(satellite.telescope.aperture.as_meters() * min_f_number);
         let telescope_min_f = satellite.telescope.with_focal_length(focal_length);
-        let fov_deg = field_diameter(&telescope_min_f, &satellite.sensor);
+        let fov_angle = field_diameter(&telescope_min_f, &satellite.sensor);
+        let fov_deg = fov_angle.as_degrees();
 
         info!(
             "Satellite: {}, FOV at f/{:.1}: {:.4}°",

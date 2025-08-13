@@ -4,6 +4,7 @@
 //! unit confusion errors at compile time. Starting with temperature units
 //! and expanding to other physical quantities.
 
+use uom::si::angle::{degree, radian};
 use uom::si::f64::*;
 use uom::si::length::{centimeter, meter, micrometer, millimeter, nanometer};
 use uom::si::thermodynamic_temperature::degree_celsius;
@@ -19,6 +20,9 @@ pub type Length = uom::si::f64::Length;
 /// While physically identical to Length, this type alias improves code clarity
 /// when dealing with electromagnetic wavelengths in nanometers.
 pub type Wavelength = Length;
+
+/// Type alias for angular measurements with convenient methods
+pub type Angle = uom::si::f64::Angle;
 
 /// Extension trait for temperature conversions
 pub trait TemperatureExt {
@@ -66,6 +70,33 @@ pub trait LengthExt {
 
     /// Get length in meters
     fn as_meters(&self) -> f64;
+}
+
+/// Extension trait for angular conversions commonly used in astronomy
+pub trait AngleExt {
+    /// Create angle from degrees (human-friendly input)
+    fn from_degrees(degrees: f64) -> Self;
+
+    /// Get angle in degrees
+    fn as_degrees(&self) -> f64;
+
+    /// Create angle from radians (mathematical operations)
+    fn from_radians(radians: f64) -> Self;
+
+    /// Get angle in radians
+    fn as_radians(&self) -> f64;
+
+    /// Create angle from arcseconds (telescope pointing accuracy)
+    fn from_arcseconds(arcseconds: f64) -> Self;
+
+    /// Get angle in arcseconds
+    fn as_arcseconds(&self) -> f64;
+
+    /// Create angle from milliarcseconds (high precision astrometry)
+    fn from_milliarcseconds(mas: f64) -> Self;
+
+    /// Get angle in milliarcseconds
+    fn as_milliarcseconds(&self) -> f64;
 }
 
 impl TemperatureExt for Temperature {
@@ -125,6 +156,44 @@ impl LengthExt for Length {
 
     fn as_meters(&self) -> f64 {
         self.get::<meter>()
+    }
+}
+
+impl AngleExt for Angle {
+    fn from_degrees(degrees: f64) -> Self {
+        Angle::new::<degree>(degrees)
+    }
+
+    fn as_degrees(&self) -> f64 {
+        self.get::<degree>()
+    }
+
+    fn from_radians(radians: f64) -> Self {
+        Angle::new::<radian>(radians)
+    }
+
+    fn as_radians(&self) -> f64 {
+        self.get::<radian>()
+    }
+
+    fn from_arcseconds(arcseconds: f64) -> Self {
+        // Convert arcseconds to degrees: 1 degree = 3600 arcseconds
+        let degrees = arcseconds / 3600.0;
+        Angle::new::<degree>(degrees)
+    }
+
+    fn as_arcseconds(&self) -> f64 {
+        self.as_degrees() * 3600.0
+    }
+
+    fn from_milliarcseconds(mas: f64) -> Self {
+        // Convert milliarcseconds to degrees: 1 degree = 3,600,000 milliarcseconds
+        let degrees = mas / 3_600_000.0;
+        Angle::new::<degree>(degrees)
+    }
+
+    fn as_milliarcseconds(&self) -> f64 {
+        self.as_degrees() * 3_600_000.0
     }
 }
 
@@ -246,5 +315,112 @@ mod tests {
 
         // Convert wavelength to micrometers for comparison with pixel size
         assert!(visible.as_micrometers() < small_pixel.as_micrometers());
+    }
+
+    #[test]
+    fn test_angular_conversions() {
+        use std::f64::consts::PI;
+
+        // Test basic degree/radian conversions
+        let angle_90_deg = Angle::from_degrees(90.0);
+        assert_relative_eq!(angle_90_deg.as_radians(), PI / 2.0, epsilon = 1e-10);
+        assert_relative_eq!(angle_90_deg.as_degrees(), 90.0, epsilon = 1e-10);
+
+        let angle_pi_rad = Angle::from_radians(PI);
+        assert_relative_eq!(angle_pi_rad.as_degrees(), 180.0, epsilon = 1e-10);
+        assert_relative_eq!(angle_pi_rad.as_radians(), PI, epsilon = 1e-10);
+
+        // Test arcsecond conversions
+        let angle_1_arcsec = Angle::from_arcseconds(1.0);
+        assert_relative_eq!(angle_1_arcsec.as_arcseconds(), 1.0, epsilon = 1e-10);
+        assert_relative_eq!(angle_1_arcsec.as_degrees(), 1.0 / 3600.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            angle_1_arcsec.as_radians(),
+            (1.0 / 3600.0) * PI / 180.0,
+            epsilon = 1e-12
+        );
+
+        // Test milliarcsecond conversions
+        let angle_1000_mas = Angle::from_milliarcseconds(1000.0);
+        assert_relative_eq!(angle_1000_mas.as_milliarcseconds(), 1000.0, epsilon = 1e-10);
+        assert_relative_eq!(angle_1000_mas.as_arcseconds(), 1.0, epsilon = 1e-10);
+        assert_relative_eq!(angle_1000_mas.as_degrees(), 1.0 / 3600.0, epsilon = 1e-12);
+
+        // Test small angle conversions (common in astronomy)
+        let angle_100_mas = Angle::from_milliarcseconds(100.0);
+        assert_relative_eq!(angle_100_mas.as_arcseconds(), 0.1, epsilon = 1e-10);
+        assert_relative_eq!(angle_100_mas.as_degrees(), 0.1 / 3600.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_angular_math() {
+        // Test angle arithmetic
+        let angle1 = Angle::from_degrees(30.0);
+        let angle2 = Angle::from_degrees(60.0);
+
+        // Addition
+        let sum = angle1 + angle2;
+        assert_relative_eq!(sum.as_degrees(), 90.0, epsilon = 1e-10);
+
+        // Subtraction
+        let diff = angle2 - angle1;
+        assert_relative_eq!(diff.as_degrees(), 30.0, epsilon = 1e-10);
+
+        // Multiplication by scalar
+        let doubled = angle1 * 2.0;
+        assert_relative_eq!(doubled.as_degrees(), 60.0, epsilon = 1e-10);
+
+        // Division by scalar
+        let halved = angle2 / 2.0;
+        assert_relative_eq!(halved.as_degrees(), 30.0, epsilon = 1e-10);
+
+        // Division of angles gives dimensionless ratio
+        let ratio = angle2.as_degrees() / angle1.as_degrees();
+        assert_relative_eq!(ratio, 2.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_typical_astronomical_angles() {
+        use std::f64::consts::PI;
+
+        // Full circle
+        let full_circle = Angle::from_degrees(360.0);
+        assert_relative_eq!(full_circle.as_radians(), 2.0 * PI, epsilon = 1e-10);
+
+        // Typical telescope pointing accuracy (sub-arcsecond)
+        let pointing_accuracy = Angle::from_milliarcseconds(100.0);
+        assert_relative_eq!(pointing_accuracy.as_arcseconds(), 0.1, epsilon = 1e-10);
+        assert!(pointing_accuracy.as_degrees() < 0.001);
+
+        // Airy disk size (order of arcseconds for visible light)
+        let airy_disk = Angle::from_arcseconds(2.0);
+        assert_relative_eq!(airy_disk.as_milliarcseconds(), 2000.0, epsilon = 1e-10);
+        assert_relative_eq!(airy_disk.as_degrees(), 2.0 / 3600.0, epsilon = 1e-12);
+
+        // Field of view (degrees)
+        let fov = Angle::from_degrees(1.0);
+        assert_relative_eq!(fov.as_arcseconds(), 3600.0, epsilon = 1e-10);
+        assert_relative_eq!(fov.as_milliarcseconds(), 3_600_000.0, epsilon = 1e-5);
+
+        // Test ordering
+        assert!(pointing_accuracy < airy_disk);
+        assert!(airy_disk < fov);
+    }
+
+    #[test]
+    fn test_angular_precision_limits() {
+        // Test very small angles (sub-milliarcsecond precision)
+        let micro_arcsec = Angle::from_milliarcseconds(0.001);
+        assert_relative_eq!(micro_arcsec.as_milliarcseconds(), 0.001, epsilon = 1e-12);
+
+        // Test very large angles
+        let large_angle = Angle::from_degrees(720.0); // Two full rotations
+        assert_relative_eq!(large_angle.as_degrees(), 720.0, epsilon = 1e-10);
+
+        // Test conversion chain consistency
+        let original_mas = 1234.567;
+        let angle = Angle::from_milliarcseconds(original_mas);
+        let recovered_mas = angle.as_milliarcseconds();
+        assert_relative_eq!(original_mas, recovered_mas, epsilon = 1e-10);
     }
 }

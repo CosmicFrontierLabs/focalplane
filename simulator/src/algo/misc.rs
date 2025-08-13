@@ -12,8 +12,8 @@
 
 use crate::hardware::SatelliteConfig;
 use crate::star_math::field_diameter;
+use crate::units::AngleExt;
 use starfield::Equatorial;
-use std::f64::consts::PI;
 use thiserror::Error;
 use url::Url;
 
@@ -272,8 +272,7 @@ pub fn generate_wwt_overlay_url(
     background_color: &str,
 ) -> Result<String, url::ParseError> {
     // Calculate field of view from satellite configuration
-    let fov_deg = field_diameter(&satellite.telescope, &satellite.sensor);
-    let fov_rad = fov_deg * PI / 180.0;
+    let fov_angle = field_diameter(&satellite.telescope, &satellite.sensor);
 
     // Use sensor dimensions for image shape
     let image_pixel_width = satellite.sensor.width_px;
@@ -296,7 +295,7 @@ pub fn generate_wwt_overlay_url(
     let placehold_url = Url::parse(&placehold_url_str)?;
 
     // Calculate WWT 'scale' parameter (width of image in degrees)
-    let scale_deg = fov_rad * (180.0 / PI);
+    let scale_deg = fov_angle.as_degrees();
 
     // Calculate center pixel for the image (assuming image is centered)
     let center_x_px = image_pixel_width as f64 / 2.0;
