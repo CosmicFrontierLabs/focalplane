@@ -1,0 +1,398 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "title": "Jetson Orin Flight Computer Monitoring",
+  "tags": ["jetson", "orin", "flight-computer", "space"],
+  "style": "dark",
+  "timezone": "",
+  "panels": [
+    {
+      "title": "Power Rail Voltages",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "jetson_power_rail_voltage_mv / 1000",
+          "format": "time_series",
+          "legendFormat": "{{rail_name}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "V"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Power Rail Currents",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "jetson_power_rail_current_ma",
+          "format": "time_series",
+          "legendFormat": "{{rail_name}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "mA"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Power Rail Wattage",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "jetson_power_rail_power_mw",
+          "format": "time_series",
+          "legendFormat": "{{rail_name}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "mW"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Power Consumption Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "jetson_power_rail_power_mw",
+          "format": "time_series",
+          "legendFormat": "{{rail_name}}"
+        }
+      ],
+      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 0},
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "none"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "stacking": {"mode": "none", "group": "A"},
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {"type": "linear"},
+            "hideFrom": {"legend": false, "tooltip": false, "vis": false},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "unit": "mW",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "System Resources Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "jetson_cpu_usage_percent",
+          "format": "time_series",
+          "legendFormat": "CPU Usage"
+        },
+        {
+          "expr": "jetson_memory_usage_mb / jetson_memory_total_mb * 100",
+          "format": "time_series",
+          "legendFormat": "Memory Usage"
+        },
+        {
+          "expr": "jetson_disk_usage_percent",
+          "format": "time_series",
+          "legendFormat": "Disk Usage"
+        },
+        {
+          "expr": "jetson_gpu_usage_percent",
+          "format": "time_series",
+          "legendFormat": "GPU Usage"
+        }
+      ],
+      "gridPos": {"h": 12, "w": 12, "x": 12, "y": 12},
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "none"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "stacking": {"mode": "none", "group": "A"},
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {"type": "linear"},
+            "hideFrom": {"legend": false, "tooltip": false, "vis": false},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 70},
+              {"color": "red", "value": 90}
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Thermal Zones",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "jetson_thermal_temperature_celsius",
+          "format": "time_series",
+          "legendFormat": "{{zone_name}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "none"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "insertNulls": false,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "stacking": {"mode": "none", "group": "A"},
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {"type": "linear"},
+            "hideFrom": {"legend": false, "tooltip": false, "vis": false},
+            "thresholdsStyle": {"mode": "off"}
+          },
+          "mappings": [],
+          "unit": "celsius",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "System Uptime",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "jetson_uptime_seconds",
+          "format": "time_series",
+          "legendFormat": "Uptime"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 32},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Metrics Collection Health",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "rate(jetson_metrics_collection_total[5m])",
+          "format": "time_series",
+          "legendFormat": "Collection Rate"
+        },
+        {
+          "expr": "rate(jetson_metrics_collection_errors_total[5m])",
+          "format": "time_series",
+          "legendFormat": "Error Rate"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 32},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "title": "Last Collection",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "jetson_last_collection_timestamp",
+          "format": "time_series",
+          "legendFormat": "Last Collection"
+        }
+      ],
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 32},
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": ["lastNotNull"],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"hideFrom": {"legend": false, "tooltip": false, "vis": false}},
+          "mappings": [],
+          "unit": "dateTimeFromNow"
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "version": 1,
+  "weekStart": ""
+}

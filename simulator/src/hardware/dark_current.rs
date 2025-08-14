@@ -204,6 +204,7 @@ impl DarkCurrentEstimator {
     /// # Example
     /// ```
     /// use simulator::hardware::dark_current::DarkCurrentEstimator;
+    /// use simulator::units::{Temperature, TemperatureExt};
     ///
     /// let estimator = DarkCurrentEstimator::from_reference_point(0.1, Temperature::from_celsius(20.0));
     /// let doubling_temp = estimator.calculate_doubling_temperature();

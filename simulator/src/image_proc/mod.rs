@@ -38,7 +38,7 @@
 //! };
 //! use simulator::image_proc::airy::PixelScaledAiryDisk;
 //! use simulator::hardware::sensor::models::GSENSE6510BSI;
-//! use simulator::units::{LengthExt, Wavelength};
+//! use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
 //! use ndarray::Array2;
 //! use std::time::Duration;
 //!
@@ -59,7 +59,7 @@
 //! // 3. Add sensor noise
 //! let sensor = GSENSE6510BSI.clone().with_dimensions(64, 64);
 //! let exposure = Duration::from_secs(10);
-//! let noise = generate_sensor_noise(&sensor, &exposure, -20.0, Some(42));
+//! let noise = generate_sensor_noise(&sensor, &exposure, Temperature::from_celsius(-20.0), Some(42));
 //! let with_noise = psf_convolved.mapv(|x| x as u16) + noise.mapv(|x| x as u16);
 //!
 //! // 4. Detect astronomical sources

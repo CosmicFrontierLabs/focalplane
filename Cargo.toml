@@ -3,6 +3,7 @@ members = [
     "simulator",
     "test_helpers",
     "viz",
+    "flight-software",
 ]
 resolver = "2"
 
