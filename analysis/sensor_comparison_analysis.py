@@ -1485,8 +1485,12 @@ def plot_error_histograms_separate(df, output_path=None):
                                              color=color, edgecolor='black',
                                              linewidth=0.5)
                     
+                    print("Histogram Dump for Exposure: {exposure_ms}ms")
+                    for i, count in enumerate(counts):
+                        print(f"Bin: {bins[i]:.3f} to {bins[i+1]:.3f}, Count: {int(count)}")
+
                     # Add mean line if within range
-                    mean_err = errors.mean()
+                    mean_err = errors[errors < 1.0].mean()
                     if 0 <= mean_err <= 1.0:
                         ax.axvline(mean_err, color=color, linestyle='--', 
                                   linewidth=1.5, alpha=0.8)
