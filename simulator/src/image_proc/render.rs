@@ -169,9 +169,10 @@ impl Renderer {
         let rendered_stars = project_stars_to_pixels(stars, center, &satellite_config, padding);
 
         // Create base star image for 1 second exposure
+        let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
         let base_star_image = add_stars_to_image(
-            satellite_config.sensor.width_px,
-            satellite_config.sensor.height_px,
+            width,
+            height,
             &rendered_stars,
             &Duration::from_secs(1),
             satellite_config.telescope.clear_aperture_area(),
@@ -199,9 +200,10 @@ impl Renderer {
     ///
     pub fn from_stars(stars: &Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
         // Create base star image for 1 second exposure
+        let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
         let base_star_image = add_stars_to_image(
-            satellite_config.sensor.width_px,
-            satellite_config.sensor.height_px,
+            width,
+            height,
             stars,
             &Duration::from_secs(1),
             satellite_config.telescope.clear_aperture_area(),
@@ -355,8 +357,7 @@ pub fn project_stars_to_pixels(
     satellite: &SatelliteConfig,
     padding: f64,
 ) -> Vec<StarInFrame> {
-    let image_width = satellite.sensor.width_px;
-    let image_height = satellite.sensor.height_px;
+    let (image_width, image_height) = satellite.sensor.dimensions.get_pixel_width_height();
 
     // Calculate field of view from telescope and sensor
     let fov_angle = field_diameter(&satellite.telescope, &satellite.sensor);
@@ -364,12 +365,7 @@ pub fn project_stars_to_pixels(
     // Create star projector for coordinate transformation
     let fov_rad = fov_angle.as_radians();
     let radians_per_pixel = fov_rad / image_width.max(image_height) as f64;
-    let projector = StarProjector::new(
-        center,
-        radians_per_pixel,
-        satellite.sensor.width_px,
-        satellite.sensor.height_px,
-    );
+    let projector = StarProjector::new(center, radians_per_pixel, image_width, image_height);
 
     let mut projected_stars = Vec::new();
 
@@ -526,7 +522,9 @@ mod tests {
 
     use super::*;
     use crate::hardware::{
-        dark_current::DarkCurrentEstimator, read_noise::ReadNoiseEstimator, sensor::create_flat_qe,
+        dark_current::DarkCurrentEstimator,
+        read_noise::ReadNoiseEstimator,
+        sensor::{create_flat_qe, SensorGeometry},
     };
     use crate::image_proc::airy::PixelScaledAiryDisk;
     use crate::image_proc::noise::simple_normal_array;
@@ -550,8 +548,8 @@ mod tests {
             x,
             y,
             spot: SourceFlux {
-                photons: SpotFlux { disk: disk, flux },
-                electrons: SpotFlux { disk: disk, flux },
+                photons: SpotFlux { disk, flux },
+                electrons: SpotFlux { disk, flux },
             },
             star: test_star_data(),
         }
@@ -562,12 +560,11 @@ mod tests {
         dn_per_electron: f64,
         max_well_depth_e: f64,
     ) -> SensorConfig {
+        let geometry = SensorGeometry::of_width_height(1024, 1024, Length::from_micrometers(5.5));
         SensorConfig::new(
             "Test",
             create_flat_qe(0.5),
-            1024,
-            1024,
-            Length::from_micrometers(5.5),
+            geometry,
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
             bit_depth,
@@ -583,11 +580,11 @@ mod tests {
             PixelScaledAiryDisk::with_fwhm(2.5, crate::units::Wavelength::from_nanometers(550.0));
         let source_flux = SourceFlux {
             photons: SpotFlux {
-                disk: psf.clone(),
+                disk: psf,
                 flux: 10000.0,
             },
             electrons: SpotFlux {
-                disk: psf.clone(),
+                disk: psf,
                 flux: 10000.0,
             },
         };
@@ -903,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_background_rms_normal() {
-        for std_dev in vec![4.0, 8.0, 10.0] {
+        for std_dev in [4.0, 8.0, 10.0] {
             // Test DN conversion factor
             let sensor = create_test_sensor(12, 1.0, 10000.0); // 0.5 DN per electron
 
@@ -924,7 +921,7 @@ mod tests {
     #[test]
     fn test_background_rms_with_dn_conversion() {
         let std_dev = 5.0;
-        for dn in vec![4.0, 8.0, 10.0] {
+        for dn in [4.0, 8.0, 10.0] {
             // Test DN conversion factor
             let sensor = create_test_sensor(12, dn, 10000.0); // 0.5 DN per electron
 

@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Failed Detection Location Analysis");
     println!("{}", "=".repeat(80));
-    println!("RA: {:.4}°, Dec: {:.4}°", ra_deg, dec_deg);
+    println!("RA: {ra_deg:.4}°, Dec: {dec_deg:.4}°");
     println!("This location detected 0 stars across all exposures (25-200ms)\n");
 
     // Create satellite configuration matching the sensor_shootout setup
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     println!("WWT Overlay URL (Failed Detection - Red):");
-    println!("{}\n", failed_url);
+    println!("{failed_url}\n");
 
     // Generate overlays for nearby successful regions for comparison
     println!("Nearby Successful Detection Regions:");
@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (ra, dec, label, color) in &nearby_regions {
         let coords = Equatorial::from_degrees(*ra, *dec);
         let url = generate_wwt_overlay_url(
-            &format!("Nearby: {}", label),
+            &format!("Nearby: {label}"),
             &coords,
             &satellite,
             0.0,
@@ -65,8 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "00000080",
         )?;
 
-        println!("RA: {:.4}°, Dec: {:.4}° ({})", ra, dec, label);
-        println!("{}\n", url);
+        println!("RA: {ra:.4}°, Dec: {dec:.4}° ({label})");
+        println!("{url}\n");
     }
 
     // Generate a wider field view centered on the failed region
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "00000000", // Fully transparent
     )?;
 
-    println!("{}\n", wide_field_url);
+    println!("{wide_field_url}\n");
 
     // Print instructions
     println!("Instructions:");

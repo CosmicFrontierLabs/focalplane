@@ -691,7 +691,7 @@ mod tests {
     fn test_photons_from_blackbody_bv_range() {
         let mut failed: bool = false;
 
-        for bv in vec![-0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6] {
+        for bv in [-0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6] {
             // Compare photon counts between flat and blackbody spectra
             let flat = FlatStellarSpectrum::from_gaia_magnitude(12.0);
             let blackbody = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(bv, 12.0);

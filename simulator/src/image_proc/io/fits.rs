@@ -238,7 +238,7 @@ mod tests {
             fs::create_dir_all(&dir).expect("Failed to create test output directory");
 
             // Generate filename with .fits extension
-            let filename = format!("{}.fits", test_name);
+            let filename = format!("{test_name}.fits");
             let path = dir.join(filename);
 
             println!("Writing test FITS to: {}", path.display());
@@ -450,10 +450,7 @@ mod tests {
         // If writing locally, print info
         if WRITE_LOCAL {
             let (height, width) = checkerboard.dim();
-            println!(
-                "Created {}x{} checkerboard with 11x13 blocks of 8 pixels each",
-                width, height
-            );
+            println!("Created {width}x{height} checkerboard with 11x13 blocks of 8 pixels each");
         }
     }
 
@@ -481,8 +478,7 @@ mod tests {
         if WRITE_LOCAL {
             let (height, width) = checkerboard.dim();
             println!(
-                "Created {}x{} square checkerboard with 10x10 blocks of 10 pixels each",
-                width, height
+                "Created {width}x{height} square checkerboard with 10x10 blocks of 10 pixels each"
             );
         }
     }

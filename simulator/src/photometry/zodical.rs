@@ -727,7 +727,7 @@ impl ZodicalLight {
         // Pixel scale = (206265 * pixel_size) / focal_length
         // where 206265 is the number of arcseconds in a radian
         let pixel_scale_arcsec_per_pixel =
-            206265.0 * satellite.sensor.pixel_size.as_millimeters() / focal_length_mm;
+            206265.0 * satellite.sensor.pixel_size().as_millimeters() / focal_length_mm;
 
         let z_spect = self
             .get_zodical_spectrum(coords)
@@ -740,7 +740,8 @@ impl ZodicalLight {
         let mean_pe = z_spect.photo_electrons(&satellite.combined_qe, aperture, exposure)
             * pixel_solid_angle_arcsec2;
 
-        Array2::ones((satellite.sensor.height_px, satellite.sensor.width_px)) * mean_pe
+        let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
+        Array2::ones((height, width)) * mean_pe
     }
 }
 

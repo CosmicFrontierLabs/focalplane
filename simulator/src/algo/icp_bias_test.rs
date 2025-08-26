@@ -129,8 +129,8 @@ fn test_icp_residual_normality() {
     let ks_statistic_y = ks_test_normal(&all_residuals_y);
 
     println!("KS test results for ICP residuals:");
-    println!("  X residuals: KS statistic = {:.6}", ks_statistic_x);
-    println!("  Y residuals: KS statistic = {:.6}", ks_statistic_y);
+    println!("  X residuals: KS statistic = {ks_statistic_x:.6}");
+    println!("  Y residuals: KS statistic = {ks_statistic_y:.6}");
     println!("  Number of samples: {}", all_residuals_x.len());
 
     // Calculate mean and std of residuals
@@ -150,65 +150,52 @@ fn test_icp_residual_normality() {
         / all_residuals_y.len() as f64)
         .sqrt();
 
-    println!("  X residuals: mean = {:.6}, std = {:.6}", mean_x, std_x);
-    println!("  Y residuals: mean = {:.6}, std = {:.6}", mean_y, std_y);
+    println!("  X residuals: mean = {mean_x:.6}, std = {std_x:.6}");
+    println!("  Y residuals: mean = {mean_y:.6}, std = {std_y:.6}");
 
     // Critical value for KS test at 5% significance level
     let critical_value = ks_critical_value(all_residuals_x.len(), 0.05);
 
-    println!("  Critical value (5% significance): {:.6}", critical_value);
+    println!("  Critical value (5% significance): {critical_value:.6}");
 
     // Test for systematic bias: mean should be near zero (relative to noise level)
     assert!(
         mean_x.abs() < noise_std * 3.0,
-        "X residuals show systematic bias: mean = {:.6} (noise_std = {:.6})",
-        mean_x,
-        noise_std
+        "X residuals show systematic bias: mean = {mean_x:.6} (noise_std = {noise_std:.6})"
     );
     assert!(
         mean_y.abs() < noise_std * 3.0,
-        "Y residuals show systematic bias: mean = {:.6} (noise_std = {:.6})",
-        mean_y,
-        noise_std
+        "Y residuals show systematic bias: mean = {mean_y:.6} (noise_std = {noise_std:.6})"
     );
 
     // Test that standard deviation is close to expected noise level
     assert!(
         (std_x - noise_std).abs() < noise_std * 0.5,
-        "X residuals std deviation {:.6} differs significantly from expected {:.6}",
-        std_x,
-        noise_std
+        "X residuals std deviation {std_x:.6} differs significantly from expected {noise_std:.6}"
     );
     assert!(
         (std_y - noise_std).abs() < noise_std * 0.5,
-        "Y residuals std deviation {:.6} differs significantly from expected {:.6}",
-        std_y,
-        noise_std
+        "Y residuals std deviation {std_y:.6} differs significantly from expected {noise_std:.6}"
     );
 
     // Test for normality using KS test with reasonable threshold
     let ks_threshold = 0.05; // More reasonable threshold for practical testing
     assert!(
         ks_statistic_x < ks_threshold,
-        "X residuals fail normality test: KS = {:.6} > {:.6}",
-        ks_statistic_x,
-        ks_threshold
+        "X residuals fail normality test: KS = {ks_statistic_x:.6} > {ks_threshold:.6}"
     );
     assert!(
         ks_statistic_y < ks_threshold,
-        "Y residuals fail normality test: KS = {:.6} > {:.6}",
-        ks_statistic_y,
-        ks_threshold
+        "Y residuals fail normality test: KS = {ks_statistic_y:.6} > {ks_threshold:.6}"
     );
 
     // Test for independence: X and Y residuals should be uncorrelated
     let correlation = pearson_correlation(&all_residuals_x, &all_residuals_y);
-    println!("  X-Y residual correlation: {:.6}", correlation);
+    println!("  X-Y residual correlation: {correlation:.6}");
 
     assert!(
         correlation.abs() < 0.1,
-        "X and Y residuals should be uncorrelated (independent), but correlation = {:.6}",
-        correlation
+        "X and Y residuals should be uncorrelated (independent), but correlation = {correlation:.6}"
     );
 }
 
@@ -269,8 +256,8 @@ fn test_icp_with_outliers() {
     let translation_error = (icp_result.translation - true_translation).norm();
 
     println!("ICP with outliers test:");
-    println!("  Rotation error: {:.6}", rotation_error);
-    println!("  Translation error: {:.6}", translation_error);
+    println!("  Rotation error: {rotation_error:.6}");
+    println!("  Translation error: {translation_error:.6}");
     println!("  Mean squared error: {:.6}", icp_result.mean_squared_error);
 
     // With outliers, ICP should still converge but with higher error

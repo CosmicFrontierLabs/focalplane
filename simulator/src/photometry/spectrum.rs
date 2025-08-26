@@ -420,7 +420,7 @@ impl Spectrum for FlatSpectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{Area, LengthExt, Wavelength};
+    use crate::units::{LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     #[test]

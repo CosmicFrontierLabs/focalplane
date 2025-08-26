@@ -40,11 +40,81 @@
 #![allow(clippy::approx_constant)]
 
 use once_cell::sync::Lazy;
+use std::fmt;
 
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
-use crate::units::{Length, LengthExt, Temperature, TemperatureExt};
+use crate::units::{Area, AreaExt, Length, LengthExt, Temperature, TemperatureExt};
+
+/// Sensor dimensions in pixels and physical size
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensorGeometry {
+    /// Width in pixels
+    width: usize,
+    /// Height in pixels  
+    height: usize,
+    /// Physical pixel size (square pixels assumed)
+    pixel_size: Length,
+}
+
+impl SensorGeometry {
+    /// Create new sensor dimensions
+    pub fn of_width_height(width: usize, height: usize, pixel_size: Length) -> Self {
+        Self {
+            width,
+            height,
+            pixel_size,
+        }
+    }
+
+    /// Get width and height in pixels as tuple
+    pub fn get_pixel_width_height(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    /// Get width and height in physical units
+    pub fn get_width_height(&self) -> (Length, Length) {
+        let width_length =
+            Length::from_micrometers(self.width as f64 * self.pixel_size.as_micrometers());
+        let height_length =
+            Length::from_micrometers(self.height as f64 * self.pixel_size.as_micrometers());
+        (width_length, height_length)
+    }
+
+    /// Get pixel size
+    pub fn pixel_size(&self) -> Length {
+        self.pixel_size
+    }
+
+    /// Get total number of pixels
+    pub fn pixel_count(&self) -> usize {
+        self.width * self.height
+    }
+
+    /// Get aspect ratio (width/height)
+    pub fn aspect_ratio(&self) -> f64 {
+        self.width as f64 / self.height as f64
+    }
+
+    /// Get total area of the sensor
+    pub fn total_area(&self) -> Area {
+        let (width, height) = self.get_width_height();
+        Area::from_square_meters(width.as_meters() * height.as_meters())
+    }
+}
+
+impl fmt::Display for SensorGeometry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}×{} pixels ({:.1}μm pitch)",
+            self.width,
+            self.height,
+            self.pixel_size.as_micrometers()
+        )
+    }
+}
 
 /// Complete sensor configuration for astronomical detector simulation.
 ///
@@ -66,14 +136,8 @@ pub struct SensorConfig {
     /// Wavelength-dependent quantum efficiency curve from manufacturer data
     pub quantum_efficiency: QuantumEfficiency,
 
-    /// Sensor width in pixels (active imaging area)
-    pub width_px: usize,
-
-    /// Sensor height in pixels (active imaging area)
-    pub height_px: usize,
-
-    /// Physical pixel size (square pixels assumed)
-    pub pixel_size: Length,
+    /// Sensor dimensions (width, height, and pixel size)
+    pub dimensions: SensorGeometry,
 
     /// Read noise estimator for temperature and exposure-dependent noise
     pub read_noise_estimator: ReadNoiseEstimator,
@@ -103,9 +167,7 @@ impl SensorConfig {
     pub fn new(
         name: impl Into<String>,
         quantum_efficiency: QuantumEfficiency,
-        width_px: usize,
-        height_px: usize,
-        pixel_size: Length,
+        geometry: SensorGeometry,
         read_noise_estimator: ReadNoiseEstimator,
         dark_current_estimator: DarkCurrentEstimator,
         bit_depth: u8,
@@ -116,9 +178,7 @@ impl SensorConfig {
         Self {
             name: name.into(),
             quantum_efficiency,
-            width_px,
-            height_px,
-            pixel_size,
+            dimensions: geometry,
             read_noise_estimator,
             dark_current_estimator,
             bit_depth,
@@ -131,8 +191,8 @@ impl SensorConfig {
     /// Create a duplicate sensor configuration with new dimensions
     pub fn with_dimensions(&self, width_px: usize, height_px: usize) -> Self {
         let mut clone = self.clone();
-        clone.width_px = width_px;
-        clone.height_px = height_px;
+        clone.dimensions =
+            SensorGeometry::of_width_height(width_px, height_px, self.dimensions.pixel_size());
         clone
     }
 
@@ -146,10 +206,8 @@ impl SensorConfig {
 
     /// Get sensor dimensions in microns
     pub fn dimensions_um(&self) -> (f64, f64) {
-        (
-            self.width_px as f64 * self.pixel_size.as_micrometers(),
-            self.height_px as f64 * self.pixel_size.as_micrometers(),
-        )
+        let (width, height) = self.dimensions.get_width_height();
+        (width.as_micrometers(), height.as_micrometers())
     }
 
     // TODO(meawoppl) - inline this as an attribute
@@ -169,6 +227,11 @@ impl SensorConfig {
             .estimate_at_temperature(temperature)
             .expect("Temperature out of interpolation range")
     }
+
+    /// Get the pixel size
+    pub fn pixel_size(&self) -> Length {
+        self.dimensions.pixel_size()
+    }
 }
 
 #[cfg(test)]
@@ -183,12 +246,11 @@ mod tests {
         let efficiencies = vec![0.0, 0.4, 0.6, 0.5, 0.0];
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
 
+        let geometry = SensorGeometry::of_width_height(1024, 1024, Length::from_micrometers(5.5));
         let sensor = SensorConfig::new(
             "Test",
             qe,
-            1024,
-            1024,
-            Length::from_micrometers(5.5),
+            geometry,
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
             8,
@@ -214,12 +276,11 @@ mod tests {
     #[test]
     fn test_sensor_dimensions() {
         let qe = create_flat_qe(0.5);
+        let geometry = SensorGeometry::of_width_height(1024, 768, Length::from_micrometers(5.5));
         let sensor = SensorConfig::new(
             "Test",
             qe,
-            1024,
-            768,
-            Length::from_micrometers(5.5),
+            geometry,
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
             8,
@@ -229,20 +290,19 @@ mod tests {
         );
         let (width_um, height_um) = sensor.dimensions_um();
 
-        assert_eq!(width_um, 1024.0 * 5.5);
-        assert_eq!(height_um, 768.0 * 5.5);
+        assert!((width_um - 1024.0 * 5.5).abs() < 1e-10);
+        assert!((height_um - 768.0 * 5.5).abs() < 1e-10);
     }
 
     #[test]
     fn test_with_dimensions() {
         use std::time::Duration;
         let qe = create_flat_qe(0.5);
+        let geometry = SensorGeometry::of_width_height(1024, 768, Length::from_micrometers(5.5));
         let original = SensorConfig::new(
             "Test",
             qe,
-            1024,
-            768,
-            Length::from_micrometers(5.5),
+            geometry,
             ReadNoiseEstimator::constant(2.0),
             DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
             8,
@@ -255,17 +315,16 @@ mod tests {
         let resized = original.with_dimensions(2048, 1536);
 
         // Check new dimensions
-        assert_eq!(resized.width_px, 2048);
-        assert_eq!(resized.height_px, 1536);
+        assert_eq!(resized.dimensions.get_pixel_width_height(), (2048, 1536));
 
         // Check dimensions in microns
         let (width_um, height_um) = resized.dimensions_um();
-        assert_eq!(width_um, 2048.0 * 5.5);
-        assert_eq!(height_um, 1536.0 * 5.5);
+        assert!((width_um - 2048.0 * 5.5).abs() < 1e-10);
+        assert!((height_um - 1536.0 * 5.5).abs() < 1e-10);
 
         // Verify other properties remain the same
         assert_eq!(resized.name, original.name);
-        assert_eq!(resized.pixel_size, original.pixel_size);
+        assert_eq!(resized.pixel_size(), original.pixel_size());
         // Read noise estimator should be cloned properly
         assert_eq!(
             resized
@@ -353,12 +412,11 @@ pub mod models {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
             .expect("Failed to create GSENSE4040BSI QE curve");
 
+        let geometry = SensorGeometry::of_width_height(4096, 4096, Length::from_micrometers(9.0));
         SensorConfig::new(
             "GSENSE4040BSI",
             qe,
-            4096,
-            4096,
-            Length::from_micrometers(9.0),
+            geometry,
             ReadNoiseEstimator::constant(2.3),
             DarkCurrentEstimator::from_reference_point(0.04, Temperature::from_celsius(-40.0)), // 0.04 e-/px/s at -40°C
             12,
@@ -395,12 +453,11 @@ pub mod models {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies)
             .expect("Failed to create GSENSE6510BSI QE curve");
 
+        let geometry = SensorGeometry::of_width_height(3200, 3200, Length::from_micrometers(6.5));
         SensorConfig::new(
             "GSENSE6510BSI",
             qe,
-            3200,
-            3200,
-            Length::from_micrometers(6.5),
+            geometry,
             ReadNoiseEstimator::constant(0.7),
             DarkCurrentEstimator::from_reference_point(0.2, Temperature::from_celsius(-10.0)), // 0.2 e-/px/s at -10°C
             12,
@@ -437,12 +494,11 @@ pub mod models {
 
         // 7.42 DN/e- at 32x gain
         // 0.242 DN/e- at 1x gain (using 1x gain here)
+        let geometry = SensorGeometry::of_width_height(4096, 2300, Length::from_micrometers(4.6));
         SensorConfig::new(
             "HWK4123",
             qe,
-            4096,
-            2300,
-            Length::from_micrometers(4.6),
+            geometry,
             ReadNoiseEstimator::hwk4123(),
             DarkCurrentEstimator::from_two_points(
                 Temperature::from_celsius(-20.0),
@@ -492,12 +548,11 @@ pub mod models {
         // Max well depth is from here:
         // https://player-one-astronomy.com/product/zeus-455m-pro-imx455-usb3-0-mono-cooled-camera/
 
+        let geometry = SensorGeometry::of_width_height(9568, 6380, Length::from_micrometers(3.76));
         SensorConfig::new(
             "IMX455",
             qe,
-            9568,
-            6380,
-            Length::from_micrometers(3.76), // Pixel pitch
+            geometry,
             ReadNoiseEstimator::constant(1.58),
             DarkCurrentEstimator::from_curve(
                 vec![-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0],
@@ -534,10 +589,12 @@ mod model_tests {
     fn test_predefined_sensors() {
         // Check GSENSE4040BSI properties
         assert_eq!(models::GSENSE4040BSI.name, "GSENSE4040BSI");
-        assert_eq!(models::GSENSE4040BSI.width_px, 4096);
-        assert_eq!(models::GSENSE4040BSI.height_px, 4096);
         assert_eq!(
-            models::GSENSE4040BSI.pixel_size,
+            models::GSENSE4040BSI.dimensions.get_pixel_width_height(),
+            (4096, 4096)
+        );
+        assert_eq!(
+            models::GSENSE4040BSI.pixel_size(),
             Length::from_micrometers(9.0)
         );
         // Check read noise at room temperature with 1s exposure
@@ -559,10 +616,12 @@ mod model_tests {
 
         // Check GSENSE6510BSI properties
         assert_eq!(models::GSENSE6510BSI.name, "GSENSE6510BSI");
-        assert_eq!(models::GSENSE6510BSI.width_px, 3200);
-        assert_eq!(models::GSENSE6510BSI.height_px, 3200);
         assert_eq!(
-            models::GSENSE6510BSI.pixel_size,
+            models::GSENSE6510BSI.dimensions.get_pixel_width_height(),
+            (3200, 3200)
+        );
+        assert_eq!(
+            models::GSENSE6510BSI.pixel_size(),
             Length::from_micrometers(6.5)
         );
         // Check read noise at room temperature with 1s exposure
@@ -584,9 +643,11 @@ mod model_tests {
 
         // Check HWK4123 properties
         assert_eq!(models::HWK4123.name, "HWK4123");
-        assert_eq!(models::HWK4123.width_px, 4096);
-        assert_eq!(models::HWK4123.height_px, 2300);
-        assert_eq!(models::HWK4123.pixel_size, Length::from_micrometers(4.6));
+        assert_eq!(
+            models::HWK4123.dimensions.get_pixel_width_height(),
+            (4096, 2300)
+        );
+        assert_eq!(models::HWK4123.pixel_size(), Length::from_micrometers(4.6));
         // Check read noise at room temperature with 1s exposure
         // For HWK4123, this should be ~0.301 based on the calibration data at 20°C, 5Hz
         let hwk_read_noise = models::HWK4123
@@ -613,9 +674,11 @@ mod model_tests {
 
         // Check IMX455 properties
         assert_eq!(models::IMX455.name, "IMX455");
-        assert_eq!(models::IMX455.width_px, 9568);
-        assert_eq!(models::IMX455.height_px, 6380);
-        assert_eq!(models::IMX455.pixel_size, Length::from_micrometers(3.76));
+        assert_eq!(
+            models::IMX455.dimensions.get_pixel_width_height(),
+            (9568, 6380)
+        );
+        assert_eq!(models::IMX455.pixel_size(), Length::from_micrometers(3.76));
         // Check read noise at room temperature with 0.2s exposure
         assert_eq!(
             models::IMX455

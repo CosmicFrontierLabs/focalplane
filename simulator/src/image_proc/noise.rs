@@ -31,10 +31,6 @@
 use std::time::Duration;
 
 use crate::algo::process_array_in_parallel_chunks;
-#[cfg(test)]
-use crate::hardware::read_noise::ReadNoiseEstimator;
-#[cfg(test)]
-use crate::units::Length;
 use crate::units::{Temperature, TemperatureExt};
 use crate::SensorConfig;
 use ndarray::Array2;
@@ -130,8 +126,7 @@ pub fn generate_sensor_noise(
     let dark_electrons_mean = dark_current * exposure_time.as_secs_f64();
 
     // Create dimensions for output
-    let height = sensor.height_px;
-    let width = sensor.width_px;
+    let (width, height) = sensor.dimensions.get_pixel_width_height();
 
     // Get read noise estimate for the given temperature and exposure time
     let read_noise = sensor
@@ -304,11 +299,14 @@ pub fn apply_poisson_photon_noise(
 
 #[cfg(test)]
 mod tests {
-    use crate::units::{LengthExt, Wavelength};
+    use crate::units::{Length, LengthExt, Wavelength};
     use approx::assert_relative_eq;
 
     use crate::{
-        hardware::{dark_current::DarkCurrentEstimator, SatelliteConfig},
+        hardware::{
+            dark_current::DarkCurrentEstimator, read_noise::ReadNoiseEstimator,
+            sensor::SensorGeometry, SatelliteConfig,
+        },
         photometry::{zodical::SolarAngularCoordinates, Band, ZodicalLight},
         QuantumEfficiency, TelescopeConfig,
     };
@@ -323,12 +321,12 @@ mod tests {
         let band = Band::from_nm_bounds(300.0, 700.0);
         let qe = QuantumEfficiency::from_notch(&band, 1.0).unwrap();
 
+        let geometry =
+            SensorGeometry::of_width_height(size.1, size.0, Length::from_micrometers(5.0));
         SensorConfig::new(
             "Test Sensor",
             qe,
-            size.1,
-            size.0,
-            Length::from_micrometers(5.0),
+            geometry,
             ReadNoiseEstimator::constant(read_noise),
             DarkCurrentEstimator::from_reference_point(
                 dark_current,
@@ -749,10 +747,7 @@ mod tests {
         for value in array.iter() {
             assert!(
                 *value > min_expected && *value < max_expected,
-                "Value {} outside expected range [{}, {}]",
-                value,
-                min_expected,
-                max_expected
+                "Value {value} outside expected range [{min_expected}, {max_expected}]"
             );
         }
     }
@@ -781,10 +776,8 @@ mod tests {
             z_light.generate_zodical_background(&temp_satellite, &exposure_time, &coords);
 
         // Check dimensions match sensor
-        assert_eq!(
-            zodical_noise.dim(),
-            (sensor.height_px as usize, sensor.width_px as usize)
-        );
+        let (width, height) = sensor.dimensions.get_pixel_width_height();
+        assert_eq!(zodical_noise.dim(), (height, width));
 
         // Check that all values are positive (photoelectrons should be non-negative)
         for value in zodical_noise.iter() {

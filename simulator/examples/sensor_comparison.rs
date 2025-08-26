@@ -36,7 +36,7 @@
 //! - Understanding trade-offs between resolution, noise, and sensitivity
 
 use simulator::hardware::sensor::models::ALL_SENSORS;
-use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
+use simulator::units::{AreaExt, LengthExt, Temperature, TemperatureExt, Wavelength};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor Comparison Table");
@@ -80,10 +80,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(0.0);
 
         // Resolution and area
-        let resolution = format!("{}×{}", config.width_px, config.height_px);
-        let sensor_width_cm = config.width_px as f64 * config.pixel_size.as_centimeters();
-        let sensor_height_cm = config.height_px as f64 * config.pixel_size.as_centimeters();
-        let area_cm2 = sensor_width_cm * sensor_height_cm;
+        let (width, height) = config.dimensions.get_pixel_width_height();
+        let resolution = format!("{width}×{height}");
+        let area_cm2 = config.dimensions.total_area().as_square_centimeters();
 
         // Calculate average QE from 150nm to 1100nm
         let mut qe_sum = 0.0;
@@ -119,24 +118,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for config in sensors {
         println!();
-        let sensor_width_cm =
-            (config.width_px as f64 * config.pixel_size.as_micrometers()) / 10000.0;
-        let sensor_height_cm =
-            (config.height_px as f64 * config.pixel_size.as_micrometers()) / 10000.0;
-        let area_cm2 = sensor_width_cm * sensor_height_cm;
+        let (width, height) = config.dimensions.get_pixel_width_height();
+        let (sensor_width, sensor_height) = config.dimensions.get_width_height();
+        let sensor_width_cm = sensor_width.as_centimeters();
+        let sensor_height_cm = sensor_height.as_centimeters();
+        let area_cm2 = config.dimensions.total_area().as_square_centimeters();
 
         println!();
         println!("### {}", config.name);
-        println!(
-            "- **Resolution:** {} × {} pixels",
-            config.width_px, config.height_px
-        );
+        println!("- **Resolution:** {width} × {height} pixels");
         println!(
             "- **Sensor area:** {area_cm2:.3} cm² ({sensor_width_cm:.2} × {sensor_height_cm:.2} cm)"
         );
         println!(
             "- **Pixel size:** {:.2} μm",
-            config.pixel_size.as_micrometers()
+            config.pixel_size().as_micrometers()
         );
         println!(
             "- **Max well depth:** {} e⁻",

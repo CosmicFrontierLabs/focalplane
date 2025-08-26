@@ -193,7 +193,7 @@ pub fn field_diameter_degrees(telescope: &TelescopeConfig, sensor: &SensorConfig
 /// Calculate the angular size subtended by one pixel
 pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Angle {
     let plate_scale_rad_per_m = telescope.plate_scale().as_radians();
-    let pixel_size_m = sensor.pixel_size.as_meters();
+    let pixel_size_m = sensor.pixel_size().as_meters();
     let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
     Angle::from_radians(angular_size_rad)
 }
@@ -774,7 +774,7 @@ mod tests {
 
         // Calculate expected pixel scale
         let arcsec_per_mm = telescope.plate_scale_arcsec_per_mm();
-        let expected_scale = arcsec_per_mm * sensor.pixel_size.as_millimeters();
+        let expected_scale = arcsec_per_mm * sensor.pixel_size().as_millimeters();
 
         let calculated = pixel_scale(&telescope, &sensor);
 

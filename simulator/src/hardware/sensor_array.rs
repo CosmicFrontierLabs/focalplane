@@ -121,7 +121,7 @@ impl SensorArray {
     pub fn total_pixel_count(&self) -> usize {
         self.sensors
             .iter()
-            .map(|ps| ps.sensor.width_px * ps.sensor.height_px)
+            .map(|ps| ps.sensor.dimensions.pixel_count())
             .sum()
     }
 
@@ -146,8 +146,8 @@ impl SensorArray {
 
             if rel_x.abs() <= width_mm / 2.0 && rel_y.abs() <= height_mm / 2.0 {
                 // Convert to pixel coordinates (0,0 at top-left of sensor)
-                let pixel_x = (rel_x + width_mm / 2.0) / ps.sensor.pixel_size.as_millimeters();
-                let pixel_y = (height_mm / 2.0 - rel_y) / ps.sensor.pixel_size.as_millimeters();
+                let pixel_x = (rel_x + width_mm / 2.0) / ps.sensor.pixel_size().as_millimeters();
+                let pixel_y = (height_mm / 2.0 - rel_y) / ps.sensor.pixel_size().as_millimeters();
 
                 return Some((pixel_x, pixel_y, index));
             }
@@ -167,10 +167,7 @@ mod tests {
         let array = SensorArray::single(sensor.clone());
 
         assert_eq!(array.sensor_count(), 1);
-        assert_eq!(
-            array.total_pixel_count(),
-            sensor.width_px * sensor.height_px
-        );
+        assert_eq!(array.total_pixel_count(), sensor.dimensions.pixel_count());
 
         // Check AABB for single sensor at origin
         let aabb = array.sensor_aabb_mm(0).unwrap();
@@ -207,7 +204,7 @@ mod tests {
         assert_eq!(array.sensor_count(), 2);
         assert_eq!(
             array.total_pixel_count(),
-            2 * sensor.width_px * sensor.height_px
+            2 * sensor.dimensions.pixel_count()
         );
 
         let aabbs = array.all_sensor_aabbs_mm();
@@ -230,8 +227,9 @@ mod tests {
 
         let (px, py, idx) = result.unwrap();
         assert_eq!(idx, 0);
-        assert!((px - sensor.width_px as f64 / 2.0).abs() < 1.0);
-        assert!((py - sensor.height_px as f64 / 2.0).abs() < 1.0);
+        let (width, height) = sensor.dimensions.get_pixel_width_height();
+        assert!((px - width as f64 / 2.0).abs() < 1.0);
+        assert!((py - height as f64 / 2.0).abs() < 1.0);
 
         // Point far outside should return None
         let result = array.mm_to_pixel(1000.0, 1000.0);

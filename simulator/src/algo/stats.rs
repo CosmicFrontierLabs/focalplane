@@ -157,9 +157,7 @@ mod tests {
         // Should be very small for perfect normal data
         assert!(
             ks_stat < critical * 2.0,
-            "KS statistic {} should be small for normal data (critical: {})",
-            ks_stat,
-            critical
+            "KS statistic {ks_stat} should be small for normal data (critical: {critical})"
         );
     }
 
@@ -181,8 +179,7 @@ mod tests {
         // Should detect non-normality
         assert!(
             ks_stat > 0.05,
-            "KS statistic {} should detect bimodal distribution",
-            ks_stat
+            "KS statistic {ks_stat} should detect bimodal distribution"
         );
     }
 
@@ -229,8 +226,7 @@ mod tests {
         // Should detect non-normality due to outliers
         assert!(
             ks_stat > 0.05,
-            "KS statistic {} should detect outliers",
-            ks_stat
+            "KS statistic {ks_stat} should detect outliers"
         );
     }
 

@@ -375,7 +375,7 @@ mod tests {
         let interp = ReadNoiseEstimator::hwk4123();
         // Test below minimum frame rate (too long exposure)
         let result_capped = interp.estimate(0.0, Duration::from_secs_f64(1.0)); // 1 Hz
-        println!("Result: {:?}", result_capped);
+        println!("Result: {result_capped:?}");
         let expected = interp.estimate(0.0, Duration::from_millis(200));
 
         assert_eq!(result_capped, expected);

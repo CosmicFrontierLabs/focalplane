@@ -58,14 +58,12 @@ fn create_focal_plane_svg(
 
     // Start SVG
     svg.push_str(&format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
-        svg_size, svg_size, svg_size, svg_size
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{svg_size}\" height=\"{svg_size}\" viewBox=\"0 0 {svg_size} {svg_size}\">\n"
     ));
 
     // Background
     svg.push_str(&format!(
-        "  <rect width=\"{}\" height=\"{}\" fill=\"#1a1a2e\"/>\n",
-        svg_size, svg_size
+        "  <rect width=\"{svg_size}\" height=\"{svg_size}\" fill=\"#1a1a2e\"/>\n"
     ));
 
     // Grid pattern
@@ -77,8 +75,7 @@ fn create_focal_plane_svg(
     svg.push_str("    </pattern>\n");
     svg.push_str("  </defs>\n");
     svg.push_str(&format!(
-        "  <rect width=\"{}\" height=\"{}\" fill=\"url(#grid)\"/>\n",
-        svg_size, svg_size
+        "  <rect width=\"{svg_size}\" height=\"{svg_size}\" fill=\"url(#grid)\"/>\n"
     ));
 
     // Focal plane circle
@@ -89,14 +86,12 @@ fn create_focal_plane_svg(
 
     // Title
     svg.push_str(&format!(
-        "  <text x=\"{}\" y=\"30\" font-family=\"monospace\" font-size=\"18\" fill=\"white\" text-anchor=\"middle\" font-weight=\"bold\">Focal Plane Layout</text>\n",
-        center
+        "  <text x=\"{center}\" y=\"30\" font-family=\"monospace\" font-size=\"18\" fill=\"white\" text-anchor=\"middle\" font-weight=\"bold\">Focal Plane Layout</text>\n"
     ));
 
     // Subtitle
     svg.push_str(&format!(
-        "  <text x=\"{}\" y=\"50\" font-family=\"monospace\" font-size=\"14\" fill=\"#aaaaaa\" text-anchor=\"middle\">FOV: {:.1}° | Focal Length: {:.1}mm | Radius: {:.1}mm</text>\n",
-        center, field_of_view_deg, focal_length_mm, focal_plane_radius_mm
+        "  <text x=\"{center}\" y=\"50\" font-family=\"monospace\" font-size=\"14\" fill=\"#aaaaaa\" text-anchor=\"middle\">FOV: {field_of_view_deg:.1}° | Focal Length: {focal_length_mm:.1}mm | Radius: {focal_plane_radius_mm:.1}mm</text>\n"
     ));
 
     // Group sensors by model for legend
@@ -128,17 +123,15 @@ fn create_focal_plane_svg(
         sensor_models.insert(sensor_name.clone(), color.clone());
 
         // Draw sensor rectangle
-        svg.push_str(&format!("  <!-- Sensor {}: {} -->\n", idx, sensor_name));
+        svg.push_str(&format!("  <!-- Sensor {idx}: {sensor_name} -->\n"));
         svg.push_str(&format!(
-            "  <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" fill-opacity=\"0.3\" stroke=\"{}\" stroke-width=\"2\"/>\n",
-            rect_x, rect_y, rect_width, rect_height, color, color
+            "  <rect x=\"{rect_x}\" y=\"{rect_y}\" width=\"{rect_width}\" height=\"{rect_height}\" fill=\"{color}\" fill-opacity=\"0.3\" stroke=\"{color}\" stroke-width=\"2\"/>\n"
         ));
 
         // Add sensor label in center
         let label_font_size = (rect_width.min(rect_height) / 8.0).max(10.0).min(16.0);
         svg.push_str(&format!(
-            "  <text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"{}\" fill=\"white\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-weight=\"bold\">{}</text>\n",
-            svg_x, svg_y, label_font_size, sensor_name
+            "  <text x=\"{svg_x}\" y=\"{svg_y}\" font-family=\"monospace\" font-size=\"{label_font_size}\" fill=\"white\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-weight=\"bold\">{sensor_name}</text>\n"
         ));
 
         // Add position info below the name
@@ -173,8 +166,7 @@ fn create_focal_plane_svg(
         ));
 
         svg.push_str(&format!(
-            "  <text x=\"50\" y=\"{}\" font-family=\"monospace\" font-size=\"12\" fill=\"white\" dominant-baseline=\"middle\">{}</text>\n",
-            y_pos, model_name
+            "  <text x=\"50\" y=\"{y_pos}\" font-family=\"monospace\" font-size=\"12\" fill=\"white\" dominant-baseline=\"middle\">{model_name}</text>\n"
         ));
     }
 

@@ -275,8 +275,8 @@ pub fn generate_wwt_overlay_url(
     let fov_angle = field_diameter(&satellite.telescope, &satellite.sensor);
 
     // Use sensor dimensions for image shape
-    let image_pixel_width = satellite.sensor.width_px;
-    let image_pixel_height = satellite.sensor.height_px;
+    let (image_pixel_width, image_pixel_height) =
+        satellite.sensor.dimensions.get_pixel_width_height();
 
     // Ensure minimum dimensions for placehold.co
     let image_pixel_width = image_pixel_width.max(1);

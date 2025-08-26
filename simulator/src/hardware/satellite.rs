@@ -94,7 +94,7 @@ impl SatelliteConfig {
     /// Get the plate scale per pixel (angular size subtended by one pixel)
     pub fn plate_scale_per_pixel(&self) -> Angle {
         let plate_scale_rad_per_m = self.telescope.plate_scale().as_radians();
-        let pixel_size_m = self.sensor.pixel_size.as_meters();
+        let pixel_size_m = self.sensor.pixel_size().as_meters();
         let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
         Angle::from_radians(angular_size_rad)
     }
@@ -116,8 +116,9 @@ impl SatelliteConfig {
     /// Returns the angular dimensions of the full sensor array
     pub fn field_of_view(&self) -> (Angle, Angle) {
         let angular_per_pixel = self.plate_scale_per_pixel();
-        let width_angle = angular_per_pixel * (self.sensor.width_px as f64);
-        let height_angle = angular_per_pixel * (self.sensor.height_px as f64);
+        let (width, height) = self.sensor.dimensions.get_pixel_width_height();
+        let width_angle = angular_per_pixel * (width as f64);
+        let height_angle = angular_per_pixel * (height as f64);
         (width_angle, height_angle)
     }
 
@@ -163,7 +164,7 @@ impl SatelliteConfig {
         let airy_radius_um = self.telescope.airy_disk_radius_um(self.wavelength);
 
         // Convert to pixels using sensor pixel size
-        let airy_radius_pixels = airy_radius_um / self.sensor.pixel_size.as_micrometers();
+        let airy_radius_pixels = airy_radius_um / self.sensor.pixel_size().as_micrometers();
 
         // Create scaled Airy disk with pixel radius
         PixelScaledAiryDisk::with_first_zero(airy_radius_pixels, self.wavelength)
@@ -201,7 +202,7 @@ impl SatelliteConfig {
     ///
     pub fn with_fwhm_sampling(&self, q: f64) -> SatelliteConfig {
         let current_q = self.telescope.fwhm_image_spot_um(self.wavelength)
-            / self.sensor.pixel_size.as_micrometers();
+            / self.sensor.pixel_size().as_micrometers();
 
         let ratio = q / current_q;
         let new_focal_length = Length::from_meters(self.telescope.focal_length.as_meters() * ratio);
@@ -223,7 +224,8 @@ impl SatelliteConfig {
     /// Number of pixels per FWHM of the PSF
     ///
     pub fn fwhm_sampling_ratio(&self) -> f64 {
-        self.telescope.fwhm_image_spot_um(self.wavelength) / self.sensor.pixel_size.as_micrometers()
+        self.telescope.fwhm_image_spot_um(self.wavelength)
+            / self.sensor.pixel_size().as_micrometers()
     }
 
     /// Generate a descriptive string for this satellite configuration
@@ -383,7 +385,7 @@ mod tests {
 
         // Should match manual calculation
         let expected = telescope.fwhm_image_spot_um(Wavelength::from_nanometers(550.0))
-            / sensor.pixel_size.as_micrometers();
+            / sensor.pixel_size().as_micrometers();
         assert!((sampling - expected).abs() < 1e-10);
     }
 

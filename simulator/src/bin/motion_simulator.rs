@@ -130,11 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sensor configuration:");
     println!("  Model: {:?}", args.sensor);
     println!("  Name: {}", sensor.name);
-    println!(
-        "  Resolution: {}x{} pixels",
-        sensor.width_px, sensor.height_px
-    );
-    println!("  Pixel size: {:.1} μm", sensor.pixel_size.as_micrometers());
+    println!("  Dimensions: {}", sensor.dimensions);
     // Get read noise estimate at operating temperature with exposure time
     let read_noise = sensor
         .read_noise_estimator

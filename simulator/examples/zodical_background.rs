@@ -303,13 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Sensors to Analyze:");
     for sensor in &sensors {
-        println!(
-            "  - {} ({:.1}μm pitch, {}x{} pixels)",
-            sensor.name,
-            sensor.pixel_size.as_micrometers(),
-            sensor.width_px,
-            sensor.height_px
-        );
+        println!("  - {}: {}", sensor.name, sensor.dimensions);
     }
     println!();
     println!("Output Information:");
@@ -359,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let min_zodical_e = z_light.generate_zodical_background(&satellite, &exposure, &min_coords);
         let min_electrons_total = min_zodical_e.mean().unwrap();
         let min_electrons_per_s = min_electrons_total / exposure.as_secs_f64();
-        println!("  Zodical minimum: {:.2e} e-/s", min_electrons_per_s);
+        println!("  Zodical minimum: {min_electrons_per_s:.2e} e-/s");
 
         // Compute DN/s and electrons/s for each coordinate combination
         for (elong_idx, &elongation) in elongations.iter().enumerate() {
