@@ -2,6 +2,18 @@
 
 This document tracks the migration to type-safe units using the `uom` crate to prevent unit confusion errors.
 
+## Summary (Last Updated: 2025-08-27)
+
+**Major Progress**: The critical physics units are now type-safe! Temperature, Length, Wavelength, Angle, and Area types have been fully implemented with convenient extension traits. The most error-prone areas (telescope optics, sensor geometry, angular calculations) have been successfully migrated.
+
+**Statistics**:
+- **5 core unit types** implemented with extension traits
+- **111+ unit conversion calls** across 21+ files
+- **30+ files** now using typed units
+- **10+ files** fully migrated to type-safe units
+
+**Remaining Work**: Primarily electronic sensor parameters (well depth, ADC gain) and domain-specific astronomical units (Magnitude, ColorIndex). The foundation is solid and most physics calculations are now protected from unit confusion errors.
+
 ## Completed Migrations
 
 ### ✅ Temperature Functions (Priority 1)
@@ -12,57 +24,82 @@ This document tracks the migration to type-safe units using the `uom` crate to p
   - `simulator/src/units.rs` - Core Temperature type and TemperatureExt trait
   - `simulator/src/hardware/dark_current.rs` - Dark current temperature calculations
   - All sensor models and temperature-dependent calculations
+- **Usage**: 111+ conversion calls across 21 files
 
-### ✅ Pixel Size Units (Priority 2 - Partial)
-- **Completed**: `pixel_size_um: f64` → `pixel_size: Length`
-- **Implementation**: Using `Length` type from uom with micrometers as common unit
+### ✅ Length Units (Priority 2)
+- **Completed**: Full `Length` type implementation with `LengthExt` trait
+- **Pixel Size**: `pixel_size_um: f64` → `pixel_size: Length`
+- **Telescope Optics**: 
+  - `aperture_m: f64` → `aperture: Length`
+  - `focal_length_m: f64` → `focal_length: Length`
+- **Sensor Dimensions**: Using `SensorGeometry` struct with typed `Length` fields
 - **Extension trait**: `LengthExt` for nm/μm/mm/cm/m conversions
 - **Files updated**:
   - `simulator/src/units.rs` - Core Length type and LengthExt trait  
   - `simulator/src/hardware/sensor.rs` - All sensor models updated
-  - All usage sites updated to use `Length::from_micrometers()`
+  - `simulator/src/hardware/telescope.rs` - TelescopeConfig fully typed
+  - All usage sites updated to use typed constructors
 - **Refactored conversions**:
   - Manual `/1000.0` → `as_millimeters()`
   - Manual `/10000.0` → `as_centimeters()`
   - Manual `/1_000_000.0` → `as_meters()`
 
-## Priority 1: Critical Unit Confusion Areas
+### ✅ Wavelength Units (Priority 1)
+- **Completed**: Type alias `Wavelength = Length` for optical clarity
+- **Implementation**: All wavelength parameters use `Wavelength` type
+- **Usage**: `wavelength_nm: f64` → `wavelength: Wavelength`
+- **Files updated**:
+  - All photometry modules (`spectrum.rs`, `stellar.rs`, `photoconversion.rs`)
+  - Airy disk calculations in `image_proc/airy.rs`
+  - Telescope diffraction calculations
+- **Key functions**:
+  - `wavelength_to_ergs(wavelength: Wavelength) -> f64`
+  - `airy_disk_radius(&self, wavelength: Wavelength) -> Angle`
+  - `quantum_efficiency.at(wavelength: Wavelength) -> f64`
 
-These are areas where unit mix-ups are most likely and dangerous:
+### ✅ Angular Units (Priority 1)
+- **Completed**: All angular measurements migrated (commit 4a3f770)
+- **Implementation**: `Angle` type with `AngleExt` trait
+- **Conversions**: degrees ↔ radians ↔ arcseconds ↔ milliarcseconds
+- **Files updated**:
+  - `simulator/src/star_math.rs` - `field_diameter()`, `pixel_scale()` return `Angle`
+  - `simulator/src/hardware/satellite.rs` - FOV and plate scale methods
+  - `simulator/src/hardware/telescope.rs` - Airy disk and resolution calculations
+  - `simulator/src/algo/motion.rs` - Angular velocities
+- **Key functions**:
+  - `field_diameter(telescope, sensor) -> Angle`
+  - `pixel_scale(telescope, sensor) -> Angle`
+  - `plate_scale() -> Angle`
+  - `field_of_view() -> (Angle, Angle)`
+  - `airy_disk_radius(wavelength) -> Angle`
 
-### Magnitude and Color Index Functions
+### ✅ Area Units (Priority 2)
+- **Completed**: Area measurements for apertures (commit 9f2bf02)
+- **Implementation**: `Area` type with `AreaExt` trait
+- **Conversions**: square meters ↔ square centimeters
+- **Files updated**:
+  - `simulator/src/hardware/telescope.rs` - `clear_aperture_area() -> Area`
+  - `simulator/src/photometry/photoconversion.rs` - `integrated_over(aperture: Area)`
+- **Key functions**:
+  - `clear_aperture_area() -> Area`
+  - `photons(spectrum, band, aperture: Area, exposure) -> f64`
+
+## Remaining Work
+
+### Priority 1: Critical Unit Confusion Areas
+
+#### Magnitude and Color Index Functions
 - [ ] `BlackbodyStellarSpectrum::from_gaia_bv_magnitude(bv: f64, mag: f64)`
   - **Risk**: Arguments can be swapped (already happened!)
   - **Solution**: Use `ColorIndex` and `Magnitude` types
+  - **Status**: Not yet started - still using raw f64
 
+### Priority 2: Physical Dimensions (Partially Complete)
 
-### Wavelength Parameters
-- [ ] Functions with `wavelength_nm: f64`
-  - **Risk**: Could pass meters or angstroms
-  - **Solution**: Use `Length` type with nanometer units
-
-### Angular Conversions
-- [ ] `to_radians()`, `to_degrees()`, `from_radians()`, `from_degrees()`
-  - **Risk**: Double conversion or wrong direction
-  - **Solution**: Use `Angle` type throughout
-
-## Priority 2: Physical Dimensions
-
-### Length Units
-- [ ] Telescope aperture (`aperture_m: f64`)
-- [ ] Focal length (`focal_length_m: f64`)
-- [x] ~~Pixel size (`pixel_size_um: f64`)~~ ✅ COMPLETED
-- [ ] Sensor dimensions (`width_um`, `height_um`)
-- [ ] Wavelength bands (`lower_nm`, `upper_nm`)
-
-### Time Units
-- [ ] Exposure duration (`Duration` already type-safe!)
+#### Time Units
+- [x] ~~Exposure duration (`Duration` already type-safe!)~~ ✅ Rust std::time::Duration
 - [ ] Frame rates (`max_frame_rate_fps: f64`)
-- [ ] Dark current rates (electrons/second)
-
-### Area Units
-- [ ] Collecting area (`collecting_area_cm2()`)
-- [ ] Aperture calculations
+- [ ] Dark current rates (electrons/second) - partially done, temperature typed
 
 ## Priority 3: Detector Units
 
@@ -90,54 +127,48 @@ These are areas where unit mix-ups are most likely and dangerous:
 - [ ] Wobble frequency (Hz)
 - [ ] RPM conversions
 
-## Implementation Strategy
+## Implementation Progress
 
-### Phase 1: Core Types
-1. Define custom unit types for astronomy:
-   ```rust
-   type Magnitude = f64; // Will be refined
-   type ColorIndex = f64; // Will be refined
-   type QuantumEfficiency = f64; // 0.0-1.0
-   ```
+### ✅ Phase 1: Core Types (COMPLETED)
+- **Temperature**: `ThermodynamicTemperature` with `TemperatureExt` trait
+- **Length/Wavelength**: `Length` type with `LengthExt` trait, `Wavelength` alias
+- **Angle**: `Angle` type with `AngleExt` trait (degrees, radians, arcseconds, mas)
+- **Area**: `Area` type with `AreaExt` trait
 
-2. Create astronomy-specific units:
-   ```rust
-   unit! {
-       system: uom::si;
-       quantity: uom::si::luminous_intensity;
-       @magnitude: 1.0; "mag";
-       @jansky: 1.0e-26; "Jy";
-   }
-   ```
+### 🔄 Phase 2: Critical Functions (IN PROGRESS)
+- ✅ Temperature-dependent calculations all typed
+- ✅ Wavelength parameters all typed
+- ✅ Angular conversions all typed
+- ✅ Telescope optics (aperture, focal length) typed
+- ✅ Sensor geometry typed via `SensorGeometry` struct
+- ⏳ Magnitude/ColorIndex types pending
+- ⏳ Electronic units pending
 
-### Phase 2: Critical Functions
-1. Update function signatures with highest risk first
-2. Add validation at boundaries
-3. Update tests to use typed units
+### Phase 3: Full Migration (PLANNED)
+1. Complete electronic sensor parameters
+2. Create domain-specific types for magnitudes
+3. Migrate remaining f64 parameters
 
-### Phase 3: Full Migration
-1. Replace all `f64` parameters with appropriate unit types
-2. Update documentation
-3. Add compile-time unit checking
+## Files Status
 
-## Files to Modify (by priority)
+### ✅ Completed Files
+- `simulator/src/units.rs` - Core unit system with all extension traits
+- `simulator/src/hardware/telescope.rs` - Fully typed (aperture, focal length)
+- `simulator/src/hardware/sensor.rs` - SensorGeometry with typed dimensions
+- `simulator/src/hardware/dark_current.rs` - Temperature typed
+- `simulator/src/star_math.rs` - Angular conversions complete
+- `simulator/src/photometry/spectrum.rs` - Wavelength units complete
+- `simulator/src/photometry/photoconversion.rs` - Area and wavelength typed
+- `simulator/src/image_proc/airy.rs` - Wavelength typed
+- `simulator/src/algo/motion.rs` - Angular velocity typed
+- `simulator/src/photometry/quantum_efficiency.rs` - Wavelengths typed
 
-### High Priority
-- `simulator/src/photometry/stellar.rs` - magnitude/color functions
-- `simulator/src/hardware/dark_current.rs` - temperature units
-- `simulator/src/photometry/spectrum.rs` - wavelength units
-- `simulator/src/star_math.rs` - angular conversions
+### 🔄 Partially Complete
+- `simulator/src/photometry/stellar.rs` - Wavelength typed, magnitude/color pending
 
-### Medium Priority
-- `simulator/src/hardware/telescope.rs` - aperture, focal length
-- `simulator/src/hardware/sensor.rs` - pixel size, dimensions
-- `simulator/src/photometry/photoconversion.rs` - flux calculations
-- `simulator/src/image_proc/airy.rs` - wavelength, pixel units
-
-### Lower Priority
-- `simulator/src/algo/motion.rs` - angular velocity
-- `simulator/src/photometry/quantum_efficiency.rs` - wavelengths
-- All test files - update to use typed units
+### ❌ Not Started
+- Electronic sensor parameters across various files
+- Magnitude and ColorIndex custom types
 
 ## Testing Strategy
 
