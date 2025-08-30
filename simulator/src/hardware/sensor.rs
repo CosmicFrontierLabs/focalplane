@@ -369,12 +369,12 @@ mod tests {
     #[test]
     fn test_sensor_geometry_display() {
         let geometry = SensorGeometry::of_width_height(4096, 2160, Length::from_micrometers(3.76));
-        let display_str = format!("{}", geometry);
+        let display_str = format!("{geometry}");
         assert_eq!(display_str, "4096×2160 pixels (3.8μm pitch)");
 
         // Test with different precision
         let geometry2 = SensorGeometry::of_width_height(1920, 1080, Length::from_micrometers(5.5));
-        let display_str2 = format!("{}", geometry2);
+        let display_str2 = format!("{geometry2}");
         assert_eq!(display_str2, "1920×1080 pixels (5.5μm pitch)");
     }
 
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(original.get_pixel_width_height(), (3840, 2160)); // Original still valid due to Copy
 
         // Test Clone
-        let cloned = original.clone();
+        let cloned = original;
         assert_eq!(cloned.get_pixel_width_height(), (3840, 2160));
         assert_eq!(cloned.pixel_size(), Length::from_micrometers(2.9));
     }

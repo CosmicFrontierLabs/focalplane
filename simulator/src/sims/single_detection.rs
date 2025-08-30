@@ -191,7 +191,7 @@ pub fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
                 })
                 .collect(),
             Err(e) => {
-                log::warn!("Star detection failed: {}", e);
+                log::warn!("Star detection failed: {e}");
                 continue;
             }
         };
@@ -223,7 +223,7 @@ pub fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
             let airy_disk = params.satellite.airy_disk_fwhm_sampled();
             if err > airy_disk.first_zero().max(1.0) * 3.0 {
                 spurious_detections += 1;
-                log::debug!("Spurious detection: {} pixels from true position", err);
+                log::debug!("Spurious detection: {err} pixels from true position");
                 break; // Break out of detection loop for this experiment
             }
 

@@ -481,7 +481,7 @@ fn run_experiment<T: StarCatalog>(
                         })
                         .collect(),
                     Err(e) => {
-                        log::warn!("Star detection failed: {}", e);
+                        log::warn!("Star detection failed: {e}");
                         vec![] // Return empty vector instead of early return
                     }
                 };
@@ -619,7 +619,7 @@ fn run_experiment<T: StarCatalog>(
                 .csv_writer
                 .write_result(&experiment_result, params.common_args.aperture_m)
             {
-                warn!("Failed to write result to CSV: {}", e);
+                warn!("Failed to write result to CSV: {e}");
             }
 
             results.push(experiment_result);
@@ -678,7 +678,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![selected_telescope.f_number()]
     };
 
-    info!("Using f-numbers: {:?}", f_numbers);
+    info!("Using f-numbers: {f_numbers:?}");
 
     // Use base telescope for satellite configurations (will be modified per f-number in experiments)
     let base_telescope = selected_telescope.clone();
@@ -871,7 +871,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Processing results...");
 
     // Results are written on-the-fly during experiments
-    info!("Results written to CSV file: {}", output_csv_path);
+    info!("Results written to CSV file: {output_csv_path}");
 
     // Calculate and report timing statistics
     let wallclock_duration = wallclock_start.elapsed();
@@ -913,7 +913,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !args.serial {
         let speedup = total_compute_time.as_secs_f64() / wallclock_duration.as_secs_f64();
-        info!("Parallel speedup: {:.2}x", speedup);
+        info!("Parallel speedup: {speedup:.2}x");
         info!(
             "Effective CPU utilization: {:.1}%",
             speedup * 100.0 / num_cpus::get() as f64
@@ -1033,7 +1033,7 @@ fn debug_stats(
     // Print ICP match distances
     for (dete, star) in matches.iter() {
         let distance = ((dete.x() - star.x()).powf(2.0) + (dete.y() - star.y()).powf(2.0)).sqrt();
-        debug!("Matched star with distance {:.2}", distance);
+        debug!("Matched star with distance {distance:.2}");
         debug!(
             "\tDetected X/Y: ({:.2}, {:.2}), Source X/Y: ({:.2}, {:.2})",
             dete.x(),
@@ -1055,7 +1055,7 @@ fn debug_stats(
 
     // Skip if all values are the same
     if (max_val - min_val).abs() < 1e-10 {
-        debug!("  All pixel values are approximately: {:.2}", min_val);
+        debug!("  All pixel values are approximately: {min_val:.2}");
         return Ok(());
     }
 
@@ -1081,9 +1081,9 @@ fn debug_stats(
 
     // Display basic statistics
     debug!("\nElectron Count Statistics:");
-    debug!("  Total Pixels: {}", total_pixels);
-    debug!("  Min Value: {:.2} electrons", min_val);
-    debug!("  Max Value: {:.2} electrons", max_val);
+    debug!("  Total Pixels: {total_pixels}");
+    debug!("  Min Value: {min_val:.2} electrons");
+    debug!("  Max Value: {max_val:.2} electrons");
 
     // Print the histograms
     debug!("\n{}", full_hist.with_config(full_config).format()?);

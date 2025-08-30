@@ -174,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             debug!("Successfully loaded catalog with {} stars", catalog.len());
         }
         Err(e) => {
-            debug!("Note: Could not load catalog ({})", e);
+            debug!("Note: Could not load catalog ({e})");
             debug!("This is not required for motion simulation");
         }
     }

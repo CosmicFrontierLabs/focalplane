@@ -43,6 +43,7 @@ cargo test
 IMPORTANT: Always run `cargo fmt` before committing any code changes!
 
 ## Code Style Guidelines
+- **Comments**: Avoid comments that reference pre-change conditions (e.g., "Changed from X", "Previously Y"). Comments should describe current state only.
 - **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups. 
   - Avoid using wildcard imports like `use crate::*` - always be explicit.
   - Example format: `use crate::utils::{self, helpers, types::TypeName};`

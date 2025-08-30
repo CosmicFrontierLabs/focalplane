@@ -37,6 +37,14 @@ pub struct V4L2Capture {
     config: CameraConfig,
 }
 
+#[derive(Debug, Clone)]
+pub struct CaptureResult {
+    pub frame: Vec<u8>,
+    pub actual_width: u32,
+    pub actual_height: u32,
+    pub fourcc: [u8; 4],
+}
+
 impl V4L2Capture {
     pub fn new(config: CameraConfig) -> Result<Self> {
         Ok(Self { config })
@@ -49,10 +57,69 @@ impl V4L2Capture {
 
     pub fn configure_device(&self, device: &mut Device) -> Result<()> {
         let mut format = device.format()?;
+        let initial_fourcc_bytes = format.fourcc.repr;
+        let initial_fourcc_str = std::str::from_utf8(&initial_fourcc_bytes).unwrap_or("????");
+
+        tracing::info!(
+            "Initial format: {}x{} {} ({:?})",
+            format.width,
+            format.height,
+            initial_fourcc_str,
+            initial_fourcc_bytes
+        );
+
         format.width = self.config.width;
         format.height = self.config.height;
         format.fourcc = v4l::FourCC::new(b"Y16 ");
+
+        tracing::info!(
+            "Requesting format: {}x{} Y16",
+            self.config.width,
+            self.config.height
+        );
+
         device.set_format(&format)?;
+
+        // Log the actual format after setting
+        let actual_format = device.format()?;
+        let fourcc_bytes = actual_format.fourcc.repr;
+        let fourcc_str = std::str::from_utf8(&fourcc_bytes).unwrap_or("????");
+
+        // Check if stride/bytesperline is available
+        // V4L2 format includes bytesperline for stride information
+        let stride = actual_format.stride;
+        let expected_stride = actual_format.width * 2; // For 16-bit format
+
+        tracing::info!(
+            "Format negotiated: {}x{} {} ({:?}), stride: {} bytes (expected: {} bytes)",
+            actual_format.width,
+            actual_format.height,
+            fourcc_str,
+            fourcc_bytes,
+            stride,
+            expected_stride
+        );
+
+        if stride != expected_stride {
+            tracing::warn!(
+                "Row padding detected: {} bytes per row ({}px × 2 = {} expected, {} padding bytes)",
+                stride,
+                actual_format.width,
+                expected_stride,
+                stride - expected_stride
+            );
+        }
+
+        // Store the actual dimensions for later use
+        if actual_format.width != self.config.width || actual_format.height != self.config.height {
+            tracing::warn!(
+                "Camera did not accept requested resolution. Using {}x{} instead of {}x{}",
+                actual_format.width,
+                actual_format.height,
+                self.config.width,
+                self.config.height
+            );
+        }
 
         if let Ok(controls) = device.query_controls() {
             for control_desc in controls {
@@ -102,6 +169,22 @@ impl V4L2Capture {
         Ok(buf.to_vec())
     }
 
+    pub fn capture_single_frame_with_info(&self) -> Result<CaptureResult> {
+        let mut device = self.open_device()?;
+        self.configure_device(&mut device)?;
+
+        let actual_format = device.format()?;
+        let mut stream = MmapStream::new(&device, Type::VideoCapture)?;
+        let (buf, _meta) = stream.next()?;
+
+        Ok(CaptureResult {
+            frame: buf.to_vec(),
+            actual_width: actual_format.width,
+            actual_height: actual_format.height,
+            fourcc: actual_format.fourcc.repr,
+        })
+    }
+
     pub fn capture_frames_with_skip(&self, count: usize, skip: usize) -> Result<Vec<Vec<u8>>> {
         let mut device = self.open_device()?;
         self.configure_device(&mut device)?;
@@ -143,18 +226,27 @@ impl<'a> CaptureSession<'a> {
     }
 
     pub fn start_stream(&mut self) -> Result<()> {
+        tracing::info!("Starting V4L2 stream...");
         let stream = MmapStream::new(&self.device, Type::VideoCapture)?;
         self.stream = Some(stream);
+        tracing::info!("V4L2 stream started successfully");
         Ok(())
     }
 
     pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
+        tracing::debug!("Attempting to capture frame...");
         let stream = self
             .stream
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Stream not started"))?;
 
-        let (buf, _meta) = stream.next()?;
+        let (buf, meta) = stream.next()?;
+        let frame_size = buf.len();
+        tracing::info!(
+            "Captured frame: {} bytes, timestamp: {:?}",
+            frame_size,
+            meta.timestamp
+        );
         Ok(buf.to_vec())
     }
 
