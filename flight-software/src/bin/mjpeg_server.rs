@@ -7,10 +7,13 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use flight_software::camera::neutralino_imx455::read_sensor_temperatures;
+use flight_software::camera::v4l2_utils::{
+    collect_camera_metadata, get_available_resolutions, query_menu_item,
+};
 use flight_software::v4l2_capture::{CameraConfig, CaptureSession};
 use image::{ImageBuffer, Luma};
 use log::{debug, error, info, warn};
-use std::ffi::CStr;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -59,6 +62,8 @@ struct FrameStats {
     fpga_temp_celsius: Option<f32>,
     pcb_temp_celsius: Option<f32>,
     last_temp_update: std::time::Instant,
+    last_timestamp_sec: i64,
+    last_timestamp_usec: i64,
 }
 
 impl Default for FrameStats {
@@ -71,6 +76,8 @@ impl Default for FrameStats {
             fpga_temp_celsius: None,
             pcb_temp_celsius: None,
             last_temp_update: std::time::Instant::now(),
+            last_timestamp_sec: 0,
+            last_timestamp_usec: 0,
         }
     }
 }
@@ -83,172 +90,6 @@ struct AppState {
     session: Arc<Mutex<CaptureSession<'static>>>,
     device_path: String,
     stats: Arc<Mutex<FrameStats>>,
-}
-
-#[derive(Default)]
-struct CameraMetadata {
-    driver: String,
-    card: String,
-    bus: String,
-    formats: Vec<String>,
-    resolutions: Vec<String>,
-    controls: Vec<String>,
-    test_patterns: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct Resolution {
-    width: u32,
-    height: u32,
-    fps: f64,
-}
-
-fn get_available_resolutions(device_path: &str) -> anyhow::Result<Vec<Resolution>> {
-    let device = Device::with_path(device_path)?;
-    let mut resolutions = Vec::new();
-
-    // Get first format (RG16)
-    if let Some(fmt) = device.enum_formats()?.into_iter().next() {
-        if let Ok(framesizes) = device.enum_framesizes(fmt.fourcc) {
-            for size in framesizes {
-                if let v4l::framesize::FrameSizeEnum::Discrete(discrete) = size.size {
-                    // Get frame rate for this resolution
-                    let fps = if let Ok(intervals) =
-                        device.enum_frameintervals(fmt.fourcc, discrete.width, discrete.height)
-                    {
-                        if let Some(interval) = intervals.into_iter().next() {
-                            match interval.interval {
-                                v4l::frameinterval::FrameIntervalEnum::Discrete(disc) => {
-                                    disc.denominator as f64 / disc.numerator as f64
-                                }
-                                _ => 30.0, // Default fps
-                            }
-                        } else {
-                            30.0
-                        }
-                    } else {
-                        30.0
-                    };
-
-                    resolutions.push(Resolution {
-                        width: discrete.width,
-                        height: discrete.height,
-                        fps,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(resolutions)
-}
-
-fn query_menu_item(fd: i32, ctrl_id: u32, index: u32) -> Option<String> {
-    unsafe {
-        #[repr(C)]
-        struct v4l2_querymenu {
-            id: u32,
-            index: u32,
-            name: [u8; 32],
-            reserved: u32,
-        }
-
-        let mut querymenu: v4l2_querymenu = std::mem::zeroed();
-        querymenu.id = ctrl_id;
-        querymenu.index = index;
-
-        // VIDIOC_QUERYMENU ioctl value
-        const VIDIOC_QUERYMENU: std::os::raw::c_ulong = 0xc02c5625;
-
-        let ret = libc::ioctl(
-            fd,
-            VIDIOC_QUERYMENU,
-            &mut querymenu as *mut _ as *mut std::os::raw::c_void,
-        );
-
-        if ret == 0 {
-            // Check if it's a named menu item
-            if querymenu.name[0] != 0 {
-                let c_str = CStr::from_ptr(querymenu.name.as_ptr() as *const std::os::raw::c_char);
-                c_str.to_str().ok().map(|s| s.to_string())
-            } else {
-                Some("(unnamed item)".to_string())
-            }
-        } else {
-            None
-        }
-    }
-}
-
-fn collect_camera_metadata(device_path: &str) -> anyhow::Result<CameraMetadata> {
-    let device = Device::with_path(device_path)?;
-    let mut metadata = CameraMetadata::default();
-
-    // Query device capabilities
-    let caps = device.query_caps()?;
-    metadata.driver = caps.driver.clone();
-    metadata.card = caps.card.clone();
-    metadata.bus = caps.bus.clone();
-
-    // List supported formats
-    let formats = device.enum_formats()?;
-    for fmt in formats {
-        let fourcc_bytes = fmt.fourcc.repr;
-        let fourcc_str = std::str::from_utf8(&fourcc_bytes).unwrap_or("????");
-        metadata
-            .formats
-            .push(format!("{} ({})", fourcc_str, fmt.description));
-
-        // List frame sizes for this format
-        if let Ok(framesizes) = device.enum_framesizes(fmt.fourcc) {
-            for size in framesizes.into_iter().take(5) {
-                // Limit to first 5
-                if let v4l::framesize::FrameSizeEnum::Discrete(discrete) = size.size {
-                    metadata
-                        .resolutions
-                        .push(format!("{}x{}", discrete.width, discrete.height));
-                }
-            }
-        }
-    }
-
-    // List camera controls
-    if let Ok(controls) = device.query_controls() {
-        for ctrl in controls {
-            let control_info = format!(
-                "{}: {} (ID: {})",
-                ctrl.name,
-                match ctrl.typ {
-                    v4l::control::Type::Integer => "Integer",
-                    v4l::control::Type::Boolean => "Boolean",
-                    v4l::control::Type::Menu => "Menu",
-                    v4l::control::Type::Integer64 => "Integer64",
-                    _ => "Unknown",
-                },
-                ctrl.id
-            );
-            metadata.controls.push(control_info);
-
-            // Special handling for Test Pattern
-            if ctrl.name == "Test Pattern" && ctrl.typ == v4l::control::Type::Menu {
-                if let Ok(fd) = std::fs::File::open(device_path) {
-                    let raw_fd = fd.as_raw_fd();
-                    let mut index = ctrl.minimum as u32;
-                    let max = ctrl.maximum as u32;
-                    while index <= max {
-                        if let Some(menu_name) = query_menu_item(raw_fd, ctrl.id, index) {
-                            metadata
-                                .test_patterns
-                                .push(format!("[{index}] {menu_name}"));
-                        }
-                        index += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(metadata)
 }
 
 fn show_camera_info(device_path: &str) -> anyhow::Result<()> {
@@ -375,14 +216,14 @@ fn show_camera_info(device_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn capture_frame_data(state: &AppState) -> Result<Vec<u8>, String> {
+async fn capture_frame_data(state: &AppState) -> Result<(Vec<u8>, v4l::buffer::Metadata), String> {
     let mut session = state.session.lock().await;
     let result = session
         .capture_frame()
         .map_err(|e| format!("Failed to capture frame: {e}"));
 
     // Update frame stats
-    if result.is_ok() {
+    if let Ok((ref _frame_data, ref metadata)) = result {
         let mut stats = state.stats.lock().await;
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(stats.last_frame_time).as_secs_f32();
@@ -397,6 +238,10 @@ async fn capture_frame_data(state: &AppState) -> Result<Vec<u8>, String> {
 
         stats.total_frames += 1;
         stats.last_frame_time = now;
+
+        // Store timestamp from metadata
+        stats.last_timestamp_sec = metadata.timestamp.sec;
+        stats.last_timestamp_usec = metadata.timestamp.usec;
 
         // Update temperatures every second
         if now.duration_since(stats.last_temp_update).as_secs() >= 1 {
@@ -416,65 +261,6 @@ fn compute_histogram(pixels: &[u8]) -> Vec<u32> {
         histogram[pixel as usize] += 1;
     }
     histogram
-}
-
-fn read_sensor_temperatures(device_path: &str) -> (Option<f32>, Option<f32>) {
-    // Read both FPGA and PCB temperatures
-    let mut fpga_temp = None;
-    let mut pcb_temp = None;
-
-    if let Ok(device) = Device::with_path(device_path) {
-        // Try iterating through controls to find specific temperature controls
-        if let Ok(controls) = device.query_controls() {
-            debug!("Enumerating controls for temperature readings...");
-            for ctrl in controls {
-                let name_lower = ctrl.name.to_lowercase();
-                debug!("Found control: '{}' (type: {:?})", ctrl.name, ctrl.typ);
-
-                // Check for FPGA temperature
-                if name_lower.contains("fpga") && name_lower.contains("temperature") {
-                    debug!("Matched FPGA temperature control");
-                    if let Ok(control) = device.control(ctrl.id) {
-                        match control.value {
-                            v4l::control::Value::Integer(val) => {
-                                fpga_temp = Some(val as f32 / 1000.0);
-                                debug!(
-                                    "FPGA temp (Integer): {} raw, {:.3}°C",
-                                    val,
-                                    val as f32 / 1000.0
-                                );
-                            }
-                            _ => warn!("FPGA temp unexpected type: {:?}", control.value),
-                        }
-                    }
-                }
-
-                // Check for PCB/sensor temperature
-                if name_lower.contains("sensor")
-                    && name_lower.contains("pcb")
-                    && name_lower.contains("temperature")
-                {
-                    debug!("Matched PCB temperature control");
-                    if let Ok(control) = device.control(ctrl.id) {
-                        match control.value {
-                            v4l::control::Value::Integer(val) => {
-                                pcb_temp = Some(val as f32 / 1000.0);
-                                debug!(
-                                    "PCB temp (Integer): {} raw, {:.3}°C",
-                                    val,
-                                    val as f32 / 1000.0
-                                );
-                            }
-                            _ => warn!("PCB temp unexpected type: {:?}", control.value),
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    debug!("Final temperatures - FPGA: {fpga_temp:?}°C, PCB: {pcb_temp:?}°C");
-    (fpga_temp, pcb_temp)
 }
 
 fn process_raw_to_pixels(frame_data: &[u8], width: u32, height: u32) -> Vec<u8> {
@@ -512,12 +298,14 @@ fn process_raw_to_pixels(frame_data: &[u8], width: u32, height: u32) -> Vec<u8> 
 
 async fn raw_frame_endpoint(State(state): State<Arc<AppState>>) -> Response {
     match capture_frame_data(&state).await {
-        Ok(frame_data) => Response::builder()
+        Ok((frame_data, metadata)) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header("X-Frame-Width", state.width.to_string())
             .header("X-Frame-Height", state.height.to_string())
             .header("X-Frame-Format", "RG16")
+            .header("X-Timestamp-Sec", metadata.timestamp.sec.to_string())
+            .header("X-Timestamp-Usec", metadata.timestamp.usec.to_string())
             .body(Body::from(frame_data))
             .unwrap(),
         Err(e) => Response::builder()
@@ -529,7 +317,7 @@ async fn raw_frame_endpoint(State(state): State<Arc<AppState>>) -> Response {
 
 async fn jpeg_frame_endpoint(State(state): State<Arc<AppState>>) -> Response {
     match capture_frame_data(&state).await {
-        Ok(frame_data) => {
+        Ok((frame_data, metadata)) => {
             let pixels_8bit = process_raw_to_pixels(&frame_data, state.width, state.height);
 
             // Compute and store histogram for stats
@@ -548,6 +336,8 @@ async fn jpeg_frame_endpoint(State(state): State<Arc<AppState>>) -> Response {
                         Response::builder()
                             .status(StatusCode::OK)
                             .header(header::CONTENT_TYPE, "image/jpeg")
+                            .header("X-Timestamp-Sec", metadata.timestamp.sec.to_string())
+                            .header("X-Timestamp-Usec", metadata.timestamp.usec.to_string())
                             .body(Body::from(jpeg_bytes))
                             .unwrap()
                     } else {
@@ -605,8 +395,14 @@ async fn stats_endpoint(State(state): State<Arc<AppState>>) -> Response {
     };
 
     let json = format!(
-        r#"{{"total_frames": {}, "current_fps": {:.1}, "errors": 0, "fpga_temp_c": {}, "pcb_temp_c": {}, "histogram": [{}]}}"#,
-        stats.total_frames, avg_fps, fpga_temp_str, pcb_temp_str, histogram_str
+        r#"{{"total_frames": {}, "current_fps": {:.1}, "errors": 0, "fpga_temp_c": {}, "pcb_temp_c": {}, "timestamp_sec": {}, "timestamp_usec": {}, "histogram": [{}]}}"#,
+        stats.total_frames,
+        avg_fps,
+        fpga_temp_str,
+        pcb_temp_str,
+        stats.last_timestamp_sec,
+        stats.last_timestamp_usec,
+        histogram_str
     );
 
     Response::builder()
@@ -615,6 +411,8 @@ async fn stats_endpoint(State(state): State<Arc<AppState>>) -> Response {
         .body(Body::from(json))
         .unwrap()
 }
+
+const CAMERA_STATUS_HTML: &str = include_str!("../../templates/camera_status.html");
 
 async fn camera_status_page(State(state): State<Arc<AppState>>) -> Html<String> {
     // Collect camera metadata
@@ -631,312 +429,37 @@ async fn camera_status_page(State(state): State<Arc<AppState>>) -> Html<String> 
         (8096, 6324),
     ];
 
-    // Build HTML page with 3-column layout
-    let html = format!(
-        r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>V4L2 Camera Monitor</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: 'Courier New', monospace; 
-            background: #0a0a0a; 
-            color: #00ff00;
-            display: flex;
-            height: 100vh;
-            overflow: hidden;
-            font-size: 32px;
-        }}
-        
-        .column {{
-            height: 100vh;
-            padding: 20px;
-            overflow-y: auto;
-        }}
-        
-        .left-panel {{
-            width: 20%;
-            background: #111;
-            border-right: 1px solid #00ff00;
-        }}
-        
-        .center-panel {{
-            width: 60%;
-            background: #000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding-top: 20px;
-        }}
-        
-        .right-panel {{
-            width: 20%;
-            background: #111;
-            border-left: 1px solid #00ff00;
-        }}
-        
-        h2 {{
-            color: #00ff00;
-            margin-bottom: 15px;
-            font-size: 1.2em;
-            border-bottom: 1px solid #00ff00;
-            padding-bottom: 5px;
-        }}
-        
-        .metadata-item {{
-            margin: 10px 0;
-            font-size: 0.9em;
-        }}
-        
-        .metadata-label {{
-            color: #00aa00;
-        }}
-        
-        .resolution-item {{
-            margin: 5px 0;
-            font-size: 0.85em;
-        }}
-        
-        .resolution-active {{
-            color: #00ff00;
-            font-weight: bold;
-        }}
-        
-        .resolution-inactive {{
-            color: #666666;
-        }}
-        
-        #camera-frame {{
-            max-width: 100%;
-            max-height: 75vh;
-            border: 2px solid #00ff00;
-            background: #111;
-            margin-top: 10px;
-        }}
-        
-        .frame-info {{
-            margin-bottom: 20px;
-            text-align: center;
-            font-size: 1.1em;
-            order: -1;
-        }}
-        
-        .stats-placeholder {{
-            border: 1px dashed #00ff00;
-            padding: 20px;
-            margin: 10px 0;
-            min-height: 100px;
-            color: #00aa00;
-            font-size: 0.9em;
-        }}
-        
-        .error {{
-            color: #ff0000;
-        }}
-        
-        .loading {{
-            color: #ffff00;
-        }}
-    </style>
-</head>
-<body>
-    <div class="column left-panel">
-        <h2>Camera Info</h2>
-        <div class="metadata-item">
-            <span class="metadata-label">Status:</span><br>
-            <span id="connection-status" class="loading">Connecting...</span>
-        </div>
-        <div class="metadata-item">
-            <span class="metadata-label">Device:</span><br>{device}
-        </div>
-        <div class="metadata-item">
-            <span class="metadata-label">Driver:</span><br>{driver}
-        </div>
-        <div class="metadata-item">
-            <span class="metadata-label">Card:</span><br>{card}
-        </div>
-        <div class="metadata-item">
-            <span class="metadata-label">Resolution:</span><br>{width}x{height}
-        </div>
-        
-        <h2 style="margin-top: 30px;">Resolutions</h2>
-        {resolutions_list}
-        
-        <h2 style="margin-top: 30px;">Test Patterns</h2>
-        {test_patterns}
-        
-        <h2 style="margin-top: 30px;">Endpoints</h2>
-        <div class="metadata-item">
-            <a href="/jpeg" style="color: #00ff00;">JPEG Frame</a><br>
-            <a href="/raw" style="color: #00ff00;">Raw Frame</a><br>
-            <a href="/stats" style="color: #00ff00;">Frame Stats (JSON)</a>
-        </div>
-    </div>
-    
-    <div class="column center-panel">
-        <div class="frame-info">
-            <span id="update-time"></span>
-        </div>
-        <img id="camera-frame" src="/jpeg" alt="Camera Frame">
-    </div>
-    
-    <div class="column right-panel">
-        <h2>Statistics</h2>
-        <div class="stats-placeholder">
-            <div id="stats-fps">FPS: Calculating...</div>
-            <div id="stats-frames">Frames: 0</div>
-            <div id="stats-fpga-temp">FPGA Temp: --°C</div>
-            <div id="stats-pcb-temp">PCB Temp: --°C</div>
-            <div id="stats-errors">Errors: 0</div>
-        </div>
-        
-        <h2 style="margin-top: 30px;">Histogram</h2>
-        <canvas id="histogram-canvas" width="300" height="150" style="width: 100%; border: 1px solid #00ff00; background: #111;"></canvas>
-    </div>
-    
-    <script>
-        let errorCount = 0;
-        
-        function updateImage() {{
-            const img = document.getElementById('camera-frame');
-            const newImg = new Image();
-            
-            newImg.onload = function() {{
-                img.src = newImg.src;
-                
-                document.getElementById('connection-status').textContent = 'Connected';
-                document.getElementById('connection-status').className = '';
-                
-                // Show time with millisecond precision (before AM/PM)
-                const updateTime = new Date();
-                const timeOptions = {{ hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' }};
-                const baseTime = updateTime.toLocaleTimeString('en-US', timeOptions);
-                const ms = String(updateTime.getMilliseconds()).padStart(3, '0');
-                // Insert milliseconds before AM/PM
-                const timeStr = baseTime.replace(/(\d{{2}}:\d{{2}}:\d{{2}})( [AP]M)/, '$1.' + ms + '$2');
-                document.getElementById('update-time').textContent = 
-                    'Updated: ' + timeStr;
-                
-                // Schedule next update
-                setTimeout(updateImage, 100); // 10 FPS target
-            }};
-            
-            newImg.onerror = function() {{
-                errorCount++;
-                document.getElementById('stats-errors').textContent = 'Errors: ' + errorCount;
-                document.getElementById('connection-status').textContent = 'Connection Error';
-                document.getElementById('connection-status').className = 'error';
-                
-                // Retry after delay
-                setTimeout(updateImage, 1000);
-            }};
-            
-            // Force reload with cache buster
-            newImg.src = '/jpeg?t=' + Date.now();
-        }}
-        
-        // Stats update function
-        function updateStats() {{
-            fetch('/stats')
-                .then(response => response.json())
-                .then(data => {{
-                    document.getElementById('stats-fps').textContent = 'FPS: ' + data.current_fps.toFixed(1);
-                    document.getElementById('stats-frames').textContent = 'Frames: ' + data.total_frames;
-                    document.getElementById('stats-errors').textContent = 'Errors: ' + data.errors;
-                    
-                    // Display FPGA temperature
-                    if (data.fpga_temp_c !== null && data.fpga_temp_c !== undefined) {{
-                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: ' + data.fpga_temp_c.toFixed(3) + '°C';
-                    }} else {{
-                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: --°C';
-                    }}
-                    
-                    // Display PCB temperature
-                    if (data.pcb_temp_c !== null && data.pcb_temp_c !== undefined) {{
-                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: ' + data.pcb_temp_c.toFixed(3) + '°C';
-                    }} else {{
-                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: --°C';
-                    }}
-                    
-                    // Draw histogram
-                    if (data.histogram) {{
-                        drawHistogram(data.histogram);
-                    }}
-                }})
-                .catch(err => {{
-                    console.error('Stats fetch error:', err);
-                }});
-        }}
-        
-        function drawHistogram(histogram) {{
-            const canvas = document.getElementById('histogram-canvas');
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-            const barWidth = width / histogram.length;
-            
-            // Clear canvas
-            ctx.fillStyle = '#111';
-            ctx.fillRect(0, 0, width, height);
-            
-            // Find max value for scaling
-            const maxVal = Math.max(...histogram, 1);
-            
-            // Draw bars
-            ctx.fillStyle = '#00ff00';
-            histogram.forEach((value, i) => {{
-                const barHeight = (value / maxVal) * (height - 10);
-                const x = i * barWidth;
-                const y = height - barHeight;
-                ctx.fillRect(x, y, barWidth - 1, barHeight);
-            }});
-            
-            // Draw grid lines
-            ctx.strokeStyle = '#004400';
-            ctx.lineWidth = 0.5;
-            for (let i = 0; i <= 4; i++) {{
-                const y = (height / 4) * i;
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(width, y);
-                ctx.stroke();
-            }}
-        }}
-        
-        // Start updates
-        updateImage();
-        setInterval(updateStats, 1000); // Update stats every second
-    </script>
-</body>
-</html>
-"#,
-        device = state.device_path,
-        driver = metadata.driver,
-        card = metadata.card,
-        width = state.width,
-        height = state.height,
-        resolutions_list = resolutions
-            .iter()
-            .map(|(w, h)| {
-                let class = if *w == state.width && *h == state.height {
-                    "resolution-active"
-                } else {
-                    "resolution-inactive"
-                };
-                format!(r#"<div class="resolution-item {class}">{w}x{h}</div>"#)
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        test_patterns = metadata
-            .test_patterns
-            .iter()
-            .map(|t| format!(r#"<div class="metadata-item">{t}</div>"#))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    // Build resolutions list HTML
+    let resolutions_list = resolutions
+        .iter()
+        .map(|(w, h)| {
+            let class = if *w == state.width && *h == state.height {
+                "resolution-active"
+            } else {
+                "resolution-inactive"
+            };
+            format!(r#"<div class="resolution-item {class}">{w}x{h}</div>"#)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Build test patterns HTML
+    let test_patterns = metadata
+        .test_patterns
+        .iter()
+        .map(|t| format!(r#"<div class="metadata-item">{t}</div>"#))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Build HTML page with template
+    let html = CAMERA_STATUS_HTML
+        .replace("{device}", &state.device_path)
+        .replace("{driver}", &metadata.driver)
+        .replace("{card}", &metadata.card)
+        .replace("{width}", &state.width.to_string())
+        .replace("{height}", &state.height.to_string())
+        .replace("{resolutions_list}", &resolutions_list)
+        .replace("{test_patterns}", &test_patterns);
 
     Html(html)
 }
@@ -973,7 +496,10 @@ async fn main() {
     if args.list {
         info!("=== Available Resolutions ===");
         for (i, res) in resolutions.iter().enumerate() {
-            info!("[{}] {}x{} @ {:.1} fps", i, res.width, res.height, res.fps);
+            match res.fps {
+                Some(fps) => info!("[{}] {}x{} @ {:.1} fps", i, res.width, res.height, fps),
+                None => info!("[{}] {}x{} @ unknown fps", i, res.width, res.height),
+            }
         }
         std::process::exit(0);
     }
@@ -990,9 +516,12 @@ async fn main() {
     let selected = &resolutions[args.resolution];
 
     info!("Camera Server Configuration:");
+    let fps_str = selected
+        .fps
+        .map_or("unknown fps".to_string(), |f| format!("{f:.1} fps"));
     info!(
-        "  Resolution [{}]: {}x{} @ {:.1} fps",
-        args.resolution, selected.width, selected.height, selected.fps
+        "  Resolution [{}]: {}x{} @ {}",
+        args.resolution, selected.width, selected.height, fps_str
     );
     info!("  Padding: {} pixels", args.padding);
     info!("  Device: {}", args.device);

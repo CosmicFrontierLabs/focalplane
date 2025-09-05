@@ -342,7 +342,7 @@ fn test_continuous_capture(device: &str, count: usize) -> Result<()> {
 
     for i in 0..count {
         let frame_start = Instant::now();
-        let frame = session.capture_frame()?;
+        let (frame, _meta) = session.capture_frame()?;
         let frame_time = frame_start.elapsed();
 
         // Save first frame as PNG for verification

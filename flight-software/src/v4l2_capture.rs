@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use v4l::buffer::Type;
+use v4l::buffer::{Metadata, Type};
 use v4l::io::mmap::Stream as MmapStream;
 use v4l::io::traits::CaptureStream;
 use v4l::prelude::*;
@@ -233,7 +233,7 @@ impl<'a> CaptureSession<'a> {
         Ok(())
     }
 
-    pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
+    pub fn capture_frame(&mut self) -> Result<(Vec<u8>, Metadata)> {
         tracing::debug!("Attempting to capture frame...");
         let stream = self
             .stream
@@ -247,7 +247,7 @@ impl<'a> CaptureSession<'a> {
             frame_size,
             meta.timestamp
         );
-        Ok(buf.to_vec())
+        Ok((buf.to_vec(), *meta))
     }
 
     pub fn stop_stream(&mut self) {
@@ -255,7 +255,7 @@ impl<'a> CaptureSession<'a> {
     }
 
     pub fn save_raw_frame(&mut self, path: &Path) -> Result<()> {
-        let frame = self.capture_frame()?;
+        let (frame, _meta) = self.capture_frame()?;
         std::fs::write(path, frame)?;
         Ok(())
     }

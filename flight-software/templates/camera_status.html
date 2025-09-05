@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>V4L2 Camera Monitor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Courier New', monospace; 
+            background: #0a0a0a; 
+            color: #00ff00;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 32px;
+        }
+        
+        .column {
+            height: 100vh;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .left-panel {
+            width: 20%;
+            background: #111;
+            border-right: 1px solid #00ff00;
+        }
+        
+        .center-panel {
+            width: 60%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding-top: 20px;
+        }
+        
+        .right-panel {
+            width: 20%;
+            background: #111;
+            border-left: 1px solid #00ff00;
+        }
+        
+        h2 {
+            color: #00ff00;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 5px;
+        }
+        
+        .metadata-item {
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+        
+        .metadata-label {
+            color: #00aa00;
+        }
+        
+        .resolution-item {
+            margin: 5px 0;
+            font-size: 0.85em;
+        }
+        
+        .resolution-active {
+            color: #00ff00;
+            font-weight: bold;
+        }
+        
+        .resolution-inactive {
+            color: #666666;
+        }
+        
+        #camera-frame {
+            max-width: 100%;
+            max-height: 75vh;
+            border: 2px solid #00ff00;
+            background: #111;
+            margin-top: 10px;
+        }
+        
+        .frame-info {
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 1.1em;
+            order: -1;
+        }
+        
+        .stats-placeholder {
+            border: 1px dashed #00ff00;
+            padding: 20px;
+            margin: 10px 0;
+            min-height: 100px;
+            color: #00aa00;
+            font-size: 0.9em;
+        }
+        
+        .error {
+            color: #ff0000;
+        }
+        
+        .loading {
+            color: #ffff00;
+        }
+    </style>
+</head>
+<body>
+    <div class="column left-panel">
+        <h2>Camera Info</h2>
+        <div class="metadata-item">
+            <span class="metadata-label">Status:</span><br>
+            <span id="connection-status" class="loading">Connecting...</span>
+        </div>
+        <div class="metadata-item">
+            <span class="metadata-label">Device:</span><br>{device}
+        </div>
+        <div class="metadata-item">
+            <span class="metadata-label">Driver:</span><br>{driver}
+        </div>
+        <div class="metadata-item">
+            <span class="metadata-label">Card:</span><br>{card}
+        </div>
+        <div class="metadata-item">
+            <span class="metadata-label">Resolution:</span><br>{width}x{height}
+        </div>
+        
+        <h2 style="margin-top: 30px;">Resolutions</h2>
+        {resolutions_list}
+        
+        <h2 style="margin-top: 30px;">Test Patterns</h2>
+        {test_patterns}
+        
+        <h2 style="margin-top: 30px;">Endpoints</h2>
+        <div class="metadata-item">
+            <a href="/jpeg" style="color: #00ff00;">JPEG Frame</a><br>
+            <a href="/raw" style="color: #00ff00;">Raw Frame</a><br>
+            <a href="/stats" style="color: #00ff00;">Frame Stats (JSON)</a>
+        </div>
+    </div>
+    
+    <div class="column center-panel">
+        <div class="frame-info">
+            <span id="update-time"></span><br>
+            <span id="frame-timestamp" style="color: #00aa00; font-size: 0.9em;"></span>
+        </div>
+        <img id="camera-frame" src="/jpeg" alt="Camera Frame">
+    </div>
+    
+    <div class="column right-panel">
+        <h2>Statistics</h2>
+        <div class="stats-placeholder">
+            <div id="stats-fps">FPS: Calculating...</div>
+            <div id="stats-frames">Frames: 0</div>
+            <div id="stats-timestamp">Timestamp: --</div>
+            <div id="stats-fpga-temp">FPGA Temp: --°C</div>
+            <div id="stats-pcb-temp">PCB Temp: --°C</div>
+            <div id="stats-errors">Errors: 0</div>
+        </div>
+        
+        <h2 style="margin-top: 30px;">Histogram</h2>
+        <canvas id="histogram-canvas" width="300" height="150" style="width: 100%; border: 1px solid #00ff00; background: #111;"></canvas>
+    </div>
+    
+    <script>
+        let errorCount = 0;
+        
+        function updateImage() {
+            // Use fetch to get headers
+            fetch('/jpeg?t=' + Date.now())
+                .then(response => {
+                    // Extract timestamp from headers
+                    const timestampSec = response.headers.get('X-Timestamp-Sec');
+                    const timestampUsec = response.headers.get('X-Timestamp-Usec');
+                    
+                    if (timestampSec && timestampUsec) {
+                        const microseconds = String(Math.abs(parseInt(timestampUsec))).padStart(6, '0');
+                        const timestampStr = timestampSec + '.' + microseconds + 's';
+                        document.getElementById('frame-timestamp').textContent = 'Frame: ' + timestampStr;
+                    }
+                    
+                    return response.blob();
+                })
+                .then(blob => {
+                    const img = document.getElementById('camera-frame');
+                    const objectURL = URL.createObjectURL(blob);
+                    
+                    img.onload = function() {
+                        URL.revokeObjectURL(objectURL);
+                    };
+                    
+                    img.src = objectURL;
+                    
+                    document.getElementById('connection-status').textContent = 'Connected';
+                    document.getElementById('connection-status').className = '';
+                    
+                    // Show time with millisecond precision (before AM/PM)
+                    const updateTime = new Date();
+                    const timeOptions = { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+                    const baseTime = updateTime.toLocaleTimeString('en-US', timeOptions);
+                    const ms = String(updateTime.getMilliseconds()).padStart(3, '0');
+                    // Insert milliseconds before AM/PM
+                    const timeStr = baseTime.replace(/(\d{2}:\d{2}:\d{2})( [AP]M)/, '$1.' + ms + '$2');
+                    document.getElementById('update-time').textContent = 
+                        'Updated: ' + timeStr;
+                    
+                    // Schedule next update
+                    setTimeout(updateImage, 100); // 10 FPS target
+                })
+                .catch(err => {
+                    errorCount++;
+                    document.getElementById('stats-errors').textContent = 'Errors: ' + errorCount;
+                    document.getElementById('connection-status').textContent = 'Connection Error';
+                    document.getElementById('connection-status').className = 'error';
+                    
+                    // Retry after delay
+                    setTimeout(updateImage, 1000);
+                });
+        }
+        
+        // Stats update function
+        function updateStats() {
+            fetch('/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('stats-fps').textContent = 'FPS: ' + data.current_fps.toFixed(1);
+                    document.getElementById('stats-frames').textContent = 'Frames: ' + data.total_frames;
+                    document.getElementById('stats-errors').textContent = 'Errors: ' + data.errors;
+                    
+                    // Display timestamp with fixed decimal places
+                    if (data.timestamp_sec !== undefined && data.timestamp_usec !== undefined) {
+                        // Convert microseconds to fractional seconds (6 decimal places)
+                        const seconds = data.timestamp_sec;
+                        const microseconds = String(Math.abs(data.timestamp_usec)).padStart(6, '0');
+                        const timestampStr = seconds + '.' + microseconds + 's';
+                        document.getElementById('stats-timestamp').textContent = 'Timestamp: ' + timestampStr;
+                    } else {
+                        document.getElementById('stats-timestamp').textContent = 'Timestamp: --';
+                    }
+                    
+                    // Display FPGA temperature
+                    if (data.fpga_temp_c !== null && data.fpga_temp_c !== undefined) {
+                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: ' + data.fpga_temp_c.toFixed(3) + '°C';
+                    } else {
+                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: --°C';
+                    }
+                    
+                    // Display PCB temperature
+                    if (data.pcb_temp_c !== null && data.pcb_temp_c !== undefined) {
+                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: ' + data.pcb_temp_c.toFixed(3) + '°C';
+                    } else {
+                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: --°C';
+                    }
+                    
+                    // Draw histogram
+                    if (data.histogram) {
+                        drawHistogram(data.histogram);
+                    }
+                })
+                .catch(err => {
+                    console.error('Stats fetch error:', err);
+                });
+        }
+        
+        function drawHistogram(histogram) {
+            const canvas = document.getElementById('histogram-canvas');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            const barWidth = width / histogram.length;
+            
+            // Clear canvas
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Find max value for scaling
+            const maxVal = Math.max(...histogram, 1);
+            
+            // Draw bars
+            ctx.fillStyle = '#00ff00';
+            histogram.forEach((value, i) => {
+                const barHeight = (value / maxVal) * (height - 10);
+                const x = i * barWidth;
+                const y = height - barHeight;
+                ctx.fillRect(x, y, barWidth - 1, barHeight);
+            });
+            
+            // Draw grid lines
+            ctx.strokeStyle = '#004400';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= 4; i++) {
+                const y = (height / 4) * i;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+        }
+        
+        // Start updates
+        updateImage();
+        setInterval(updateStats, 1000); // Update stats every second
+    </script>
+</body>
+</html>

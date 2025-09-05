@@ -32,3 +32,7 @@ log = "0.4.27"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[features]
+default = []
+hardware-tests = []
