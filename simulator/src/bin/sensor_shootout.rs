@@ -475,7 +475,6 @@ fn run_experiment<T: StarCatalog>(
                                     m_xy: 0.0,
                                     aspect_ratio: 1.0,
                                     diameter: 2.0,
-                                    is_valid: true,
                                 }
                             }
                         })

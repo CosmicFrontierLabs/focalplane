@@ -50,7 +50,7 @@ fn main() {
             star.y,
             star.flux,
             star.aspect_ratio,
-            star.is_valid
+            star.is_valid()
         );
 
         // Print window around each star

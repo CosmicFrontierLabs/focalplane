@@ -69,12 +69,12 @@ fn main() {
             star.y,
             star.flux,
             star.aspect_ratio,
-            star.is_valid
+            star.is_valid()
         );
     }
 
     // Calculate metrics for detection (using the number of valid stars)
-    let num_stars = stars.iter().filter(|s| s.is_valid).count();
+    let num_stars = stars.iter().filter(|s| s.is_valid()).count();
     let true_positives = num_stars.min(20); // 20 is our original count of added stars
     let false_positives = if num_stars > 20 { num_stars - 20 } else { 0 };
     let false_negatives = if 20 > num_stars { 20 - num_stars } else { 0 };

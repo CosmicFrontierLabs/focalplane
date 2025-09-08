@@ -72,8 +72,15 @@ pub struct StarDetection {
     pub aspect_ratio: f64,
     /// Estimated object diameter in pixels (4√(λ₁+λ₂)/2)
     pub diameter: f64,
-    /// True if likely to be a star (aspect_ratio < 2.5)
-    pub is_valid: bool,
+}
+
+impl StarDetection {
+    /// Check if detection is likely to be a valid star based on aspect ratio
+    /// Stars should have aspect ratio close to 1.0 (circular PSF)
+    /// Returns true if aspect_ratio < 2.5, which allows for some PSF distortion
+    pub fn is_valid(&self) -> bool {
+        self.aspect_ratio < 2.5
+    }
 }
 
 impl Locatable2d for StarDetection {
@@ -98,6 +105,56 @@ impl StellarSource for StarDetection {
     fn flux(&self) -> f64 {
         self.flux
     }
+}
+
+/// Debug function to validate centroid calculation arguments
+#[inline]
+fn validate_centroid_args(
+    image: &ArrayView2<f64>,
+    labeled: &ArrayView2<usize>,
+    bbox: (usize, usize, usize, usize),
+) {
+    let (min_row, min_col, max_row, max_col) = bbox;
+
+    debug_assert!(
+        min_row < image.nrows(),
+        "bbox min_row {} is out of image bounds (nrows: {})",
+        min_row,
+        image.nrows()
+    );
+    debug_assert!(
+        max_row < image.nrows(),
+        "bbox max_row {} is out of image bounds (nrows: {})",
+        max_row,
+        image.nrows()
+    );
+    debug_assert!(
+        min_col < image.ncols(),
+        "bbox min_col {} is out of image bounds (ncols: {})",
+        min_col,
+        image.ncols()
+    );
+    debug_assert!(
+        max_col < image.ncols(),
+        "bbox max_col {} is out of image bounds (ncols: {})",
+        max_col,
+        image.ncols()
+    );
+    debug_assert!(
+        min_row <= max_row,
+        "bbox min_row {min_row} must be <= max_row {max_row}"
+    );
+    debug_assert!(
+        min_col <= max_col,
+        "bbox min_col {min_col} must be <= max_col {max_col}"
+    );
+    debug_assert_eq!(
+        image.shape(),
+        labeled.shape(),
+        "image shape {:?} does not match labeled shape {:?}",
+        image.shape(),
+        labeled.shape()
+    );
 }
 
 /// Calculate precise centroid and shape moments for a labeled object.
@@ -132,6 +189,9 @@ pub fn calculate_star_centroid(
     bbox: (usize, usize, usize, usize),
     id: usize,
 ) -> StarDetection {
+    // Validate arguments in debug builds
+    validate_centroid_args(image, labeled, bbox);
+
     let (min_row, min_col, max_row, max_col) = bbox;
 
     // Initialize moments
@@ -145,7 +205,7 @@ pub fn calculate_star_centroid(
     // Calculate raw moments
     for row in min_row..=max_row {
         for col in min_col..=max_col {
-            if row < labeled.nrows() && col < labeled.ncols() && labeled[[row, col]] == label {
+            if labeled[[row, col]] == label {
                 let intensity = image[[row, col]];
 
                 // Use intensity as weight
@@ -169,9 +229,8 @@ pub fn calculate_star_centroid(
             m_xx: 0.0,
             m_yy: 0.0,
             m_xy: 0.0,
-            aspect_ratio: 1.0,
+            aspect_ratio: f64::INFINITY,
             diameter: 0.0,
-            is_valid: false,
         };
     }
 
@@ -204,11 +263,6 @@ pub fn calculate_star_centroid(
     // We use 4*sqrt because 2*2*sqrt = 4*sqrt
     let diameter = 4.0 * ((lambda1 + lambda2) / 2.0).sqrt();
 
-    // Stars should have aspect ratio close to 1.0 (circular PSF)
-    // Use 2.5 as a threshold, which allows for some PSF distortion
-    let is_valid = aspect_ratio < 2.5;
-    // let is_valid = true; // FIXME(meawoppl)
-
     StarDetection {
         id,
         x: x_centroid,
@@ -219,7 +273,6 @@ pub fn calculate_star_centroid(
         m_xy: mu11,
         aspect_ratio,
         diameter,
-        is_valid,
     }
 }
 
@@ -273,7 +326,7 @@ pub fn detect_stars(image: &ArrayView2<f64>, threshold: Option<f64>) -> Vec<Star
     }
 
     // Filter out non-star objects
-    stars.into_iter().filter(|star| star.is_valid).collect()
+    stars.into_iter().filter(|star| star.is_valid()).collect()
 }
 
 /// Extract centroid positions from star detections.
@@ -395,7 +448,7 @@ mod tests {
         assert!((star.y - 2.0).abs() < 1e-10);
 
         // Star should be valid (circular)
-        assert!(star.is_valid);
+        assert!(star.is_valid());
 
         // Moments should indicate a circular object
         assert!((star.aspect_ratio - 1.0).abs() < 0.1);
@@ -947,9 +1000,11 @@ mod tests {
 
             // Star should be valid
             assert!(
-                star.is_valid,
+                star.is_valid(),
                 "Star at ({}, {}) was marked invalid with aspect_ratio={}",
-                offset_x, offset_y, star.aspect_ratio
+                offset_x,
+                offset_y,
+                star.aspect_ratio
             );
 
             // Aspect ratio should be reasonable for a Gaussian PSF
@@ -1013,9 +1068,10 @@ mod tests {
 
             // Star should be valid
             assert!(
-                star.is_valid,
+                star.is_valid(),
                 "Star with sigma={} was marked invalid with aspect_ratio={}",
-                sigma, star.aspect_ratio
+                sigma,
+                star.aspect_ratio
             );
         }
     }
