@@ -30,6 +30,7 @@ use ndarray::{Array2, ArrayView2};
 use std::collections::HashSet;
 
 use crate::algo::icp::Locatable2d;
+use crate::image_proc::centroid::compute_centroid_from_mask;
 use starfield::image::starfinders::StellarSource;
 
 /// Star detection result with sub-pixel position and shape characterization.
@@ -194,85 +195,37 @@ pub fn calculate_star_centroid(
 
     let (min_row, min_col, max_row, max_col) = bbox;
 
-    // Initialize moments
-    let mut m00 = 0.0; // Total mass/intensity
-    let mut m10 = 0.0; // First moment in x
-    let mut m01 = 0.0; // First moment in y
-    let mut m20 = 0.0; // Second moment in x
-    let mut m02 = 0.0; // Second moment in y
-    let mut m11 = 0.0; // Cross moment
+    // Extract sub-image and create mask
+    let height = max_row - min_row + 1;
+    let width = max_col - min_col + 1;
 
-    // Calculate raw moments
-    for row in min_row..=max_row {
-        for col in min_col..=max_col {
-            if labeled[[row, col]] == label {
-                let intensity = image[[row, col]];
+    // Create views for the AABB region
+    let sub_image = image.slice(ndarray::s![min_row..=max_row, min_col..=max_col]);
 
-                // Use intensity as weight
-                m00 += intensity;
-                m10 += col as f64 * intensity;
-                m01 += row as f64 * intensity;
-                m20 += (col as f64).powi(2) * intensity;
-                m02 += (row as f64).powi(2) * intensity;
-                m11 += (row as f64) * (col as f64) * intensity;
+    // Create binary mask for the label
+    let mut mask = Array2::<f64>::zeros((height, width));
+    for row in 0..height {
+        for col in 0..width {
+            if labeled[[min_row + row, min_col + col]] == label {
+                mask[[row, col]] = 1.0;
             }
         }
     }
 
-    // Avoid division by zero
-    if m00 < f64::EPSILON {
-        return StarDetection {
-            id,
-            x: 0.0,
-            y: 0.0,
-            flux: 0.0,
-            m_xx: 0.0,
-            m_yy: 0.0,
-            m_xy: 0.0,
-            aspect_ratio: f64::INFINITY,
-            diameter: 0.0,
-        };
-    }
+    // Compute centroid using the new function
+    let centroid_result = compute_centroid_from_mask(&sub_image, &mask.view());
 
-    // Calculate centroid
-    let x_centroid = m10 / m00;
-    let y_centroid = m01 / m00;
-
-    // Calculate central moments (relative to centroid)
-    let mu20 = m20 / m00 - x_centroid.powi(2);
-    let mu02 = m02 / m00 - y_centroid.powi(2);
-    let mu11 = m11 / m00 - x_centroid * y_centroid;
-
-    // Calculate aspect ratio using eigenvalues of the covariance matrix
-    let sum = mu20 + mu02;
-    let diff = mu20 - mu02;
-    let discriminant = (4.0 * mu11.powi(2) + diff.powi(2)).sqrt();
-
-    let lambda1 = (sum + discriminant) / 2.0;
-    let lambda2 = (sum - discriminant) / 2.0;
-
-    // Larger eigenvalue divided by smaller eigenvalue
-    let aspect_ratio = if lambda2 > f64::EPSILON {
-        (lambda1 / lambda2).abs()
-    } else {
-        f64::INFINITY
-    };
-
-    // Calculate the diameter using the average of the eigenvalues
-    // Eigenvalues represent variance, so we use 2*sqrt(lambda) for the radius and then double it for diameter
-    // We use 4*sqrt because 2*2*sqrt = 4*sqrt
-    let diameter = 4.0 * ((lambda1 + lambda2) / 2.0).sqrt();
-
+    // Convert relative coordinates to absolute image coordinates
     StarDetection {
         id,
-        x: x_centroid,
-        y: y_centroid,
-        flux: m00,
-        m_xx: mu20,
-        m_yy: mu02,
-        m_xy: mu11,
-        aspect_ratio,
-        diameter,
+        x: centroid_result.x + min_col as f64,
+        y: centroid_result.y + min_row as f64,
+        flux: centroid_result.flux,
+        m_xx: centroid_result.m_xx,
+        m_yy: centroid_result.m_yy,
+        m_xy: centroid_result.m_xy,
+        aspect_ratio: centroid_result.aspect_ratio,
+        diameter: centroid_result.diameter,
     }
 }
 

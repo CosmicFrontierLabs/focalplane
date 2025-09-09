@@ -88,6 +88,7 @@
 //! - **Bit depth optimization**: Efficient conversions between u16 (sensor) and u8 (display)
 
 pub mod airy;
+pub mod centroid;
 pub mod convolve2d;
 pub mod detection;
 pub mod histogram_stretch;
