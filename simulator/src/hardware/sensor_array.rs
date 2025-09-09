@@ -5,7 +5,7 @@
 //! and survey instruments.
 
 use crate::hardware::sensor::SensorConfig;
-use crate::units::{Length, LengthExt};
+use crate::units::LengthExt;
 
 /// Position of a sensor in the array focal plane.
 ///
@@ -70,9 +70,9 @@ impl SensorArray {
     /// with coordinates in the array coordinate system (millimeters).
     pub fn sensor_aabb_mm(&self, index: usize) -> Option<(f64, f64, f64, f64)> {
         self.sensors.get(index).map(|ps| {
-            let (width_um, height_um) = ps.sensor.dimensions_um();
-            let width_mm = Length::from_micrometers(width_um).as_millimeters();
-            let height_mm = Length::from_micrometers(height_um).as_millimeters();
+            let (width, height) = ps.sensor.dimensions.get_width_height();
+            let width_mm = width.as_millimeters();
+            let height_mm = height.as_millimeters();
 
             let min_x = ps.position.x_mm - width_mm / 2.0;
             let max_x = ps.position.x_mm + width_mm / 2.0;
@@ -136,9 +136,9 @@ impl SensorArray {
     /// or None if the point is not on any sensor.
     pub fn mm_to_pixel(&self, x_mm: f64, y_mm: f64) -> Option<(f64, f64, usize)> {
         for (index, ps) in self.sensors.iter().enumerate() {
-            let (width_um, height_um) = ps.sensor.dimensions_um();
-            let width_mm = Length::from_micrometers(width_um).as_millimeters();
-            let height_mm = Length::from_micrometers(height_um).as_millimeters();
+            let (width, height) = ps.sensor.dimensions.get_width_height();
+            let width_mm = width.as_millimeters();
+            let height_mm = height.as_millimeters();
 
             // Check if point is within this sensor's bounds
             let rel_x = x_mm - ps.position.x_mm;
@@ -146,8 +146,16 @@ impl SensorArray {
 
             if rel_x.abs() <= width_mm / 2.0 && rel_y.abs() <= height_mm / 2.0 {
                 // Convert to pixel coordinates (0,0 at top-left of sensor)
-                let pixel_x = (rel_x + width_mm / 2.0) / ps.sensor.pixel_size().as_millimeters();
-                let pixel_y = (height_mm / 2.0 - rel_y) / ps.sensor.pixel_size().as_millimeters();
+                let pixel_x = (rel_x + width_mm / 2.0) / {
+                    let this = &ps.sensor;
+                    this.dimensions.pixel_size()
+                }
+                .as_millimeters();
+                let pixel_y = (height_mm / 2.0 - rel_y) / {
+                    let this = &ps.sensor;
+                    this.dimensions.pixel_size()
+                }
+                .as_millimeters();
 
                 return Some((pixel_x, pixel_y, index));
             }
@@ -171,9 +179,9 @@ mod tests {
 
         // Check AABB for single sensor at origin
         let aabb = array.sensor_aabb_mm(0).unwrap();
-        let (width_um, height_um) = sensor.dimensions_um();
-        let half_width_mm = width_um / 2000.0;
-        let half_height_mm = height_um / 2000.0;
+        let (width, height) = sensor.dimensions.get_width_height();
+        let half_width_mm = width.as_millimeters() / 2.0;
+        let half_height_mm = height.as_millimeters() / 2.0;
 
         assert!((aabb.0 + half_width_mm).abs() < 1e-6);
         assert!((aabb.1 + half_height_mm).abs() < 1e-6);

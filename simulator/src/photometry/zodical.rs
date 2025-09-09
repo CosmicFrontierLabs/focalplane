@@ -726,8 +726,12 @@ impl ZodicalLight {
         // Calculate pixel scale in arcseconds per pixel
         // Pixel scale = (206265 * pixel_size) / focal_length
         // where 206265 is the number of arcseconds in a radian
-        let pixel_scale_arcsec_per_pixel =
-            206265.0 * satellite.sensor.pixel_size().as_millimeters() / focal_length_mm;
+        let pixel_scale_arcsec_per_pixel = 206265.0 * {
+            let this = &satellite.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_millimeters()
+            / focal_length_mm;
 
         let z_spect = self
             .get_zodical_spectrum(coords)

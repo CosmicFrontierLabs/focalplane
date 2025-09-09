@@ -81,7 +81,7 @@ impl RenderingResult {
         let noise_rms_electrons = noise_electrons.std(0.0);
 
         // Convert from electrons to DN units
-        noise_rms_electrons * self.sensor_config.dn_per_electron()
+        noise_rms_electrons * self.sensor_config.dn_per_electron
     }
 }
 
@@ -419,7 +419,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
     // 4. Convert to u16
     electron_img.mapv(|total_e| {
         let clipped_e = total_e.clamp(0.0, sensor.max_well_depth_e);
-        let dn = clipped_e * sensor.dn_per_electron();
+        let dn = clipped_e * sensor.dn_per_electron;
         let clipped = dn.clamp(0.0, max_dn);
         clipped.round() as u16
     })

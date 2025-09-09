@@ -8,7 +8,7 @@ use simulator::hardware::{
     sensor::models::*,
     sensor_array::{PositionedSensor, SensorArray, SensorPosition},
 };
-use simulator::units::{Length, LengthExt};
+use simulator::units::LengthExt;
 use std::collections::HashMap;
 use std::fs;
 
@@ -103,9 +103,9 @@ fn create_focal_plane_svg(
         let pos = &positioned_sensor.position;
 
         // Get sensor dimensions in mm
-        let (width_um, height_um) = sensor.dimensions_um();
-        let width_mm = Length::from_micrometers(width_um).as_millimeters();
-        let height_mm = Length::from_micrometers(height_um).as_millimeters();
+        let (width, height) = sensor.dimensions.get_width_height();
+        let width_mm = width.as_millimeters();
+        let height_mm = height.as_millimeters();
 
         // Convert position to SVG coordinates
         let svg_x = center + pos.x_mm * scale;

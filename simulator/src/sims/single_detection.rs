@@ -106,7 +106,12 @@ impl ExperimentResults {
 
     pub fn rms_error_radians(&self) -> f64 {
         let pix_err = self.rms_error();
-        let err_m = self.params.satellite.sensor.pixel_size().as_meters() * pix_err;
+        let err_m = {
+            let this = &self.params.satellite.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_meters()
+            * pix_err;
         (err_m / self.params.satellite.telescope.focal_length.as_meters()).tan()
     }
 

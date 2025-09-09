@@ -169,14 +169,13 @@ pub const DEFAULT_BV: f64 = 1.4;
 /// Calculates the diagonal field of view diameter based on sensor dimensions
 /// and telescope focal length. Essential for survey planning and coverage analysis.
 pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Angle {
-    // Get sensor dimensions in microns
-    let (width_um, height_um) = sensor.dimensions_um();
+    // Get sensor dimensions as Length units from SensorGeometry
+    let (width, height) = sensor.dimensions.get_width_height();
 
-    // Calculate the diagonal size of the sensor in microns
-    let diagonal_um = (width_um.powi(2) + height_um.powi(2)).sqrt();
-
-    // Convert to meters
-    let diagonal_m = diagonal_um * 1.0e-6;
+    // Calculate the diagonal size of the sensor
+    let width_m = width.as_meters();
+    let height_m = height.as_meters();
+    let diagonal_m = (width_m.powi(2) + height_m.powi(2)).sqrt();
 
     // Use the plate scale to convert to an angle
     // angle in radians = diagonal / focal_length
@@ -193,7 +192,11 @@ pub fn field_diameter_degrees(telescope: &TelescopeConfig, sensor: &SensorConfig
 /// Calculate the angular size subtended by one pixel
 pub fn pixel_scale(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Angle {
     let plate_scale_rad_per_m = telescope.plate_scale().as_radians();
-    let pixel_size_m = sensor.pixel_size().as_meters();
+    let pixel_size_m = {
+        let this = &sensor;
+        this.dimensions.pixel_size()
+    }
+    .as_meters();
     let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
     Angle::from_radians(angular_size_rad)
 }
@@ -751,9 +754,10 @@ mod tests {
         let sensor = sensor_models::GSENSE4040BSI.clone();
 
         // Calculate expected field diameter
-        let (width_um, height_um) = sensor.dimensions_um();
-        let diagonal_um = (width_um.powi(2) + height_um.powi(2)).sqrt();
-        let diagonal_m = diagonal_um * 1.0e-6;
+        let (width, height) = sensor.dimensions.get_width_height();
+        let width_m = width.as_meters();
+        let height_m = height.as_meters();
+        let diagonal_m = (width_m.powi(2) + height_m.powi(2)).sqrt();
         let expected_angle_rad = diagonal_m / telescope.focal_length.as_meters();
         let expected_angle_deg = expected_angle_rad.to_degrees();
 
@@ -774,7 +778,11 @@ mod tests {
 
         // Calculate expected pixel scale
         let arcsec_per_mm = telescope.plate_scale_arcsec_per_mm();
-        let expected_scale = arcsec_per_mm * sensor.pixel_size().as_millimeters();
+        let expected_scale = arcsec_per_mm * {
+            let this = &sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_millimeters();
 
         let calculated = pixel_scale(&telescope, &sensor);
 

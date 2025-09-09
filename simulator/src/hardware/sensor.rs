@@ -204,23 +204,6 @@ impl SensorConfig {
             .at(Length::from_nanometers(wavelength_nm as f64))
     }
 
-    /// Get sensor dimensions in microns
-    pub fn dimensions_um(&self) -> (f64, f64) {
-        let (width, height) = self.dimensions.get_width_height();
-        (width.as_micrometers(), height.as_micrometers())
-    }
-
-    // TODO(meawoppl) - inline this as an attribute
-    /// Estimate DN (Digital Numbers) per electron based on sensor characteristics
-    ///
-    /// This is an approximation that assumes the ADC bit depth is sufficient to
-    /// capture the read noise with at least 2 bits of precision. In practice,
-    /// the relationship between electrons and DN depends on gain settings and
-    /// other factors specific to the camera implementation.
-    pub fn dn_per_electron(&self) -> f64 {
-        self.dn_per_electron
-    }
-
     /// Get dark current at a specific temperature in electrons/pixel/second
     pub fn dark_current_at_temperature(&self, temperature: Temperature) -> f64 {
         self.dark_current_estimator
@@ -288,10 +271,10 @@ mod tests {
             1e20,
             30.0,
         );
-        let (width_um, height_um) = sensor.dimensions_um();
+        let (width, height) = sensor.dimensions.get_width_height();
 
-        assert!((width_um - 1024.0 * 5.5).abs() < 1e-10);
-        assert!((height_um - 768.0 * 5.5).abs() < 1e-10);
+        assert!((width.as_micrometers() - 1024.0 * 5.5).abs() < 1e-10);
+        assert!((height.as_micrometers() - 768.0 * 5.5).abs() < 1e-10);
     }
 
     #[test]
@@ -429,9 +412,9 @@ mod tests {
         assert_eq!(resized.dimensions.get_pixel_width_height(), (2048, 1536));
 
         // Check dimensions in microns
-        let (width_um, height_um) = resized.dimensions_um();
-        assert!((width_um - 2048.0 * 5.5).abs() < 1e-10);
-        assert!((height_um - 1536.0 * 5.5).abs() < 1e-10);
+        let (width, height) = resized.dimensions.get_width_height();
+        assert!((width.as_micrometers() - 2048.0 * 5.5).abs() < 1e-10);
+        assert!((height.as_micrometers() - 1536.0 * 5.5).abs() < 1e-10);
 
         // Verify other properties remain the same
         assert_eq!(resized.name, original.name);

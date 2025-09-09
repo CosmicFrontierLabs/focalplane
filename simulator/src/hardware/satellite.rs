@@ -85,7 +85,11 @@ impl SatelliteConfig {
     /// Get the plate scale per pixel (angular size subtended by one pixel)
     pub fn plate_scale_per_pixel(&self) -> Angle {
         let plate_scale_rad_per_m = self.telescope.plate_scale().as_radians();
-        let pixel_size_m = self.sensor.pixel_size().as_meters();
+        let pixel_size_m = {
+            let this = &self.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_meters();
         let angular_size_rad = plate_scale_rad_per_m * pixel_size_m;
         Angle::from_radians(angular_size_rad)
     }
@@ -139,7 +143,11 @@ impl SatelliteConfig {
         let airy_radius_um = self.telescope.airy_disk_radius_um();
 
         // Convert to pixels using sensor pixel size
-        let airy_radius_pixels = airy_radius_um / self.sensor.pixel_size().as_micrometers();
+        let airy_radius_pixels = airy_radius_um / {
+            let this = &self.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_micrometers();
 
         // Create scaled Airy disk with pixel radius
         PixelScaledAiryDisk::with_first_zero(airy_radius_pixels, self.telescope.corrected_to)
@@ -176,8 +184,11 @@ impl SatelliteConfig {
     /// A new SatelliteConfig with adjusted telescope focal length
     ///
     pub fn with_fwhm_sampling(&self, q: f64) -> SatelliteConfig {
-        let current_q =
-            self.telescope.fwhm_image_spot() / self.sensor.pixel_size().as_micrometers();
+        let current_q = self.telescope.fwhm_image_spot() / {
+            let this = &self.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_micrometers();
 
         let ratio = q / current_q;
         let new_focal_length = Length::from_meters(self.telescope.focal_length.as_meters() * ratio);
@@ -198,7 +209,11 @@ impl SatelliteConfig {
     /// Number of pixels per FWHM of the PSF
     ///
     pub fn fwhm_sampling_ratio(&self) -> f64 {
-        self.telescope.fwhm_image_spot() / self.sensor.pixel_size().as_micrometers()
+        self.telescope.fwhm_image_spot() / {
+            let this = &self.sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_micrometers()
     }
 
     /// Generate a descriptive string for this satellite configuration
@@ -346,7 +361,11 @@ mod tests {
         assert!(sampling > 0.0);
 
         // Should match manual calculation
-        let expected = telescope.fwhm_image_spot() / sensor.pixel_size().as_micrometers();
+        let expected = telescope.fwhm_image_spot() / {
+            let this = &sensor;
+            this.dimensions.pixel_size()
+        }
+        .as_micrometers();
         assert!((sampling - expected).abs() < 1e-10);
     }
 
