@@ -105,8 +105,8 @@ pub use airy::AiryDisk;
 pub use convolve2d::{convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions};
 pub use detection::{
     aabbs_to_tuples, apply_threshold, connected_components, detect_stars, detect_stars_unified,
-    do_detections, get_bounding_boxes, get_centroids, merge_overlapping_aabbs, otsu_threshold,
-    tuples_to_aabbs, union_aabbs, StarDetection, StarFinder, AABB,
+    get_bounding_boxes, get_centroids, merge_overlapping_aabbs, otsu_threshold, tuples_to_aabbs,
+    union_aabbs, StarDetection, StarFinder, AABB,
 };
 pub use histogram_stretch::stretch_histogram;
 pub use io::{save_u8_image, u16_to_u8_auto_scale, u16_to_u8_scaled};

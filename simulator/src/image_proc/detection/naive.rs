@@ -22,8 +22,7 @@
 //!
 //! # Usage
 //!
-//! Use detect_stars() for direct detection on f64 images or do_detections()
-//! for the full pipeline with optional smoothing and automatic thresholding.
+//! Use detect_stars() for direct detection on f64 images.
 
 use ndarray::{Array2, ArrayView2};
 #[cfg(test)]
@@ -298,75 +297,6 @@ pub fn detect_stars(image: &ArrayView2<f64>, threshold: Option<f64>) -> Vec<Star
 /// that only need centroid locations without shape information.
 pub fn get_centroids(stars: &[StarDetection]) -> Vec<(f64, f64)> {
     stars.iter().map(|star| (star.x, star.y)).collect()
-}
-
-/// Complete star detection pipeline with optional smoothing and automatic thresholding.
-///
-/// High-level interface that handles the entire detection workflow from raw sensor
-/// data to filtered star detections. Includes optional Gaussian smoothing to reduce
-/// noise and improve detection of faint sources.
-///
-/// # Processing Pipeline
-/// 1. **Type conversion**: u16 sensor data → f64 for precise calculations
-/// 2. **Optional smoothing**: Gaussian convolution with specified sigma
-/// 3. **Threshold selection**: User-specified or automatic Otsu method
-/// 4. **Star detection**: Full centroiding pipeline with shape filtering
-///
-/// # Smoothing Benefits
-/// - Reduces pixel noise for faint source detection
-/// - Improves centroid accuracy for undersampled PSFs
-/// - Helps merge fragmented detections of extended sources
-///
-/// # Arguments
-/// * `sensor_image` - Raw sensor image (ADU/DN values as u16)
-/// * `smooth_by` - Optional Gaussian sigma in pixels (None = no smoothing)
-/// * `threshold` - Optional intensity threshold (None = Otsu automatic)
-///
-/// # Returns
-/// Vector of validated StarDetection objects with sub-pixel precision
-///
-/// # Usage
-/// Complete star detection pipeline with optional smoothing and automatic
-/// thresholding. Use for full workflow from sensor data to filtered detections.
-pub fn do_detections(
-    sensor_image: &Array2<u16>,
-    smooth_by: Option<f64>,
-    threshold: Option<f64>,
-) -> Vec<StarDetection> {
-    use super::thresholding::otsu_threshold;
-    use crate::image_proc::{convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions};
-
-    // Cast it into float space
-    let image_array = sensor_image.mapv(|x| x as f64);
-
-    let smoothed = match smooth_by {
-        Some(smooth) => {
-            // TODO(meawoppl) - make this a function of erf() + round up kernel to nearest odd multiple
-            let kernel_size = 9;
-            let kernel = gaussian_kernel(kernel_size, smooth);
-
-            convolve2d(
-                &image_array.view(),
-                &kernel.view(),
-                Some(ConvolveOptions {
-                    mode: ConvolveMode::Same,
-                }),
-            )
-        }
-        None => image_array.clone(),
-    };
-
-    // Use the supplied threshold if provided, otherwise calculate Otsu's threshold
-    let cutoff = match threshold {
-        Some(t) => t,
-        None => {
-            let threshold = otsu_threshold(&smoothed.view());
-            threshold
-        }
-    };
-
-    // Detect stars using our new centroid-based detection
-    detect_stars(&smoothed.view(), Some(cutoff))
 }
 
 #[cfg(test)]
