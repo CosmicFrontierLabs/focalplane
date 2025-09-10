@@ -12,10 +12,10 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 
 # Array processing
-ndarray = "0.16"
+ndarray = "0.15"
 
-# Internal dependencies (if needed for star detection/centroiding)
-# simulator = { path = "../simulator" }
+# Internal dependencies
+shared = { path = "../shared" }
 
 [dev-dependencies]
 env_logger = "0.11"

@@ -1916,8 +1916,9 @@ dependencies = [
  "approx",
  "env_logger",
  "log",
- "ndarray 0.16.1",
+ "ndarray 0.15.6",
  "serde",
+ "shared",
 ]
 
 [[package]]

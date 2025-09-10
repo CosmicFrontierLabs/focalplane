@@ -5,6 +5,7 @@
 
 use ndarray::{Array2, ArrayView2};
 use serde::{Deserialize, Serialize};
+use shared::image_proc::detection::{detect_stars, StarDetection};
 use std::time::Instant;
 
 /// ROI (Region of Interest) around a guide star
@@ -148,6 +149,8 @@ pub struct FineGuidanceSystem {
     accumulated_frame: Option<Array2<f64>>,
     /// Number of frames accumulated
     frames_accumulated: usize,
+    /// Detected stars from calibration (sorted by flux, brightest first)
+    detected_stars: Vec<StarDetection>,
     /// Last guidance update
     last_update: Option<GuidanceUpdate>,
 }
@@ -161,6 +164,7 @@ impl FineGuidanceSystem {
             guide_stars: Vec::new(),
             accumulated_frame: None,
             frames_accumulated: 0,
+            detected_stars: Vec::new(),
             last_update: None,
         }
     }
@@ -176,6 +180,7 @@ impl FineGuidanceSystem {
                 self.accumulated_frame = None;
                 self.frames_accumulated = 0;
                 self.guide_stars.clear();
+                self.detected_stars.clear();
                 Acquiring {
                     frames_collected: 0,
                 }
@@ -204,7 +209,7 @@ impl FineGuidanceSystem {
 
             // From Calibrating
             (Calibrating, FgsEvent::ProcessFrame(frame)) => {
-                self.calibrate(frame)?;
+                self.detect_and_select_guides(frame)?;
 
                 if !self.guide_stars.is_empty() {
                     log::info!(
@@ -299,6 +304,11 @@ impl FineGuidanceSystem {
         })
     }
 
+    /// Get the detected stars (sorted by flux, brightest first)
+    pub fn get_detected_stars(&self) -> &[StarDetection] {
+        &self.detected_stars
+    }
+
     /// Accumulate frames during acquisition
     fn accumulate_frame(&mut self, frame: ArrayView2<u16>) -> Result<(), String> {
         match &mut self.accumulated_frame {
@@ -324,14 +334,29 @@ impl FineGuidanceSystem {
         Ok(())
     }
 
-    /// Perform calibration: detect stars, select guides, set references
-    fn calibrate(&mut self, _frame: ArrayView2<u16>) -> Result<(), String> {
-        // TODO: Implement calibration logic
-        // 1. Average accumulated frames
-        // 2. Detect all stars
-        // 3. Select guide stars based on criteria
-        // 4. Define ROIs
-        // 5. Store reference positions
+    /// Detect stars and select guide stars from averaged frame
+    fn detect_and_select_guides(&mut self, _frame: ArrayView2<u16>) -> Result<(), String> {
+        // Get the averaged accumulated frame
+        let averaged_frame = self
+            .get_averaged_frame()
+            .ok_or("No accumulated frame available for calibration")?;
+
+        // Detect stars in the averaged frame
+        self.detected_stars = detect_stars(&averaged_frame.view(), None);
+
+        // Sort by flux (brightest first)
+        self.detected_stars
+            .sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap());
+
+        log::info!(
+            "Detected {} stars in calibration frame",
+            self.detected_stars.len()
+        );
+
+        // TODO: Select guide stars from detections
+        // TODO: Create ROIs around selected stars
+        // TODO: Store reference positions
+
         Ok(())
     }
 
