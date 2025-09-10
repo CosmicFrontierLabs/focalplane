@@ -4,15 +4,15 @@ use ndarray::Array2;
 use starfield::{catalogs::StarData, Equatorial};
 
 use crate::{
-    algo::icp::Locatable2d,
-    hardware::SatelliteConfig,
+    hardware::{sensor_noise::generate_sensor_noise, SatelliteConfig, SensorConfig},
     photometry::{photoconversion::SourceFlux, zodical::SolarAngularCoordinates, ZodicalLight},
     star_math::{field_diameter, star_data_to_fluxes, StarProjector},
-    units::{AngleExt, Area},
-    SensorConfig,
 };
-
-use super::{generate_sensor_noise, noise::apply_poisson_photon_noise};
+use shared::{
+    algo::icp::Locatable2d,
+    image_proc::noise::apply_poisson_photon_noise,
+    units::{AngleExt, Area},
+};
 
 #[derive(Clone, Debug)]
 pub struct StarInFrame {
@@ -445,8 +445,8 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 /// use ndarray::Array2;
 /// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
 /// use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
-/// use simulator::image_proc::airy::PixelScaledAiryDisk;
-/// use simulator::units::{Area, AreaExt, LengthExt, Wavelength};
+/// use shared::image_proc::airy::PixelScaledAiryDisk;
+/// use shared::units::{Area, AreaExt, LengthExt, Wavelength};
 /// use starfield::catalogs::StarData;
 /// use starfield::Equatorial;
 /// use std::time::Duration;
@@ -526,10 +526,10 @@ mod tests {
         read_noise::ReadNoiseEstimator,
         sensor::{create_flat_qe, SensorGeometry},
     };
-    use crate::image_proc::airy::PixelScaledAiryDisk;
-    use crate::image_proc::noise::simple_normal_array;
     use crate::photometry::photoconversion::SpotFlux;
-    use crate::units::{Area, AreaExt, Length, LengthExt, Temperature, TemperatureExt};
+    use shared::image_proc::airy::PixelScaledAiryDisk;
+    use shared::image_proc::noise::simple_normal_array;
+    use shared::units::{Area, AreaExt, Length, LengthExt, Temperature, TemperatureExt};
 
     fn test_star_data() -> StarData {
         StarData {

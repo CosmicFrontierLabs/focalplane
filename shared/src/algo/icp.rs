@@ -290,7 +290,7 @@ fn calculate_error(
 /// # Examples
 /// ```
 /// use ndarray::Array2;
-/// use simulator::algo::iterative_closest_point;
+/// use shared::algo::iterative_closest_point;
 ///
 /// // Create two point sets
 /// let source = Array2::from_shape_vec((3, 2), vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]).unwrap();

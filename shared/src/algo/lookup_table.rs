@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```
-//! use simulator::algo::lookup_table::LookupTable;
+//! use shared::algo::lookup_table::LookupTable;
 //!
 //! // Create a lookup table for exp(x) from -5 to 5 with 1000 points
 //! let exp_table = LookupTable::new(-5.0, 5.0, 1000, |x| x.exp());

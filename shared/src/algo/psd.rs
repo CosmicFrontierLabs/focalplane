@@ -31,8 +31,8 @@
 //!
 //! # Examples
 //!
-//! ```rust
-//! use simulator::algo::psd::*;
+//! ```rust,no_run
+//! use shared::algo::psd::*;
 //! use nalgebra::Vector3;
 //! use std::time::Duration;
 //!

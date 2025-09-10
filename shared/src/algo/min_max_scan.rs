@@ -34,7 +34,7 @@ impl<T: Float + fmt::Debug> MinMaxScan<T> {
     ///
     /// # Example
     /// ```
-    /// use simulator::algo::min_max_scan::MinMaxScan;
+    /// use shared::algo::min_max_scan::MinMaxScan;
     ///
     /// let scanner = MinMaxScan::<f64>::new(&[1.0, 5.0, 3.0, 2.0]);
     /// assert_eq!(scanner.min().unwrap(), 1.0);

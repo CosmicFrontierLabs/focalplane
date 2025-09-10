@@ -5,6 +5,7 @@ members = [
     "viz",
     "flight-software",
     "monacle",
+    "shared",
 ]
 resolver = "2"
 

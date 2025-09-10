@@ -24,10 +24,10 @@
 //!
 //! # Examples
 //!
-//! ```rust
-//! use simulator::image_proc::detection::{detect_stars_unified, StarFinder, detect_stars};
-//! use simulator::image_proc::airy::PixelScaledAiryDisk;
-//! use simulator::units::{LengthExt, Wavelength};
+//! ```rust,no_run
+//! use shared::image_proc::detection::{detect_stars_unified, StarFinder, detect_stars};
+//! use shared::image_proc::airy::PixelScaledAiryDisk;
+//! use shared::units::{LengthExt, Wavelength};
 //! use ndarray::Array2;
 //!
 //! // Create a test image

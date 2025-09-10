@@ -117,25 +117,27 @@
 //! - **Validation**: Compare simulation results with on-orbit data
 //! - **Education**: Understand space telescope physics and image processing
 
-pub mod algo;
+pub mod algo; // misc module lives here
 pub mod hardware;
-pub mod image_proc;
+pub mod image_proc; // render module lives here
 pub mod photometry;
 pub mod scene;
 pub mod shared_args;
 pub mod sims;
 pub mod star_math;
-pub mod units;
+
+// Re-export from shared for compatibility
+pub use shared::units;
 
 // Re-exports for easier access
-pub use algo::icp::{iterative_closest_point, ICPResult};
 pub use hardware::sensor::SensorConfig;
 pub use hardware::telescope::TelescopeConfig;
-pub use image_proc::histogram_stretch::stretch_histogram;
 pub use photometry::quantum_efficiency::QuantumEfficiency;
 pub use photometry::spectrum::{Spectrum, CGS};
 pub use photometry::trapezoid::trap_integrate;
 pub use scene::Scene;
+pub use shared::algo::icp::{iterative_closest_point, ICPResult};
+pub use shared::image_proc::histogram_stretch::stretch_histogram;
 pub use star_math::{field_diameter, filter_stars_in_field, pixel_scale, star_data_to_fluxes};
 pub use starfield::catalogs::StarPosition;
 

@@ -8,10 +8,10 @@
 use clap::Parser;
 use rayon::prelude::*;
 use simulator::hardware::sensor::models::ALL_SENSORS;
+use simulator::hardware::sensor_noise::generate_sensor_noise;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::airy::PixelScaledAiryDisk;
 use simulator::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
-use simulator::image_proc::generate_sensor_noise;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
 use simulator::photometry::ZodicalLight;
 use simulator::shared_args::SharedSimulationArgs;
