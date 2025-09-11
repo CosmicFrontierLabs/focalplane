@@ -268,125 +268,189 @@ impl FineGuidanceSystem {
         }
     }
 
+    /// Handle transition from Idle to Acquiring
+    fn handle_idle_start(&mut self) -> FgsState {
+        log::info!("Starting FGS, entering Acquiring state");
+        self.accumulated_frame = None;
+        self.frames_accumulated = 0;
+        self.guide_stars.clear();
+        self.detected_stars.clear();
+        FgsState::Acquiring {
+            frames_collected: 0,
+        }
+    }
+
+    /// Handle frame processing during Acquiring state
+    fn handle_acquiring_frame(
+        &mut self,
+        frames_collected: usize,
+        frame: ArrayView2<u16>,
+    ) -> Result<FgsState, String> {
+        let frames = frames_collected + 1;
+        self.accumulate_frame(frame)?;
+
+        if frames >= self.config.acquisition_frames {
+            log::info!("Acquisition complete, entering Calibrating state");
+            Ok(FgsState::Calibrating)
+        } else {
+            Ok(FgsState::Acquiring {
+                frames_collected: frames,
+            })
+        }
+    }
+
+    /// Handle abort during Acquiring state
+    fn handle_acquiring_abort(&mut self) -> FgsState {
+        log::info!("Aborting acquisition, returning to Idle");
+        self.accumulated_frame = None;
+        self.frames_accumulated = 0;
+        FgsState::Idle
+    }
+
+    /// Handle frame processing during Calibrating state
+    fn handle_calibrating_frame(&mut self, frame: ArrayView2<u16>) -> Result<FgsState, String> {
+        self.detect_and_select_guides(frame)?;
+
+        if !self.guide_stars.is_empty() {
+            log::info!(
+                "Calibration complete with {} guide stars, entering Tracking",
+                self.guide_stars.len()
+            );
+
+            // Increment track ID for new tracking session
+            self.current_track_id += 1;
+
+            // Emit tracking started event
+            self.emit_tracking_started_event();
+
+            Ok(FgsState::Tracking {
+                frames_processed: 0,
+            })
+        } else {
+            log::warn!("No suitable guide stars found, returning to Idle");
+            Ok(FgsState::Idle)
+        }
+    }
+
+    /// Handle frame processing during Tracking state
+    fn handle_tracking_frame(
+        &mut self,
+        frames_processed: usize,
+        frame: ArrayView2<u16>,
+    ) -> Result<FgsState, String> {
+        let update = self.track(frame)?;
+
+        if update.num_stars_used > 0 {
+            // Emit tracking update event
+            self.emit_tracking_update_event(&update);
+
+            self.last_update = Some(update.clone());
+            Ok(FgsState::Tracking {
+                frames_processed: frames_processed + 1,
+            })
+        } else {
+            log::warn!("Lost all guide stars, entering Reacquiring");
+
+            // Emit tracking lost event
+            self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak);
+
+            Ok(FgsState::Reacquiring { attempts: 0 })
+        }
+    }
+
+    /// Handle frame processing during Reacquiring state
+    fn handle_reacquiring_frame(
+        &mut self,
+        attempts: usize,
+        frame: ArrayView2<u16>,
+    ) -> Result<FgsState, String> {
+        let recovered = self.attempt_reacquisition(frame)?;
+
+        if recovered {
+            log::info!("Lock recovered, returning to Tracking");
+            Ok(FgsState::Tracking {
+                frames_processed: 0,
+            })
+        } else if attempts + 1 >= self.config.max_reacquisition_attempts {
+            log::warn!("Reacquisition timeout, returning to Calibrating");
+            Ok(FgsState::Calibrating)
+        } else {
+            Ok(FgsState::Reacquiring {
+                attempts: attempts + 1,
+            })
+        }
+    }
+
+    /// Emit tracking started event
+    fn emit_tracking_started_event(&self) {
+        if let Some(first_star) = self.guide_stars.first() {
+            self.emit_event(&FgsCallbackEvent::TrackingStarted {
+                track_id: self.current_track_id,
+                initial_position: PositionEstimate {
+                    x: first_star.x,
+                    y: first_star.y,
+                    confidence: 1.0,
+                    timestamp_us: Instant::now().elapsed().as_micros() as u64,
+                },
+                num_guide_stars: self.guide_stars.len(),
+            });
+        }
+    }
+
+    /// Emit tracking update event
+    fn emit_tracking_update_event(&self, update: &GuidanceUpdate) {
+        if let Some(first_star) = self.guide_stars.first() {
+            self.emit_event(&FgsCallbackEvent::TrackingUpdate {
+                track_id: self.current_track_id,
+                position: PositionEstimate {
+                    x: first_star.x + update.delta_x,
+                    y: first_star.y + update.delta_y,
+                    confidence: update.quality,
+                    timestamp_us: Instant::now().elapsed().as_micros() as u64,
+                },
+                delta_x: update.delta_x,
+                delta_y: update.delta_y,
+                num_stars_used: update.num_stars_used,
+            });
+        }
+    }
+
+    /// Emit tracking lost event
+    fn emit_tracking_lost_event(&self, reason: TrackingLostReason) {
+        if let Some(first_star) = self.guide_stars.first() {
+            self.emit_event(&FgsCallbackEvent::TrackingLost {
+                track_id: self.current_track_id,
+                last_position: PositionEstimate {
+                    x: first_star.x,
+                    y: first_star.y,
+                    confidence: 0.0,
+                    timestamp_us: Instant::now().elapsed().as_micros() as u64,
+                },
+                reason,
+            });
+        }
+    }
+
     /// Process an event and potentially transition states
     pub fn process_event(&mut self, event: FgsEvent<'_>) -> Result<Option<GuidanceUpdate>, String> {
         use FgsState::*;
 
         let new_state = match (&self.state, event) {
             // From Idle
-            (Idle, FgsEvent::StartFgs) => {
-                log::info!("Starting FGS, entering Acquiring state");
-                self.accumulated_frame = None;
-                self.frames_accumulated = 0;
-                self.guide_stars.clear();
-                self.detected_stars.clear();
-                Acquiring {
-                    frames_collected: 0,
-                }
-            }
+            (Idle, FgsEvent::StartFgs) => self.handle_idle_start(),
 
             // From Acquiring
             (Acquiring { frames_collected }, FgsEvent::ProcessFrame(frame)) => {
-                let frames = frames_collected + 1;
-                self.accumulate_frame(frame)?;
-
-                if frames >= self.config.acquisition_frames {
-                    log::info!("Acquisition complete, entering Calibrating state");
-                    Calibrating
-                } else {
-                    Acquiring {
-                        frames_collected: frames,
-                    }
-                }
+                self.handle_acquiring_frame(*frames_collected, frame)?
             }
-            (Acquiring { .. }, FgsEvent::Abort) => {
-                log::info!("Aborting acquisition, returning to Idle");
-                self.accumulated_frame = None;
-                self.frames_accumulated = 0;
-                Idle
-            }
+            (Acquiring { .. }, FgsEvent::Abort) => self.handle_acquiring_abort(),
 
             // From Calibrating
-            (Calibrating, FgsEvent::ProcessFrame(frame)) => {
-                self.detect_and_select_guides(frame)?;
-
-                if !self.guide_stars.is_empty() {
-                    log::info!(
-                        "Calibration complete with {} guide stars, entering Tracking",
-                        self.guide_stars.len()
-                    );
-
-                    // Increment track ID for new tracking session
-                    self.current_track_id += 1;
-
-                    // Emit tracking started event
-                    if let Some(first_star) = self.guide_stars.first() {
-                        self.emit_event(&FgsCallbackEvent::TrackingStarted {
-                            track_id: self.current_track_id,
-                            initial_position: PositionEstimate {
-                                x: first_star.x,
-                                y: first_star.y,
-                                confidence: 1.0,
-                                timestamp_us: Instant::now().elapsed().as_micros() as u64,
-                            },
-                            num_guide_stars: self.guide_stars.len(),
-                        });
-                    }
-
-                    Tracking {
-                        frames_processed: 0,
-                    }
-                } else {
-                    log::warn!("No suitable guide stars found, returning to Idle");
-                    Idle
-                }
-            }
+            (Calibrating, FgsEvent::ProcessFrame(frame)) => self.handle_calibrating_frame(frame)?,
 
             // From Tracking
             (Tracking { frames_processed }, FgsEvent::ProcessFrame(frame)) => {
-                let frames = *frames_processed;
-                let update = self.track(frame)?;
-
-                if update.num_stars_used > 0 {
-                    // Emit tracking update event
-                    if let Some(first_star) = self.guide_stars.first() {
-                        self.emit_event(&FgsCallbackEvent::TrackingUpdate {
-                            track_id: self.current_track_id,
-                            position: PositionEstimate {
-                                x: first_star.x + update.delta_x,
-                                y: first_star.y + update.delta_y,
-                                confidence: update.quality,
-                                timestamp_us: Instant::now().elapsed().as_micros() as u64,
-                            },
-                            delta_x: update.delta_x,
-                            delta_y: update.delta_y,
-                            num_stars_used: update.num_stars_used,
-                        });
-                    }
-
-                    self.last_update = Some(update.clone());
-                    Tracking {
-                        frames_processed: frames + 1,
-                    }
-                } else {
-                    log::warn!("Lost all guide stars, entering Reacquiring");
-
-                    // Emit tracking lost event
-                    if let Some(first_star) = self.guide_stars.first() {
-                        self.emit_event(&FgsCallbackEvent::TrackingLost {
-                            track_id: self.current_track_id,
-                            last_position: PositionEstimate {
-                                x: first_star.x,
-                                y: first_star.y,
-                                confidence: 0.0,
-                                timestamp_us: Instant::now().elapsed().as_micros() as u64,
-                            },
-                            reason: TrackingLostReason::SignalTooWeak,
-                        });
-                    }
-
-                    Reacquiring { attempts: 0 }
-                }
+                self.handle_tracking_frame(*frames_processed, frame)?
             }
             (Tracking { .. }, FgsEvent::StopFgs) => {
                 log::info!("Stopping FGS, returning to Idle");
@@ -395,22 +459,7 @@ impl FineGuidanceSystem {
 
             // From Reacquiring
             (Reacquiring { attempts }, FgsEvent::ProcessFrame(frame)) => {
-                let attempt_count = *attempts;
-                let recovered = self.attempt_reacquisition(frame)?;
-
-                if recovered {
-                    log::info!("Lock recovered, returning to Tracking");
-                    Tracking {
-                        frames_processed: 0,
-                    }
-                } else if attempt_count + 1 >= self.config.max_reacquisition_attempts {
-                    log::warn!("Reacquisition timeout, returning to Calibrating");
-                    Calibrating
-                } else {
-                    Reacquiring {
-                        attempts: attempt_count + 1,
-                    }
-                }
+                self.handle_reacquiring_frame(*attempts, frame)?
             }
             (Reacquiring { .. }, FgsEvent::Abort) => {
                 log::info!("Aborting reacquisition, returning to Idle");
