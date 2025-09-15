@@ -153,7 +153,7 @@
 
 use crate::hardware::sensor::SensorConfig;
 use crate::hardware::telescope::TelescopeConfig;
-use crate::photometry::zodical::SolarAngularCoordinates;
+use crate::photometry::zodiacal::SolarAngularCoordinates;
 use clap::{Parser, ValueEnum};
 use log::info;
 use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
@@ -861,7 +861,7 @@ impl SharedSimulationArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::photometry::zodical::{ELONG_OF_MIN, LAT_OF_MIN};
+    use crate::photometry::zodiacal::{ELONG_OF_MIN, LAT_OF_MIN};
     use starfield::catalogs::StarPosition;
 
     #[test]

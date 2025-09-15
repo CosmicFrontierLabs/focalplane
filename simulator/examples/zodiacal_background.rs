@@ -16,7 +16,7 @@ use shared::algo::MinMaxScan;
 use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
-use simulator::photometry::{spectrum::Spectrum, zodical::SolarAngularCoordinates, ZodicalLight};
+use simulator::photometry::{spectrum::Spectrum, zodiacal::SolarAngularCoordinates, ZodiacalLight};
 use simulator::shared_args::{DurationArg, TelescopeModel};
 use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
 
@@ -121,7 +121,7 @@ fn parse_range(range_str: &str) -> Result<Array1<f64>, Box<dyn std::error::Error
 ///
 /// # Arguments
 ///
-/// * `z_light` - ZodicalLight instance for spectrum calculation
+/// * `z_light` - ZodiacalLight instance for spectrum calculation
 /// * `coords` - Solar angular coordinates (elongation and ecliptic latitude)
 /// * `output_path` - File path for the output PNG image
 ///
@@ -144,15 +144,15 @@ fn parse_range(range_str: &str) -> Result<Array1<f64>, Box<dyn std::error::Error
 ///
 /// ```rust
 /// let coords = SolarAngularCoordinates::zodiacal_minimum();
-/// let z_light = ZodicalLight::new();
+/// let z_light = ZodiacalLight::new();
 /// create_spectrum_plot(&z_light, &coords, "spectrum.png")?;
 /// ```
 fn create_spectrum_plot(
-    z_light: &ZodicalLight,
+    z_light: &ZodiacalLight,
     coords: &SolarAngularCoordinates,
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let spectrum = z_light.get_zodical_spectrum(coords)?;
+    let spectrum = z_light.get_zodiacal_spectrum(coords)?;
 
     // Sample wavelengths from 100nm to 1100nm (full STIS spectrum range)
     let wavelengths: Vec<f64> = (100..=1100).step_by(5).map(|w| w as f64).collect();
@@ -321,7 +321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Latitude: {:.1}°", min_coords.latitude());
     println!();
 
-    let z_light = ZodicalLight::new();
+    let z_light = ZodiacalLight::new();
 
     // Create plots directory if it doesn't exist
     std::fs::create_dir_all("plots")?;
@@ -349,10 +349,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Calculate zodical minimum e-/s for this sensor
-        let min_zodical_e = z_light.generate_zodical_background(&satellite, &exposure, &min_coords);
-        let min_electrons_total = min_zodical_e.mean().unwrap();
+        let min_zodiacal_e =
+            z_light.generate_zodiacal_background(&satellite, &exposure, &min_coords);
+        let min_electrons_total = min_zodiacal_e.mean().unwrap();
         let min_electrons_per_s = min_electrons_total / exposure.as_secs_f64();
-        println!("  Zodical minimum: {min_electrons_per_s:.2e} e-/s");
+        println!("  Zodiacal minimum: {min_electrons_per_s:.2e} e-/s");
 
         // Compute DN/s and electrons/s for each coordinate combination
         for (elong_idx, &elongation) in elongations.iter().enumerate() {
@@ -362,22 +363,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("Invalid solar angular coordinates from parsed ranges");
 
                 // Try to generate zodiacal background, handle interpolation errors
-                match z_light.get_zodical_spectrum(&coords) {
+                match z_light.get_zodiacal_spectrum(&coords) {
                     Ok(_) => {
                         // Generate zodiacal background in electrons
-                        let zodical_e =
-                            z_light.generate_zodical_background(&satellite, &exposure, &coords);
+                        let zodiacal_e =
+                            z_light.generate_zodiacal_background(&satellite, &exposure, &coords);
 
                         // Calculate mean electrons/s (divide by exposure time to get per second)
-                        let mean_electrons_total = zodical_e.mean().unwrap();
+                        let mean_electrons_total = zodiacal_e.mean().unwrap();
                         let mean_electrons_per_s = mean_electrons_total / exposure.as_secs_f64();
                         electron_matrix[[elong_idx, lat_idx]] = mean_electrons_per_s;
 
                         // Convert to DN
-                        let zodical_dn = quantize_image(&zodical_e, &satellite.sensor);
+                        let zodiacal_dn = quantize_image(&zodiacal_e, &satellite.sensor);
 
                         // Calculate mean DN/s (divide by exposure time to get per second)
-                        let mean_dn_total = zodical_dn.map(|&x| x as f64).mean().unwrap();
+                        let mean_dn_total = zodiacal_dn.map(|&x| x as f64).mean().unwrap();
                         let mean_dn_per_s = mean_dn_total / exposure.as_secs_f64();
                         dn_matrix[[elong_idx, lat_idx]] = mean_dn_per_s;
                     }

@@ -5,7 +5,7 @@ use starfield::{catalogs::StarData, Equatorial};
 
 use crate::{
     hardware::{sensor_noise::generate_sensor_noise, SatelliteConfig, SensorConfig},
-    photometry::{photoconversion::SourceFlux, zodical::SolarAngularCoordinates, ZodicalLight},
+    photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
     star_math::{field_diameter, star_data_to_fluxes, StarProjector},
 };
 use shared::{
@@ -305,10 +305,10 @@ impl Renderer {
         );
 
         // Generate zodiacal background
-        let z_light = ZodicalLight::new();
+        let z_light = ZodiacalLight::new();
 
         let zodiacal_mean =
-            z_light.generate_zodical_background(&self.satellite_config, exposure, zodiacal_coords);
+            z_light.generate_zodiacal_background(&self.satellite_config, exposure, zodiacal_coords);
 
         let zodiacal_image = if apply_poisson {
             let new_seed = rng_seed.map(|val| val + 1);

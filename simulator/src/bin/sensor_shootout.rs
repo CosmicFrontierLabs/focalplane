@@ -43,7 +43,7 @@ use shared::viz::histogram::{Histogram, HistogramConfig, Scale};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::{RenderingResult, StarInFrame};
-use simulator::photometry::zodical::SolarAngularCoordinates;
+use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};
 use simulator::{

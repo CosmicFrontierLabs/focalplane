@@ -81,7 +81,7 @@
 //!
 //! ## Detector Noise Modeling
 //! ```ignore
-//! use simulator::photometry::zodical::{ZodicalLight, SolarAngularCoordinates};
+//! use simulator::photometry::zodiacal::{ZodiacalLight, SolarAngularCoordinates};
 //! use simulator::hardware::SatelliteConfig;
 //! use std::time::Duration;
 //!
@@ -89,12 +89,12 @@
 //! # let telescope = simulator::hardware::TelescopeConfig::from_f_d(1.4, 0.2);
 //! # let sensor = simulator::hardware::SensorConfig::from_pixel_size(1024, 1024, 13e-6);
 //! # let satellite = SatelliteConfig::new(telescope, sensor, -40.0, 550.0);
-//! let zodi_model = ZodicalLight::new();
+//! let zodi_model = ZodiacalLight::new();
 //! let coords = SolarAngularCoordinates::new(120.0, 45.0).unwrap();
 //! let exposure = Duration::from_secs(300); // 5-minute exposure
 //!
 //! // Generate zodiacal background image
-//! let background_image = zodi_model.generate_zodical_background(
+//! let background_image = zodi_model.generate_zodiacal_background(
 //!     &satellite, &exposure, &coords
 //! );
 //!
@@ -167,7 +167,7 @@ pub const ELONG_OF_MIN: f64 = 165.0;
 /// and data access problems encountered during zodiacal light calculations.
 /// Each error includes specific guidance for resolution and context.
 #[derive(Error, Debug)]
-pub enum ZodicalError {
+pub enum ZodiacalError {
     /// Requested coordinates fall outside the valid zodiacal light data domain.
     ///
     /// Occurs when attempting to evaluate zodiacal brightness at coordinates
@@ -302,18 +302,18 @@ impl SolarAngularCoordinates {
     ///
     /// # Returns
     /// * `Ok(SolarAngularCoordinates)` - Successfully validated coordinates
-    /// * `Err(ZodicalError)` - Validation failure with specific error type
+    /// * `Err(ZodiacalError)` - Validation failure with specific error type
     ///
     /// # Usage
     /// Create valid solar angular coordinates with range validation for elongation
     /// and latitude, including edge cases for sun, opposition, and pole positions.
-    pub fn new(elongation: f64, latitude: f64) -> Result<Self, ZodicalError> {
+    pub fn new(elongation: f64, latitude: f64) -> Result<Self, ZodiacalError> {
         if !(0.0..=180.0).contains(&elongation) {
-            return Err(ZodicalError::InvalidElongation(elongation));
+            return Err(ZodiacalError::InvalidElongation(elongation));
         }
 
         if !(-90.0..=90.0).contains(&latitude) {
-            return Err(ZodicalError::InvalidLatitude(latitude));
+            return Err(ZodiacalError::InvalidLatitude(latitude));
         }
 
         Ok(Self {
@@ -441,7 +441,7 @@ impl SolarAngularCoordinates {
 /// - **Filter integration**: Direct calculation of band-integrated backgrounds
 /// - **Detector modeling**: Realistic photoelectron noise simulation
 /// - **Calibration consistency**: Cross-validated with space telescope data
-pub struct ZodicalLight {
+pub struct ZodiacalLight {
     /// Bilinear interpolator for zodiacal light brightness.
     ///
     /// Efficiently interpolates brightness values from Leinert et al. (1998) data:
@@ -503,7 +503,7 @@ const ELONGATIONS: [f64; 19] = [
 /// - **Wavelength**: 500 nm (V-band) measurements
 /// - **Observing conditions**: Clear, dark-sky sites with minimal light pollution
 #[rustfmt::skip]
-fn zodical_raw_data() -> [[f64; 11]; 19] {
+fn zodiacal_raw_data() -> [[f64; 11]; 19] {
     let inf = f64::INFINITY;
 
     [
@@ -529,14 +529,14 @@ fn zodical_raw_data() -> [[f64; 11]; 19] {
     ]
 }
 
-impl Default for ZodicalLight {
+impl Default for ZodiacalLight {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ZodicalLight {
-    /// Create new ZodicalLight model with Leinert et al. (1998) calibration data.
+impl ZodiacalLight {
+    /// Create new ZodiacalLight model with Leinert et al. (1998) calibration data.
     ///
     /// Constructs a complete zodiacal light brightness model using the definitive
     /// ground-based measurements from Leinert et al. The data is organized for
@@ -550,17 +550,17 @@ impl ZodicalLight {
     /// 4. **Memory layout**: Optimizes for cache-efficient bilinear interpolation
     ///
     /// # Returns
-    /// Complete ZodicalLight model ready for brightness calculations
+    /// Complete ZodiacalLight model ready for brightness calculations
     ///
     /// # Usage
-    /// Create complete ZodicalLight model ready for brightness
+    /// Create complete ZodiacalLight model ready for brightness
     /// calculations at any valid solar angular coordinates.
     pub fn new() -> Self {
         // Convert the hardcoded 2D array to an ndarray::Array2
         // Raw data is organized as [elongation][latitude], but we want [latitude][elongation]
         // So we transpose during construction
         let mut data = Array2::zeros((LATITUDES.len(), ELONGATIONS.len()));
-        let raw_data = zodical_raw_data();
+        let raw_data = zodiacal_raw_data();
 
         for (elong_idx, elong_row) in raw_data.iter().enumerate() {
             for (lat_idx, &val) in elong_row.iter().enumerate() {
@@ -585,7 +585,7 @@ impl ZodicalLight {
     /// # Returns
     ///
     /// A `Result` containing either the brightness in S10 units (10th magnitude stars per square degree) or an error
-    pub fn get_brightness(&self, coords: &SolarAngularCoordinates) -> Result<f64, ZodicalError> {
+    pub fn get_brightness(&self, coords: &SolarAngularCoordinates) -> Result<f64, ZodiacalError> {
         let elongation = coords.elongation();
         let latitude = coords.abs_latitude();
 
@@ -596,12 +596,12 @@ impl ZodicalLight {
         {
             Ok(value) => Ok(value),
             Err(InterpolationError::OutOfBounds { .. }) => {
-                Err(ZodicalError::OutOfRange(elongation, coords.latitude()))
+                Err(ZodiacalError::OutOfRange(elongation, coords.latitude()))
             }
-            Err(InterpolationError::NoValidData(_)) => Err(ZodicalError::InterpolationError(
+            Err(InterpolationError::NoValidData(_)) => Err(ZodiacalError::InterpolationError(
                 "No valid data points for interpolation".to_string(),
             )),
-            Err(e) => Err(ZodicalError::InterpolationError(e.to_string())),
+            Err(e) => Err(ZodiacalError::InterpolationError(e.to_string())),
         }
     }
 
@@ -626,7 +626,7 @@ impl ZodicalLight {
     pub fn get_brightness_mag_per_square_arcsec(
         &self,
         coords: &SolarAngularCoordinates,
-    ) -> Result<f64, ZodicalError> {
+    ) -> Result<f64, ZodiacalError> {
         // Get brightness in S10 units
         let s10 = self.get_brightness(coords)?;
 
@@ -659,7 +659,7 @@ impl ZodicalLight {
     pub fn get_spectrum_scale_factor(
         &self,
         coords: &SolarAngularCoordinates,
-    ) -> Result<f64, ZodicalError> {
+    ) -> Result<f64, ZodiacalError> {
         // Get brightness in S10 units
         let reference_coords = SolarAngularCoordinates::new(180.0, 0.0)?;
         let reference = self.get_brightness_mag_per_square_arcsec(&reference_coords)?;
@@ -688,10 +688,10 @@ impl ZodicalLight {
     /// as measured by STIS, but is scaled in overall brightness to match the
     /// zodiacal light intensity at the target coordinates. This assumes the
     /// zodiacal spectrum shape is constant across the sky.
-    pub fn get_zodical_spectrum(
+    pub fn get_zodiacal_spectrum(
         &self,
         coords: &SolarAngularCoordinates,
-    ) -> Result<STISZodiacalSpectrum, ZodicalError> {
+    ) -> Result<STISZodiacalSpectrum, ZodiacalError> {
         // Get the scale factor based on a reference point
         let scale_factor = self.get_spectrum_scale_factor(coords)?;
         Ok(STISZodiacalSpectrum::new(scale_factor))
@@ -714,7 +714,7 @@ impl ZodicalLight {
     /// This assumed the light is uniformly distributed across the sensor pixels. (no vignetting)
     /// Ideally we should also interpolate the value across the sensor, as it is not uniform
     /// across the field of view.
-    pub fn generate_zodical_background(
+    pub fn generate_zodiacal_background(
         &self,
         satellite: &SatelliteConfig,
         exposure: &Duration,
@@ -734,8 +734,8 @@ impl ZodicalLight {
             / focal_length_mm;
 
         let z_spect = self
-            .get_zodical_spectrum(coords)
-            .expect("Unable to generate zodical spectrum?");
+            .get_zodiacal_spectrum(coords)
+            .expect("Unable to generate zodiacal spectrum?");
 
         let pixel_solid_angle_arcsec2 = pixel_scale_arcsec_per_pixel * pixel_scale_arcsec_per_pixel;
 
@@ -771,12 +771,12 @@ mod tests {
         // Final scale factor: 0.336
 
         // Test that the Dorado model matches the original data
-        let zodical = ZodicalLight::new();
+        let zodiacal = ZodiacalLight::new();
 
         // Check a few known points from the original data
         let coords = SolarAngularCoordinates::new(170.28, 66.56).unwrap();
         assert_relative_eq!(
-            zodical.get_spectrum_scale_factor(&coords).unwrap(),
+            zodiacal.get_spectrum_scale_factor(&coords).unwrap(),
             0.336,
             epsilon = 0.01
         );
@@ -784,18 +784,18 @@ mod tests {
 
     #[test]
     fn test_get_brightness() {
-        let zodical = ZodicalLight::new();
+        let zodiacal = ZodiacalLight::new();
 
         // Test a coordinate with known value (exact match to a grid point)
         // 45° elongation, 60° latitude should give 91.0 S10 (after transposing data)
         let coords = SolarAngularCoordinates::new(45.0, 60.0).unwrap();
-        let brightness = zodical.get_brightness(&coords).unwrap();
+        let brightness = zodiacal.get_brightness(&coords).unwrap();
         assert!((brightness - 91.0).abs() < 1e-10);
 
         // Test interpolation between grid points
         // Between 30° and 45° elongation, between 45° and 60° latitude
         let coords = SolarAngularCoordinates::new(37.5, 52.5).unwrap();
-        let brightness = zodical.get_brightness(&coords).unwrap();
+        let brightness = zodiacal.get_brightness(&coords).unwrap();
         // Expected: interpolation between surrounding values
         assert!(brightness > 80.0 && brightness < 200.0);
 
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_brightness_range() {
-        let zodical = ZodicalLight::new();
+        let zodiacal = ZodiacalLight::new();
 
         // Test a grid of points across the valid range
         // This covers the sun exclusion zone and will have a bunch
@@ -818,7 +818,7 @@ mod tests {
                 let lat_f64 = lat as f64;
 
                 if let Ok(coords) = SolarAngularCoordinates::new(elong_f64, lat_f64) {
-                    if let Ok(brightness) = zodical.get_brightness(&coords) {
+                    if let Ok(brightness) = zodiacal.get_brightness(&coords) {
                         if brightness.is_finite() {
                             assert!(
                                 (40.0..=10000.0).contains(&brightness),
@@ -833,31 +833,31 @@ mod tests {
 
     #[test]
     fn test_sun_exclusion_zones() {
-        let zodical = ZodicalLight::new();
+        let zodiacal = ZodiacalLight::new();
 
         // Test that regions too close to the sun return finite values or errors
         // At 0° latitude, 0° elongation should be infinity (sun exclusion)
         let coords = SolarAngularCoordinates::new(0.0, 0.0).unwrap();
-        match zodical.get_brightness(&coords) {
+        match zodiacal.get_brightness(&coords) {
             Ok(brightness) => assert!(!brightness.is_finite()),
             Err(_) => (), // Also acceptable
         }
 
         // At higher latitudes, small elongations should have finite values
         let coords = SolarAngularCoordinates::new(15.0, 15.0).unwrap();
-        let brightness = zodical.get_brightness(&coords).unwrap();
+        let brightness = zodiacal.get_brightness(&coords).unwrap();
         assert!(brightness.is_finite());
         assert!(brightness > 1000.0); // Should be bright near the sun
     }
 
     #[test]
     fn test_zodical_light_minimum_angle() {
-        let zodical = ZodicalLight::new();
+        let zodiacal = ZodiacalLight::new();
 
         // Test the minimum angle where zodiacal light is still measurable
         // This is around 165° elongation and 75° latitude
         let coords = SolarAngularCoordinates::zodiacal_minimum();
-        let min_brightness = zodical.get_brightness(&coords).unwrap();
+        let min_brightness = zodiacal.get_brightness(&coords).unwrap();
         assert!(min_brightness.is_finite());
         assert!(min_brightness > 0.0); // Should be measurable at this point
 
@@ -871,7 +871,7 @@ mod tests {
                 let lat_f64 = lat as f64;
 
                 if let Ok(coords) = SolarAngularCoordinates::new(elong_f64, lat_f64) {
-                    if let Ok(brightness) = zodical.get_brightness(&coords) {
+                    if let Ok(brightness) = zodiacal.get_brightness(&coords) {
                         if brightness.is_finite() {
                             assert!(
                     brightness >= min_brightness,

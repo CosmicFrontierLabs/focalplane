@@ -7,7 +7,7 @@ use shared::image_proc::{save_u8_image, stretch_histogram, u16_to_u8_scaled};
 use shared::units::{Temperature, TemperatureExt};
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::StarInFrame;
-use simulator::photometry::zodical::SolarAngularCoordinates;
+use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::shared_args::{RangeArg, SensorModel, TelescopeModel};
 use simulator::star_data_to_fluxes;
 use simulator::Scene;

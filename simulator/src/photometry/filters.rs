@@ -58,7 +58,7 @@
 
 use super::{quantum_efficiency::QuantumEfficiencyError, QuantumEfficiency};
 
-/// Hardcoded U filter transmission data from the Zodical Light Curve - SpectrumPassbands.csv
+/// Hardcoded U filter transmission data from the Zodiacal Light Curve - SpectrumPassbands.csv
 /// Format: (wavelength_nm, transmission)
 const U_FILTER_DATA: [(f64, f64); 21] = [
     (250.0, 0.0),
@@ -84,7 +84,7 @@ const U_FILTER_DATA: [(f64, f64); 21] = [
     (450.0, 0.0),
 ];
 
-/// Hardcoded B filter transmission data from the Zodical Light Curve - SpectrumPassbands.csv
+/// Hardcoded B filter transmission data from the Zodiacal Light Curve - SpectrumPassbands.csv
 /// Format: (wavelength_nm, transmission)
 const B_FILTER_DATA: [(f64, f64); 23] = [
     (350.0, 0.0),
@@ -112,7 +112,7 @@ const B_FILTER_DATA: [(f64, f64); 23] = [
     (570.0, 0.0),
 ];
 
-/// Hardcoded V filter transmission data from the Zodical Light Curve - SpectrumPassbands.csv
+/// Hardcoded V filter transmission data from the Zodiacal Light Curve - SpectrumPassbands.csv
 /// Format: (wavelength_nm, transmission)
 const V_FILTER_DATA: [(f64, f64); 27] = [
     (450.0, 0.0),

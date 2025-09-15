@@ -14,7 +14,7 @@
 
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::StarInFrame;
-use crate::photometry::zodical::SolarAngularCoordinates;
+use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::star_data_to_fluxes;
 use crate::Scene;
 use core::f64;
@@ -256,7 +256,7 @@ mod tests {
     use super::*;
     use crate::hardware::sensor::models::{ALL_SENSORS, GSENSE4040BSI, HWK4123};
     use crate::hardware::telescope::models::IDEAL_50CM;
-    use crate::photometry::zodical::SolarAngularCoordinates;
+    use crate::photometry::zodiacal::SolarAngularCoordinates;
     use std::time::Duration;
 
     #[test]

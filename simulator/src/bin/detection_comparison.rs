@@ -14,7 +14,7 @@ use simulator::hardware::sensor::models::ALL_SENSORS;
 use simulator::hardware::sensor_noise::generate_sensor_noise;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
-use simulator::photometry::ZodicalLight;
+use simulator::photometry::ZodiacalLight;
 use simulator::shared_args::SharedSimulationArgs;
 use simulator::star_data_to_fluxes;
 use starfield::catalogs::StarData;
@@ -128,14 +128,14 @@ fn test_algorithm(
             None,
         );
 
-        let z_light = ZodicalLight::new();
-        let zodical = z_light.generate_zodical_background(
+        let z_light = ZodiacalLight::new();
+        let zodiacal = z_light.generate_zodiacal_background(
             satellite,
             &args.shared.exposure.0,
             &args.shared.coordinates,
         );
 
-        let noise = &sensor_noise + &zodical;
+        let noise = &sensor_noise + &zodiacal;
         let total_e_image = &e_image + &noise;
         let quantized = quantize_image(&total_e_image, &satellite.sensor);
 

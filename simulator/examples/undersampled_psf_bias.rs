@@ -14,7 +14,7 @@ use simulator::hardware::sensor::models::IMX455;
 use simulator::hardware::telescope::models::IDEAL_50CM;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::StarInFrame;
-use simulator::photometry::zodical::SolarAngularCoordinates;
+use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::star_data_to_fluxes;
 use starfield::catalogs::StarData;

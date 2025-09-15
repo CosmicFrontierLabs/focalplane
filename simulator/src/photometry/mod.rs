@@ -25,7 +25,7 @@
 //! - **RGB conversion**: Human-perceptible stellar color calculation
 //! - **Temperature sequences**: Logarithmic stellar population sampling
 //!
-//! ## Background Models (`zodical`, `stis_zodiacal`)
+//! ## Background Models (`zodiacal`, `stis_zodiacal`)
 //! - **Zodiacal light**: Solar system dust scattering models
 //! - **Scattered light**: Telescope background contributions
 //! - **Angular dependencies**: Solar elongation and ecliptic latitude effects
@@ -123,7 +123,7 @@
 //! - **`human`**: Human cone cell vision models for perceptual color accuracy
 //!
 //! ## Background Modeling
-//! - **`zodical`**: Zodiacal light and scattered light background models
+//! - **`zodiacal`**: Zodiacal light and scattered light background models
 //! - **`stis_zodiacal`**: HST/STIS zodiacal light spectral measurements
 //!
 //! # Physical Accuracy
@@ -148,7 +148,7 @@ pub mod spectrum;
 pub mod stellar;
 pub mod stis_zodiacal;
 pub mod trapezoid;
-pub mod zodical;
+pub mod zodiacal;
 
 pub use color::{
     color_temperature_index, generate_temperature_sequence, rgb_values_to_color,
@@ -162,4 +162,4 @@ pub use spectrum::{Band, Spectrum};
 pub use stellar::{BlackbodyStellarSpectrum, FlatStellarSpectrum};
 pub use stis_zodiacal::STISZodiacalSpectrum;
 pub use trapezoid::trap_integrate;
-pub use zodical::ZodicalLight;
+pub use zodiacal::ZodiacalLight;

@@ -52,7 +52,7 @@
 //! ```ignore
 //! // NOTE: This doctest is ignored because it's computationally expensive - renders 5 different exposures
 //! use simulator::Scene;
-//! use simulator::photometry::zodical::SolarAngularCoordinates;
+//! use simulator::photometry::zodiacal::SolarAngularCoordinates;
 //! use std::time::Duration;
 //!
 //! # use simulator::hardware::{telescope::models::IDEAL_50CM, sensor::models::GSENSE6510BSI};
@@ -82,7 +82,7 @@
 //! // NOTE: This doctest is ignored because it's computationally expensive - renders multiple scenes
 //! use simulator::Scene;
 //! use simulator::hardware::SatelliteConfig;
-//! use simulator::photometry::zodical::SolarAngularCoordinates;
+//! use simulator::photometry::zodiacal::SolarAngularCoordinates;
 //! use starfield::{Equatorial, catalogs::load_catalog};
 //! use std::time::Duration;
 //!
@@ -161,7 +161,7 @@
 
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::{project_stars_to_pixels, Renderer, RenderingResult, StarInFrame};
-use crate::photometry::zodical::SolarAngularCoordinates;
+use crate::photometry::zodiacal::SolarAngularCoordinates;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::time::Duration;
