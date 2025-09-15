@@ -25,10 +25,6 @@
 //! then save in standard image formats. Handles coordinate transformations
 //! and provides both automatic and fixed scaling options.
 
-pub mod fits;
-
-pub use fits::{read_fits_to_hashmap, write_typed_fits, FitsDataType, FitsError};
-
 use crate::algo::MinMaxScan;
 use ndarray::Array2;
 use std::error::Error;

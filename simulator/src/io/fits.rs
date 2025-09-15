@@ -221,8 +221,8 @@ pub fn write_typed_fits<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image_proc::test_patterns::*;
     use ndarray::Array2;
+    use shared::image_proc::test_patterns::*;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;

@@ -35,7 +35,6 @@ use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::image_proc::detection::{detect_stars_unified, StarFinder};
 use shared::image_proc::histogram_stretch::sigma_stretch;
 use shared::image_proc::image::array2_to_gray_image;
-use shared::image_proc::io::{write_typed_fits, FitsDataType};
 use shared::image_proc::{
     draw_stars_with_x_markers, save_u8_image, stretch_histogram, u16_to_u8_scaled, StarDetection,
 };
@@ -43,6 +42,7 @@ use shared::viz::histogram::{Histogram, HistogramConfig, Scale};
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::{RenderingResult, StarInFrame};
+use simulator::io::{write_typed_fits, FitsDataType};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{RangeArg, SharedSimulationArgs};

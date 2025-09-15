@@ -120,6 +120,7 @@
 pub mod algo; // misc module lives here
 pub mod hardware;
 pub mod image_proc; // render module lives here
+pub mod io;
 pub mod photometry;
 pub mod scene;
 pub mod shared_args;
