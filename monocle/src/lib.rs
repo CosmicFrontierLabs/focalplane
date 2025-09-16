@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+pub mod filters;
+
 /// ROI (Region of Interest) around a guide star
 #[derive(Debug, Clone)]
 pub struct Roi {
@@ -539,20 +541,82 @@ impl FineGuidanceSystem {
             .ok_or("No accumulated frame available for calibration")?;
 
         // Detect stars in the averaged frame
-        self.detected_stars = detect_stars(&averaged_frame.view(), None);
+        let detections = detect_stars(&averaged_frame.view(), None);
+        self.detected_stars = detections.clone();
 
-        // Sort by flux (brightest first)
+        // Apply filters for guide star selection
+        let image_shape = averaged_frame.dim();
+        let image_diagonal =
+            ((image_shape.0 as f64).powi(2) + (image_shape.1 as f64).powi(2)).sqrt();
+
+        // Filter and score stars
+        let mut candidates: Vec<(StarDetection, f64)> = detections
+            .into_iter()
+            .filter(|star| {
+                // Basic shape filter
+                star.aspect_ratio < 2.5 && star.diameter > 2.0 && star.diameter < 20.0
+            })
+            .filter(|star| {
+                // SNR filter
+                let snr = filters::calculate_snr(star, &averaged_frame.view(), star.diameter / 2.0);
+                snr >= self.config.min_guide_star_snr
+            })
+            .map(|star| {
+                // Calculate quality score
+                let snr =
+                    filters::calculate_snr(&star, &averaged_frame.view(), star.diameter / 2.0);
+                let distance = filters::distance_from_center(&star, image_shape);
+                let quality = filters::calculate_quality_score(
+                    snr,
+                    distance,
+                    star.aspect_ratio,
+                    image_diagonal,
+                    (0.4, 0.3, 0.3), // SNR, position, PSF weights
+                );
+                (star, quality)
+            })
+            .collect();
+
+        // Sort by quality score
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Select top candidates
+        let selected_stars: Vec<StarDetection> = candidates
+            .into_iter()
+            .take(self.config.max_guide_stars)
+            .map(|(star, _)| star)
+            .collect();
+
+        // Convert to GuideStar objects with ROIs
+        self.guide_stars = selected_stars
+            .iter()
+            .enumerate()
+            .map(|(idx, star)| GuideStar {
+                id: idx,
+                x: star.x,
+                y: star.y,
+                flux: star.flux,
+                snr: filters::calculate_snr(star, &averaged_frame.view(), star.diameter / 2.0),
+                roi: Roi {
+                    center_x: star.x,
+                    center_y: star.y,
+                    width: self.config.roi_size,
+                    height: self.config.roi_size,
+                    reference_x: star.x,
+                    reference_y: star.y,
+                },
+            })
+            .collect();
+
+        // Sort detected stars by flux for compatibility
         self.detected_stars
             .sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap());
 
         log::info!(
-            "Detected {} stars in calibration frame",
-            self.detected_stars.len()
+            "Detected {} stars, selected {} guide stars for tracking",
+            self.detected_stars.len(),
+            self.guide_stars.len()
         );
-
-        // TODO: Select guide stars from detections
-        // TODO: Create ROIs around selected stars
-        // TODO: Store reference positions
 
         Ok(())
     }
