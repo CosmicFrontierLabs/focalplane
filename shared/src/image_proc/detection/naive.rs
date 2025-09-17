@@ -202,14 +202,9 @@ pub fn calculate_star_centroid(
     let sub_image = image.slice(ndarray::s![min_row..=max_row, min_col..=max_col]);
 
     // Create binary mask for the label
-    let mut mask = Array2::<f64>::zeros((height, width));
-    for row in 0..height {
-        for col in 0..width {
-            if labeled[[min_row + row, min_col + col]] == label {
-                mask[[row, col]] = 1.0;
-            }
-        }
-    }
+    let mask = Array2::from_shape_fn((height, width), |(row, col)| {
+        labeled[[min_row + row, min_col + col]] == label
+    });
 
     // Compute centroid using the new function
     let centroid_result = compute_centroid_from_mask(&sub_image, &mask.view());

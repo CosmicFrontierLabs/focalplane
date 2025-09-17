@@ -27,24 +27,50 @@ pub struct CentroidResult {
     pub aspect_ratio: f64,
     /// Estimated object diameter in pixels
     pub diameter: f64,
+    /// Saturation tracking: (cutoff value, count of pixels above cutoff)
+    pub n_saturated: (f64, u32),
 }
 
 /// Calculate centroid and shape moments from image data and binary mask
 ///
 /// Computes intensity-weighted center-of-mass and second-order moments
 /// for accurate sub-pixel position determination and shape characterization.
+/// Uses a default saturation cutoff of 65535.0 (16-bit max).
 ///
 /// # Arguments
 ///
 /// * `image` - Sub-image containing the object (AABB size)
-/// * `mask` - Binary mask (same size as image) with 1.0 where pixels belong to object
+/// * `mask` - Binary mask (same size as image) with true where pixels belong to object
 ///
 /// # Returns
 ///
 /// CentroidResult with position relative to sub-image origin and shape parameters
 pub fn compute_centroid_from_mask(
     image: &ArrayView2<f64>,
-    mask: &ArrayView2<f64>,
+    mask: &ArrayView2<bool>,
+) -> CentroidResult {
+    compute_centroid_from_mask_with_saturation(image, mask, 65535.0)
+}
+
+/// Calculate centroid and shape moments with custom saturation threshold
+///
+/// Computes intensity-weighted center-of-mass and second-order moments
+/// for accurate sub-pixel position determination and shape characterization,
+/// while counting pixels above the specified saturation threshold.
+///
+/// # Arguments
+///
+/// * `image` - Sub-image containing the object (AABB size)
+/// * `mask` - Binary mask (same size as image) with true where pixels belong to object
+/// * `saturation_cutoff` - Intensity threshold for counting saturated pixels
+///
+/// # Returns
+///
+/// CentroidResult with position, shape parameters, and saturation statistics
+pub fn compute_centroid_from_mask_with_saturation(
+    image: &ArrayView2<f64>,
+    mask: &ArrayView2<bool>,
+    saturation_cutoff: f64,
 ) -> CentroidResult {
     assert_eq!(
         image.shape(),
@@ -59,12 +85,17 @@ pub fn compute_centroid_from_mask(
     let mut m20 = 0.0; // Second moment in x
     let mut m02 = 0.0; // Second moment in y
     let mut m11 = 0.0; // Cross moment
+    let mut n_saturated: u32 = 0; // Count of saturated pixels
 
     // Calculate raw moments
     for ((row, col), &mask_val) in mask.indexed_iter() {
-        if mask_val > 0.5 {
-            // Binary threshold for mask
+        if mask_val {
             let intensity = image[[row, col]];
+
+            // Check for saturation
+            if intensity > saturation_cutoff {
+                n_saturated += 1;
+            }
 
             // Use intensity as weight
             m00 += intensity;
@@ -87,6 +118,7 @@ pub fn compute_centroid_from_mask(
             m_xy: 0.0,
             aspect_ratio: f64::INFINITY,
             diameter: 0.0,
+            n_saturated: (saturation_cutoff, n_saturated),
         };
     }
 
@@ -126,6 +158,7 @@ pub fn compute_centroid_from_mask(
         m_xy: mu11,
         aspect_ratio,
         diameter,
+        n_saturated: (saturation_cutoff, n_saturated),
     }
 }
 
@@ -137,11 +170,11 @@ mod tests {
     #[test]
     fn test_centroid_single_pixel() {
         let image = Array2::from_elem((3, 3), 0.0);
-        let mut mask = Array2::from_elem((3, 3), 0.0);
+        let mut mask = Array2::from_elem((3, 3), false);
         let mut image_mut = image.clone();
 
         image_mut[[1, 1]] = 100.0;
-        mask[[1, 1]] = 1.0;
+        mask[[1, 1]] = true;
 
         let result = compute_centroid_from_mask(&image_mut.view(), &mask.view());
 
@@ -153,19 +186,19 @@ mod tests {
     #[test]
     fn test_centroid_symmetric_pattern() {
         let mut image = Array2::from_elem((5, 5), 0.0);
-        let mut mask = Array2::from_elem((5, 5), 0.0);
+        let mut mask = Array2::from_elem((5, 5), false);
 
         // Create symmetric cross pattern
         image[[2, 1]] = 50.0;
-        mask[[2, 1]] = 1.0;
+        mask[[2, 1]] = true;
         image[[2, 2]] = 100.0;
-        mask[[2, 2]] = 1.0;
+        mask[[2, 2]] = true;
         image[[2, 3]] = 50.0;
-        mask[[2, 3]] = 1.0;
+        mask[[2, 3]] = true;
         image[[1, 2]] = 50.0;
-        mask[[1, 2]] = 1.0;
+        mask[[1, 2]] = true;
         image[[3, 2]] = 50.0;
-        mask[[3, 2]] = 1.0;
+        mask[[3, 2]] = true;
 
         let result = compute_centroid_from_mask(&image.view(), &mask.view());
 
@@ -177,26 +210,26 @@ mod tests {
     #[test]
     fn test_moments_and_aspect_ratio() {
         let mut image = Array2::from_elem((7, 7), 0.0);
-        let mut mask = Array2::from_elem((7, 7), 0.0);
+        let mut mask = Array2::from_elem((7, 7), false);
 
         // Create elongated horizontal pattern (should have aspect ratio > 1)
         // Pattern centered at (3, 3) with more spread in x than y
         image[[3, 1]] = 25.0;
-        mask[[3, 1]] = 1.0;
+        mask[[3, 1]] = true;
         image[[3, 2]] = 50.0;
-        mask[[3, 2]] = 1.0;
+        mask[[3, 2]] = true;
         image[[3, 3]] = 100.0;
-        mask[[3, 3]] = 1.0;
+        mask[[3, 3]] = true;
         image[[3, 4]] = 50.0;
-        mask[[3, 4]] = 1.0;
+        mask[[3, 4]] = true;
         image[[3, 5]] = 25.0;
-        mask[[3, 5]] = 1.0;
+        mask[[3, 5]] = true;
 
         // Add slight vertical component to make it 2D
         image[[2, 3]] = 25.0;
-        mask[[2, 3]] = 1.0;
+        mask[[2, 3]] = true;
         image[[4, 3]] = 25.0;
-        mask[[4, 3]] = 1.0;
+        mask[[4, 3]] = true;
 
         let result = compute_centroid_from_mask(&image.view(), &mask.view());
 
@@ -248,7 +281,7 @@ mod tests {
     #[test]
     fn test_circular_pattern_aspect_ratio() {
         let mut image = Array2::from_elem((7, 7), 0.0);
-        let mut mask = Array2::from_elem((7, 7), 0.0);
+        let mut mask = Array2::from_elem((7, 7), false);
 
         // Create roughly circular Gaussian-like pattern
         // Should have aspect ratio close to 1.0
@@ -263,7 +296,7 @@ mod tests {
                 if intensity > 10.0 {
                     // Threshold to create mask
                     image[[i, j]] = intensity;
-                    mask[[i, j]] = 1.0;
+                    mask[[i, j]] = true;
                 }
             }
         }
@@ -288,12 +321,12 @@ mod tests {
     #[test]
     fn test_diagonal_pattern_moments() {
         let mut image = Array2::from_elem((7, 7), 0.0);
-        let mut mask = Array2::from_elem((7, 7), 0.0);
+        let mut mask = Array2::from_elem((7, 7), false);
 
         // Create diagonal pattern - should have non-zero m_xy
         for i in 1..6 {
             image[[i, i]] = 100.0;
-            mask[[i, i]] = 1.0;
+            mask[[i, i]] = true;
         }
 
         let result = compute_centroid_from_mask(&image.view(), &mask.view());
@@ -310,6 +343,77 @@ mod tests {
         assert!(
             (moment_ratio - 1.0).abs() < 0.1,
             "m_xx/m_yy should be close to 1.0 for diagonal pattern, got {moment_ratio}"
+        );
+    }
+
+    #[test]
+    fn test_saturation_counting() {
+        let mut image = Array2::from_elem((5, 5), 0.0);
+        let mut mask = Array2::from_elem((5, 5), false);
+
+        // Create pattern with mix of saturated and non-saturated pixels
+        image[[2, 1]] = 50.0; // Below cutoff
+        mask[[2, 1]] = true;
+        image[[2, 2]] = 100.0; // At cutoff
+        mask[[2, 2]] = true;
+        image[[2, 3]] = 150.0; // Above cutoff
+        mask[[2, 3]] = true;
+        image[[1, 2]] = 200.0; // Above cutoff
+        mask[[1, 2]] = true;
+        image[[3, 2]] = 75.0; // Below cutoff
+        mask[[3, 2]] = true;
+
+        // Test with cutoff at 100.0
+        let result = compute_centroid_from_mask_with_saturation(&image.view(), &mask.view(), 100.0);
+
+        // Should have 2 saturated pixels (150.0 and 200.0)
+        assert_eq!(result.n_saturated.0, 100.0, "Cutoff should be 100.0");
+        assert_eq!(result.n_saturated.1, 2, "Should have 2 saturated pixels");
+        assert!(
+            (result.flux - 575.0).abs() < 1e-10,
+            "Total flux should be 575.0"
+        );
+
+        // Test with higher cutoff
+        let result_high =
+            compute_centroid_from_mask_with_saturation(&image.view(), &mask.view(), 180.0);
+        assert_eq!(result_high.n_saturated.0, 180.0, "Cutoff should be 180.0");
+        assert_eq!(
+            result_high.n_saturated.1, 1,
+            "Should have 1 saturated pixel"
+        );
+
+        // Test with low cutoff (all saturated)
+        let result_low =
+            compute_centroid_from_mask_with_saturation(&image.view(), &mask.view(), 40.0);
+        assert_eq!(result_low.n_saturated.0, 40.0, "Cutoff should be 40.0");
+        assert_eq!(
+            result_low.n_saturated.1, 5,
+            "All 5 pixels should be saturated"
+        );
+    }
+
+    #[test]
+    fn test_default_saturation_cutoff() {
+        let mut image = Array2::from_elem((3, 3), 0.0);
+        let mut mask = Array2::from_elem((3, 3), false);
+
+        // Create a very bright pixel
+        image[[1, 1]] = 70000.0; // Above default 16-bit max (65535)
+        mask[[1, 1]] = true;
+        image[[1, 2]] = 30000.0; // Below default cutoff
+        mask[[1, 2]] = true;
+
+        // Using default function should use 65535.0 as cutoff
+        let result = compute_centroid_from_mask(&image.view(), &mask.view());
+
+        assert_eq!(
+            result.n_saturated.0, 65535.0,
+            "Default cutoff should be 65535.0"
+        );
+        assert_eq!(
+            result.n_saturated.1, 1,
+            "Should have 1 saturated pixel above 65535"
         );
     }
 }
