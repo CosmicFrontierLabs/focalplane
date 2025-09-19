@@ -13,17 +13,17 @@ use std::time::Instant;
 
 pub mod filters;
 
+use shared::image_proc::detection::aabb::AABB;
+
 /// ROI (Region of Interest) around a guide star
 #[derive(Debug, Clone)]
 pub struct Roi {
-    /// Center X position in full frame
+    /// Bounding box in pixel coordinates
+    pub bounds: AABB,
+    /// Nominal center X position in full frame (f64 for sub-pixel precision)
     pub center_x: f64,
-    /// Center Y position in full frame
+    /// Nominal center Y position in full frame (f64 for sub-pixel precision)
     pub center_y: f64,
-    /// Width of ROI in pixels
-    pub width: usize,
-    /// Height of ROI in pixels  
-    pub height: usize,
     /// Reference centroid position (from calibration)
     pub reference_x: f64,
     /// Reference centroid position (from calibration)
@@ -187,8 +187,6 @@ pub enum TrackingLostReason {
     SignalTooWeak,
     /// Target moved out of bounds
     OutOfBounds,
-    /// Target was occluded
-    Occlusion,
     /// User requested stop
     UserRequested,
     /// System error occurred
@@ -609,10 +607,18 @@ impl FineGuidanceSystem {
                 flux: star.flux,
                 snr: filters::calculate_snr(star, &averaged_frame.view(), star.diameter / 2.0),
                 roi: Roi {
+                    bounds: AABB::from_coords(
+                        (star.y as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
+                        (star.x as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
+                        ((star.y as i32 + self.config.roi_size as i32 / 2)
+                            .min(averaged_frame.shape()[0] as i32 - 1))
+                            as usize,
+                        ((star.x as i32 + self.config.roi_size as i32 / 2)
+                            .min(averaged_frame.shape()[1] as i32 - 1))
+                            as usize,
+                    ),
                     center_x: star.x,
                     center_y: star.y,
-                    width: self.config.roi_size,
-                    height: self.config.roi_size,
                     reference_x: star.x,
                     reference_y: star.y,
                 },
