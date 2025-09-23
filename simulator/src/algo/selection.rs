@@ -809,7 +809,7 @@ mod tests {
         assert!(!selector.filter_snr(&low_snr_detection, &image.view()));
 
         // Test 3: Custom SNR threshold
-        let mut custom_selector = GuideStarSelector::with_parameters(
+        let custom_selector = GuideStarSelector::with_parameters(
             satellite.clone(),
             5.0, // Lower SNR threshold
             0.1,

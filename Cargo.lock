@@ -1958,6 +1958,8 @@ dependencies = [
  "ndarray 0.15.6",
  "serde",
  "shared",
+ "simulator",
+ "starfield",
 ]
 
 [[package]]
