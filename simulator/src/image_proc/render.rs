@@ -6,11 +6,12 @@ use starfield::{catalogs::StarData, Equatorial};
 use crate::{
     hardware::{sensor_noise::generate_sensor_noise, SatelliteConfig, SensorConfig},
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
-    star_math::{field_diameter, star_data_to_fluxes, StarProjector},
+    star_math::{field_diameter, star_data_to_fluxes},
 };
 use shared::{
     algo::icp::Locatable2d,
     image_proc::noise::apply_poisson_photon_noise,
+    star_projector::StarProjector,
     units::{AngleExt, Area},
 };
 
