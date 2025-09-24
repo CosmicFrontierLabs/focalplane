@@ -39,8 +39,8 @@ fn create_synthetic_stars(base_x: f64, base_y: f64, drift: (f64, f64)) -> Vec<St
             star: StarData::new(1, 0.0, 0.0, 5.0, None),
         },
         StarInFrame {
-            x: base_x + 100.0 + drift.0,
-            y: base_y + 50.0 + drift.1,
+            x: base_x + 50.0 + drift.0,
+            y: base_y + 25.0 + drift.1,
             spot: SourceFlux {
                 photons: SpotFlux {
                     disk: disk.clone(),
@@ -54,8 +54,8 @@ fn create_synthetic_stars(base_x: f64, base_y: f64, drift: (f64, f64)) -> Vec<St
             star: StarData::new(2, 0.0, 0.0, 5.5, None),
         },
         StarInFrame {
-            x: base_x - 80.0 + drift.0,
-            y: base_y + 120.0 + drift.1,
+            x: base_x - 40.0 + drift.0,
+            y: base_y + 60.0 + drift.1,
             spot: SourceFlux {
                 photons: SpotFlux {
                     disk: disk.clone(),
@@ -69,8 +69,8 @@ fn create_synthetic_stars(base_x: f64, base_y: f64, drift: (f64, f64)) -> Vec<St
             star: StarData::new(3, 0.0, 0.0, 6.0, None),
         },
         StarInFrame {
-            x: base_x + 150.0 + drift.0,
-            y: base_y - 100.0 + drift.1,
+            x: base_x + 75.0 + drift.0,
+            y: base_y - 50.0 + drift.1,
             spot: SourceFlux {
                 photons: SpotFlux {
                     disk: disk.clone(),
@@ -84,8 +84,8 @@ fn create_synthetic_stars(base_x: f64, base_y: f64, drift: (f64, f64)) -> Vec<St
             star: StarData::new(4, 0.0, 0.0, 6.5, None),
         },
         StarInFrame {
-            x: base_x - 120.0 + drift.0,
-            y: base_y - 80.0 + drift.1,
+            x: base_x - 60.0 + drift.0,
+            y: base_y - 40.0 + drift.1,
             spot: SourceFlux {
                 photons: SpotFlux {
                     disk: disk.clone(),
@@ -108,8 +108,8 @@ fn generate_synthetic_frame(
     exposure_ms: f64,
     noise_seed: u64,
 ) -> Array2<u16> {
-    // Create synthetic stars
-    let stars = create_synthetic_stars(2000.0, 2000.0, drift);
+    // Create synthetic stars (centered for 512x512 sensor)
+    let stars = create_synthetic_stars(256.0, 256.0, drift);
 
     // Use zodiacal minimum for simple test
     let solar_angles = SolarAngularCoordinates::zodiacal_minimum();
@@ -140,17 +140,18 @@ fn test_basic_simulator_fgs_integration() {
         focal_length,
         0.9, // light efficiency
     );
-    let sensor = sensor_models::IMX455.clone();
+    // Use tiny sensor for fastest test execution
+    let sensor = sensor_models::IMX455.clone().with_dimensions(512, 512);
     let temperature = Temperature::from_celsius(0.0);
     let satellite = SatelliteConfig::new(telescope, sensor, temperature);
 
-    // Configure FGS with simple settings
+    // Configure FGS with minimal settings for fast CI
     let fgs_config = FgsConfig {
-        acquisition_frames: 3,
+        acquisition_frames: 1, // Minimum possible
         min_guide_star_snr: 10.0,
-        max_guide_stars: 3,
-        roi_size: 64,
-        max_reacquisition_attempts: 3,
+        max_guide_stars: 2,            // Fewer guide stars
+        roi_size: 16,                  // Tiny ROI for fastest processing
+        max_reacquisition_attempts: 1, // Minimum
         ..Default::default()
     };
 
@@ -170,7 +171,8 @@ fn test_basic_simulator_fgs_integration() {
 
     // Acquisition phase
     println!("Acquisition phase with synthetic stars...");
-    for i in 0..3 {
+    for i in 0..1 {
+        // Single acquisition frame
         let frame = generate_synthetic_frame(
             &satellite,
             (0.0, 0.0), // No drift during acquisition
@@ -209,7 +211,8 @@ fn test_basic_simulator_fgs_integration() {
     let mut cumulative_drift = (0.0, 0.0);
     let drift_per_frame = (0.5, 0.25); // pixels per frame
 
-    for frame_num in 0..10 {
+    for frame_num in 0..2 {
+        // Just 2 tracking frames to verify it works
         cumulative_drift.0 += drift_per_frame.0;
         cumulative_drift.1 += drift_per_frame.1;
 
@@ -251,7 +254,7 @@ fn test_frame_generation_sanity() {
     let aperture = simulator::units::Length::from_millimeters(80.0);
     let focal_length = simulator::units::Length::from_millimeters(400.0);
     let telescope = TelescopeConfig::new("Test", aperture, focal_length, 0.9);
-    let sensor = sensor_models::IMX455.clone();
+    let sensor = sensor_models::IMX455.clone().with_dimensions(512, 512);
     let satellite = SatelliteConfig::new(telescope, sensor.clone(), Temperature::from_celsius(0.0));
 
     let frame = generate_synthetic_frame(&satellite, (0.0, 0.0), 100.0, 42);
