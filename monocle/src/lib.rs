@@ -20,6 +20,9 @@ pub mod v4l2_camera;
 // Test motion patterns
 pub mod test_motions;
 
+// Tracking visualization
+pub mod tracking_plots;
+
 use shared::image_proc::detection::aabb::AABB;
 
 /// ROI (Region of Interest) around a guide star

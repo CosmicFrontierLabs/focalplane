@@ -1956,6 +1956,7 @@ dependencies = [
  "env_logger",
  "log",
  "ndarray 0.15.6",
+ "plotters",
  "rand",
  "rand_chacha",
  "serde",
