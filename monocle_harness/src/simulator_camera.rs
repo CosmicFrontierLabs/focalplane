@@ -8,6 +8,7 @@ use shared::camera_interface::{
     AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata,
 };
 use shared::image_proc::detection::AABB;
+use shared::units::TemperatureExt;
 use simulator::hardware::{SatelliteConfig, TelescopeConfig};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
@@ -16,6 +17,9 @@ use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+
+/// Default pointing direction (RA=0, Dec=0)
+const DEFAULT_POINTING: Equatorial = Equatorial { ra: 0.0, dec: 0.0 };
 
 /// Camera state for continuous capture mode
 struct ContinuousCaptureState {
@@ -47,23 +51,22 @@ pub struct SimulatorCamera {
 }
 
 impl SimulatorCamera {
-    /// Create a new simulator camera with a star catalog and initial pointing
-    pub fn new(satellite: SatelliteConfig, catalog: BinaryCatalog, pointing: Equatorial) -> Self {
+    /// Create a new simulator camera with a star catalog (default pointing at RA=0, Dec=0)
+    pub fn new(satellite: SatelliteConfig, catalog: BinaryCatalog) -> Self {
         let sensor = &satellite.sensor;
         let (width, height) = sensor.dimensions.get_pixel_width_height();
 
         let config = CameraConfig {
             width,
             height,
-            default_exposure: Duration::from_millis(100),
-            temperature_c: 0.0,
+            exposure: Duration::from_millis(100),
         };
 
         Self {
             config,
             satellite,
             catalog: Some(catalog),
-            pointing,
+            pointing: DEFAULT_POINTING,
             roi: None,
             exposure: Duration::from_millis(100),
             frame_number: 0,
@@ -82,20 +85,28 @@ impl SimulatorCamera {
         sensor: simulator::SensorConfig,
         temperature_c: f64,
         catalog: BinaryCatalog,
-        pointing: Equatorial,
     ) -> Self {
         use simulator::units::{Temperature, TemperatureExt};
         let satellite =
             SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(temperature_c));
 
-        let mut camera = Self::new(satellite, catalog, pointing);
-        camera.config.temperature_c = temperature_c;
-        camera
+        Self::new(satellite, catalog)
     }
 
     /// Get the satellite configuration
     pub fn satellite_config(&self) -> &SatelliteConfig {
         &self.satellite
+    }
+
+    /// Get the current pointing
+    pub fn pointing(&self) -> Equatorial {
+        self.pointing
+    }
+
+    /// Set the pointing (convenience method that returns Result)
+    pub fn set_pointing(&mut self, pointing: Equatorial) -> CameraResult<()> {
+        self.pointing = pointing;
+        Ok(())
     }
 
     /// Generate a frame using the simulator
@@ -139,11 +150,6 @@ impl SimulatorCamera {
 }
 
 impl CameraInterface for SimulatorCamera {
-    fn set_pointing(&mut self, pointing: Equatorial) -> CameraResult<()> {
-        self.pointing = pointing;
-        Ok(())
-    }
-
     fn set_roi(&mut self, roi: AABB) -> CameraResult<()> {
         roi.validate_for_sensor(self.config.width, self.config.height)?;
         self.roi = Some(roi);
@@ -172,7 +178,7 @@ impl CameraInterface for SimulatorCamera {
             timestamp: SystemTime::now(),
             pointing: Some(self.pointing),
             roi: self.roi,
-            temperature_c: self.config.temperature_c,
+            temperature_c: self.satellite.temperature.as_celsius(),
         };
 
         Ok((frame, metadata))
@@ -197,11 +203,7 @@ impl CameraInterface for SimulatorCamera {
     }
 
     fn is_ready(&self) -> bool {
-        true // Always ready since pointing is now required
-    }
-
-    fn get_pointing(&self) -> Option<Equatorial> {
-        Some(self.pointing)
+        true // Always ready
     }
 
     fn get_roi(&self) -> Option<AABB> {
@@ -281,7 +283,7 @@ mod tests {
         let catalog = create_test_catalog();
         let pointing = Equatorial::from_degrees(83.0, -5.0);
 
-        SimulatorCamera::with_config(telescope, sensor, 0.0, catalog, pointing)
+        SimulatorCamera::with_config(telescope, sensor, 0.0, catalog)
     }
 
     #[test]
@@ -289,7 +291,8 @@ mod tests {
         let camera = create_test_camera();
         assert_eq!(camera.get_exposure(), Duration::from_millis(100));
         assert!(camera.is_ready()); // Always ready now
-        assert!(camera.get_pointing().is_some());
+                                    // Camera has default pointing at (0, 0)
+        assert_eq!(camera.pointing(), DEFAULT_POINTING);
 
         // Verify sensor dimensions are 1024x1024
         let config = camera.get_config();
@@ -305,7 +308,7 @@ mod tests {
         let pointing = Equatorial::from_degrees(0.0, 0.0);
         assert!(camera.set_pointing(pointing).is_ok());
         assert!(camera.is_ready());
-        assert_eq!(camera.get_pointing(), Some(pointing));
+        assert_eq!(camera.pointing(), pointing);
 
         // Set valid ROI
         let roi = AABB {

@@ -66,10 +66,8 @@ pub struct CameraConfig {
     pub width: usize,
     /// Sensor height in pixels
     pub height: usize,
-    /// Default exposure duration
-    pub default_exposure: Duration,
-    /// Sensor temperature in Celsius
-    pub temperature_c: f64,
+    /// Exposure duration
+    pub exposure: Duration,
 }
 
 /// Trait for unified camera interface
@@ -77,16 +75,6 @@ pub struct CameraConfig {
 /// This trait abstracts camera operations to allow testing with the simulator
 /// and deployment with real hardware using the same interface.
 pub trait CameraInterface: Send + Sync {
-    /// Set telescope pointing direction
-    ///
-    /// # Arguments
-    /// * `pointing` - Equatorial coordinates for telescope pointing
-    ///
-    /// # Returns
-    /// * `Ok(())` on successful pointing update
-    /// * `Err(CameraError)` if pointing cannot be set
-    fn set_pointing(&mut self, pointing: Equatorial) -> CameraResult<()>;
-
     /// Set region of interest for readout
     ///
     /// # Arguments
@@ -121,9 +109,6 @@ pub trait CameraInterface: Send + Sync {
 
     /// Check if camera is ready to capture
     fn is_ready(&self) -> bool;
-
-    /// Get current pointing (if set)
-    fn get_pointing(&self) -> Option<Equatorial>;
 
     /// Get current ROI (if set)
     fn get_roi(&self) -> Option<AABB>;

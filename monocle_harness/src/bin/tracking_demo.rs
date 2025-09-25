@@ -103,7 +103,9 @@ fn create_test_camera(pointing: Equatorial) -> SimulatorCamera {
     let catalog = create_test_catalog();
     let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
 
-    SimulatorCamera::new(satellite, catalog, pointing)
+    let mut camera = SimulatorCamera::new(satellite, catalog);
+    camera.set_pointing(pointing).unwrap();
+    camera
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
