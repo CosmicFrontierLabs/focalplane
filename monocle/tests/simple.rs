@@ -25,7 +25,6 @@ fn test_single_stationary_star() {
     let image_config = SyntheticImageConfig {
         width: 256,
         height: 256,
-        background_level: 100.0,
         read_noise_std: 3.0,         // Low noise for reliable detection
         include_photon_noise: false, // Disable for simpler test
         seed: 42,
@@ -39,10 +38,7 @@ fn test_single_stationary_star() {
 
     println!("Frame stats:");
     println!("  Size: {}x{}", image_config.width, image_config.height);
-    println!(
-        "  Background: {} + noise (std={})",
-        image_config.background_level, image_config.read_noise_std
-    );
+    println!("  Noise (std={})", image_config.read_noise_std);
     println!(
         "  Star: pos=({:.1}, {:.1}), peak={:.0}, FWHM={:.1} pixels",
         stars[0].x, stars[0].y, stars[0].peak_flux, stars[0].fwhm

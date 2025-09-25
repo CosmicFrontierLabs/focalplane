@@ -426,15 +426,21 @@ impl FineGuidanceSystem {
         // Estimate noise level using Chen et al. 2015 method
         let noise_level = estimate_noise_level(&averaged_frame.view(), 8);
 
-        // Calculate 5-sigma threshold for detection
-        let detection_threshold = 5.0 * noise_level;
+        // Calculate detection threshold using configurable sigma multiplier
+        // Note: For images without background, this is appropriate
+        let detection_threshold = self.config.detection_threshold_sigma * noise_level;
 
         log::info!(
-            "Estimated noise level: {noise_level:.2}, using 5-sigma threshold: {detection_threshold:.2}"
+            "Estimated noise level: {noise_level:.2}, using {}-sigma threshold: {detection_threshold:.2}",
+            self.config.detection_threshold_sigma
         );
 
         // Detect stars in the averaged frame with 5-sigma threshold
+        log::debug!(
+            "Using detection threshold: {detection_threshold:.2}, background estimate: {noise_level:.2}"
+        );
         let detections = detect_stars(&averaged_frame.view(), Some(detection_threshold));
+        log::debug!("Raw detections from detector: {} stars", detections.len());
         self.detected_stars = detections.clone();
 
         log::debug!("Detected {} raw stars before filtering", detections.len());

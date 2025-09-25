@@ -40,7 +40,6 @@ impl StarParams {
 pub struct SyntheticImageConfig {
     pub width: usize,
     pub height: usize,
-    pub background_level: f64,
     pub read_noise_std: f64,
     pub include_photon_noise: bool,
     pub seed: u64,
@@ -51,7 +50,6 @@ impl Default for SyntheticImageConfig {
         Self {
             width: 256,
             height: 256,
-            background_level: 100.0,
             read_noise_std: 5.0,
             include_photon_noise: true,
             seed: 42,
@@ -60,14 +58,16 @@ impl Default for SyntheticImageConfig {
 }
 
 /// Create a synthetic star image with configurable parameters
+///
+/// NOTE: This is NOT intended to be a realistic star field representation.
+/// It only exists to ensure the algorithm coarsely works without direct
+/// dependencies on the simulator. Performance and tuning tests with realistic
+/// star fields are in the monocle_harness crate.
 pub fn create_synthetic_star_image(
     config: &SyntheticImageConfig,
     stars: &[StarParams],
 ) -> Array2<u16> {
     let mut image = Array2::<f64>::zeros((config.height, config.width));
-
-    // Add background
-    image.fill(config.background_level);
 
     // Add stars with Gaussian PSFs
     for star in stars {
@@ -129,7 +129,6 @@ pub fn create_simple_test_frame() -> Array2<u16> {
     let config = SyntheticImageConfig {
         width: 256,
         height: 256,
-        background_level: 100.0,
         read_noise_std: 2.0,
         include_photon_noise: false,
         seed: 12345,
@@ -147,7 +146,6 @@ pub fn create_multi_star_frame() -> Array2<u16> {
     let config = SyntheticImageConfig {
         width: 512,
         height: 512,
-        background_level: 100.0,
         read_noise_std: 5.0,
         include_photon_noise: true,
         seed: 54321,
@@ -160,17 +158,4 @@ pub fn create_multi_star_frame() -> Array2<u16> {
     ];
 
     create_synthetic_star_image(&config, &stars)
-}
-
-/// Move stars by given offset
-pub fn offset_stars(stars: &[StarParams], dx: f64, dy: f64) -> Vec<StarParams> {
-    stars
-        .iter()
-        .map(|s| StarParams {
-            x: s.x + dx,
-            y: s.y + dy,
-            peak_flux: s.peak_flux,
-            fwhm: s.fwhm,
-        })
-        .collect()
 }

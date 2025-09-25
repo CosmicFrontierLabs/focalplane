@@ -28,6 +28,8 @@ pub struct FgsConfig {
     pub centroid_method: CentroidMethod,
     /// Multiplier for FWHM to determine centroid computation radius (e.g., 5.0 for 5x FWHM)
     pub centroid_radius_multiplier: f64,
+    /// Detection threshold multiplier for noise level (e.g., 5.0 for 5-sigma)
+    pub detection_threshold_sigma: f64,
 }
 
 impl Default for FgsConfig {
@@ -40,6 +42,7 @@ impl Default for FgsConfig {
             max_reacquisition_attempts: 5,
             centroid_method: CentroidMethod::CenterOfMass,
             centroid_radius_multiplier: 5.0,
+            detection_threshold_sigma: 5.0,
         }
     }
 }

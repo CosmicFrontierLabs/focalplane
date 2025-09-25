@@ -1,3 +1,6 @@
+mod common;
+
+use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     callback::FgsCallbackEvent,
     config::FgsConfig,
@@ -8,47 +11,11 @@ use ndarray::Array2;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Helper to create synthetic star images with known star positions
-fn create_synthetic_star_image(
-    width: usize,
-    height: usize,
-    stars: &[(f64, f64, f64)],
-) -> Array2<u16> {
-    let mut image = Array2::<u16>::zeros((height, width));
-
-    for &(x, y, flux) in stars {
-        // Create a simple Gaussian PSF for each star
-        let sigma = 2.0;
-        let radius = (sigma * 3.0) as isize;
-
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let px = x as isize + dx;
-                let py = y as isize + dy;
-
-                if px >= 0 && px < width as isize && py >= 0 && py < height as isize {
-                    let distance_sq = (dx * dx + dy * dy) as f64;
-                    let gaussian = (flux * (-distance_sq / (2.0 * sigma * sigma)).exp()) as u16;
-                    image[[py as usize, px as usize]] =
-                        image[[py as usize, px as usize]].saturating_add(gaussian);
-                }
-            }
-        }
-    }
-
-    // Add background noise
-    for pixel in image.iter_mut() {
-        *pixel = pixel.saturating_add(100); // Add bias level
-    }
-
-    image
-}
-
 /// Helper to perturb star positions slightly (simulating drift)
-fn perturb_stars(stars: &[(f64, f64, f64)], dx: f64, dy: f64) -> Vec<(f64, f64, f64)> {
+fn perturb_stars(stars: &[StarParams], dx: f64, dy: f64) -> Vec<StarParams> {
     stars
         .iter()
-        .map(|&(x, y, flux)| (x + dx, y + dy, flux))
+        .map(|star| StarParams::with_fwhm(star.x + dx, star.y + dy, star.peak_flux, star.fwhm))
         .collect()
 }
 
@@ -79,12 +46,20 @@ fn test_full_tracking_lifecycle() {
 
     // Define star positions (bright stars for guide tracking)
     let base_stars = vec![
-        (250.0, 250.0, 50000.0), // Bright guide star
-        (400.0, 150.0, 45000.0), // Another bright star
-        (100.0, 400.0, 40000.0), // Third bright star
-        (350.0, 350.0, 20000.0), // Dimmer star
-        (150.0, 100.0, 15000.0), // Even dimmer
+        StarParams::with_fwhm(250.0, 250.0, 50000.0, 4.0), // Bright guide star
+        StarParams::with_fwhm(400.0, 150.0, 45000.0, 4.0), // Another bright star
+        StarParams::with_fwhm(100.0, 400.0, 40000.0, 4.0), // Third bright star
+        StarParams::with_fwhm(350.0, 350.0, 20000.0, 4.0), // Dimmer star
+        StarParams::with_fwhm(150.0, 100.0, 15000.0, 4.0), // Even dimmer
     ];
+
+    let image_config = SyntheticImageConfig {
+        width: 512,
+        height: 512,
+        read_noise_std: 3.0,
+        include_photon_noise: false,
+        seed: 42,
+    };
 
     // === Phase 1: Start FGS ===
     assert_eq!(fgs.state(), &FgsState::Idle);
@@ -100,7 +75,7 @@ fn test_full_tracking_lifecycle() {
     // === Phase 2: Acquisition (accumulate frames) ===
     println!("Starting acquisition phase...");
     for i in 0..3 {
-        let image = create_synthetic_star_image(512, 512, &base_stars);
+        let image = create_synthetic_star_image(&image_config, &base_stars);
         let result = fgs.process_frame(image.view());
         assert!(result.is_ok());
 
@@ -115,7 +90,7 @@ fn test_full_tracking_lifecycle() {
     // === Phase 3: Calibration ===
     println!("Calibration phase...");
     // Send one more frame to complete calibration
-    let calibration_image = create_synthetic_star_image(512, 512, &base_stars);
+    let calibration_image = create_synthetic_star_image(&image_config, &base_stars);
     let result = fgs.process_frame(calibration_image.view());
     assert!(result.is_ok());
 
@@ -125,7 +100,7 @@ fn test_full_tracking_lifecycle() {
     // If still in Calibrating, might need another frame
     if matches!(fgs.state(), FgsState::Calibrating) {
         println!("Still calibrating, sending another frame...");
-        let another_image = create_synthetic_star_image(512, 512, &base_stars);
+        let another_image = create_synthetic_star_image(&image_config, &base_stars);
         let result = fgs.process_frame(another_image.view());
         assert!(result.is_ok());
         println!("State after second frame: {:?}", fgs.state());
@@ -157,7 +132,7 @@ fn test_full_tracking_lifecycle() {
             drift_y += 0.05;
 
             let drifted_stars = perturb_stars(&base_stars, drift_x, drift_y);
-            let tracking_image = create_synthetic_star_image(512, 512, &drifted_stars);
+            let tracking_image = create_synthetic_star_image(&image_config, &drifted_stars);
 
             let result = fgs.process_frame(tracking_image.view());
             assert!(result.is_ok());
@@ -281,17 +256,28 @@ fn test_tracking_loss_and_recovery() {
         }
     });
 
-    let bright_stars = vec![(256.0, 256.0, 60000.0), (384.0, 128.0, 55000.0)];
+    let bright_stars = vec![
+        StarParams::with_fwhm(256.0, 256.0, 60000.0, 4.0),
+        StarParams::with_fwhm(384.0, 128.0, 55000.0, 4.0),
+    ];
+
+    let image_config = SyntheticImageConfig {
+        width: 512,
+        height: 512,
+        read_noise_std: 3.0,
+        include_photon_noise: false,
+        seed: 100,
+    };
 
     // Start and acquire
     fgs.process_event(FgsEvent::StartFgs).unwrap();
     for _ in 0..2 {
-        let image = create_synthetic_star_image(512, 512, &bright_stars);
+        let image = create_synthetic_star_image(&image_config, &bright_stars);
         fgs.process_frame(image.view()).unwrap();
     }
 
     // Calibrate
-    let image = create_synthetic_star_image(512, 512, &bright_stars);
+    let image = create_synthetic_star_image(&image_config, &bright_stars);
     fgs.process_frame(image.view()).unwrap();
 
     // May be Tracking or Idle
@@ -303,7 +289,7 @@ fn test_tracking_loss_and_recovery() {
 
     // Track for a few frames
     for _ in 0..3 {
-        let image = create_synthetic_star_image(512, 512, &bright_stars);
+        let image = create_synthetic_star_image(&image_config, &bright_stars);
         fgs.process_frame(image.view()).unwrap();
     }
 
@@ -346,17 +332,25 @@ fn test_image_sequence_processing() {
     // Create a sequence of images with gradually moving stars
     let mut image_sequence = Vec::new();
     let base_stars = vec![
-        (200.0, 200.0, 40000.0),
-        (300.0, 300.0, 35000.0),
-        (150.0, 350.0, 30000.0),
-        (350.0, 150.0, 25000.0),
+        StarParams::with_fwhm(200.0, 200.0, 40000.0, 4.0),
+        StarParams::with_fwhm(300.0, 300.0, 35000.0, 4.0),
+        StarParams::with_fwhm(150.0, 350.0, 30000.0, 4.0),
+        StarParams::with_fwhm(350.0, 150.0, 25000.0, 4.0),
     ];
+
+    let image_config = SyntheticImageConfig {
+        width: 512,
+        height: 512,
+        read_noise_std: 3.0,
+        include_photon_noise: false,
+        seed: 200,
+    };
 
     // Generate 20 images with gradual motion
     for i in 0..20 {
         let drift = i as f64 * 0.5;
         let stars = perturb_stars(&base_stars, drift, drift * 0.5);
-        let image = create_synthetic_star_image(512, 512, &stars);
+        let image = create_synthetic_star_image(&image_config, &stars);
         image_sequence.push(image);
     }
 

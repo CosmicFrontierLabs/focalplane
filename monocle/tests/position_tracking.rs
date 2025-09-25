@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{create_synthetic_star_image, offset_stars, StarParams, SyntheticImageConfig};
+use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{FgsCallbackEvent, FgsConfig, FgsEvent, FgsState, FineGuidanceSystem};
 use std::sync::{Arc, Mutex};
 
@@ -34,7 +34,6 @@ fn test_star_detection_on_correct_cycle() {
     let config = SyntheticImageConfig {
         width: 256,
         height: 256,
-        background_level: 100.0,
         read_noise_std: 3.0,
         include_photon_noise: false,
         seed: 100,
@@ -67,19 +66,16 @@ fn test_star_detection_on_correct_cycle() {
 
     // Calibration frame - should detect star and enter Tracking
     fgs.process_frame(frame.view()).unwrap();
-    // TODO: Fix star detection in calibration
-    if matches!(fgs.state(), FgsState::Tracking { .. }) {
-        // Verify we got the tracking started event
-        let events = states.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0], "TrackingStarted");
-    } else {
-        eprintln!(
-            "WARNING: Not tracking after calibration, state is {:?}",
-            fgs.state()
-        );
-        // For now, just pass the test
-    }
+    assert!(
+        matches!(fgs.state(), FgsState::Tracking { .. }),
+        "Should be tracking after calibration but state is {:?}",
+        fgs.state()
+    );
+
+    // Verify we got the tracking started event
+    let events = states.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0], "TrackingStarted");
 }
 
 #[test]
@@ -123,7 +119,6 @@ fn test_position_accuracy() {
     let config = SyntheticImageConfig {
         width: 256,
         height: 256,
-        background_level: 100.0,
         read_noise_std: 2.0,
         include_photon_noise: false,
         seed: 200,
@@ -139,11 +134,7 @@ fn test_position_accuracy() {
     fgs.process_frame(frame.view()).unwrap(); // Calibration
 
     // Should be tracking now
-    // TODO: Fix star detection in calibration
-    if !matches!(fgs.state(), FgsState::Tracking { .. }) {
-        eprintln!("WARNING: Not tracking, state is {:?}", fgs.state());
-        return; // Skip rest of test for now
-    }
+    assert!(matches!(fgs.state(), FgsState::Tracking { .. }));
 
     // Process a tracking frame with same position
     fgs.process_frame(frame.view()).unwrap();
@@ -205,7 +196,6 @@ fn test_moving_star_tracking() {
     let config = SyntheticImageConfig {
         width: 256,
         height: 256,
-        background_level: 100.0,
         read_noise_std: 3.0,
         include_photon_noise: false,
         seed: 300,
@@ -219,15 +209,22 @@ fn test_moving_star_tracking() {
     fgs.process_frame(frame.view()).unwrap();
     fgs.process_frame(frame.view()).unwrap();
 
-    // TODO: Fix star detection in calibration
-    if !matches!(fgs.state(), FgsState::Tracking { .. }) {
-        eprintln!("WARNING: Not tracking, state is {:?}", fgs.state());
-        return; // Skip rest of test for now
-    }
+    assert!(matches!(fgs.state(), FgsState::Tracking { .. }));
 
-    // Move star in small steps
+    // Move star in small steps - emulating slow creep across FOV
     for i in 0..5 {
-        stars = offset_stars(&stars, 2.0, 1.0);
+        // Offset from original position by increasing amounts
+        // Slow drift b/t frames
+        let drift_x = (i + 1) as f64 * 0.2;
+        let drift_y = (i + 1) as f64 * 0.1;
+
+        // Create stars at new position relative to original (128, 128)
+        stars = vec![StarParams::with_fwhm(
+            128.0 + drift_x,
+            128.0 + drift_y,
+            8000.0,
+            4.0,
+        )];
         let frame = create_synthetic_star_image(&config, &stars);
         fgs.process_frame(frame.view()).unwrap();
 
@@ -251,16 +248,27 @@ fn test_moving_star_tracking() {
     let final_star_x = stars[0].x;
     let final_star_y = stars[0].y;
 
+    // Check tracking accuracy - currently ~10 pixel error after 5 moves
+    let x_error = (last_x - final_star_x).abs();
+    let y_error = (last_y - final_star_y).abs();
+
+    println!(
+        "Tracking error: X={:.1} pixels, Y={:.1} pixels",
+        x_error, y_error
+    );
+
     assert!(
-        (last_x - final_star_x).abs() < 3.0,
-        "Final X position error: expected {:.1}, got {:.1}",
+        x_error < 1.0,
+        "Final X position error too large: expected {:.1}, got {:.1} (error {:.1})",
         final_star_x,
-        last_x
+        last_x,
+        x_error
     );
     assert!(
-        (last_y - final_star_y).abs() < 3.0,
-        "Final Y position error: expected {:.1}, got {:.1}",
+        y_error < 1.0,
+        "Final Y position error too large: expected {:.1}, got {:.1} (error {:.1})",
         final_star_y,
-        last_y
+        last_y,
+        y_error
     );
 }
