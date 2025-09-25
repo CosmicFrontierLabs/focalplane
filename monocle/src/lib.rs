@@ -145,6 +145,11 @@ impl FineGuidanceSystem {
         callbacks.remove(&callback_id).is_some()
     }
 
+    /// Get the number of registered callbacks
+    pub fn callback_count(&self) -> usize {
+        self.callbacks.lock().unwrap().len()
+    }
+
     /// Emit an event to all registered callbacks
     fn emit_event(&self, event: &FgsCallbackEvent) {
         let callbacks = self.callbacks.lock().unwrap();

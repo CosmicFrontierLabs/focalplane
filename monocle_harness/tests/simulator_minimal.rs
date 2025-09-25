@@ -25,7 +25,7 @@ fn test_basic_setup() {
     let temperature = Temperature::from_celsius(0.0);
 
     // Verify we can create satellite config
-    let _satellite = SatelliteConfig::new(telescope, sensor, temperature);
+    let _satellite: SatelliteConfig = SatelliteConfig::new(telescope, sensor, temperature);
 
     // Verify solar angles creation works
     let _solar_angles = SolarAngularCoordinates::new(90.0_f64.to_radians(), 30.0_f64.to_radians());

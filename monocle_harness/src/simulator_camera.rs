@@ -281,7 +281,7 @@ mod tests {
         // Create a 1024x1024 sensor based on IMX455 characteristics
         let sensor = sensor_models::IMX455.clone().with_dimensions(1024, 1024);
         let catalog = create_test_catalog();
-        let pointing = Equatorial::from_degrees(83.0, -5.0);
+        let _pointing = Equatorial::from_degrees(83.0, -5.0);
 
         SimulatorCamera::with_config(telescope, sensor, 0.0, catalog)
     }

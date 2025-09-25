@@ -6,8 +6,8 @@ use monocle::{
     FineGuidanceSystem,
 };
 use monocle_harness::{
+    motion_profiles::TestMotions,
     simulator_camera::SimulatorCamera,
-    test_motions::TestMotions,
     tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter},
 };
 use shared::camera_interface::CameraInterface;
