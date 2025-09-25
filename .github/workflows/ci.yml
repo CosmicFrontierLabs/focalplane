@@ -33,8 +33,34 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         
-    - name: Run tests
-      run: cargo test --verbose
+    - name: Run tests with timing
+      id: run_tests
+      run: |
+        # Measure total test time (including any compilation needed)
+        START_TIME=$(date +%s.%N)
+        cargo test --verbose
+        END_TIME=$(date +%s.%N)
+        TEST_TIME=$(echo "$END_TIME - $START_TIME" | bc)
+
+        echo "Test execution time: ${TEST_TIME}s"
+        echo "test_time=$TEST_TIME" >> $GITHUB_OUTPUT
+
+    - name: Push test metrics to Grafana
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      env:
+        GRAPHANA_CLOUD_API_TOKEN: ${{ secrets.GRAPHANA_CLOUD_API_TOKEN }}
+      run: |
+        # Get test time, default to 0 if not available
+        TEST_TIME="${{ steps.run_tests.outputs.test_time }}"
+        if [ -z "$TEST_TIME" ] || (( $(echo "$TEST_TIME < 0" | bc -l) )); then
+          TEST_TIME="0"
+          echo "Warning: Invalid test time, using 0"
+        fi
+
+        # Only push test execution time metric (not build time)
+        python scripts/push_metric.py meter_sim_test_execution_seconds "$TEST_TIME" \
+          --label phase=test_execution \
+          --label status=${{ job.status }}
 
   cross-compile-arm64:
     runs-on: ubuntu-latest
