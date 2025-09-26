@@ -6,6 +6,7 @@ use monocle::{
     FineGuidanceSystem,
 };
 use monocle_harness::{
+    create_guide_star_catalog, create_jbt_hwk_camera_with_catalog,
     motion_profiles::TestMotions,
     simulator_camera::SimulatorCamera,
     tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter},
@@ -13,10 +14,6 @@ use monocle_harness::{
 use shared::camera_interface::CameraInterface;
 use shared::star_projector::StarProjector;
 use shared::units::AngleExt;
-use simulator::hardware::sensor::models as sensor_models;
-use simulator::hardware::{SatelliteConfig, TelescopeConfig};
-use simulator::units::{Length, LengthExt, Temperature, TemperatureExt};
-use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -78,32 +75,10 @@ struct Args {
     verbose: bool,
 }
 
-/// Create a test star catalog for tracking
-fn create_test_catalog() -> BinaryCatalog {
-    // Create catalog with bright stars suitable for guiding
-    let stars = vec![
-        MinimalStar::new(1, 83.0, -5.0, 3.0),   // Very bright star
-        MinimalStar::new(2, 83.1, -5.1, 4.0),   // Bright star nearby
-        MinimalStar::new(3, 83.2, -4.9, 5.0),   // Another bright star
-        MinimalStar::new(4, 83.05, -5.15, 6.0), // Dimmer star
-        MinimalStar::new(5, 82.95, -5.05, 7.0), // Even dimmer
-    ];
-    BinaryCatalog::from_stars(stars, "Test catalog for tracking")
-}
-
 /// Create a simulator camera with test configuration
 fn create_test_camera(pointing: Equatorial) -> SimulatorCamera {
-    let telescope = TelescopeConfig::new(
-        "Test",
-        Length::from_millimeters(80.0),
-        Length::from_millimeters(400.0),
-        0.9,
-    );
-    let sensor = sensor_models::IMX455.clone().with_dimensions(1024, 1024);
-    let catalog = create_test_catalog();
-    let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
-
-    let mut camera = SimulatorCamera::new(satellite, catalog);
+    let catalog = create_guide_star_catalog(&pointing);
+    let mut camera = create_jbt_hwk_camera_with_catalog(catalog);
     camera.set_pointing(pointing).unwrap();
     camera
 }

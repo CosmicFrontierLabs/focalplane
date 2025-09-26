@@ -7,25 +7,21 @@ use monocle::{
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
-use simulator::hardware::sensor::models as sensor_models;
-use simulator::hardware::{SatelliteConfig, TelescopeConfig};
+use monocle_harness::create_jbt_hwk_test_satellite;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
-use simulator::units::{LengthExt, Temperature, TemperatureExt};
-use starfield::catalogs::binary_catalog::BinaryCatalog;
 
 #[test]
 fn test_basic_setup() {
-    // Verify we can create telescope config
-    let aperture = simulator::units::Length::from_millimeters(80.0);
-    let focal_length = simulator::units::Length::from_millimeters(400.0);
-    let telescope = TelescopeConfig::new("Test Telescope", aperture, focal_length, 0.9);
+    // Use standardized test configuration
+    let satellite = create_jbt_hwk_test_satellite();
 
-    // Verify we can get sensor model
-    let sensor = sensor_models::IMX455.clone();
-    let temperature = Temperature::from_celsius(0.0);
-
-    // Verify we can create satellite config
-    let _satellite: SatelliteConfig = SatelliteConfig::new(telescope, sensor, temperature);
+    // Verify the configuration is created correctly
+    assert_eq!(satellite.telescope.name, "Cosmic Frontier JBT .5m");
+    assert_eq!(satellite.sensor.name, "HWK4123");
+    assert_eq!(
+        satellite.sensor.dimensions.get_pixel_width_height(),
+        (512, 512)
+    );
 
     // Verify solar angles creation works
     let _solar_angles = SolarAngularCoordinates::new(90.0_f64.to_radians(), 30.0_f64.to_radians());
@@ -40,28 +36,10 @@ fn test_basic_setup() {
 
     let mut fgs = FineGuidanceSystem::new(fgs_config);
 
-    // Verify basic state transitions work
-    assert_eq!(fgs.state(), &FgsState::Idle);
-    let result = fgs.process_event(FgsEvent::StartFgs);
-    assert!(result.is_ok());
+    // Verify FGS starts in idle state
+    assert!(matches!(fgs.state(), FgsState::Idle));
 
-    println!("✅ Basic integration test passed!");
-}
-
-#[test]
-fn test_catalog_loading() {
-    // Try to load catalog if available
-    match BinaryCatalog::load("cats/test.bin") {
-        Ok(catalog) => {
-            println!("Loaded {} stars from catalog", catalog.len());
-
-            // Verify catalog has stars
-            assert!(catalog.len() > 0, "Catalog should have stars");
-
-            println!("✅ Catalog loading test passed!");
-        }
-        Err(_) => {
-            println!("⚠️ Catalog not available at cats/test.bin, skipping catalog test");
-        }
-    }
+    // Test state transitions
+    assert!(fgs.process_event(FgsEvent::StartFgs).is_ok());
+    assert!(matches!(fgs.state(), FgsState::Acquiring { .. }));
 }

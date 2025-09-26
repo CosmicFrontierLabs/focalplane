@@ -257,33 +257,10 @@ impl CameraInterface for SimulatorCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simulator::hardware::sensor::models as sensor_models;
-    use simulator::units::{Length, LengthExt};
-    use starfield::catalogs::binary_catalog::MinimalStar;
-
-    fn create_test_catalog() -> BinaryCatalog {
-        // Create a simple test catalog with a few stars
-        let stars = vec![
-            MinimalStar::new(1, 83.0, -5.0, 6.0),
-            MinimalStar::new(2, 83.5, -5.5, 7.0),
-            MinimalStar::new(3, 84.0, -5.0, 8.0),
-        ];
-        BinaryCatalog::from_stars(stars, "Test catalog")
-    }
+    use crate::helpers::create_jbt_hwk_camera;
 
     fn create_test_camera() -> SimulatorCamera {
-        let telescope = TelescopeConfig::new(
-            "Test",
-            Length::from_millimeters(80.0),
-            Length::from_millimeters(400.0),
-            0.9,
-        );
-        // Create a 1024x1024 sensor based on IMX455 characteristics
-        let sensor = sensor_models::IMX455.clone().with_dimensions(1024, 1024);
-        let catalog = create_test_catalog();
-        let _pointing = Equatorial::from_degrees(83.0, -5.0);
-
-        SimulatorCamera::with_config(telescope, sensor, 0.0, catalog)
+        create_jbt_hwk_camera()
     }
 
     #[test]
@@ -294,10 +271,10 @@ mod tests {
                                     // Camera has default pointing at (0, 0)
         assert_eq!(camera.pointing(), DEFAULT_POINTING);
 
-        // Verify sensor dimensions are 1024x1024
+        // Verify sensor dimensions are 512x512 (JBT/HWK test config)
         let config = camera.get_config();
-        assert_eq!(config.width, 1024);
-        assert_eq!(config.height, 1024);
+        assert_eq!(config.width, 512);
+        assert_eq!(config.height, 512);
     }
 
     #[test]
@@ -376,8 +353,8 @@ mod tests {
             .expect("Failed to capture full frame");
         assert_eq!(
             full_frame.shape(),
-            &[1024, 1024],
-            "Full frame should be 1024x1024"
+            &[512, 512],
+            "Full frame should be 512x512"
         );
         assert_eq!(
             metadata.roi, None,
@@ -397,22 +374,22 @@ mod tests {
             AABB {
                 min_row: 200,
                 min_col: 200,
-                max_row: 599,
-                max_col: 599,
+                max_row: 399,
+                max_col: 399,
             },
             // Asymmetric ROI
             AABB {
                 min_row: 50,
                 min_col: 100,
                 max_row: 249,
-                max_col: 899,
+                max_col: 399,
             },
             // Edge-to-edge ROI (full width, partial height)
             AABB {
                 min_row: 100,
                 min_col: 0,
                 max_row: 299,
-                max_col: 1023,
+                max_col: 511,
             },
         ];
 
@@ -444,7 +421,7 @@ mod tests {
             .expect("Failed to capture after clearing ROI");
         assert_eq!(
             cleared_frame.shape(),
-            &[1024, 1024],
+            &[512, 512],
             "Should return to full frame after clearing ROI"
         );
         assert_eq!(
@@ -484,7 +461,7 @@ mod tests {
             .sum();
 
         // There should be substantial differences due to noise
-        let total_pixels = (1024 * 1024) as f64;
+        let total_pixels = (512 * 512) as f64;
         let avg_diff_1_2 = diff_1_2 / total_pixels;
         let avg_diff_2_3 = diff_2_3 / total_pixels;
 
@@ -501,10 +478,10 @@ mod tests {
 
         // Also test with ROI to ensure noise changes there too
         let roi = AABB {
-            min_row: 400,
-            min_col: 400,
-            max_row: 599,
-            max_col: 599,
+            min_row: 200,
+            min_col: 200,
+            max_row: 399,
+            max_col: 399,
         };
         camera.set_roi(roi).expect("Failed to set ROI");
 
