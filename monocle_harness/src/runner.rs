@@ -27,21 +27,19 @@ pub struct RunnerResults {
     pub events: Vec<FgsCallbackEvent>,
 }
 
-/// Run FGS with camera and motion for specified duration
+/// Run FGS with camera for specified duration
 ///
 /// # Arguments
-/// * `camera` - Camera interface implementation (e.g., SimulatorCamera)
+/// * `camera` - Camera interface implementation with built-in motion (e.g., SimulatorCamera)
 /// * `fgs` - Fine Guidance System instance
-/// * `motion` - Pointing motion to apply over time
 /// * `duration` - Total duration to run
 /// * `frame_interval` - Time between frames
 ///
 /// # Returns
 /// * `RunnerResults` containing execution statistics
-pub fn run_fgs_with_motion(
+pub fn run_fgs(
     camera: &mut SimulatorCamera,
     fgs: &mut FineGuidanceSystem,
-    motion: &dyn PointingMotion,
     duration: Duration,
     frame_interval: Duration,
 ) -> Result<RunnerResults, Box<dyn std::error::Error>> {
@@ -70,12 +68,11 @@ pub fn run_fgs_with_motion(
 
     // Run for specified duration
     for frame_num in 0..num_frames {
-        let current_time =
+        let _current_time =
             Duration::from_millis(frame_num as u64 * frame_interval.as_millis() as u64);
 
-        // Update camera pointing based on motion
-        let pointing = motion.get_pointing(current_time);
-        camera.set_pointing(pointing)?;
+        // Camera now handles motion internally based on elapsed time
+        // No need to set pointing manually
 
         // Capture frame
         let (frame, _metadata) = camera.capture_frame()?;
@@ -113,12 +110,17 @@ pub fn run_fgs_with_motion(
 
 /// Extended runner with callback support
 ///
-/// Similar to `run_fgs_with_motion` but allows registering a callback
-/// that gets called after each frame is processed.
+/// Allows registering a callback that gets called after each frame is processed.
+///
+/// # Arguments
+/// * `camera` - Camera interface implementation with built-in motion
+/// * `fgs` - Fine Guidance System instance
+/// * `duration` - Total duration to run
+/// * `frame_interval` - Time between frames
+/// * `callback` - Function called after each frame with (frame_num, state, time)
 pub fn run_fgs_with_callback<F>(
     camera: &mut SimulatorCamera,
     fgs: &mut FineGuidanceSystem,
-    motion: &dyn PointingMotion,
     duration: Duration,
     frame_interval: Duration,
     mut callback: F,
@@ -151,9 +153,8 @@ where
         let current_time =
             Duration::from_millis(frame_num as u64 * frame_interval.as_millis() as u64);
 
-        // Update pointing
-        let pointing = motion.get_pointing(current_time);
-        camera.set_pointing(pointing)?;
+        // Camera now handles motion internally based on elapsed time
+        // No need to set pointing manually
 
         // Capture and process frame
         let (frame, _metadata) = camera.capture_frame()?;
@@ -191,6 +192,21 @@ where
     Ok(results)
 }
 
+/// Legacy function for backward compatibility
+#[deprecated(
+    since = "0.2.0",
+    note = "Use run_fgs instead - camera now handles motion internally"
+)]
+pub fn run_fgs_with_motion(
+    camera: &mut SimulatorCamera,
+    fgs: &mut FineGuidanceSystem,
+    _motion: &dyn PointingMotion,
+    duration: Duration,
+    frame_interval: Duration,
+) -> Result<RunnerResults, Box<dyn std::error::Error>> {
+    run_fgs(camera, fgs, duration, frame_interval)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,7 +242,8 @@ mod tests {
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
-        let mut camera = SimulatorCamera::new(satellite, catalog);
+        let motion = Box::new(StaticPointing::new(0.0, 0.0));
+        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
 
         // Create FGS
         let config = FgsConfig {
@@ -238,14 +255,11 @@ mod tests {
         };
         let mut fgs = FineGuidanceSystem::new(config);
 
-        // Use static pointing
-        let motion = StaticPointing::new(0.0, 0.0);
-
         // Run for 1 second at 10 Hz
-        let results = run_fgs_with_motion(
+        // Camera already has StaticPointing motion built in from create_test_catalog
+        let results = run_fgs(
             &mut camera,
             &mut fgs,
-            &motion,
             Duration::from_secs(1),
             Duration::from_millis(100),
         )
@@ -271,7 +285,8 @@ mod tests {
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
-        let mut camera = SimulatorCamera::new(satellite, catalog);
+        let motion = Box::new(StaticPointing::new(0.0, 0.0));
+        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
 
         let config = FgsConfig {
             acquisition_frames: 1,
@@ -279,15 +294,12 @@ mod tests {
         };
         let mut fgs = FineGuidanceSystem::new(config);
 
-        let motion = StaticPointing::new(0.0, 0.0);
-
         // Track states seen
         let mut states_seen = Vec::new();
 
         let results = run_fgs_with_callback(
             &mut camera,
             &mut fgs,
-            &motion,
             Duration::from_millis(500),
             Duration::from_millis(100),
             |frame_num, state, _time| {
@@ -333,7 +345,8 @@ mod tests {
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
-        let mut camera = SimulatorCamera::new(satellite, catalog);
+        let motion = Box::new(StaticPointing::new(0.0, 0.0));
+        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
 
         let config = FgsConfig {
             acquisition_frames: 1,
@@ -341,17 +354,14 @@ mod tests {
         };
         let mut fgs = FineGuidanceSystem::new(config);
 
-        let motion = StaticPointing::new(0.0, 0.0);
-
         // Get initial callback count (should be 0)
         let initial_count = fgs.callback_count();
         assert_eq!(initial_count, 0, "Should start with no callbacks");
 
-        // Run with motion - this registers and deregisters a callback
-        let results = run_fgs_with_motion(
+        // Run - this registers and deregisters a callback
+        let results = run_fgs(
             &mut camera,
             &mut fgs,
-            &motion,
             Duration::from_millis(300),
             Duration::from_millis(100),
         )
@@ -374,7 +384,6 @@ mod tests {
         let results2 = run_fgs_with_callback(
             &mut camera,
             &mut fgs,
-            &motion,
             Duration::from_millis(200),
             Duration::from_millis(100),
             |_, _, _| {

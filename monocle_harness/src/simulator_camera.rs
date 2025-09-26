@@ -3,6 +3,7 @@
 //! Provides a CameraInterface implementation that uses the telescope simulator
 //! to generate realistic frames for testing the monocle subsystem.
 
+use crate::motion_profiles::PointingMotion;
 use ndarray::Array2;
 use shared::camera_interface::{
     AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata,
@@ -17,9 +18,6 @@ use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-
-/// Default pointing direction (RA=0, Dec=0)
-const DEFAULT_POINTING: Equatorial = Equatorial { ra: 0.0, dec: 0.0 };
 
 /// Camera state for continuous capture mode
 struct ContinuousCaptureState {
@@ -36,8 +34,10 @@ pub struct SimulatorCamera {
     satellite: SatelliteConfig,
     /// Star catalog
     catalog: Option<BinaryCatalog>,
-    /// Current pointing (required)
-    pointing: Equatorial,
+    /// Pointing motion profile
+    pointing_motion: Box<dyn PointingMotion>,
+    /// Elapsed time since start
+    elapsed_time: Duration,
     /// Current ROI
     roi: Option<AABB>,
     /// Current exposure duration
@@ -51,8 +51,12 @@ pub struct SimulatorCamera {
 }
 
 impl SimulatorCamera {
-    /// Create a new simulator camera with a star catalog (default pointing at RA=0, Dec=0)
-    pub fn new(satellite: SatelliteConfig, catalog: BinaryCatalog) -> Self {
+    /// Create a new simulator camera with a star catalog and pointing motion
+    pub fn new(
+        satellite: SatelliteConfig,
+        catalog: BinaryCatalog,
+        pointing_motion: Box<dyn PointingMotion>,
+    ) -> Self {
         let sensor = &satellite.sensor;
         let (width, height) = sensor.dimensions.get_pixel_width_height();
 
@@ -66,7 +70,8 @@ impl SimulatorCamera {
             config,
             satellite,
             catalog: Some(catalog),
-            pointing: DEFAULT_POINTING,
+            pointing_motion,
+            elapsed_time: Duration::ZERO,
             roi: None,
             exposure: Duration::from_millis(100),
             frame_number: 0,
@@ -85,12 +90,13 @@ impl SimulatorCamera {
         sensor: simulator::SensorConfig,
         temperature_c: f64,
         catalog: BinaryCatalog,
+        pointing_motion: Box<dyn PointingMotion>,
     ) -> Self {
         use simulator::units::{Temperature, TemperatureExt};
         let satellite =
             SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(temperature_c));
 
-        Self::new(satellite, catalog)
+        Self::new(satellite, catalog, pointing_motion)
     }
 
     /// Get the satellite configuration
@@ -98,20 +104,25 @@ impl SimulatorCamera {
         &self.satellite
     }
 
-    /// Get the current pointing
+    /// Get the current pointing based on elapsed time and motion profile
     pub fn pointing(&self) -> Equatorial {
-        self.pointing
+        self.pointing_motion.get_pointing(self.elapsed_time)
     }
 
-    /// Set the pointing (convenience method that returns Result)
-    pub fn set_pointing(&mut self, pointing: Equatorial) -> CameraResult<()> {
-        self.pointing = pointing;
-        Ok(())
+    /// Reset elapsed time to start
+    pub fn reset_time(&mut self) {
+        self.elapsed_time = Duration::ZERO;
+    }
+
+    /// Set a new pointing motion profile
+    pub fn set_pointing_motion(&mut self, motion: Box<dyn PointingMotion>) {
+        self.pointing_motion = motion;
+        self.elapsed_time = Duration::ZERO;
     }
 
     /// Generate a frame using the simulator
     fn generate_frame(&mut self) -> CameraResult<Array2<u16>> {
-        let pointing = self.pointing;
+        let pointing = self.pointing();
 
         let catalog = self
             .catalog
@@ -172,11 +183,14 @@ impl CameraInterface for SimulatorCamera {
 
         self.frame_number += 1;
 
+        // Increment elapsed time by exposure duration
+        self.elapsed_time += self.exposure;
+
         let metadata = FrameMetadata {
             frame_number: self.frame_number,
             exposure: self.exposure,
             timestamp: SystemTime::now(),
-            pointing: Some(self.pointing),
+            pointing: Some(self.pointing()),
             roi: self.roi,
             temperature_c: self.satellite.temperature.as_celsius(),
         };
@@ -269,7 +283,8 @@ mod tests {
         assert_eq!(camera.get_exposure(), Duration::from_millis(100));
         assert!(camera.is_ready()); // Always ready now
                                     // Camera has default pointing at (0, 0)
-        assert_eq!(camera.pointing(), DEFAULT_POINTING);
+        let pointing = camera.pointing();
+        assert_eq!(pointing, Equatorial::from_degrees(0.0, 0.0));
 
         // Verify sensor dimensions are 512x512 (JBT/HWK test config)
         let config = camera.get_config();
@@ -281,11 +296,10 @@ mod tests {
     fn test_pointing_and_roi() {
         let mut camera = create_test_camera();
 
-        // Set pointing
-        let pointing = Equatorial::from_degrees(0.0, 0.0);
-        assert!(camera.set_pointing(pointing).is_ok());
+        // Check default pointing
+        let pointing = camera.pointing();
         assert!(camera.is_ready());
-        assert_eq!(camera.pointing(), pointing);
+        assert_eq!(pointing, Equatorial::from_degrees(0.0, 0.0));
 
         // Set valid ROI
         let roi = AABB {

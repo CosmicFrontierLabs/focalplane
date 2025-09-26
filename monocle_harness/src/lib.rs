@@ -12,9 +12,13 @@ pub mod tracking_plots;
 
 pub use helpers::{
     create_guide_star_catalog, create_jbt_hwk_camera, create_jbt_hwk_camera_with_catalog,
-    create_jbt_hwk_test_satellite, create_simple_test_catalog, create_single_star_catalog,
+    create_jbt_hwk_camera_with_catalog_and_motion, create_jbt_hwk_test_satellite,
+    create_simple_test_catalog, create_single_star_catalog,
 };
 pub use motion_profiles::TestMotions;
-pub use runner::{run_fgs_with_callback, run_fgs_with_motion, RunnerResults};
+pub use runner::{run_fgs, run_fgs_with_callback, RunnerResults};
+// Deprecated: run_fgs_with_motion is kept for backward compatibility
+#[allow(deprecated)]
+pub use runner::run_fgs_with_motion;
 pub use simulator_camera::SimulatorCamera;
 pub use tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter};

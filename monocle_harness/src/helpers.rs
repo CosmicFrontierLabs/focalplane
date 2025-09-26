@@ -3,6 +3,7 @@
 //! Provides common utilities for building test configurations including
 //! standard satellites, cameras, and catalogs.
 
+use crate::motion_profiles::StaticPointing;
 use crate::SimulatorCamera;
 use simulator::hardware::{
     sensor::models::HWK4123, telescope::models::COSMIC_FRONTIER_JBT_50CM, SatelliteConfig,
@@ -40,8 +41,9 @@ pub fn create_jbt_hwk_test_satellite() -> SatelliteConfig {
 pub fn create_jbt_hwk_camera() -> SimulatorCamera {
     let satellite = create_jbt_hwk_test_satellite();
     let catalog = create_simple_test_catalog();
+    let motion = Box::new(StaticPointing::new(0.0, 0.0));
 
-    SimulatorCamera::new(satellite, catalog)
+    SimulatorCamera::new(satellite, catalog, motion)
 }
 
 /// Creates a test SimulatorCamera with custom catalog
@@ -53,7 +55,24 @@ pub fn create_jbt_hwk_camera() -> SimulatorCamera {
 /// * `SimulatorCamera` - Configured camera with custom catalog
 pub fn create_jbt_hwk_camera_with_catalog(catalog: BinaryCatalog) -> SimulatorCamera {
     let satellite = create_jbt_hwk_test_satellite();
-    SimulatorCamera::new(satellite, catalog)
+    let motion = Box::new(StaticPointing::new(0.0, 0.0));
+    SimulatorCamera::new(satellite, catalog, motion)
+}
+
+/// Creates a test SimulatorCamera with custom catalog and motion
+///
+/// # Arguments
+/// * `catalog` - Custom star catalog to use
+/// * `motion` - Pointing motion profile
+///
+/// # Returns
+/// * `SimulatorCamera` - Configured camera with custom catalog and motion
+pub fn create_jbt_hwk_camera_with_catalog_and_motion(
+    catalog: BinaryCatalog,
+    motion: Box<dyn crate::motion_profiles::PointingMotion>,
+) -> SimulatorCamera {
+    let satellite = create_jbt_hwk_test_satellite();
+    SimulatorCamera::new(satellite, catalog, motion)
 }
 
 /// Creates a catalog with a single star at specified position

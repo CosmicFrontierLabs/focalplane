@@ -6,8 +6,8 @@ use monocle::{
     FineGuidanceSystem,
 };
 use monocle_harness::{
-    create_guide_star_catalog, create_jbt_hwk_camera_with_catalog,
-    motion_profiles::TestMotions,
+    create_guide_star_catalog, create_jbt_hwk_camera_with_catalog_and_motion,
+    motion_profiles::{PointingMotion, TestMotions},
     simulator_camera::SimulatorCamera,
     tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter},
 };
@@ -75,12 +75,13 @@ struct Args {
     verbose: bool,
 }
 
-/// Create a simulator camera with test configuration
-fn create_test_camera(pointing: Equatorial) -> SimulatorCamera {
+/// Create a simulator camera with test configuration and motion
+fn create_test_camera_with_motion(
+    pointing: Equatorial,
+    motion: Box<dyn PointingMotion>,
+) -> SimulatorCamera {
     let catalog = create_guide_star_catalog(&pointing);
-    let mut camera = create_jbt_hwk_camera_with_catalog(catalog);
-    camera.set_pointing(pointing).unwrap();
-    camera
+    create_jbt_hwk_camera_with_catalog_and_motion(catalog, motion)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -127,8 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_motion(&args.motion)
         .ok_or_else(|| format!("Unknown motion type: {}", args.motion))?;
 
-    // Create camera with initial pointing
-    let mut camera = create_test_camera(base_pointing);
+    // Create camera with motion profile
+    let mut camera = create_test_camera_with_motion(base_pointing, motion);
     let frame_interval_ms = (1000.0 / args.frame_rate) as u64;
     camera.set_exposure(Duration::from_millis(frame_interval_ms))?;
 
@@ -234,9 +235,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for frame_num in 0..num_frames {
         let current_time = Duration::from_millis(frame_num as u64 * frame_interval_ms);
 
-        // Update camera pointing based on motion
-        let actual_pointing = motion.get_pointing(current_time);
-        camera.set_pointing(actual_pointing)?;
+        // Camera now handles motion internally, get current pointing for display
+        let actual_pointing = camera.pointing();
 
         // Capture frame and process
         let (frame, _) = camera.capture_frame()?;
