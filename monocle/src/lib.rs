@@ -4,6 +4,7 @@
 //! Processes images through states: Idle -> Acquiring -> Calibrating -> Tracking
 
 use ndarray::{Array2, ArrayView2};
+use shared::camera_interface::CameraInterface;
 use shared::image_proc::detection::{detect_stars, StarDetection};
 use shared::image_proc::noise::quantify::estimate_noise_level;
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ use std::time::Instant;
 pub mod callback;
 pub mod config;
 pub mod filters;
+pub mod mock_camera;
 pub mod state;
 
 use crate::callback::{CallbackId, FgsCallback, PositionEstimate, TrackingLostReason};
@@ -22,21 +24,6 @@ use shared::image_proc::detection::aabb::AABB;
 pub use crate::callback::FgsCallbackEvent;
 pub use crate::config::FgsConfig;
 pub use crate::state::{FgsEvent, FgsState};
-
-/// ROI (Region of Interest) around a guide star
-#[derive(Debug, Clone)]
-pub struct Roi {
-    /// Bounding box in pixel coordinates
-    pub bounds: AABB,
-    /// Nominal center X position in full frame (f64 for sub-pixel precision)
-    pub center_x: f64,
-    /// Nominal center Y position in full frame (f64 for sub-pixel precision)
-    pub center_y: f64,
-    /// Reference centroid position (from calibration)
-    pub reference_x: f64,
-    /// Reference centroid position (from calibration)
-    pub reference_y: f64,
-}
 
 /// A selected guide star
 #[derive(Debug, Clone)]
@@ -50,47 +37,44 @@ pub struct GuideStar {
     pub flux: f64,
     /// Signal-to-noise ratio
     pub snr: f64,
-    /// Region of interest for tracking
-    pub roi: Roi,
+    /// Region of interest for tracking (bounding box in pixel coordinates)
+    pub roi: AABB,
     /// Estimated star diameter in pixels
     pub diameter: f64,
+}
+
+impl GuideStar {
+    /// Compute the center position relative to the ROI coordinates
+    pub fn roi_center(&self) -> (f64, f64) {
+        let roi_center_x = self.x - self.roi.min_col as f64;
+        let roi_center_y = self.y - self.roi.min_row as f64;
+        (roi_center_x, roi_center_y)
+    }
 }
 
 /// Guidance update produced by the system
 #[derive(Debug, Clone)]
 pub struct GuidanceUpdate {
-    /// Computed X error in pixels
-    pub delta_x: f64,
-    /// Computed Y error in pixels
-    pub delta_y: f64,
-    /// Number of guide stars used
-    pub num_stars_used: usize,
+    /// X position in frame coordinates
+    pub x: f64,
+    /// Y position in frame coordinates
+    pub y: f64,
     /// Timestamp of update
     pub timestamp: Instant,
     /// Quality metric (0.0 to 1.0)
     pub quality: f64,
 }
 
-impl Default for GuidanceUpdate {
-    fn default() -> Self {
-        Self {
-            delta_x: 0.0,
-            delta_y: 0.0,
-            num_stars_used: 0,
-            timestamp: Instant::now(),
-            quality: 0.0,
-        }
-    }
-}
-
 /// Main Fine Guidance System state machine
-pub struct FineGuidanceSystem {
+pub struct FineGuidanceSystem<C: CameraInterface> {
+    /// Camera interface for capturing frames
+    camera: C,
     /// Current state
     state: FgsState,
     /// System configuration
     config: FgsConfig,
-    /// Selected guide stars (populated during calibration)
-    guide_stars: Vec<GuideStar>,
+    /// Selected guide star (populated during calibration)
+    guide_star: Option<GuideStar>,
     /// Accumulated frame sum (stored as f64 to avoid overflow)
     accumulated_frame: Option<Array2<f64>>,
     /// Number of frames accumulated
@@ -107,13 +91,14 @@ pub struct FineGuidanceSystem {
     current_track_id: u32,
 }
 
-impl FineGuidanceSystem {
-    /// Create a new Fine Guidance System
-    pub fn new(config: FgsConfig) -> Self {
+impl<C: CameraInterface> FineGuidanceSystem<C> {
+    /// Create a new Fine Guidance System with a camera
+    pub fn new(camera: C, config: FgsConfig) -> Self {
         Self {
+            camera,
             state: FgsState::Idle,
             config,
-            guide_stars: Vec::new(),
+            guide_star: None,
             accumulated_frame: None,
             frames_accumulated: 0,
             detected_stars: Vec::new(),
@@ -163,7 +148,7 @@ impl FineGuidanceSystem {
         log::info!("Starting FGS, entering Acquiring state");
         self.accumulated_frame = None;
         self.frames_accumulated = 0;
-        self.guide_stars.clear();
+        self.guide_star = None;
         self.detected_stars.clear();
         FgsState::Acquiring {
             frames_collected: 0,
@@ -201,11 +186,20 @@ impl FineGuidanceSystem {
     fn handle_calibrating_frame(&mut self, frame: ArrayView2<u16>) -> Result<FgsState, String> {
         self.detect_and_select_guides(frame)?;
 
-        if !self.guide_stars.is_empty() {
+        if let Some(guide_star) = &self.guide_star {
+            log::info!("Calibration complete with guide star, entering Tracking");
+
+            // Set camera ROI to track the guide star
             log::info!(
-                "Calibration complete with {} guide stars, entering Tracking",
-                self.guide_stars.len()
+                "Setting camera ROI to {:?} for star at ({}, {})",
+                guide_star.roi,
+                guide_star.x,
+                guide_star.y
             );
+            if let Err(e) = self.camera.set_roi(guide_star.roi) {
+                log::warn!("Failed to set camera ROI: {e}");
+                // Continue anyway - camera may not support ROI
+            }
 
             // Increment track ID for new tracking session
             self.current_track_id += 1;
@@ -230,7 +224,7 @@ impl FineGuidanceSystem {
     ) -> Result<FgsState, String> {
         let update = self.track(frame)?;
 
-        if update.num_stars_used > 0 {
+        if self.guide_star.is_some() {
             // Emit tracking update event
             self.emit_tracking_update_event(&update);
 
@@ -240,6 +234,11 @@ impl FineGuidanceSystem {
             })
         } else {
             log::warn!("Lost all guide stars, entering Reacquiring");
+
+            // Clear camera ROI when losing tracking
+            if let Err(e) = self.camera.clear_roi() {
+                log::warn!("Failed to clear camera ROI: {e}");
+            }
 
             // Emit tracking lost event
             self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak);
@@ -273,46 +272,42 @@ impl FineGuidanceSystem {
 
     /// Emit tracking started event
     fn emit_tracking_started_event(&self) {
-        if let Some(first_star) = self.guide_stars.first() {
+        if let Some(guide_star) = &self.guide_star {
             self.emit_event(&FgsCallbackEvent::TrackingStarted {
                 track_id: self.current_track_id,
                 initial_position: PositionEstimate {
-                    x: first_star.x,
-                    y: first_star.y,
+                    x: guide_star.x,
+                    y: guide_star.y,
                     confidence: 1.0,
                     timestamp_us: Instant::now().elapsed().as_micros() as u64,
                 },
-                num_guide_stars: self.guide_stars.len(),
+                num_guide_stars: 1,
             });
         }
     }
 
     /// Emit tracking update event
     fn emit_tracking_update_event(&self, update: &GuidanceUpdate) {
-        if let Some(first_star) = self.guide_stars.first() {
-            self.emit_event(&FgsCallbackEvent::TrackingUpdate {
-                track_id: self.current_track_id,
-                position: PositionEstimate {
-                    x: first_star.x + update.delta_x,
-                    y: first_star.y + update.delta_y,
-                    confidence: update.quality,
-                    timestamp_us: Instant::now().elapsed().as_micros() as u64,
-                },
-                delta_x: update.delta_x,
-                delta_y: update.delta_y,
-                num_stars_used: update.num_stars_used,
-            });
-        }
+        // NOTE(meawoppl) - the timestamp in this field will need to be chained back to the sensor timestamp
+        self.emit_event(&FgsCallbackEvent::TrackingUpdate {
+            track_id: self.current_track_id,
+            position: PositionEstimate {
+                x: update.x,
+                y: update.y,
+                confidence: update.quality,
+                timestamp_us: Instant::now().elapsed().as_micros() as u64,
+            },
+        });
     }
 
     /// Emit tracking lost event
     fn emit_tracking_lost_event(&self, reason: TrackingLostReason) {
-        if let Some(first_star) = self.guide_stars.first() {
+        if let Some(guide_star) = &self.guide_star {
             self.emit_event(&FgsCallbackEvent::TrackingLost {
                 track_id: self.current_track_id,
                 last_position: PositionEstimate {
-                    x: first_star.x,
-                    y: first_star.y,
+                    x: guide_star.x,
+                    y: guide_star.y,
                     confidence: 0.0,
                     timestamp_us: Instant::now().elapsed().as_micros() as u64,
                 },
@@ -344,6 +339,10 @@ impl FineGuidanceSystem {
             }
             (Tracking { .. }, FgsEvent::StopFgs) => {
                 log::info!("Stopping FGS, returning to Idle");
+                // Clear camera ROI when stopping
+                if let Err(e) = self.camera.clear_roi() {
+                    log::warn!("Failed to clear camera ROI: {e}");
+                }
                 Idle
             }
 
@@ -353,6 +352,10 @@ impl FineGuidanceSystem {
             }
             (Reacquiring { .. }, FgsEvent::Abort) => {
                 log::info!("Aborting reacquisition, returning to Idle");
+                // Clear camera ROI when aborting
+                if let Err(e) = self.camera.clear_roi() {
+                    log::warn!("Failed to clear camera ROI: {e}");
+                }
                 Idle
             }
 
@@ -373,6 +376,15 @@ impl FineGuidanceSystem {
         frame: ArrayView2<u16>,
     ) -> Result<Option<GuidanceUpdate>, String> {
         self.process_event(FgsEvent::ProcessFrame(frame))
+    }
+
+    /// Capture and process the next frame from the camera
+    pub fn process_next_frame(&mut self) -> Result<Option<GuidanceUpdate>, String> {
+        let (frame, _metadata) = self
+            .camera
+            .capture_frame()
+            .map_err(|e| format!("Camera capture failed: {e}"))?;
+        self.process_frame(frame.view())
     }
 
     /// Get the current state
@@ -511,51 +523,32 @@ impl FineGuidanceSystem {
         // Sort by quality score
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        // Select top candidates
-        let selected_stars: Vec<StarDetection> = candidates
-            .into_iter()
-            .take(self.config.max_guide_stars)
-            .map(|(star, _)| star)
-            .collect();
-
-        // Convert to GuideStar objects with ROIs
-        self.guide_stars = selected_stars
-            .iter()
-            .enumerate()
-            .map(|(idx, star)| GuideStar {
-                id: idx,
-                x: star.x,
-                y: star.y,
-                flux: star.flux,
-                snr: filters::calculate_snr(star, &averaged_frame.view(), star.diameter / 2.0),
-                roi: Roi {
-                    bounds: AABB::from_coords(
-                        (star.y as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
-                        (star.x as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
-                        ((star.y as i32 + self.config.roi_size as i32 / 2)
-                            .min(averaged_frame.shape()[0] as i32 - 1))
-                            as usize,
-                        ((star.x as i32 + self.config.roi_size as i32 / 2)
-                            .min(averaged_frame.shape()[1] as i32 - 1))
-                            as usize,
-                    ),
-                    center_x: star.x,
-                    center_y: star.y,
-                    reference_x: star.x,
-                    reference_y: star.y,
-                },
-                diameter: star.diameter,
-            })
-            .collect();
+        // Select the single best star
+        self.guide_star = candidates.into_iter().next().map(|(star, _)| GuideStar {
+            id: 0,
+            x: star.x,
+            y: star.y,
+            flux: star.flux,
+            snr: filters::calculate_snr(&star, &averaged_frame.view(), star.diameter / 2.0),
+            roi: AABB::from_coords(
+                (star.y as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
+                (star.x as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
+                ((star.y as i32 + self.config.roi_size as i32 / 2)
+                    .min(averaged_frame.shape()[0] as i32 - 1)) as usize,
+                ((star.x as i32 + self.config.roi_size as i32 / 2)
+                    .min(averaged_frame.shape()[1] as i32 - 1)) as usize,
+            ),
+            diameter: star.diameter,
+        });
 
         // Sort detected stars by flux for compatibility
         self.detected_stars
             .sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap());
 
         log::info!(
-            "Detected {} stars in calibration frame with 5-sigma threshold, selected {} guide stars for tracking",
+            "Detected {} stars in calibration frame with 5-sigma threshold, selected {} guide star for tracking",
             self.detected_stars.len(),
-            self.guide_stars.len()
+            if self.guide_star.is_some() { 1 } else { 0 }
         );
 
         Ok(())
@@ -577,100 +570,80 @@ impl FineGuidanceSystem {
         })
     }
 
-    /// Track guide stars and compute guidance update
+    /// Track guide star and compute guidance update
     fn track(&mut self, frame: ArrayView2<u16>) -> Result<GuidanceUpdate, String> {
         use shared::image_proc::centroid::compute_centroid_from_mask;
 
-        let mut delta_x_sum = 0.0;
-        let mut delta_y_sum = 0.0;
-        let mut total_quality = 0.0;
-        let stars_tracked = self.guide_stars.len();
+        let guide_star = self
+            .guide_star
+            .as_mut()
+            .ok_or("No guide star available for tracking")?;
 
-        // Process each guide star
-        for guide_star in &mut self.guide_stars {
-            // Extract ROI from the frame
-            let roi_bounds = &guide_star.roi.bounds;
+        // Check if we're receiving an ROI frame that matches expected size
+        let (frame_height, frame_width) = frame.dim();
+        let roi_bounds = &guide_star.roi;
+        let expected_roi_height = roi_bounds.max_row - roi_bounds.min_row + 1;
+        let expected_roi_width = roi_bounds.max_col - roi_bounds.min_col + 1;
 
-            // Ensure ROI is within frame bounds
-            let (frame_height, frame_width) = frame.dim();
-            if roi_bounds.min_row >= frame_height || roi_bounds.min_col >= frame_width {
-                continue;
-            }
-
-            let roi_min_row = roi_bounds.min_row.min(frame_height - 1);
-            let roi_max_row = roi_bounds.max_row.min(frame_height - 1);
-            let roi_min_col = roi_bounds.min_col.min(frame_width - 1);
-            let roi_max_col = roi_bounds.max_col.min(frame_width - 1);
-
-            // Extract the ROI subarray
-            let roi = frame.slice(ndarray::s![
-                roi_min_row..=roi_max_row,
-                roi_min_col..=roi_max_col
-            ]);
-
-            // Convert ROI to f64 for centroid calculation
-            let roi_f64 = roi.mapv(|v| v as f64);
-
-            // Create mask for centroid calculation based on configurable radius
-            // Use guide star diameter as FWHM estimate
-            let fwhm = guide_star.diameter;
-            let radius = fwhm * self.config.centroid_radius_multiplier;
-
-            // Create circular mask centered on expected position within ROI
-            let roi_height = roi_max_row - roi_min_row + 1;
-            let roi_width = roi_max_col - roi_min_col + 1;
-            let roi_center_x = (guide_star.x - roi_min_col as f64)
-                .max(0.0)
-                .min(roi_width as f64 - 1.0);
-            let roi_center_y = (guide_star.y - roi_min_row as f64)
-                .max(0.0)
-                .min(roi_height as f64 - 1.0);
-
-            let mask = Self::create_circular_mask(
-                (roi_height, roi_width),
-                roi_center_x,
-                roi_center_y,
-                radius,
+        // If frame size doesn't match expected ROI size, warn and skip
+        if frame_height != expected_roi_height || frame_width != expected_roi_width {
+            log::warn!(
+                "Expected ROI frame {expected_roi_height}x{expected_roi_width}, got {frame_height}x{frame_width} - skipping frame"
             );
-
-            // Compute centroid within the masked region
-            let centroid_result = compute_centroid_from_mask(&roi_f64.view(), &mask.view());
-
-            // Convert centroid position back to full frame coordinates
-            let new_x = roi_min_col as f64 + centroid_result.x;
-            let new_y = roi_min_row as f64 + centroid_result.y;
-
-            // Calculate delta from reference position
-            let delta_x = new_x - guide_star.roi.reference_x;
-            let delta_y = new_y - guide_star.roi.reference_y;
-
-            // Update guide star position
-            guide_star.x = new_x;
-            guide_star.y = new_y;
-            guide_star.flux = centroid_result.flux;
-            guide_star.diameter = centroid_result.diameter;
-
-            // Accumulate deltas
-            delta_x_sum += delta_x;
-            delta_y_sum += delta_y;
-
-            // Estimate quality based on flux and shape
-            let quality = (centroid_result.flux / 1000.0).min(1.0)
-                * (1.0 / centroid_result.aspect_ratio).min(1.0);
-            total_quality += quality;
+            // Return current position without update
+            return Ok(GuidanceUpdate {
+                x: guide_star.x,
+                y: guide_star.y,
+                timestamp: Instant::now(),
+                quality: 0.0, // Low quality since we couldn't track
+            });
         }
 
-        // Calculate average deltas and quality
-        let avg_delta_x = delta_x_sum / stars_tracked as f64;
-        let avg_delta_y = delta_y_sum / stars_tracked as f64;
-        let avg_quality = total_quality / stars_tracked as f64;
+        // Frame is the ROI we expected
+        let roi = frame;
+        let roi_min_row = roi_bounds.min_row;
+        let roi_min_col = roi_bounds.min_col;
+        let roi_max_row = roi_bounds.max_row;
+        let roi_max_col = roi_bounds.max_col;
+
+        // Convert ROI to f64 for centroid calculation
+        let roi_f64 = roi.mapv(|v| v as f64);
+
+        // Create mask for centroid calculation based on configurable radius
+        // Use guide star diameter as FWHM estimate
+        let fwhm = guide_star.diameter;
+        let radius = fwhm * self.config.centroid_radius_multiplier;
+
+        // Create circular mask centered on expected position within ROI
+        let roi_height = roi_max_row - roi_min_row + 1;
+        let roi_width = roi_max_col - roi_min_col + 1;
+        let (roi_center_x, roi_center_y) = guide_star.roi_center();
+
+        let mask =
+            Self::create_circular_mask((roi_height, roi_width), roi_center_x, roi_center_y, radius);
+
+        // Compute centroid within the masked region
+        let centroid_result = compute_centroid_from_mask(&roi_f64.view(), &mask.view());
+
+        // Convert centroid position back to full frame coordinates
+        let new_x = roi_min_col as f64 + centroid_result.x;
+        let new_y = roi_min_row as f64 + centroid_result.y;
+
+        // Update guide star position
+        guide_star.x = new_x;
+        guide_star.y = new_y;
+        guide_star.flux = centroid_result.flux;
+        guide_star.diameter = centroid_result.diameter;
+
+        // Estimate quality based on flux and shape
+        let quality = (centroid_result.flux / 1000.0).min(1.0)
+            * (1.0 / centroid_result.aspect_ratio).min(1.0);
 
         Ok(GuidanceUpdate {
-            delta_x: avg_delta_x,
-            delta_y: avg_delta_y,
-            num_stars_used: stars_tracked,
+            x: new_x,
+            y: new_y,
             timestamp: Instant::now(),
-            quality: avg_quality,
+            quality,
         })
     }
 
@@ -687,12 +660,13 @@ impl FineGuidanceSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mock_camera::MockCamera;
     use ndarray::Array2;
-    use std::sync::Arc;
 
     #[test]
     fn test_state_transitions() {
-        let mut fgs = FineGuidanceSystem::new(FgsConfig::default());
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
 
         // Should start in Idle
         assert_eq!(fgs.state(), &FgsState::Idle);
@@ -704,7 +678,8 @@ mod tests {
 
     #[test]
     fn test_process_frame() {
-        let mut fgs = FineGuidanceSystem::new(FgsConfig::default());
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
         let dummy_frame = Array2::<u16>::zeros((100, 100));
 
         // Should do nothing in Idle state
@@ -715,10 +690,14 @@ mod tests {
 
     #[test]
     fn test_frame_accumulation() {
-        let mut fgs = FineGuidanceSystem::new(FgsConfig {
-            acquisition_frames: 3,
-            ..Default::default()
-        });
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
+        let mut fgs = FineGuidanceSystem::new(
+            camera,
+            FgsConfig {
+                acquisition_frames: 3,
+                ..Default::default()
+            },
+        );
 
         // Start FGS
         let _ = fgs.process_event(FgsEvent::StartFgs);
@@ -763,7 +742,8 @@ mod tests {
 
     #[test]
     fn test_frame_accumulation_abort() {
-        let mut fgs = FineGuidanceSystem::new(FgsConfig::default());
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
+        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
 
         // Start FGS and accumulate some frames
         let _ = fgs.process_event(FgsEvent::StartFgs);
@@ -781,8 +761,10 @@ mod tests {
     #[test]
     fn test_callback_registration() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
-        let fgs = FineGuidanceSystem::new(FgsConfig::default());
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
 
@@ -800,7 +782,7 @@ mod tests {
                 confidence: 0.95,
                 timestamp_us: 1000,
             },
-            num_guide_stars: 3,
+            num_guide_stars: 1,
         });
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -816,9 +798,6 @@ mod tests {
                 confidence: 0.95,
                 timestamp_us: 2000,
             },
-            delta_x: 1.0,
-            delta_y: 1.0,
-            num_stars_used: 3,
         });
 
         // Counter should not have increased
@@ -828,8 +807,10 @@ mod tests {
     #[test]
     fn test_multiple_callbacks() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
-        let fgs = FineGuidanceSystem::new(FgsConfig::default());
+        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
 
         let counter1 = Arc::new(AtomicUsize::new(0));
         let counter2 = Arc::new(AtomicUsize::new(0));

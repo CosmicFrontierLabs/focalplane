@@ -17,8 +17,5 @@ pub use helpers::{
 };
 pub use motion_profiles::TestMotions;
 pub use runner::{run_fgs, run_fgs_with_callback, RunnerResults};
-// Deprecated: run_fgs_with_motion is kept for backward compatibility
-#[allow(deprecated)]
-pub use runner::run_fgs_with_motion;
 pub use simulator_camera::SimulatorCamera;
 pub use tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter};

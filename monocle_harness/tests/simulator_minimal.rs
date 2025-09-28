@@ -7,7 +7,7 @@ use monocle::{
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
-use monocle_harness::create_jbt_hwk_test_satellite;
+use monocle_harness::{create_jbt_hwk_camera, create_jbt_hwk_test_satellite};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 
 #[test]
@@ -34,7 +34,8 @@ fn test_basic_setup() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(fgs_config);
+    let camera = create_jbt_hwk_camera();
+    let mut fgs = FineGuidanceSystem::new(camera, fgs_config);
 
     // Verify FGS starts in idle state
     assert!(matches!(fgs.state(), FgsState::Idle));

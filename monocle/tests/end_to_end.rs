@@ -4,6 +4,7 @@ use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     callback::FgsCallbackEvent,
     config::FgsConfig,
+    mock_camera::MockCamera,
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
@@ -33,7 +34,9 @@ fn test_full_tracking_lifecycle() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    // Create mock camera with empty frames - we'll provide frames directly to process_frame
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track events
     let events_received = Arc::new(Mutex::new(Vec::<FgsCallbackEvent>::new()));
@@ -144,14 +147,9 @@ fn test_full_tracking_lifecycle() {
             let update = result.unwrap();
             if let Some(update) = update {
                 println!(
-                    "Frame {}: Guidance update - dx: {:.2}, dy: {:.2}, stars: {}, quality: {:.2}",
-                    frame_num,
-                    update.delta_x,
-                    update.delta_y,
-                    update.num_stars_used,
-                    update.quality
+                    "Frame {}: Guidance update - x: {:.2}, y: {:.2}, quality: {:.2}",
+                    frame_num, update.x, update.y, update.quality
                 );
-                assert!(update.num_stars_used > 0);
             }
         }
     } else {
@@ -199,15 +197,11 @@ fn test_full_tracking_lifecycle() {
                 assert!(*num_guide_stars > 0);
                 assert!(*track_id > 0);
             }
-            FgsCallbackEvent::TrackingUpdate {
-                track_id,
-                position,
-                delta_x,
-                delta_y,
-                num_stars_used,
-            } => {
-                println!("TrackingUpdate: track_id={}, position=({:.1}, {:.1}), delta=({:.2}, {:.2}), stars={}",
-                    track_id, position.x, position.y, delta_x, delta_y, num_stars_used);
+            FgsCallbackEvent::TrackingUpdate { track_id, position } => {
+                println!(
+                    "TrackingUpdate: track_id={}, position=({:.1}, {:.1})",
+                    track_id, position.x, position.y
+                );
             }
             FgsCallbackEvent::TrackingLost {
                 track_id,
@@ -244,7 +238,9 @@ fn test_tracking_loss_and_recovery() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    // Create mock camera with empty frames - we'll provide frames directly to process_frame
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track lost events
     let lost_count = Arc::new(AtomicUsize::new(0));
@@ -327,7 +323,9 @@ fn test_image_sequence_processing() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    // Create mock camera with empty frames - we'll provide frames directly to process_frame
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Create a sequence of images with gradually moving stars
     let mut image_sequence = Vec::new();
@@ -376,8 +374,8 @@ fn test_image_sequence_processing() {
                 println!("Frame {}: Tracking (processed: {})", idx, frames_processed);
                 if let Ok(Some(update)) = result {
                     println!(
-                        "  -> Update: dx={:.2}, dy={:.2}, quality={:.2}",
-                        update.delta_x, update.delta_y, update.quality
+                        "  -> Update: x={:.2}, y={:.2}, quality={:.2}",
+                        update.x, update.y, update.quality
                     );
                 }
             }

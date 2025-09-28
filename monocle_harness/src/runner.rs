@@ -3,8 +3,6 @@
 //! Provides functionality to run a Fine Guidance System with a camera interface
 //! and pointing motion for a specified duration, collecting results.
 
-use crate::motion_profiles::PointingMotion;
-use crate::SimulatorCamera;
 use monocle::{FgsCallbackEvent, FgsEvent, FgsState, FineGuidanceSystem};
 use shared::camera_interface::CameraInterface;
 use std::sync::{Arc, Mutex};
@@ -27,19 +25,17 @@ pub struct RunnerResults {
     pub events: Vec<FgsCallbackEvent>,
 }
 
-/// Run FGS with camera for specified duration
+/// Run FGS for specified duration
 ///
 /// # Arguments
-/// * `camera` - Camera interface implementation with built-in motion (e.g., SimulatorCamera)
-/// * `fgs` - Fine Guidance System instance
+/// * `fgs` - Fine Guidance System instance that owns its camera
 /// * `duration` - Total duration to run
 /// * `frame_interval` - Time between frames
 ///
 /// # Returns
 /// * `RunnerResults` containing execution statistics
-pub fn run_fgs(
-    camera: &mut SimulatorCamera,
-    fgs: &mut FineGuidanceSystem,
+pub fn run_fgs<C: CameraInterface>(
+    fgs: &mut FineGuidanceSystem<C>,
     duration: Duration,
     frame_interval: Duration,
 ) -> Result<RunnerResults, Box<dyn std::error::Error>> {
@@ -68,17 +64,8 @@ pub fn run_fgs(
 
     // Run for specified duration
     for frame_num in 0..num_frames {
-        let _current_time =
-            Duration::from_millis(frame_num as u64 * frame_interval.as_millis() as u64);
-
-        // Camera now handles motion internally based on elapsed time
-        // No need to set pointing manually
-
-        // Capture frame
-        let (frame, _metadata) = camera.capture_frame()?;
-
-        // Process frame with FGS
-        match fgs.process_frame(frame.view()) {
+        // FGS now owns the camera and captures internally
+        match fgs.process_next_frame() {
             Ok(_) => {
                 results.frames_processed += 1;
 
@@ -90,7 +77,8 @@ pub fn run_fgs(
                 }
             }
             Err(e) => {
-                results.errors.push(format!("Frame {frame_num}: {e}"));
+                results.errors.push(format!("Frame {frame_num} error: {e}"));
+                // Don't break on errors, continue processing
             }
         }
     }
@@ -113,19 +101,18 @@ pub fn run_fgs(
 /// Allows registering a callback that gets called after each frame is processed.
 ///
 /// # Arguments
-/// * `camera` - Camera interface implementation with built-in motion
-/// * `fgs` - Fine Guidance System instance
+/// * `fgs` - Fine Guidance System instance that owns its camera
 /// * `duration` - Total duration to run
 /// * `frame_interval` - Time between frames
 /// * `callback` - Function called after each frame with (frame_num, state, time)
-pub fn run_fgs_with_callback<F>(
-    camera: &mut SimulatorCamera,
-    fgs: &mut FineGuidanceSystem,
+pub fn run_fgs_with_callback<C, F>(
+    fgs: &mut FineGuidanceSystem<C>,
     duration: Duration,
     frame_interval: Duration,
     mut callback: F,
 ) -> Result<RunnerResults, Box<dyn std::error::Error>>
 where
+    C: CameraInterface,
     F: FnMut(usize, &FgsState, Duration),
 {
     let mut results = RunnerResults {
@@ -153,13 +140,8 @@ where
         let current_time =
             Duration::from_millis(frame_num as u64 * frame_interval.as_millis() as u64);
 
-        // Camera now handles motion internally based on elapsed time
-        // No need to set pointing manually
-
-        // Capture and process frame
-        let (frame, _metadata) = camera.capture_frame()?;
-
-        match fgs.process_frame(frame.view()) {
+        // FGS now owns the camera and captures internally
+        match fgs.process_next_frame() {
             Ok(_) => {
                 results.frames_processed += 1;
 
@@ -192,37 +174,24 @@ where
     Ok(results)
 }
 
-/// Legacy function for backward compatibility
-#[deprecated(
-    since = "0.2.0",
-    note = "Use run_fgs instead - camera now handles motion internally"
-)]
-pub fn run_fgs_with_motion(
-    camera: &mut SimulatorCamera,
-    fgs: &mut FineGuidanceSystem,
-    _motion: &dyn PointingMotion,
-    duration: Duration,
-    frame_interval: Duration,
-) -> Result<RunnerResults, Box<dyn std::error::Error>> {
-    run_fgs(camera, fgs, duration, frame_interval)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::motion_profiles::StaticPointing;
-    use monocle::FgsConfig;
+    use crate::SimulatorCamera;
+    use monocle::config::FgsConfig;
     use simulator::hardware::{SatelliteConfig, TelescopeConfig};
     use simulator::units::{Length, LengthExt, Temperature, TemperatureExt};
     use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
 
     fn create_test_catalog() -> BinaryCatalog {
-        // Create a simple test catalog with a few bright stars
+        // Create a simple test catalog with a few bright stars close together
+        // Using much smaller offsets to ensure they appear in a 256x256 frame
         BinaryCatalog::from_stars(
             vec![
-                MinimalStar::new(1, 0.0, 0.0, 5.0),
-                MinimalStar::new(2, 1.0, 0.0, 6.0),
-                MinimalStar::new(3, 0.0, 1.0, 7.0),
+                MinimalStar::new(1, 0.0, 0.0, 5.0),  // Center star
+                MinimalStar::new(2, 0.01, 0.0, 6.0), // Very close, 0.01 degree offset
+                MinimalStar::new(3, 0.0, 0.01, 7.0), // Very close, 0.01 degree offset
             ],
             "Test catalog",
         )
@@ -231,10 +200,12 @@ mod tests {
     #[test]
     fn test_runner_basic() {
         // Create test camera
+        // Use more reasonable telescope parameters for testing
+        // Longer focal length gives smaller field of view, keeping stars closer in pixels
         let telescope = TelescopeConfig::new(
             "Test",
             Length::from_meters(0.3),
-            Length::from_meters(0.045),
+            Length::from_meters(3.0), // f/10 telescope
             0.9,
         );
         let sensor = simulator::hardware::sensor::models::IMX455
@@ -243,7 +214,7 @@ mod tests {
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
-        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
+        let camera = SimulatorCamera::new(satellite, catalog, motion);
 
         // Create FGS
         let config = FgsConfig {
@@ -253,17 +224,22 @@ mod tests {
             roi_size: 32,
             ..Default::default()
         };
-        let mut fgs = FineGuidanceSystem::new(config);
+        let mut fgs = FineGuidanceSystem::new(camera, config);
 
         // Run for 1 second at 10 Hz
         // Camera already has StaticPointing motion built in from create_test_catalog
-        let results = run_fgs(
-            &mut camera,
-            &mut fgs,
-            Duration::from_secs(1),
-            Duration::from_millis(100),
-        )
-        .unwrap();
+        let results =
+            run_fgs(&mut fgs, Duration::from_secs(1), Duration::from_millis(100)).unwrap();
+
+        // Print debug info if test fails
+        if results.frames_processed != 10 {
+            eprintln!("Errors: {:?}", results.errors);
+            eprintln!("Final state: {:?}", results.final_state);
+            eprintln!("Events: {} events recorded", results.events.len());
+            eprintln!("Events detail: {:?}", results.events);
+            eprintln!("Frames processed: {}", results.frames_processed);
+            eprintln!("Frames tracking: {}", results.frames_tracking);
+        }
 
         // Should have processed 10 frames
         assert_eq!(results.frames_processed, 10);
@@ -274,10 +250,12 @@ mod tests {
     #[test]
     fn test_runner_with_callback() {
         // Create test setup
+        // Use more reasonable telescope parameters for testing
+        // Longer focal length gives smaller field of view, keeping stars closer in pixels
         let telescope = TelescopeConfig::new(
             "Test",
             Length::from_meters(0.3),
-            Length::from_meters(0.045),
+            Length::from_meters(3.0), // f/10 telescope
             0.9,
         );
         let sensor = simulator::hardware::sensor::models::IMX455
@@ -286,19 +264,18 @@ mod tests {
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
-        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
+        let camera = SimulatorCamera::new(satellite, catalog, motion);
 
         let config = FgsConfig {
             acquisition_frames: 1,
             ..Default::default()
         };
-        let mut fgs = FineGuidanceSystem::new(config);
+        let mut fgs = FineGuidanceSystem::new(camera, config);
 
         // Track states seen
         let mut states_seen = Vec::new();
 
         let results = run_fgs_with_callback(
-            &mut camera,
             &mut fgs,
             Duration::from_millis(500),
             Duration::from_millis(100),
@@ -334,10 +311,12 @@ mod tests {
     #[test]
     fn test_callback_cleanup() {
         // Test that callbacks are properly deregistered after runner completes
+        // Use more reasonable telescope parameters for testing
+        // Longer focal length gives smaller field of view, keeping stars closer in pixels
         let telescope = TelescopeConfig::new(
             "Test",
             Length::from_meters(0.3),
-            Length::from_meters(0.045),
+            Length::from_meters(3.0), // f/10 telescope
             0.9,
         );
         let sensor = simulator::hardware::sensor::models::IMX455
@@ -346,13 +325,13 @@ mod tests {
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
         let catalog = create_test_catalog();
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
-        let mut camera = SimulatorCamera::new(satellite, catalog, motion);
+        let camera = SimulatorCamera::new(satellite, catalog, motion);
 
         let config = FgsConfig {
             acquisition_frames: 1,
             ..Default::default()
         };
-        let mut fgs = FineGuidanceSystem::new(config);
+        let mut fgs = FineGuidanceSystem::new(camera, config);
 
         // Get initial callback count (should be 0)
         let initial_count = fgs.callback_count();
@@ -360,7 +339,6 @@ mod tests {
 
         // Run - this registers and deregisters a callback
         let results = run_fgs(
-            &mut camera,
             &mut fgs,
             Duration::from_millis(300),
             Duration::from_millis(100),
@@ -382,7 +360,6 @@ mod tests {
         // Run with callback function - this also registers and deregisters a callback
         let mut callback_invoked = false;
         let results2 = run_fgs_with_callback(
-            &mut camera,
             &mut fgs,
             Duration::from_millis(200),
             Duration::from_millis(100),

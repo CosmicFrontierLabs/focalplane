@@ -3,7 +3,13 @@
 mod common;
 
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
-use monocle::{FgsConfig, FgsEvent, FgsState, FineGuidanceSystem};
+use monocle::{
+    config::FgsConfig,
+    mock_camera::MockCamera,
+    state::{FgsEvent, FgsState},
+    FineGuidanceSystem,
+};
+use ndarray::Array2;
 
 #[test]
 fn test_single_stationary_star() {
@@ -19,7 +25,8 @@ fn test_single_stationary_star() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((256, 256)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Create a frame with a single star using the shared renderer
     let image_config = SyntheticImageConfig {

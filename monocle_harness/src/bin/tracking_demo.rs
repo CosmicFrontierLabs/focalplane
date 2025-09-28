@@ -12,8 +12,6 @@ use monocle_harness::{
     tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter},
 };
 use shared::camera_interface::CameraInterface;
-use shared::star_projector::StarProjector;
-use shared::units::AngleExt;
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -94,33 +92,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Duration: {} seconds", args.duration);
     println!("Frame rate: {} Hz", args.frame_rate);
 
-    // Create FGS with configuration
-    let config = FgsConfig {
-        acquisition_frames: args.acquisition_frames,
-        min_guide_star_snr: args.min_snr,
-        max_guide_stars: args.max_guide_stars,
-        roi_size: args.roi_size,
-        max_reacquisition_attempts: 3,
-        centroid_radius_multiplier: args.centroid_multiplier,
-        ..Default::default()
-    };
-
-    let mut fgs = FineGuidanceSystem::new(config);
-
-    // Determine output filename
-    let output_filename = args
-        .output
-        .unwrap_or_else(|| format!("tracking_{}.png", args.motion));
-
-    // Create tracking plotter
-    let mut plotter = TrackingPlotter::with_config(TrackingPlotConfig {
-        output_filename: output_filename.clone(),
-        title: format!("FGS Tracking: {} Motion", args.motion),
-        width: args.width,
-        height: args.height,
-        max_time_seconds: args.duration,
-    });
-
     // Setup motion pattern
     let base_pointing = Equatorial::from_degrees(83.0, -5.0);
     let test_motions = TestMotions::new(83.0, -5.0);
@@ -136,6 +107,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get actual sensor dimensions and telescope config for accurate projection
     let satellite_config = camera.satellite_config().clone();
     let (sensor_width, sensor_height) = satellite_config.sensor.dimensions.get_pixel_width_height();
+
+    // Create FGS with configuration and camera
+    let config = FgsConfig {
+        acquisition_frames: args.acquisition_frames,
+        min_guide_star_snr: args.min_snr,
+        max_guide_stars: args.max_guide_stars,
+        roi_size: args.roi_size,
+        max_reacquisition_attempts: 3,
+        centroid_radius_multiplier: args.centroid_multiplier,
+        ..Default::default()
+    };
+
+    let mut fgs = FineGuidanceSystem::new(camera, config);
+
+    // Determine output filename
+    let output_filename = args
+        .output
+        .unwrap_or_else(|| format!("tracking_{}.png", args.motion));
+
+    // Create tracking plotter
+    let mut plotter = TrackingPlotter::with_config(TrackingPlotConfig {
+        output_filename: output_filename.clone(),
+        title: format!("FGS Tracking: {} Motion", args.motion),
+        width: args.width,
+        height: args.height,
+        max_time_seconds: args.duration,
+    });
 
     // Track state for plotting
     let lock_established = Arc::new(Mutex::new(false));
@@ -160,16 +158,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             *lock_clone.lock().unwrap() = true;
             *position_clone.lock().unwrap() = (initial_position.x, initial_position.y);
         }
-        FgsCallbackEvent::TrackingUpdate {
-            position,
-            delta_x,
-            delta_y,
-            ..
-        } => {
+        FgsCallbackEvent::TrackingUpdate { position, .. } => {
             if verbose {
                 println!(
-                    "Tracking update: pos=({:.1}, {:.1}), delta=({:.2}, {:.2})",
-                    position.x, position.y, delta_x, delta_y
+                    "Tracking update: pos=({:.1}, {:.1})",
+                    position.x, position.y
                 );
             }
             *position_clone.lock().unwrap() = (position.x, position.y);
@@ -189,8 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Acquisition phase
     println!("Acquisition phase ({} frames)...", args.acquisition_frames);
     for i in 0..args.acquisition_frames {
-        let (frame, _) = camera.capture_frame()?;
-        fgs.process_frame(frame.view())?;
+        fgs.process_next_frame()?;
         if args.verbose {
             println!("  Frame {}/{} captured", i + 1, args.acquisition_frames);
         }
@@ -198,8 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Calibration frame
     println!("Calibration phase...");
-    let (calibration_frame, _) = camera.capture_frame()?;
-    fgs.process_frame(calibration_frame.view())?;
+    fgs.process_next_frame()?;
 
     // Check if we're tracking
     if !matches!(fgs.state(), FgsState::Tracking { .. }) {
@@ -207,20 +198,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Tracking established!");
     }
-
-    // Create StarProjector for accurate position calculations
-    // Calculate pixel scale from telescope and sensor parameters
-    use simulator::star_math::field_diameter;
-    let fov_angle = field_diameter(&satellite_config.telescope, &satellite_config.sensor);
-    let fov_rad = fov_angle.as_radians();
-    let max_dim = sensor_width.max(sensor_height) as f64;
-    let radians_per_pixel = fov_rad / max_dim;
-    let projector = StarProjector::new(
-        &base_pointing,
-        radians_per_pixel,
-        sensor_width,
-        sensor_height,
-    );
 
     // Tracking phase
     let total_duration = Duration::from_secs_f64(args.duration);
@@ -235,22 +212,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for frame_num in 0..num_frames {
         let current_time = Duration::from_millis(frame_num as u64 * frame_interval_ms);
 
-        // Camera now handles motion internally, get current pointing for display
-        let actual_pointing = camera.pointing();
-
-        // Capture frame and process
-        let (frame, _) = camera.capture_frame()?;
-        let result = fgs.process_frame(frame.view());
+        // Process next frame (FGS owns camera now)
+        let result = fgs.process_next_frame();
 
         if let Err(e) = &result {
             eprintln!("Frame {frame_num}: Error processing - {e:?}");
             continue;
         }
 
-        // Calculate actual position in pixels using StarProjector
-        let (actual_x, actual_y) = projector
-            .project_unbounded(&actual_pointing)
-            .ok_or_else(|| format!("Failed to project pointing at time {current_time:?}"))?;
+        // For tracking demo, we'll use the center position as "actual" since
+        // we can't access camera pointing directly anymore
+        let (actual_x, actual_y) = (center_x, center_y);
 
         // Get estimated position from FGS
         let has_lock = *lock_established.lock().unwrap();

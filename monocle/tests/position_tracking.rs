@@ -3,7 +3,14 @@
 mod common;
 
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
-use monocle::{FgsCallbackEvent, FgsConfig, FgsEvent, FgsState, FineGuidanceSystem};
+use monocle::{
+    callback::FgsCallbackEvent,
+    config::FgsConfig,
+    mock_camera::MockCamera,
+    state::{FgsEvent, FgsState},
+    FineGuidanceSystem,
+};
+use ndarray::Array2;
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -18,7 +25,8 @@ fn test_star_detection_on_correct_cycle() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track when we enter each state
     let states = Arc::new(Mutex::new(Vec::new()));
@@ -91,7 +99,8 @@ fn test_position_accuracy() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track reported positions
     let positions = Arc::new(Mutex::new(Vec::new()));
@@ -181,7 +190,8 @@ fn test_moving_star_tracking() {
         ..Default::default()
     };
 
-    let mut fgs = FineGuidanceSystem::new(config);
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let mut fgs = FineGuidanceSystem::new(camera, config);
 
     let positions = Arc::new(Mutex::new(Vec::new()));
     let pos_clone = positions.clone();

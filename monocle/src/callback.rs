@@ -26,9 +26,6 @@ pub enum FgsCallbackEvent {
     TrackingUpdate {
         track_id: u32,
         position: PositionEstimate,
-        delta_x: f64,
-        delta_y: f64,
-        num_stars_used: usize,
     },
     /// Tracking has been lost
     TrackingLost {
