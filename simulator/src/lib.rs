@@ -139,7 +139,7 @@ pub use photometry::trapezoid::trap_integrate;
 pub use scene::Scene;
 pub use shared::algo::icp::{iterative_closest_point, ICPResult};
 pub use shared::image_proc::histogram_stretch::stretch_histogram;
-pub use star_math::{field_diameter, filter_stars_in_field, pixel_scale, star_data_to_fluxes};
+pub use star_math::{field_diameter, pixel_scale, star_data_to_fluxes};
 pub use starfield::catalogs::StarPosition;
 
 #[cfg(test)]

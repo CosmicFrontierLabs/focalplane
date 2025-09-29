@@ -126,7 +126,7 @@
 //! - **Detector alignment**: Coordinate system registration
 //! - **Pointing accuracy**: Astrometric residual analysis
 
-use starfield::catalogs::{StarData, StarPosition};
+use starfield::catalogs::StarData;
 
 use crate::hardware::{SatelliteConfig, SensorConfig, TelescopeConfig};
 use crate::photometry::photoconversion::SourceFlux;
@@ -238,54 +238,6 @@ pub fn star_data_to_fluxes(star_data: &StarData, satellite: &SatelliteConfig) ->
     )
 }
 
-/// Filter stars that would be visible in the field of view
-///
-/// # Arguments
-/// * `stars` - Vector of star data objects with ra and dec fields
-/// * `center_ra` - Right ascension of field center in degrees
-/// * `center_dec` - Declination of field center in degrees
-/// * `field_diameter` - Diameter of field in degrees
-///
-/// # Returns
-/// Vector of references to stars that are within the field
-pub fn filter_stars_in_field<T>(
-    stars: &[T],
-    center_ra: f64,
-    center_dec: f64,
-    field_diameter: f64,
-) -> Vec<&T>
-where
-    T: StarPosition,
-{
-    // Field radius in degrees
-    let field_radius = field_diameter / 2.0;
-
-    // Convert to radians for calculations
-    let center_ra_rad = center_ra.to_radians();
-    let center_dec_rad = center_dec.to_radians();
-    let field_radius_rad = field_radius.to_radians();
-
-    // Filter stars that fall within the field
-    stars
-        .iter()
-        .filter(|star| {
-            let star_ra_rad = star.ra().to_radians();
-            let star_dec_rad = star.dec().to_radians();
-
-            // Angular distance using haversine formula
-            let d_ra = star_ra_rad - center_ra_rad;
-            let d_dec = star_dec_rad - center_dec_rad;
-
-            let a = (d_dec / 2.0).sin().powi(2)
-                + center_dec_rad.cos() * star_dec_rad.cos() * (d_ra / 2.0).sin().powi(2);
-            let angular_distance = 2.0 * a.sqrt().asin();
-
-            // Include stars within field radius
-            angular_distance <= field_radius_rad
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,67 +296,6 @@ mod tests {
             expected_scale,
             epsilon = 1e-6
         ));
-    }
-
-    // Test struct for StarPosition trait
-    #[derive(Debug, Clone)]
-    struct TestStar {
-        ra: f64,
-        dec: f64,
-    }
-
-    impl starfield::catalogs::StarPosition for TestStar {
-        fn ra(&self) -> f64 {
-            self.ra
-        }
-
-        fn dec(&self) -> f64 {
-            self.dec
-        }
-    }
-
-    #[test]
-    fn test_filter_stars_in_field() {
-        // Create test stars
-        let stars = vec![
-            TestStar {
-                ra: 100.0,
-                dec: 45.0,
-            }, // Center
-            TestStar {
-                ra: 100.1,
-                dec: 45.0,
-            }, // Near center
-            TestStar {
-                ra: 101.0,
-                dec: 45.0,
-            }, // 1 degree away in RA
-            TestStar {
-                ra: 100.0,
-                dec: 46.0,
-            }, // 1 degree away in Dec
-            TestStar {
-                ra: 105.0,
-                dec: 45.0,
-            }, // 5 degrees away in RA
-            TestStar {
-                ra: 100.0,
-                dec: 50.0,
-            }, // 5 degrees away in Dec
-        ];
-
-        // Test with 2 degree field diameter
-        let field_stars = filter_stars_in_field(&stars, 100.0, 45.0, 2.0);
-
-        // Count how many stars are definitely in the field
-        // Stars exactly 1 degree away might be at the border due to numeric precision in the calculation
-        assert!(field_stars.len() >= 3);
-
-        // Test with smaller field
-        let field_stars = filter_stars_in_field(&stars, 100.0, 45.0, 0.5);
-
-        // Should only include center and near center
-        assert_eq!(field_stars.len(), 2);
     }
 
     #[test]
