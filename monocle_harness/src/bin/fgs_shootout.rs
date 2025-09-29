@@ -1,108 +1,94 @@
 //! FGS (Fine Guidance System) performance shootout
 //!
-//! Tests FGS tracking performance across various conditions using SimulatorCamera
-//! and the monocle FGS implementation. Evaluates tracking accuracy, acquisition time,
-//! and robustness under different motion profiles, star magnitudes, and noise conditions.
+//! Tests FGS tracking performance across various telescope and exposure configurations.
+//! Evaluates tracking accuracy after lock acquisition over multiple time points.
 //!
 //! Usage:
 //! ```
 //! cargo run --release --bin fgs_shootout -- [OPTIONS]
 //! ```
 
-#![allow(unused_imports)] // Will be used in full implementation
-#![allow(dead_code)] // Stub implementation
-
 use chrono::Local;
 use clap::Parser;
-use monocle::{config::FgsConfig, state::FgsEvent, FineGuidanceSystem};
-use monocle_harness::{
-    create_guide_star_catalog, create_jbt_hwk_camera_with_catalog_and_motion,
-    motion_profiles::{PointingMotion, TestMotions},
-    simulator_camera::SimulatorCamera,
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use monocle::{
+    config::FgsConfig,
+    state::{FgsEvent, FgsState},
+    FineGuidanceSystem,
 };
+use monocle_harness::{motion_profiles::StaticPointing, simulator_camera::SimulatorCamera};
+use rand::prelude::*;
+use rayon::prelude::*;
 use shared::camera_interface::CameraInterface;
 use shared::range_arg::RangeArg;
+use shared::units::Temperature;
+use shared::units::{Length, LengthExt, TemperatureExt};
+use simulator::{
+    hardware::SatelliteConfig,
+    shared_args::{SensorModel, TelescopeModel},
+};
+use starfield::catalogs::binary_catalog::BinaryCatalog;
 use starfield::Equatorial;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Default filename for experiment results CSV
 const DEFAULT_CSV_FILENAME: &str = "fgs_shootout_YYYYMMDD_HHMMSS.csv";
 
-/// Parse coordinates string in format "ra,dec" (degrees)
-fn parse_ra_dec_coordinates(s: &str) -> Result<Equatorial, String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        return Err("Coordinates must be in format 'ra,dec' (degrees)".to_string());
-    }
-
-    let ra = parts[0]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid RA value".to_string())?;
-    let dec = parts[1]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid Dec value".to_string())?;
-
-    if !(0.0..360.0).contains(&ra) {
-        return Err("RA must be in range [0, 360) degrees".to_string());
-    }
-    if !(-90.0..=90.0).contains(&dec) {
-        return Err("Dec must be in range [-90, 90] degrees".to_string());
-    }
-
-    Ok(Equatorial::from_degrees(ra, dec))
-}
+/// Default number of tracked points after lock
+const DEFAULT_TRACKED_POINTS: usize = 10;
 
 /// Command line arguments for FGS shootout
 #[derive(Parser, Debug)]
 #[command(
     name = "FGS Performance Shootout",
-    about = "Tests FGS tracking performance across various conditions",
+    about = "Tests FGS tracking performance across telescope and exposure configurations",
     long_about = None
 )]
 struct Args {
-    /// Number of experiments to run (different sky pointings)
-    #[arg(short, long, default_value_t = 100)]
-    experiments: u32,
+    /// Number of random sky pointings to test
+    #[arg(short = 'n', long, default_value_t = 100)]
+    num_pointings: usize,
 
-    /// Single-shot debug mode: specify RA,Dec coordinates in degrees (format: "ra,dec")
-    /// Example: "83.0,-5.0" for Orion region
-    /// When specified, runs simulation only at this position instead of random sampling
-    #[arg(long, value_parser = parse_ra_dec_coordinates)]
-    single_shot_debug: Option<Equatorial>,
+    /// Sensor model to use (gsense4040bsi, gsense6510bsi, hwk4123, imx455)
+    #[arg(long, default_value_t = SensorModel::Hwk4123)]
+    sensor: SensorModel,
+
+    /// Telescope model to use
+    #[arg(long, default_value_t = TelescopeModel::CosmicFrontierJbt50cm)]
+    telescope: TelescopeModel,
+
+    /// F-number range to test (start:stop:step)
+    /// Example: --f-number-range 8:16:2 tests f/8, f/10, f/12, f/14, f/16
+    /// If not specified, uses the telescope's default f-number
+    #[arg(long)]
+    f_number_range: Option<RangeArg>,
+
+    /// Exposure time range in milliseconds (start:stop:step)
+    /// Example: --exposure-range-ms 100:1000:100
+    #[arg(long, default_value = "100:1000:200")]
+    exposure_range_ms: RangeArg,
+
+    /// Number of time points to track after lock acquisition
+    #[arg(long, default_value_t = DEFAULT_TRACKED_POINTS)]
+    tracked_points: usize,
 
     /// Output CSV file for experiment results
     #[arg(short, long, default_value = DEFAULT_CSV_FILENAME)]
     output_csv: String,
 
-    /// Motion types to test (comma-separated: stationary,sine_ra,sine_dec,circular,chaotic)
-    /// Default: all motion types
-    #[arg(
-        long,
-        value_delimiter = ',',
-        default_value = "stationary,sine_ra,sine_dec,circular"
-    )]
-    motion_types: Vec<String>,
+    /// Path to star catalog file
+    #[arg(long, default_value = "gaia_mag16_multi.bin")]
+    catalog: PathBuf,
 
-    /// Motion amplitude range in arcseconds (start:stop:step)
-    /// Example: --amplitude-range 0.1:1.0:0.1 for 0.1 to 1.0 arcsec in 0.1 arcsec steps
-    #[arg(long, default_value = "0.25:1.0:0.25")]
-    amplitude_range: RangeArg,
+    /// Run experiments serially instead of in parallel
+    #[arg(long)]
+    serial: bool,
 
-    /// Frame rate range in Hz (start:stop:step)
-    /// Example: --frame-rate-range 5:20:5 for 5Hz to 20Hz in 5Hz steps
-    #[arg(long, default_value = "10:10:1")]
-    frame_rate_range: RangeArg,
-
-    /// Tracking duration in seconds
-    #[arg(long, default_value_t = 30.0)]
-    tracking_duration: f64,
-
-    /// Number of acquisition frames
+    /// Number of acquisition frames for FGS
     #[arg(long, default_value_t = 3)]
     acquisition_frames: usize,
 
@@ -122,105 +108,77 @@ struct Args {
     #[arg(long, default_value_t = 5.0)]
     centroid_multiplier: f64,
 
-    /// Star magnitude range to test (start:stop:step)
-    /// Example: --magnitude-range 3:12:1 for mag 3 to 12 in steps of 1
-    #[arg(long, default_value = "3:10:1")]
-    magnitude_range: RangeArg,
-
-    /// Run experiments serially instead of in parallel
-    #[arg(long, default_value_t = false)]
-    serial: bool,
-
-    /// Number of trials to run for each configuration (different noise seeds)
-    #[arg(long, default_value_t = 3)]
-    trials: u32,
-
-    /// Save tracking plots for each experiment
-    #[arg(long)]
-    save_plots: bool,
-
-    /// Output directory for plots (if --save-plots is enabled)
-    #[arg(long, default_value = "fgs_shootout_plots")]
-    plot_dir: PathBuf,
-
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
 
-    /// Number of threads for parallel execution (0 = use all available)
+    /// Random seed for reproducibility (0 = use random seed)
     #[arg(long, default_value_t = 0)]
-    threads: usize,
+    seed: u64,
 
     /// Temperature in Celsius for sensor simulation
     #[arg(long, default_value_t = -10.0)]
     temperature: f64,
 
-    /// Enable tracking plots for debugging (saves to plots/ directory)
-    #[arg(long)]
-    debug_plots: bool,
+    /// Number of threads for parallel execution (0 = use all available)
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+}
 
-    /// Maximum reacquisition attempts when tracking is lost
-    #[arg(long, default_value_t = 3)]
-    max_reacquisition_attempts: usize,
+/// Parameters for a single FGS experiment
+#[derive(Debug, Clone)]
+struct ExperimentParams {
+    pointing: Equatorial,
+    satellite_config: SatelliteConfig,
+    exposure_ms: f64,
+    experiment_id: usize,
+}
 
-    /// Save detailed per-frame tracking data
-    #[arg(long)]
-    save_frame_data: bool,
-
-    /// Sensor noise scale factor (1.0 = nominal, 2.0 = double noise)
-    #[arg(long, default_value_t = 1.0)]
-    noise_scale: f64,
+/// Results from a single FGS tracking point
+#[derive(Debug, Clone)]
+struct TrackingPoint {
+    time_s: f64,
+    x_error_pixels: f64,
+    y_error_pixels: f64,
+    x_actual: f64,
+    y_actual: f64,
+    x_estimated: f64,
+    y_estimated: f64,
 }
 
 /// Results from a single FGS experiment
 #[derive(Debug, Clone)]
-struct FgsExperimentResult {
-    // Experiment parameters
-    pointing_ra: f64,
-    pointing_dec: f64,
-    motion_type: String,
-    motion_amplitude_arcsec: f64,
-    frame_rate_hz: f64,
-    star_magnitude: f64,
-    trial_number: u32,
-    noise_scale: f64,
+struct ExperimentResult {
+    // Original experiment parameters
+    params: ExperimentParams,
 
-    // FGS configuration
-    acquisition_frames: usize,
-    min_snr: f64,
-    max_guide_stars: usize,
-    roi_size: usize,
-    centroid_multiplier: f64,
-
-    // Results
-    acquisition_success: bool,
+    // Acquisition results
+    lock_acquired: bool,
     acquisition_time_s: f64,
-    num_guide_stars_found: usize,
-    tracking_duration_s: f64,
-    frames_tracked: usize,
-    frames_lost: usize,
-    reacquisition_attempts: usize,
-    mean_x_error_pixels: f64,
-    mean_y_error_pixels: f64,
-    std_x_error_pixels: f64,
-    std_y_error_pixels: f64,
-    max_error_pixels: f64,
-    rms_error_pixels: f64,
-    tracking_lost_permanently: bool,
+    num_guide_stars: usize,
+
+    // Tracking results (empty if no lock)
+    tracking_points: Vec<TrackingPoint>,
+
+    // Summary statistics
+    mean_x_error: f64,
+    mean_y_error: f64,
+    std_x_error: f64,
+    std_y_error: f64,
+    max_error: f64,
+    rms_error: f64,
 }
 
-impl FgsExperimentResult {
+impl ExperimentResult {
     /// Write CSV header
     fn write_csv_header(file: &mut File) -> std::io::Result<()> {
         writeln!(
             file,
-            "pointing_ra_deg,pointing_dec_deg,motion_type,motion_amplitude_arcsec,\
-            frame_rate_hz,star_magnitude,trial_number,noise_scale,\
-            acquisition_frames,min_snr,max_guide_stars,roi_size,centroid_multiplier,\
-            acquisition_success,acquisition_time_s,num_guide_stars_found,\
-            tracking_duration_s,frames_tracked,frames_lost,reacquisition_attempts,\
+            "experiment_id,pointing_ra_deg,pointing_dec_deg,f_number,exposure_ms,\
+            sensor,telescope,temperature_c,\
+            lock_acquired,acquisition_time_s,num_guide_stars,\
             mean_x_error_pixels,mean_y_error_pixels,std_x_error_pixels,std_y_error_pixels,\
-            max_error_pixels,rms_error_pixels,tracking_lost_permanently"
+            max_error_pixels,rms_error_pixels,num_tracked_points"
         )
     }
 
@@ -228,39 +186,214 @@ impl FgsExperimentResult {
     fn write_csv_row(&self, file: &mut File) -> std::io::Result<()> {
         writeln!(
             file,
-            "{:.6},{:.6},{},{:.3},{:.1},{:.1},{},{:.2},\
-            {},{:.1},{},{},{:.1},\
-            {},{:.3},{},{:.3},{},{},{},\
-            {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{}",
-            self.pointing_ra,
-            self.pointing_dec,
-            self.motion_type,
-            self.motion_amplitude_arcsec,
-            self.frame_rate_hz,
-            self.star_magnitude,
-            self.trial_number,
-            self.noise_scale,
-            self.acquisition_frames,
-            self.min_snr,
-            self.max_guide_stars,
-            self.roi_size,
-            self.centroid_multiplier,
-            self.acquisition_success,
+            "{},{:.6},{:.6},{:.1},{:.1},{},{},{:.1},{},{:.3},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{}",
+            self.params.experiment_id,
+            self.params.pointing.ra.to_degrees(),
+            self.params.pointing.dec.to_degrees(),
+            self.params.satellite_config.telescope.f_number(),
+            self.params.exposure_ms,
+            self.params.satellite_config.sensor.name,
+            self.params.satellite_config.telescope.name,
+            self.params.satellite_config.temperature.as_celsius(),
+            self.lock_acquired,
             self.acquisition_time_s,
-            self.num_guide_stars_found,
-            self.tracking_duration_s,
-            self.frames_tracked,
-            self.frames_lost,
-            self.reacquisition_attempts,
-            self.mean_x_error_pixels,
-            self.mean_y_error_pixels,
-            self.std_x_error_pixels,
-            self.std_y_error_pixels,
-            self.max_error_pixels,
-            self.rms_error_pixels,
-            self.tracking_lost_permanently
+            self.num_guide_stars,
+            self.mean_x_error,
+            self.mean_y_error,
+            self.std_x_error,
+            self.std_y_error,
+            self.max_error,
+            self.rms_error,
+            self.tracking_points.len()
         )
     }
+
+    /// Write detailed tracking data to separate CSV
+    fn write_tracking_csv(&self, file: &mut File) -> std::io::Result<()> {
+        for point in &self.tracking_points {
+            writeln!(
+                file,
+                "{},{:.6},{:.6},{:.1},{:.1},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+                self.params.experiment_id,
+                self.params.pointing.ra.to_degrees(),
+                self.params.pointing.dec.to_degrees(),
+                self.params.satellite_config.telescope.f_number(),
+                self.params.exposure_ms,
+                point.time_s,
+                point.x_actual,
+                point.y_actual,
+                point.x_estimated,
+                point.y_estimated,
+                point.x_error_pixels,
+                point.y_error_pixels,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Run a single FGS experiment
+fn run_single_experiment(
+    params: ExperimentParams,
+    catalog: Arc<BinaryCatalog>,
+    fgs_config: FgsConfig,
+    tracked_points: usize,
+    verbose: bool,
+) -> ExperimentResult {
+    let start_time = Instant::now();
+
+    // Use the satellite configuration from params
+    let satellite = params.satellite_config.clone();
+
+    // Create simulator camera with catalog
+    let mut camera = SimulatorCamera::new(
+        satellite,
+        catalog.as_ref().clone(),
+        StaticPointing::from_equatorial_boxed(params.pointing),
+    );
+
+    // Set exposure time
+    let exposure = Duration::from_millis(params.exposure_ms as u64);
+    camera
+        .set_exposure(exposure)
+        .expect("Failed to set exposure");
+
+    // Create FGS
+    let mut fgs = FineGuidanceSystem::new(camera, fgs_config.clone());
+
+    // Start FGS
+    fgs.process_event(FgsEvent::StartFgs)
+        .expect("Failed to start FGS");
+
+    // Acquisition phase
+    for _ in 0..fgs_config.acquisition_frames {
+        fgs.process_next_frame()
+            .expect("Failed to process acquisition frame");
+    }
+
+    // Calibration frame
+    fgs.process_next_frame()
+        .expect("Failed to process calibration frame");
+
+    let acquisition_time = start_time.elapsed().as_secs_f64();
+
+    // Check if we achieved lock
+    let (lock_acquired, num_guide_stars) = match fgs.state() {
+        FgsState::Tracking { .. } => (true, 1), // FGS currently tracks single star
+        _ => (false, 0),
+    };
+
+    if verbose {
+        println!(
+            "Experiment {}: Pointing ({:.2}, {:.2})°, f/{:.1}, {}ms exposure - Lock: {}, Stars: {}",
+            params.experiment_id,
+            params.pointing.ra.to_degrees(),
+            params.pointing.dec.to_degrees(),
+            params.satellite_config.telescope.f_number(),
+            params.exposure_ms,
+            lock_acquired,
+            num_guide_stars
+        );
+    }
+
+    // Tracking phase
+    let mut tracking_points = Vec::new();
+
+    if lock_acquired {
+        // For simplicity, we'll track at the same position (no motion)
+        // In a real scenario, you might add motion here
+
+        for _ in 0..tracked_points {
+            if let Ok(Some(update)) = fgs.process_next_frame() {
+                // Since we're using static pointing, actual position is center
+                // In a real implementation with motion, you'd calculate actual position
+                let sensor_width = 4096.0; // HWK4123 width
+                let sensor_height = 2300.0; // HWK4123 height
+                let center_x = sensor_width / 2.0;
+                let center_y = sensor_height / 2.0;
+
+                let point = TrackingPoint {
+                    time_s: update.timestamp.to_duration().as_secs_f64(),
+                    x_actual: center_x,
+                    y_actual: center_y,
+                    x_estimated: update.x,
+                    y_estimated: update.y,
+                    x_error_pixels: update.x - center_x,
+                    y_error_pixels: update.y - center_y,
+                };
+
+                tracking_points.push(point);
+            }
+        }
+    }
+
+    // Calculate statistics
+    let (mean_x_error, mean_y_error, std_x_error, std_y_error, max_error, rms_error) =
+        if !tracking_points.is_empty() {
+            let x_errors: Vec<f64> = tracking_points.iter().map(|p| p.x_error_pixels).collect();
+            let y_errors: Vec<f64> = tracking_points.iter().map(|p| p.y_error_pixels).collect();
+
+            let mean_x = x_errors.iter().sum::<f64>() / x_errors.len() as f64;
+            let mean_y = y_errors.iter().sum::<f64>() / y_errors.len() as f64;
+
+            let var_x =
+                x_errors.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>() / x_errors.len() as f64;
+            let var_y =
+                y_errors.iter().map(|y| (y - mean_y).powi(2)).sum::<f64>() / y_errors.len() as f64;
+
+            let std_x = var_x.sqrt();
+            let std_y = var_y.sqrt();
+
+            let max_err = x_errors
+                .iter()
+                .chain(&y_errors)
+                .map(|e| e.abs())
+                .fold(0.0, f64::max);
+
+            let rms = ((x_errors.iter().map(|x| x.powi(2)).sum::<f64>()
+                + y_errors.iter().map(|y| y.powi(2)).sum::<f64>())
+                / (x_errors.len() + y_errors.len()) as f64)
+                .sqrt();
+
+            (mean_x, mean_y, std_x, std_y, max_err, rms)
+        } else {
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        };
+
+    ExperimentResult {
+        params,
+        lock_acquired,
+        acquisition_time_s: acquisition_time,
+        num_guide_stars,
+        tracking_points,
+        mean_x_error,
+        mean_y_error,
+        std_x_error,
+        std_y_error,
+        max_error,
+        rms_error,
+    }
+}
+
+/// Generate random sky pointings
+fn generate_random_pointings(num: usize, seed: u64) -> Vec<Equatorial> {
+    let mut rng = if seed == 0 {
+        StdRng::from_entropy()
+    } else {
+        StdRng::seed_from_u64(seed)
+    };
+
+    (0..num)
+        .map(|_| {
+            // Random RA: 0-360 degrees
+            let ra_deg = rng.gen_range(0.0..360.0);
+            // Random Dec: -90 to +90 degrees (with cosine distribution for uniform sphere coverage)
+            let dec_rad = rng.gen_range(0.0..1.0f64).asin() - std::f64::consts::FRAC_PI_2;
+            let dec_deg = dec_rad.to_degrees();
+
+            Equatorial::from_degrees(ra_deg, dec_deg)
+        })
+        .collect()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -272,28 +405,223 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("FGS Performance Shootout");
     println!("========================");
-    println!("Experiments: {}", args.experiments);
-    println!("Motion types: {:?}", args.motion_types);
-    println!("Amplitude range (arcsec): {}", args.amplitude_range);
-    println!("Frame rate range (Hz): {}", args.frame_rate_range);
-    println!("Star magnitude range: {}", args.magnitude_range);
-    println!("Tracking duration: {} seconds", args.tracking_duration);
-    println!("Trials per configuration: {}", args.trials);
+    println!("Number of pointings: {}", args.num_pointings);
+    println!("F-number range: {:?}", args.f_number_range);
+    println!("Exposure range (ms): {}", args.exposure_range_ms);
+    println!("Tracked points per lock: {}", args.tracked_points);
+    println!("Catalog: {}", args.catalog.display());
+    println!("Parallel execution: {}", !args.serial);
 
-    // Generate timestamp for output file
+    // Set thread pool size if specified
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(args.threads)
+            .build_global()
+            .unwrap();
+    }
+
+    // Load star catalog
+    println!("\nLoading catalog...");
+    let catalog = Arc::new(BinaryCatalog::load(&args.catalog)?);
+    println!("Loaded {} stars", catalog.len());
+
+    // Get base satellite configuration
+    let base_sensor = args.sensor.to_config();
+    let base_telescope = args.telescope.to_config();
+
+    // Generate parameter combinations
+    let f_numbers = if let Some(ref f_range) = args.f_number_range {
+        f_range.to_vec()?
+    } else {
+        vec![base_telescope.f_number()]
+    };
+    let exposures_ms = args.exposure_range_ms.to_vec()?;
+    let pointings = generate_random_pointings(args.num_pointings, args.seed);
+
+    println!("\nParameter space:");
+    println!("  Sensor: {}", base_sensor.name);
+    println!("  Telescope: {}", base_telescope.name);
+    println!("  Temperature: {:.1}°C", args.temperature);
+    println!("  F-numbers: {f_numbers:?}");
+    println!("  Exposures (ms): {exposures_ms:?}");
+    println!(
+        "  Total experiments: {}",
+        f_numbers.len() * exposures_ms.len() * pointings.len()
+    );
+
+    // Create FGS configuration
+    let fgs_config = FgsConfig {
+        acquisition_frames: args.acquisition_frames,
+        min_guide_star_snr: args.min_snr,
+        max_guide_stars: args.max_guide_stars,
+        roi_size: args.roi_size,
+        centroid_radius_multiplier: args.centroid_multiplier,
+        ..Default::default()
+    };
+
+    // Generate all experiment parameters with satellite configurations
+    let mut all_params = Vec::new();
+    let mut experiment_id = 0;
+
+    for pointing in &pointings {
+        for &f_number in &f_numbers {
+            // Create telescope with modified f-number
+            let focal_length = Length::from_meters(base_telescope.aperture.as_meters() * f_number);
+            let telescope = base_telescope.clone().with_focal_length(focal_length);
+
+            // Create satellite configuration
+            let satellite_config = SatelliteConfig::new(
+                telescope,
+                base_sensor.clone(),
+                Temperature::from_celsius(args.temperature),
+            );
+
+            for &exposure_ms in &exposures_ms {
+                all_params.push(ExperimentParams {
+                    pointing: *pointing,
+                    satellite_config: satellite_config.clone(),
+                    exposure_ms,
+                    experiment_id,
+                });
+                experiment_id += 1;
+            }
+        }
+    }
+
+    // Setup progress tracking
+    let multi_progress = MultiProgress::new();
+    let main_progress = multi_progress.add(ProgressBar::new(all_params.len() as u64));
+    main_progress.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+    main_progress.set_message("Running experiments...");
+
+    // Shared results vector
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    // Run experiments
+    let experiment_start = Instant::now();
+
+    if args.serial {
+        // Serial execution
+        for params in all_params {
+            let result = run_single_experiment(
+                params,
+                catalog.clone(),
+                fgs_config.clone(),
+                args.tracked_points,
+                args.verbose,
+            );
+
+            results.lock().unwrap().push(result);
+            main_progress.inc(1);
+        }
+    } else {
+        // Parallel execution
+        all_params.into_par_iter().for_each(|params| {
+            let result = run_single_experiment(
+                params,
+                catalog.clone(),
+                fgs_config.clone(),
+                args.tracked_points,
+                args.verbose,
+            );
+
+            results.lock().unwrap().push(result);
+            main_progress.inc(1);
+        });
+    }
+
+    main_progress.finish_with_message("Experiments complete!");
+
+    let total_time = experiment_start.elapsed();
+
+    // Sort results by experiment_id for consistent output
+    let mut final_results = results.lock().unwrap().clone();
+    final_results.sort_by_key(|r| r.params.experiment_id);
+
+    // Calculate statistics
+    let total_experiments = final_results.len();
+    let successful_locks = final_results.iter().filter(|r| r.lock_acquired).count();
+    let lock_rate = successful_locks as f64 / total_experiments as f64 * 100.0;
+
+    println!("\n=== Results Summary ===");
+    println!("Total experiments: {total_experiments}");
+    println!("Successful locks: {successful_locks} ({lock_rate:.1}%)");
+    println!("Total time: {:.2}s", total_time.as_secs_f64());
+    println!(
+        "Time per experiment: {:.3}s",
+        total_time.as_secs_f64() / total_experiments as f64
+    );
+
+    // Write results to CSV
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
     let output_filename = args.output_csv.replace("YYYYMMDD_HHMMSS", &timestamp);
 
-    println!("\nOutput CSV: {output_filename}");
+    println!("\nWriting results to: {output_filename}");
 
-    // TODO: Implement experiment runner
-    println!("\n[Stub implementation - experiment runner not yet implemented]");
-    println!("Next steps:");
-    println!("1. Create experiment parameter combinations");
-    println!("2. Implement single experiment runner function");
-    println!("3. Add parallel/serial execution");
-    println!("4. Collect and write results to CSV");
-    println!("5. Add progress tracking");
+    let mut output_file = File::create(&output_filename)?;
+    ExperimentResult::write_csv_header(&mut output_file)?;
+
+    for result in &final_results {
+        result.write_csv_row(&mut output_file)?;
+    }
+
+    // Write detailed tracking data if we have any
+    let tracking_filename = output_filename.replace(".csv", "_tracking.csv");
+    let mut tracking_file = File::create(&tracking_filename)?;
+
+    writeln!(
+        tracking_file,
+        "experiment_id,pointing_ra_deg,pointing_dec_deg,f_number,exposure_ms,\
+        time_s,x_actual,y_actual,x_estimated,y_estimated,x_error_pixels,y_error_pixels"
+    )?;
+
+    for result in &final_results {
+        if result.lock_acquired {
+            result.write_tracking_csv(&mut tracking_file)?;
+        }
+    }
+
+    println!("Tracking details written to: {tracking_filename}");
+
+    // Print some statistics by configuration
+    println!("\n=== Lock Rate by F-number ===");
+    for f_num in &f_numbers {
+        let f_results: Vec<_> = final_results
+            .iter()
+            .filter(|r| (r.params.satellite_config.telescope.f_number() - f_num).abs() < 0.01)
+            .collect();
+        let f_locks = f_results.iter().filter(|r| r.lock_acquired).count();
+        println!(
+            "f/{:.1}: {}/{} ({:.1}%)",
+            f_num,
+            f_locks,
+            f_results.len(),
+            f_locks as f64 / f_results.len() as f64 * 100.0
+        );
+    }
+
+    println!("\n=== Lock Rate by Exposure ===");
+    for exp in &exposures_ms {
+        let exp_results: Vec<_> = final_results
+            .iter()
+            .filter(|r| (r.params.exposure_ms - exp).abs() < 0.01)
+            .collect();
+        let exp_locks = exp_results.iter().filter(|r| r.lock_acquired).count();
+        println!(
+            "{:.0}ms: {}/{} ({:.1}%)",
+            exp,
+            exp_locks,
+            exp_results.len(),
+            exp_locks as f64 / exp_results.len() as f64 * 100.0
+        );
+    }
+
+    println!("\n✅ FGS shootout complete!");
 
     Ok(())
 }

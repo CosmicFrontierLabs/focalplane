@@ -9,12 +9,13 @@ use shared::camera_interface::{
     AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
 };
 use shared::image_proc::detection::AABB;
-use shared::units::TemperatureExt;
+use shared::units::{AngleExt, TemperatureExt};
 use simulator::hardware::{SatelliteConfig, TelescopeConfig};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
+use simulator::star_math::field_diameter;
 use starfield::catalogs::binary_catalog::BinaryCatalog;
-use starfield::catalogs::StarData;
+use starfield::catalogs::StarCatalog;
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -129,20 +130,16 @@ impl SimulatorCamera {
             .as_ref()
             .ok_or_else(|| CameraError::CaptureError("No catalog loaded".to_string()))?;
 
-        // Get stars from catalog and convert to StarData
-        let stars: Vec<StarData> = catalog
-            .stars()
-            .iter()
-            .map(|s| {
-                StarData::new(
-                    s.id,
-                    s.position.ra.to_degrees(),
-                    s.position.dec.to_degrees(),
-                    s.magnitude,
-                    None,
-                )
-            })
-            .collect();
+        // Calculate field diameter in degrees
+        let fov_diameter =
+            field_diameter(&self.satellite.telescope, &self.satellite.sensor).as_degrees();
+
+        // Get stars in the field of view using catalog's method
+        let stars = catalog.stars_in_field(
+            pointing.ra.to_degrees(),
+            pointing.dec.to_degrees(),
+            fov_diameter,
+        );
 
         // Use minimum zodiacal light for best visibility
         let solar_angles = SolarAngularCoordinates::zodiacal_minimum();

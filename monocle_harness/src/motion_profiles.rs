@@ -39,6 +39,11 @@ impl StaticPointing {
             base: Equatorial::from_degrees(ra_deg, dec_deg),
         }
     }
+
+    /// Create a new StaticPointing from an Equatorial coordinate and return it boxed
+    pub fn from_equatorial_boxed(coord: Equatorial) -> Box<dyn PointingMotion> {
+        Box::new(Self { base: coord })
+    }
 }
 
 impl PointingMotion for StaticPointing {
