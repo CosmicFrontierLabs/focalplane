@@ -221,16 +221,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_frames, args.duration
     );
 
+    // Track start time for converting Instant to Duration
+
     for frame_num in 0..num_frames {
-        let current_time = Duration::from_millis(frame_num as u64 * frame_interval_ms);
-
         // Process next frame (FGS owns camera now)
-        let result = fgs.process_next_frame();
+        let update = fgs
+            .process_next_frame()
+            .unwrap_or_else(|e| panic!("Frame {frame_num}: Failed to process frame: {e}"))
+            .unwrap_or_else(|| {
+                panic!("Frame {frame_num}: Should have guidance update during tracking")
+            });
 
-        if let Err(e) = &result {
-            eprintln!("Frame {frame_num}: Error processing - {e:?}");
-            continue;
-        }
+        let current_time = update.timestamp.to_duration();
 
         // Get actual pointing from motion at current time
         let actual_pointing = motion_for_tracking.get_pointing(current_time);
@@ -277,10 +279,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(); // New line after progress dots
     }
 
-    // Generate the plot
-    println!("\nGenerating plot...");
+    // Generate the plots
+    println!("\nGenerating plots...");
     plotter.generate_plot()?;
     println!("✅ Tracking plot saved to plots/{output_filename}");
+
+    // Generate residuals plot
+    plotter.generate_residuals_plot()?;
+    let residuals_filename = output_filename.replace(".png", "_residuals.png");
+    println!("✅ Residuals plot saved to plots/{residuals_filename}");
 
     // Stop FGS
     fgs.process_event(FgsEvent::StopFgs)?;

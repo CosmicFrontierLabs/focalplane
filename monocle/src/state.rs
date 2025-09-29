@@ -1,5 +1,6 @@
 use ndarray::ArrayView2;
 use serde::{Deserialize, Serialize};
+use shared::camera_interface::Timestamp;
 
 /// Fine Guidance System states
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +26,6 @@ pub enum FgsEvent<'a> {
     Abort,
     /// Stop FGS (graceful shutdown)
     StopFgs,
-    /// Process a new image frame
-    ProcessFrame(ArrayView2<'a, u16>),
+    /// Process a new image frame with timestamp
+    ProcessFrame(ArrayView2<'a, u16>, Timestamp),
 }

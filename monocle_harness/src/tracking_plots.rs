@@ -139,6 +139,238 @@ impl TrackingPlotter {
         Ok(())
     }
 
+    /// Generate residuals plot in a 2x2 layout
+    pub fn generate_residuals_plot(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Ensure plots directory exists
+        fs::create_dir_all("plots")?;
+
+        // Build output path for residuals plot
+        let residuals_filename = self
+            .config
+            .output_filename
+            .replace(".png", "_residuals.png");
+        let output_path = format!("plots/{residuals_filename}");
+
+        // Create drawing backend
+        let root = BitMapBackend::new(&output_path, (self.config.width, self.config.height))
+            .into_drawing_area();
+
+        root.fill(&WHITE)?;
+
+        // Split into 2x2 grid
+        let areas = root.split_evenly((2, 2));
+
+        // Calculate residuals (only for points with lock)
+        let residuals: Vec<(Duration, f64, f64)> = self
+            .data_points
+            .iter()
+            .filter(|p| p.has_lock)
+            .map(|p| {
+                (
+                    p.time,
+                    p.estimated_x - p.actual_x,
+                    p.estimated_y - p.actual_y,
+                )
+            })
+            .collect();
+
+        if !residuals.is_empty() {
+            // Top left: X residuals time series
+            self.draw_residual_timeseries(&areas[0], &residuals, true, "X Residuals")?;
+
+            // Top right: X residuals histogram
+            self.draw_residual_histogram(&areas[1], &residuals, true, "X Residual Distribution")?;
+
+            // Bottom left: Y residuals time series
+            self.draw_residual_timeseries(&areas[2], &residuals, false, "Y Residuals")?;
+
+            // Bottom right: Y residuals histogram
+            self.draw_residual_histogram(&areas[3], &residuals, false, "Y Residual Distribution")?;
+        }
+
+        root.present()?;
+        println!("Residuals plot saved to: plots/{residuals_filename}");
+
+        Ok(())
+    }
+
+    /// Draw residual time series plot
+    fn draw_residual_timeseries(
+        &self,
+        area: &DrawingArea<BitMapBackend, plotters::coord::Shift>,
+        residuals: &[(Duration, f64, f64)],
+        is_x_axis: bool,
+        title: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if residuals.is_empty() {
+            return Ok(());
+        }
+
+        // Get time bounds
+        let time_min = 0.0;
+        let time_max = residuals
+            .last()
+            .map(|(t, _, _)| t.as_secs_f64())
+            .unwrap_or(1.0)
+            * 1.05;
+
+        // Get residual bounds
+        let mut res_min = f64::INFINITY;
+        let mut res_max = f64::NEG_INFINITY;
+
+        for (_, x_res, y_res) in residuals {
+            let res = if is_x_axis { *x_res } else { *y_res };
+            res_min = res_min.min(res);
+            res_max = res_max.max(res);
+        }
+
+        // Add margin and ensure symmetric around zero
+        let max_abs = res_min.abs().max(res_max.abs()) * 1.1;
+        res_min = -max_abs;
+        res_max = max_abs;
+
+        // Create chart
+        let mut chart = ChartBuilder::on(area)
+            .caption(title, ("sans-serif", 25))
+            .margin(5)
+            .x_label_area_size(35)
+            .y_label_area_size(45)
+            .build_cartesian_2d(time_min..time_max, res_min..res_max)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("Time (seconds)")
+            .y_desc("Residual (pixels)")
+            .x_label_formatter(&|x| format!("{x:.1}"))
+            .y_label_formatter(&|y| format!("{y:.3}"))
+            .draw()?;
+
+        // Draw zero line
+        chart.draw_series(LineSeries::new(
+            vec![(time_min, 0.0), (time_max, 0.0)],
+            &BLACK.mix(0.3),
+        ))?;
+
+        // Draw residuals
+        let data: Vec<(f64, f64)> = residuals
+            .iter()
+            .map(|(t, x_res, y_res)| {
+                let res = if is_x_axis { *x_res } else { *y_res };
+                (t.as_secs_f64(), res)
+            })
+            .collect();
+
+        chart.draw_series(LineSeries::new(data.clone(), &BLUE))?;
+
+        // Also draw points for clarity
+        chart.draw_series(
+            data.iter()
+                .map(|&(x, y)| Circle::new((x, y), 2, BLUE.filled())),
+        )?;
+
+        Ok(())
+    }
+
+    /// Draw residual histogram
+    fn draw_residual_histogram(
+        &self,
+        area: &DrawingArea<BitMapBackend, plotters::coord::Shift>,
+        residuals: &[(Duration, f64, f64)],
+        is_x_axis: bool,
+        title: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if residuals.is_empty() {
+            return Ok(());
+        }
+
+        // Extract residual values
+        let res_values: Vec<f64> = residuals
+            .iter()
+            .map(|(_, x_res, y_res)| if is_x_axis { *x_res } else { *y_res })
+            .collect();
+
+        // Calculate statistics
+        let mean = res_values.iter().sum::<f64>() / res_values.len() as f64;
+        let variance =
+            res_values.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / res_values.len() as f64;
+        let std_dev = variance.sqrt();
+
+        // Determine histogram bounds
+        let min_val = res_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_val = res_values.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max_val - min_val;
+        let hist_min = min_val - range * 0.1;
+        let hist_max = max_val + range * 0.1;
+
+        // Create histogram bins
+        let num_bins = 30;
+        let bin_width = (hist_max - hist_min) / num_bins as f64;
+        let mut bins = vec![0u32; num_bins];
+
+        for &res in &res_values {
+            let bin_idx = ((res - hist_min) / bin_width) as usize;
+            let bin_idx = bin_idx.min(num_bins - 1);
+            bins[bin_idx] += 1;
+        }
+
+        let max_count = *bins.iter().max().unwrap_or(&1) as f64;
+
+        // Create chart
+        let mut chart = ChartBuilder::on(area)
+            .caption(title, ("sans-serif", 25))
+            .margin(5)
+            .x_label_area_size(35)
+            .y_label_area_size(45)
+            .build_cartesian_2d(hist_min..hist_max, 0.0..max_count * 1.1)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("Residual (pixels)")
+            .y_desc("Count")
+            .x_label_formatter(&|x| format!("{x:.3}"))
+            .y_label_formatter(&|y| format!("{y:.0}"))
+            .draw()?;
+
+        // Draw histogram bars
+        chart.draw_series(bins.iter().enumerate().map(|(i, &count)| {
+            let x0 = hist_min + i as f64 * bin_width;
+            let x1 = x0 + bin_width;
+            Rectangle::new([(x0, 0.0), (x1, count as f64)], BLUE.mix(0.5).filled())
+        }))?;
+
+        // Draw mean line
+        chart
+            .draw_series(LineSeries::new(
+                vec![(mean, 0.0), (mean, max_count * 1.1)],
+                &RED,
+            ))?
+            .label(format!("μ={mean:.3}"))
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], RED));
+
+        // Draw ±σ lines
+        chart.draw_series(LineSeries::new(
+            vec![(mean - std_dev, 0.0), (mean - std_dev, max_count * 1.1)],
+            RED.mix(0.5).stroke_width(1),
+        ))?;
+
+        chart
+            .draw_series(LineSeries::new(
+                vec![(mean + std_dev, 0.0), (mean + std_dev, max_count * 1.1)],
+                RED.mix(0.5).stroke_width(1),
+            ))?
+            .label(format!("σ={std_dev:.3}"))
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], RED.mix(0.5)));
+
+        // Draw legend
+        chart
+            .configure_series_labels()
+            .background_style(WHITE.mix(0.8))
+            .border_style(BLACK)
+            .draw()?;
+
+        Ok(())
+    }
+
     /// Draw a single axis tracking plot
     fn draw_axis_plot(
         &self,

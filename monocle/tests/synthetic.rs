@@ -1,6 +1,7 @@
 //! Synthetic tests for FGS using pure ndarray frames without external dependencies
 
 mod common;
+mod test_helpers;
 
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
@@ -11,6 +12,7 @@ use monocle::{
     FineGuidanceSystem,
 };
 use ndarray::Array2;
+use test_helpers::test_timestamp;
 
 #[test]
 fn test_fgs_with_synthetic_frames() {
@@ -51,13 +53,14 @@ fn test_fgs_with_synthetic_frames() {
     // Acquisition frames
     for i in 0..2 {
         let frame = create_synthetic_star_image(&image_config, &base_stars);
-        fgs.process_frame(frame.view()).unwrap();
+        fgs.process_frame(frame.view(), test_timestamp()).unwrap();
         println!("Processed acquisition frame {}", i + 1);
     }
 
     // Calibration frame
     let calibration_frame = create_synthetic_star_image(&image_config, &base_stars);
-    fgs.process_frame(calibration_frame.view()).unwrap();
+    fgs.process_frame(calibration_frame.view(), test_timestamp())
+        .unwrap();
 
     // Should now be tracking
     // TODO: Fix star detection in calibration
@@ -76,7 +79,7 @@ fn test_fgs_with_synthetic_frames() {
             .collect();
         let tracking_frame = create_synthetic_star_image(&image_config, &shifted_stars);
 
-        let result = fgs.process_frame(tracking_frame.view());
+        let result = fgs.process_frame(tracking_frame.view(), test_timestamp());
         assert!(result.is_ok(), "Tracking frame {} failed", i);
     }
 
@@ -132,14 +135,14 @@ fn test_fgs_acquisition_to_tracking_transition() {
     // Process acquisition frames
     for i in 0..3 {
         let frame = create_synthetic_star_image(&image_config, &stars);
-        fgs.process_frame(frame.view()).unwrap();
+        fgs.process_frame(frame.view(), test_timestamp()).unwrap();
         states.push(fgs.state().clone());
         println!("State after frame {}: {:?}", i, fgs.state());
     }
 
     // Process calibration frame
     let frame = create_synthetic_star_image(&image_config, &stars);
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
     states.push(fgs.state().clone());
     println!("State after calibration: {:?}", fgs.state());
 
@@ -206,11 +209,11 @@ fn test_fgs_with_moving_stars() {
 
     // Acquisition
     let frame = create_synthetic_star_image(&image_config, &base_star);
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
 
     // Calibration
     let frame = create_synthetic_star_image(&image_config, &base_star);
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
 
     // Track with circular motion
     for i in 0..10 {
@@ -223,7 +226,7 @@ fn test_fgs_with_moving_stars() {
             .map(|s| StarParams::with_fwhm(s.x + dx, s.y + dy, s.peak_flux, s.fwhm))
             .collect();
         let frame = create_synthetic_star_image(&image_config, &shifted_stars);
-        let result = fgs.process_frame(frame.view());
+        let result = fgs.process_frame(frame.view(), test_timestamp());
 
         assert!(result.is_ok(), "Failed at frame {}", i);
         centroid_positions.push((64.0 + dx, 64.0 + dy));
@@ -269,10 +272,16 @@ fn test_fgs_loses_tracking_with_large_motion() {
 
     // Initialize to tracking
     fgs.process_event(FgsEvent::StartFgs).unwrap();
-    fgs.process_frame(create_synthetic_star_image(&image_config, &base_star).view())
-        .unwrap();
-    fgs.process_frame(create_synthetic_star_image(&image_config, &base_star).view())
-        .unwrap();
+    fgs.process_frame(
+        create_synthetic_star_image(&image_config, &base_star).view(),
+        test_timestamp(),
+    )
+    .unwrap();
+    fgs.process_frame(
+        create_synthetic_star_image(&image_config, &base_star).view(),
+        test_timestamp(),
+    )
+    .unwrap();
 
     // TODO: Fix star detection in calibration
     if !matches!(fgs.state(), FgsState::Tracking { .. }) {
@@ -286,7 +295,7 @@ fn test_fgs_loses_tracking_with_large_motion() {
         .map(|s| StarParams::with_fwhm(s.x + 50.0, s.y + 50.0, s.peak_flux, s.fwhm))
         .collect();
     let frame = create_synthetic_star_image(&image_config, &shifted_stars);
-    let _result = fgs.process_frame(frame.view());
+    let _result = fgs.process_frame(frame.view(), test_timestamp());
 
     // Should have lost tracking or entered reacquisition
     println!("State after large motion: {:?}", fgs.state());

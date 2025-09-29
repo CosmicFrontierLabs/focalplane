@@ -4,7 +4,7 @@
 //! Processes images through states: Idle -> Acquiring -> Calibrating -> Tracking
 
 use ndarray::{Array2, ArrayView2};
-use shared::camera_interface::CameraInterface;
+use shared::camera_interface::{CameraInterface, Timestamp};
 use shared::image_proc::detection::{detect_stars, StarDetection};
 use shared::image_proc::noise::quantify::estimate_noise_level;
 use std::collections::HashMap;
@@ -59,8 +59,8 @@ pub struct GuidanceUpdate {
     pub x: f64,
     /// Y position in frame coordinates
     pub y: f64,
-    /// Timestamp of update
-    pub timestamp: Instant,
+    /// Timestamp of update (from camera frame)
+    pub timestamp: Timestamp,
     /// Quality metric (0.0 to 1.0)
     pub quality: f64,
 }
@@ -160,6 +160,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         &mut self,
         frames_collected: usize,
         frame: ArrayView2<u16>,
+        _timestamp: Timestamp,
     ) -> Result<FgsState, String> {
         let frames = frames_collected + 1;
         self.accumulate_frame(frame)?;
@@ -183,7 +184,11 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
     }
 
     /// Handle frame processing during Calibrating state
-    fn handle_calibrating_frame(&mut self, frame: ArrayView2<u16>) -> Result<FgsState, String> {
+    fn handle_calibrating_frame(
+        &mut self,
+        frame: ArrayView2<u16>,
+        _timestamp: Timestamp,
+    ) -> Result<FgsState, String> {
         self.detect_and_select_guides(frame)?;
 
         if let Some(guide_star) = &self.guide_star {
@@ -221,8 +226,9 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         &mut self,
         frames_processed: usize,
         frame: ArrayView2<u16>,
+        timestamp: Timestamp,
     ) -> Result<FgsState, String> {
-        let update = self.track(frame)?;
+        let update = self.track(frame, timestamp)?;
 
         if self.guide_star.is_some() {
             // Emit tracking update event
@@ -252,6 +258,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         &mut self,
         attempts: usize,
         frame: ArrayView2<u16>,
+        _timestamp: Timestamp,
     ) -> Result<FgsState, String> {
         let recovered = self.attempt_reacquisition(frame)?;
 
@@ -325,17 +332,19 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
             (Idle, FgsEvent::StartFgs) => self.handle_idle_start(),
 
             // From Acquiring
-            (Acquiring { frames_collected }, FgsEvent::ProcessFrame(frame)) => {
-                self.handle_acquiring_frame(*frames_collected, frame)?
+            (Acquiring { frames_collected }, FgsEvent::ProcessFrame(frame, timestamp)) => {
+                self.handle_acquiring_frame(*frames_collected, frame, timestamp)?
             }
             (Acquiring { .. }, FgsEvent::Abort) => self.handle_acquiring_abort(),
 
             // From Calibrating
-            (Calibrating, FgsEvent::ProcessFrame(frame)) => self.handle_calibrating_frame(frame)?,
+            (Calibrating, FgsEvent::ProcessFrame(frame, timestamp)) => {
+                self.handle_calibrating_frame(frame, timestamp)?
+            }
 
             // From Tracking
-            (Tracking { frames_processed }, FgsEvent::ProcessFrame(frame)) => {
-                self.handle_tracking_frame(*frames_processed, frame)?
+            (Tracking { frames_processed }, FgsEvent::ProcessFrame(frame, timestamp)) => {
+                self.handle_tracking_frame(*frames_processed, frame, timestamp)?
             }
             (Tracking { .. }, FgsEvent::StopFgs) => {
                 log::info!("Stopping FGS, returning to Idle");
@@ -347,8 +356,8 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
             }
 
             // From Reacquiring
-            (Reacquiring { attempts }, FgsEvent::ProcessFrame(frame)) => {
-                self.handle_reacquiring_frame(*attempts, frame)?
+            (Reacquiring { attempts }, FgsEvent::ProcessFrame(frame, timestamp)) => {
+                self.handle_reacquiring_frame(*attempts, frame, timestamp)?
             }
             (Reacquiring { .. }, FgsEvent::Abort) => {
                 log::info!("Aborting reacquisition, returning to Idle");
@@ -374,17 +383,18 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
     pub fn process_frame(
         &mut self,
         frame: ArrayView2<u16>,
+        timestamp: Timestamp,
     ) -> Result<Option<GuidanceUpdate>, String> {
-        self.process_event(FgsEvent::ProcessFrame(frame))
+        self.process_event(FgsEvent::ProcessFrame(frame, timestamp))
     }
 
     /// Capture and process the next frame from the camera
     pub fn process_next_frame(&mut self) -> Result<Option<GuidanceUpdate>, String> {
-        let (frame, _metadata) = self
+        let (frame, metadata) = self
             .camera
             .capture_frame()
             .map_err(|e| format!("Camera capture failed: {e}"))?;
-        self.process_frame(frame.view())
+        self.process_frame(frame.view(), metadata.timestamp)
     }
 
     /// Get the current state
@@ -571,7 +581,11 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
     }
 
     /// Track guide star and compute guidance update
-    fn track(&mut self, frame: ArrayView2<u16>) -> Result<GuidanceUpdate, String> {
+    fn track(
+        &mut self,
+        frame: ArrayView2<u16>,
+        timestamp: Timestamp,
+    ) -> Result<GuidanceUpdate, String> {
         use shared::image_proc::centroid::compute_centroid_from_mask;
 
         let guide_star = self
@@ -594,7 +608,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
             return Ok(GuidanceUpdate {
                 x: guide_star.x,
                 y: guide_star.y,
-                timestamp: Instant::now(),
+                timestamp,
                 quality: 0.0, // Low quality since we couldn't track
             });
         }
@@ -642,7 +656,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         Ok(GuidanceUpdate {
             x: new_x,
             y: new_y,
-            timestamp: Instant::now(),
+            timestamp,
             quality,
         })
     }
@@ -662,6 +676,11 @@ mod tests {
     use super::*;
     use crate::mock_camera::MockCamera;
     use ndarray::Array2;
+    use std::time::Duration;
+
+    fn test_timestamp() -> Timestamp {
+        Timestamp::from_duration(Duration::from_millis(100))
+    }
 
     #[test]
     fn test_state_transitions() {
@@ -683,7 +702,7 @@ mod tests {
         let dummy_frame = Array2::<u16>::zeros((100, 100));
 
         // Should do nothing in Idle state
-        let result = fgs.process_frame(dummy_frame.view());
+        let result = fgs.process_frame(dummy_frame.view(), test_timestamp());
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
     }
@@ -708,7 +727,7 @@ mod tests {
         let frame3 = Array2::<u16>::from_elem((10, 10), 300);
 
         // Process first frame
-        let _ = fgs.process_frame(frame1.view());
+        let _ = fgs.process_frame(frame1.view(), test_timestamp());
         assert_eq!(fgs.frames_accumulated, 1);
         assert!(matches!(
             fgs.state(),
@@ -718,7 +737,7 @@ mod tests {
         ));
 
         // Process second frame
-        let _ = fgs.process_frame(frame2.view());
+        let _ = fgs.process_frame(frame2.view(), test_timestamp());
         assert_eq!(fgs.frames_accumulated, 2);
         assert!(matches!(
             fgs.state(),
@@ -728,7 +747,7 @@ mod tests {
         ));
 
         // Process third frame - should transition to Calibrating
-        let _ = fgs.process_frame(frame3.view());
+        let _ = fgs.process_frame(frame3.view(), test_timestamp());
         assert_eq!(fgs.frames_accumulated, 3);
         assert!(matches!(fgs.state(), FgsState::Calibrating));
 
@@ -748,7 +767,7 @@ mod tests {
         // Start FGS and accumulate some frames
         let _ = fgs.process_event(FgsEvent::StartFgs);
         let frame = Array2::<u16>::from_elem((10, 10), 100);
-        let _ = fgs.process_frame(frame.view());
+        let _ = fgs.process_frame(frame.view(), test_timestamp());
         assert_eq!(fgs.frames_accumulated, 1);
 
         // Abort should clear accumulation

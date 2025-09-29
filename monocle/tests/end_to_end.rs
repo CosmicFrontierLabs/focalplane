@@ -1,4 +1,5 @@
 mod common;
+mod test_helpers;
 
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
@@ -11,6 +12,7 @@ use monocle::{
 use ndarray::Array2;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use test_helpers::test_timestamp;
 
 /// Helper to perturb star positions slightly (simulating drift)
 fn perturb_stars(stars: &[StarParams], dx: f64, dy: f64) -> Vec<StarParams> {
@@ -79,7 +81,7 @@ fn test_full_tracking_lifecycle() {
     println!("Starting acquisition phase...");
     for i in 0..3 {
         let image = create_synthetic_star_image(&image_config, &base_stars);
-        let result = fgs.process_frame(image.view());
+        let result = fgs.process_frame(image.view(), test_timestamp());
         assert!(result.is_ok());
 
         if i < 2 {
@@ -94,7 +96,7 @@ fn test_full_tracking_lifecycle() {
     println!("Calibration phase...");
     // Send one more frame to complete calibration
     let calibration_image = create_synthetic_star_image(&image_config, &base_stars);
-    let result = fgs.process_frame(calibration_image.view());
+    let result = fgs.process_frame(calibration_image.view(), test_timestamp());
     assert!(result.is_ok());
 
     // Check state after calibration
@@ -104,7 +106,7 @@ fn test_full_tracking_lifecycle() {
     if matches!(fgs.state(), FgsState::Calibrating) {
         println!("Still calibrating, sending another frame...");
         let another_image = create_synthetic_star_image(&image_config, &base_stars);
-        let result = fgs.process_frame(another_image.view());
+        let result = fgs.process_frame(another_image.view(), test_timestamp());
         assert!(result.is_ok());
         println!("State after second frame: {:?}", fgs.state());
     }
@@ -137,7 +139,7 @@ fn test_full_tracking_lifecycle() {
             let drifted_stars = perturb_stars(&base_stars, drift_x, drift_y);
             let tracking_image = create_synthetic_star_image(&image_config, &drifted_stars);
 
-            let result = fgs.process_frame(tracking_image.view());
+            let result = fgs.process_frame(tracking_image.view(), test_timestamp());
             assert!(result.is_ok());
 
             // Should remain in tracking
@@ -269,12 +271,12 @@ fn test_tracking_loss_and_recovery() {
     fgs.process_event(FgsEvent::StartFgs).unwrap();
     for _ in 0..2 {
         let image = create_synthetic_star_image(&image_config, &bright_stars);
-        fgs.process_frame(image.view()).unwrap();
+        fgs.process_frame(image.view(), test_timestamp()).unwrap();
     }
 
     // Calibrate
     let image = create_synthetic_star_image(&image_config, &bright_stars);
-    fgs.process_frame(image.view()).unwrap();
+    fgs.process_frame(image.view(), test_timestamp()).unwrap();
 
     // May be Tracking or Idle
     let is_tracking = matches!(fgs.state(), FgsState::Tracking { .. });
@@ -286,7 +288,7 @@ fn test_tracking_loss_and_recovery() {
     // Track for a few frames
     for _ in 0..3 {
         let image = create_synthetic_star_image(&image_config, &bright_stars);
-        fgs.process_frame(image.view()).unwrap();
+        fgs.process_frame(image.view(), test_timestamp()).unwrap();
     }
 
     // Send dark frames to simulate star loss
@@ -296,7 +298,7 @@ fn test_tracking_loss_and_recovery() {
     let dark_image = Array2::<u16>::from_elem((512, 512), 100); // Just background
 
     for attempt in 0..6 {
-        let result = fgs.process_frame(dark_image.view());
+        let result = fgs.process_frame(dark_image.view(), test_timestamp());
         assert!(result.is_ok());
 
         // The current implementation doesn't actually transition to Reacquiring
@@ -359,7 +361,7 @@ fn test_image_sequence_processing() {
     fgs.process_event(FgsEvent::StartFgs).unwrap();
 
     for (idx, image) in image_sequence.iter().enumerate() {
-        let result = fgs.process_frame(image.view());
+        let result = fgs.process_frame(image.view(), test_timestamp());
         assert!(result.is_ok());
 
         match fgs.state() {

@@ -6,7 +6,7 @@
 use crate::motion_profiles::PointingMotion;
 use ndarray::Array2;
 use shared::camera_interface::{
-    AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata,
+    AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
 };
 use shared::image_proc::detection::AABB;
 use shared::units::TemperatureExt;
@@ -17,7 +17,7 @@ use starfield::catalogs::binary_catalog::BinaryCatalog;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Camera state for continuous capture mode
 struct ContinuousCaptureState {
@@ -189,10 +189,11 @@ impl CameraInterface for SimulatorCamera {
                 self.frame_number += 1;
                 self.elapsed_time += self.exposure;
 
+                // Convert elapsed time to seconds and nanoseconds
                 let metadata = FrameMetadata {
                     frame_number: self.frame_number,
                     exposure: self.exposure,
-                    timestamp: SystemTime::now(),
+                    timestamp: Timestamp::from_duration(self.elapsed_time),
                     pointing: Some(self.pointing()),
                     roi: self.roi,
                     temperature_c: self.satellite.temperature.as_celsius(),
@@ -216,17 +217,18 @@ impl CameraInterface for SimulatorCamera {
 
         self.frame_number += 1;
 
-        // Increment elapsed time by exposure duration
-        self.elapsed_time += self.exposure;
-
+        // Convert elapsed time to seconds and nanoseconds
         let metadata = FrameMetadata {
             frame_number: self.frame_number,
             exposure: self.exposure,
-            timestamp: SystemTime::now(),
+            timestamp: Timestamp::from_duration(self.elapsed_time),
             pointing: Some(self.pointing()),
             roi: self.roi,
             temperature_c: self.satellite.temperature.as_celsius(),
         };
+
+        // Increment elapsed time by exposure duration
+        self.elapsed_time += self.exposure;
 
         Ok((frame, metadata))
     }
@@ -388,6 +390,67 @@ mod tests {
 
         assert!(camera.stop_continuous_capture().is_ok());
         assert!(!camera.is_capturing());
+    }
+
+    #[test]
+    fn test_timestamp_monotonicity_and_progression() {
+        let mut camera = create_test_camera();
+
+        // Set a specific exposure time
+        let exposure = Duration::from_millis(50);
+        camera
+            .set_exposure(exposure)
+            .expect("Failed to set exposure");
+
+        // Capture first frame and get initial timestamp
+        let (_, metadata1) = camera
+            .capture_frame()
+            .expect("Failed to capture first frame");
+        let timestamp1 = metadata1.timestamp;
+
+        // First frame should have timestamp at 0 (start of capture)
+        assert_eq!(
+            timestamp1.to_duration(),
+            Duration::ZERO,
+            "First frame should have timestamp of 0"
+        );
+
+        // Capture multiple frames and verify timestamps
+        let mut prev_timestamp = timestamp1;
+        for i in 2..=10 {
+            let (_, metadata) = camera
+                .capture_frame()
+                .expect(&format!("Failed to capture frame {}", i));
+            let current_timestamp = metadata.timestamp;
+
+            // Verify monotonicity - timestamps should always increase
+            assert!(
+                current_timestamp.to_duration() > prev_timestamp.to_duration(),
+                "Timestamp {} ({:?}) should be greater than previous ({:?})",
+                i,
+                current_timestamp,
+                prev_timestamp
+            );
+
+            // Verify progression - Frame 1 is at t=0, Frame 2 is at t=exposure, etc.
+            let expected_duration = exposure * (i - 1) as u32;
+            assert_eq!(
+                current_timestamp.to_duration(),
+                expected_duration,
+                "Frame {} timestamp should be exactly {} ms",
+                i,
+                expected_duration.as_millis()
+            );
+
+            // Verify the difference between consecutive timestamps
+            let time_diff = current_timestamp.to_duration() - prev_timestamp.to_duration();
+            assert_eq!(
+                time_diff, exposure,
+                "Time difference between frames should be exactly one exposure duration"
+            );
+
+            prev_timestamp = current_timestamp;
+        }
     }
 
     #[test]

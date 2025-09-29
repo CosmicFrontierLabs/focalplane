@@ -2,7 +2,7 @@
 
 use ndarray::Array2;
 use shared::camera_interface::{
-    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata,
+    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
 };
 use shared::image_proc::detection::aabb::AABB;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +18,7 @@ pub struct MockCamera {
     config: CameraConfig,
     is_capturing: Arc<AtomicBool>,
     exposure: Duration,
+    elapsed_time: Arc<Mutex<Duration>>,
 }
 
 impl MockCamera {
@@ -35,6 +36,7 @@ impl MockCamera {
             },
             is_capturing: Arc::new(AtomicBool::new(false)),
             exposure: Duration::from_millis(10),
+            elapsed_time: Arc::new(Mutex::new(Duration::ZERO)),
         }
     }
 
@@ -109,10 +111,14 @@ impl CameraInterface for MockCamera {
             frame
         };
 
+        // Update elapsed time
+        let mut elapsed = self.elapsed_time.lock().unwrap();
+        *elapsed += self.exposure;
+
         let metadata = FrameMetadata {
             frame_number: (*self.frame_index.lock().unwrap()).saturating_sub(1) as u64,
             exposure: self.exposure,
-            timestamp: std::time::SystemTime::now(),
+            timestamp: Timestamp::from_duration(*elapsed),
             pointing: None,
             roi: *self.current_roi.lock().unwrap(),
             temperature_c: 20.0,

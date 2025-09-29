@@ -10,6 +10,42 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+/// Timestamp structure aligned with V4L2 format
+/// Represents time as seconds and nanoseconds since an epoch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timestamp {
+    /// Seconds component
+    pub seconds: u64,
+    /// Nanoseconds component (0-999,999,999)
+    pub nanos: u64,
+}
+
+impl Timestamp {
+    /// Create a new timestamp
+    pub fn new(seconds: u64, nanos: u64) -> Self {
+        Self { seconds, nanos }
+    }
+
+    /// Create a timestamp from a Duration since epoch
+    pub fn from_duration(duration: Duration) -> Self {
+        let total_nanos = duration.as_nanos();
+        let seconds = (total_nanos / 1_000_000_000) as u64;
+        let nanos = (total_nanos % 1_000_000_000) as u64;
+        Self { seconds, nanos }
+    }
+
+    /// Convert to Duration
+    pub fn to_duration(&self) -> Duration {
+        Duration::new(self.seconds, self.nanos as u32)
+    }
+}
+
+impl fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}.{:09}", self.seconds, self.nanos)
+    }
+}
+
 /// Error type for camera operations
 #[derive(Debug)]
 pub enum CameraError {
@@ -50,7 +86,8 @@ pub struct FrameMetadata {
     /// Exposure duration
     pub exposure: Duration,
     /// Timestamp when frame was captured
-    pub timestamp: std::time::SystemTime,
+    /// Values are intended to align with V4L2 timestamp format and expectations
+    pub timestamp: Timestamp,
     /// Current telescope pointing
     pub pointing: Option<Equatorial>,
     /// Current ROI if set
@@ -176,6 +213,62 @@ impl AABBExt for AABB {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_timestamp_creation() {
+        let ts = Timestamp::new(100, 500_000_000);
+        assert_eq!(ts.seconds, 100);
+        assert_eq!(ts.nanos, 500_000_000);
+    }
+
+    #[test]
+    fn test_timestamp_from_duration() {
+        // Test exact second
+        let duration = Duration::from_secs(5);
+        let ts = Timestamp::from_duration(duration);
+        assert_eq!(ts.seconds, 5);
+        assert_eq!(ts.nanos, 0);
+
+        // Test with nanoseconds
+        let duration = Duration::new(10, 123_456_789);
+        let ts = Timestamp::from_duration(duration);
+        assert_eq!(ts.seconds, 10);
+        assert_eq!(ts.nanos, 123_456_789);
+
+        // Test large duration
+        let duration = Duration::from_millis(1500);
+        let ts = Timestamp::from_duration(duration);
+        assert_eq!(ts.seconds, 1);
+        assert_eq!(ts.nanos, 500_000_000);
+    }
+
+    #[test]
+    fn test_timestamp_to_duration() {
+        let ts = Timestamp::new(42, 123_456_789);
+        let duration = ts.to_duration();
+        assert_eq!(duration.as_secs(), 42);
+        assert_eq!(duration.subsec_nanos(), 123_456_789);
+    }
+
+    #[test]
+    fn test_timestamp_roundtrip() {
+        let original = Duration::new(100, 999_999_999);
+        let ts = Timestamp::from_duration(original);
+        let recovered = ts.to_duration();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_timestamp_display() {
+        let ts = Timestamp::new(42, 123_456_789);
+        assert_eq!(ts.to_string(), "42.123456789");
+
+        let ts = Timestamp::new(0, 1);
+        assert_eq!(ts.to_string(), "0.000000001");
+
+        let ts = Timestamp::new(100, 0);
+        assert_eq!(ts.to_string(), "100.000000000");
+    }
 
     #[test]
     fn test_roi_validation() {

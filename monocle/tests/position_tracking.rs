@@ -1,6 +1,7 @@
 //! Test that FGS detects stars and tracks positions accurately
 
 mod common;
+mod test_helpers;
 
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
@@ -12,6 +13,7 @@ use monocle::{
 };
 use ndarray::Array2;
 use std::sync::{Arc, Mutex};
+use test_helpers::test_timestamp;
 
 #[test]
 fn test_star_detection_on_correct_cycle() {
@@ -60,7 +62,7 @@ fn test_star_detection_on_correct_cycle() {
     ));
 
     // First acquisition frame
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
     assert!(matches!(
         fgs.state(),
         FgsState::Acquiring {
@@ -69,11 +71,11 @@ fn test_star_detection_on_correct_cycle() {
     ));
 
     // Second acquisition frame - should transition to Calibrating
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
     assert!(matches!(fgs.state(), FgsState::Calibrating));
 
     // Calibration frame - should detect star and enter Tracking
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
     assert!(
         matches!(fgs.state(), FgsState::Tracking { .. }),
         "Should be tracking after calibration but state is {:?}",
@@ -139,14 +141,14 @@ fn test_position_accuracy() {
     let star_y = stars[0].y;
 
     fgs.process_event(FgsEvent::StartFgs).unwrap();
-    fgs.process_frame(frame.view()).unwrap(); // Acquisition
-    fgs.process_frame(frame.view()).unwrap(); // Calibration
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap(); // Acquisition
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap(); // Calibration
 
     // Should be tracking now
     assert!(matches!(fgs.state(), FgsState::Tracking { .. }));
 
     // Process a tracking frame with same position
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
 
     // Check positions are accurate
     let reported_positions = positions.lock().unwrap();
@@ -216,8 +218,8 @@ fn test_moving_star_tracking() {
     // Initialize to tracking
     let frame = create_synthetic_star_image(&config, &stars);
     fgs.process_event(FgsEvent::StartFgs).unwrap();
-    fgs.process_frame(frame.view()).unwrap();
-    fgs.process_frame(frame.view()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
+    fgs.process_frame(frame.view(), test_timestamp()).unwrap();
 
     assert!(matches!(fgs.state(), FgsState::Tracking { .. }));
 
@@ -236,7 +238,7 @@ fn test_moving_star_tracking() {
             4.0,
         )];
         let frame = create_synthetic_star_image(&config, &stars);
-        fgs.process_frame(frame.view()).unwrap();
+        fgs.process_frame(frame.view(), test_timestamp()).unwrap();
 
         // Should still be tracking
         assert!(
