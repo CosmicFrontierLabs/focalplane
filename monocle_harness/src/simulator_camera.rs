@@ -1,7 +1,9 @@
 //! Simulator-backed camera implementation for testing
 //!
 //! Provides a CameraInterface implementation that uses the telescope simulator
-//! to generate realistic frames for testing the monocle subsystem.
+//! to generate realistic frames for testing the monocle subsystem. This camera
+//! simulates realistic star fields, sensor noise, and supports configurable
+//! pointing motion profiles for testing tracking algorithms.
 
 use crate::motion_profiles::PointingMotion;
 use ndarray::Array2;
@@ -27,7 +29,10 @@ struct ContinuousCaptureState {
     frame_counter: u64,
 }
 
-/// Simulator-backed camera for testing
+/// Simulator-backed camera for testing FGS and tracking algorithms.
+///
+/// Combines a star catalog, telescope/sensor configuration, and pointing motion
+/// to generate realistic frames for testing.
 pub struct SimulatorCamera {
     /// Camera configuration
     config: CameraConfig,
@@ -52,7 +57,8 @@ pub struct SimulatorCamera {
 }
 
 impl SimulatorCamera {
-    /// Create a new simulator camera with a star catalog and pointing motion
+    /// Create a new simulator camera with a star catalog and pointing motion.
+    /// Uses default exposure of 100ms and initializes cached star catalog.
     pub fn new(
         satellite: SatelliteConfig,
         catalog: BinaryCatalog,
@@ -91,7 +97,8 @@ impl SimulatorCamera {
         }
     }
 
-    /// Create with a specific telescope and sensor configuration
+    /// Create with a specific telescope and sensor configuration.
+    /// Convenience method that builds a SatelliteConfig from individual components.
     pub fn with_config(
         telescope: TelescopeConfig,
         sensor: simulator::SensorConfig,
@@ -106,28 +113,33 @@ impl SimulatorCamera {
         Self::new(satellite, catalog, pointing_motion)
     }
 
-    /// Get the satellite configuration
+    /// Get the satellite configuration.
+    /// Returns the combined telescope, sensor, and temperature settings.
     pub fn satellite_config(&self) -> &SatelliteConfig {
         &self.satellite
     }
 
-    /// Get the current pointing based on elapsed time and motion profile
+    /// Get the current pointing based on elapsed time and motion profile.
+    /// The pointing changes over time according to the configured PointingMotion.
     pub fn pointing(&self) -> Equatorial {
         self.pointing_motion.get_pointing(self.elapsed_time)
     }
 
-    /// Reset elapsed time to start
+    /// Reset elapsed time to start.
+    /// Useful for restarting a test sequence from the beginning.
     pub fn reset_time(&mut self) {
         self.elapsed_time = Duration::ZERO;
     }
 
-    /// Set a new pointing motion profile
+    /// Set a new pointing motion profile.
+    /// Replaces the current motion and resets elapsed time to zero.
     pub fn set_pointing_motion(&mut self, motion: Box<dyn PointingMotion>) {
         self.pointing_motion = motion;
         self.elapsed_time = Duration::ZERO;
     }
 
-    /// Generate a frame using the simulator
+    /// Generate a frame using the simulator.
+    /// Queries stars from cached catalog and renders them with realistic noise.
     fn generate_frame(&mut self) -> CameraResult<Array2<u16>> {
         let pointing = self.pointing();
 
@@ -151,17 +163,22 @@ impl SimulatorCamera {
 }
 
 impl CameraInterface for SimulatorCamera {
+    /// Set a region of interest for frame capture.
+    /// Returns error if ROI extends beyond sensor dimensions.
     fn set_roi(&mut self, roi: AABB) -> CameraResult<()> {
         roi.validate_for_sensor(self.config.width, self.config.height)?;
         self.roi = Some(roi);
         Ok(())
     }
 
+    /// Clear the region of interest, returning to full frame capture.
     fn clear_roi(&mut self) -> CameraResult<()> {
         self.roi = None;
         Ok(())
     }
 
+    /// Capture a single frame with current settings.
+    /// Advances internal time by exposure duration and applies ROI if set.
     fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
         // Generate full frame
         let mut frame = self.generate_frame()?;
@@ -223,6 +240,8 @@ impl CameraInterface for SimulatorCamera {
         Ok((frame, metadata))
     }
 
+    /// Set the exposure duration for frame capture.
+    /// Must be positive, returns error for zero duration.
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
         if exposure.is_zero() {
             return Err(CameraError::ConfigError(
@@ -233,22 +252,28 @@ impl CameraInterface for SimulatorCamera {
         Ok(())
     }
 
+    /// Get the current exposure duration.
     fn get_exposure(&self) -> Duration {
         self.exposure
     }
 
+    /// Get the camera configuration (width, height, exposure).
     fn get_config(&self) -> &CameraConfig {
         &self.config
     }
 
+    /// Check if camera is ready. Always returns true for simulator.
     fn is_ready(&self) -> bool {
         true // Always ready
     }
 
+    /// Get the current region of interest if set.
     fn get_roi(&self) -> Option<AABB> {
         self.roi
     }
 
+    /// Start continuous capture mode.
+    /// Frames are generated on demand via get_latest_frame().
     fn start_continuous_capture(&mut self) -> CameraResult<()> {
         let mut state = self.continuous_state.lock().unwrap();
         state.is_active = true;
@@ -256,6 +281,7 @@ impl CameraInterface for SimulatorCamera {
         Ok(())
     }
 
+    /// Stop continuous capture mode and clear buffered frame.
     fn stop_continuous_capture(&mut self) -> CameraResult<()> {
         let mut state = self.continuous_state.lock().unwrap();
         state.is_active = false;
@@ -263,6 +289,8 @@ impl CameraInterface for SimulatorCamera {
         Ok(())
     }
 
+    /// Get the latest frame in continuous capture mode.
+    /// Generates a new frame if one isn't buffered.
     fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
         // Check if capturing is active first
         let is_active = {
