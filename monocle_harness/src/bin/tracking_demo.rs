@@ -84,7 +84,7 @@ fn create_test_camera_with_motion(
     pointing: Equatorial,
     motion: Box<dyn PointingMotion>,
 ) -> SimulatorCamera {
-    let catalog = create_guide_star_catalog(&pointing);
+    let catalog = Arc::new(create_guide_star_catalog(&pointing));
     create_jbt_hwk_camera_with_catalog_and_motion(catalog, motion)
 }
 

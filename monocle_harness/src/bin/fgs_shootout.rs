@@ -274,10 +274,10 @@ fn run_single_experiment(
     // Use the satellite configuration from params
     let satellite = params.satellite_config.clone();
 
-    // Create simulator camera with catalog
+    // Create simulator camera with catalog (Arc is cheap to clone, catalog itself is shared)
     let mut camera = SimulatorCamera::new(
         satellite,
-        catalog.as_ref().clone(),
+        catalog,
         StaticPointing::from_equatorial_boxed(params.pointing),
     );
 

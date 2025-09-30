@@ -64,7 +64,7 @@ impl SimulatorCamera {
     /// Uses default exposure of 100ms and initializes cached star catalog.
     pub fn new(
         satellite: SatelliteConfig,
-        catalog: BinaryCatalog,
+        catalog: Arc<BinaryCatalog>,
         pointing_motion: Box<dyn PointingMotion>,
     ) -> Self {
         let sensor = &satellite.sensor;
@@ -107,7 +107,7 @@ impl SimulatorCamera {
         telescope: TelescopeConfig,
         sensor: simulator::SensorConfig,
         temperature_c: f64,
-        catalog: BinaryCatalog,
+        catalog: Arc<BinaryCatalog>,
         pointing_motion: Box<dyn PointingMotion>,
     ) -> Self {
         use simulator::units::{Temperature, TemperatureExt};
@@ -618,14 +618,14 @@ mod tests {
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
 
         // Same catalog as runner tests
-        let catalog = BinaryCatalog::from_stars(
+        let catalog = Arc::new(BinaryCatalog::from_stars(
             vec![
                 MinimalStar::new(1, 0.0, 0.0, 5.0),
                 MinimalStar::new(2, 0.01, 0.0, 6.0),
                 MinimalStar::new(3, 0.0, 0.01, 7.0),
             ],
             "Test catalog",
-        );
+        ));
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
         let mut camera256 = SimulatorCamera::new(satellite, catalog, motion);
 

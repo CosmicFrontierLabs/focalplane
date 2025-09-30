@@ -11,6 +11,7 @@ use simulator::hardware::{
 use simulator::units::{Temperature, TemperatureExt};
 use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
 use starfield::Equatorial;
+use std::sync::Arc;
 
 /// Creates a standard test satellite configuration using JBT 50cm telescope
 /// and HWK4123 sensor reduced to 512x512 pixels.
@@ -40,7 +41,7 @@ pub fn create_jbt_hwk_test_satellite() -> SatelliteConfig {
 /// * `SimulatorCamera` - Configured camera ready for testing
 pub fn create_jbt_hwk_camera() -> SimulatorCamera {
     let satellite = create_jbt_hwk_test_satellite();
-    let catalog = create_simple_test_catalog();
+    let catalog = Arc::new(create_simple_test_catalog());
     let motion = Box::new(StaticPointing::new(0.0, 0.0));
 
     SimulatorCamera::new(satellite, catalog, motion)
@@ -49,11 +50,11 @@ pub fn create_jbt_hwk_camera() -> SimulatorCamera {
 /// Creates a test SimulatorCamera with custom catalog
 ///
 /// # Arguments
-/// * `catalog` - Custom star catalog to use
+/// * `catalog` - Custom star catalog to use (wrapped in Arc)
 ///
 /// # Returns
 /// * `SimulatorCamera` - Configured camera with custom catalog
-pub fn create_jbt_hwk_camera_with_catalog(catalog: BinaryCatalog) -> SimulatorCamera {
+pub fn create_jbt_hwk_camera_with_catalog(catalog: Arc<BinaryCatalog>) -> SimulatorCamera {
     let satellite = create_jbt_hwk_test_satellite();
     let motion = Box::new(StaticPointing::new(0.0, 0.0));
     SimulatorCamera::new(satellite, catalog, motion)
@@ -62,13 +63,13 @@ pub fn create_jbt_hwk_camera_with_catalog(catalog: BinaryCatalog) -> SimulatorCa
 /// Creates a test SimulatorCamera with custom catalog and motion
 ///
 /// # Arguments
-/// * `catalog` - Custom star catalog to use
+/// * `catalog` - Custom star catalog to use (wrapped in Arc)
 /// * `motion` - Pointing motion profile
 ///
 /// # Returns
 /// * `SimulatorCamera` - Configured camera with custom catalog and motion
 pub fn create_jbt_hwk_camera_with_catalog_and_motion(
-    catalog: BinaryCatalog,
+    catalog: Arc<BinaryCatalog>,
     motion: Box<dyn crate::motion_profiles::PointingMotion>,
 ) -> SimulatorCamera {
     let satellite = create_jbt_hwk_test_satellite();

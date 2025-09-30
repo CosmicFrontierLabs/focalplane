@@ -7,6 +7,7 @@
 use crate::units::{Angle, AngleExt};
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield::Equatorial;
+use std::sync::Arc;
 
 /// Cache FOV multiplier - cache area is this times the requested FOV
 /// This provides a buffer zone to avoid frequent cache misses
@@ -18,8 +19,8 @@ const CACHE_FOV_MULTIPLIER: f64 = 2.0;
 /// the requested field of view. When the pointing moves outside the cached region,
 /// it automatically refreshes the cache with a new, larger region.
 pub struct CachedStarCatalog<C: StarCatalog> {
-    /// The underlying star catalog
-    catalog: C,
+    /// The underlying star catalog (shared via Arc to avoid cloning large catalogs)
+    catalog: Arc<C>,
 
     /// Cached stars from the last query
     cached_stars: Vec<StarData>,
@@ -38,9 +39,9 @@ impl<C: StarCatalog> CachedStarCatalog<C> {
     /// Create a new cached catalog with the specified sensor FOV
     ///
     /// # Arguments
-    /// * `catalog` - The underlying star catalog to wrap
+    /// * `catalog` - The underlying star catalog to wrap (wrapped in Arc for sharing)
     /// * `sensor_fov_diameter` - The diameter of the sensor's field of view
-    pub fn new(catalog: C, sensor_fov_diameter: Angle) -> Self {
+    pub fn new(catalog: Arc<C>, sensor_fov_diameter: Angle) -> Self {
         // Pre-calculate cache FOV diameter (larger than sensor FOV)
         let cache_fov_diameter =
             Angle::from_degrees(sensor_fov_diameter.as_degrees() * CACHE_FOV_MULTIPLIER);
@@ -122,8 +123,8 @@ impl<C: StarCatalog> CachedStarCatalog<C> {
             .collect()
     }
 
-    /// Get the underlying catalog (immutable reference)
-    pub fn catalog(&self) -> &C {
+    /// Get the underlying catalog (Arc reference)
+    pub fn catalog(&self) -> &Arc<C> {
         &self.catalog
     }
 
@@ -245,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_cache_initialization() {
-        let catalog = MockCatalog::new(vec![]);
+        let catalog = Arc::new(MockCatalog::new(vec![]));
         let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
 
         // Cache should start uninitialized
@@ -292,7 +293,7 @@ mod tests {
             }, // Way outside
         ];
 
-        let catalog = MockCatalog::new(stars);
+        let catalog = Arc::new(MockCatalog::new(stars));
         let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
 
         // First query - cache miss
@@ -320,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_empty_region() {
-        let catalog = MockCatalog::new(vec![]);
+        let catalog = Arc::new(MockCatalog::new(vec![]));
         let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
 
         // Query empty region
@@ -350,7 +351,7 @@ mod tests {
             },
         ];
 
-        let catalog = MockCatalog::new(stars);
+        let catalog = Arc::new(MockCatalog::new(stars));
         let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
 
         let pointing = Equatorial::from_degrees(0.0, 0.0);
@@ -371,8 +372,8 @@ mod tests {
         let n_stars = if ENABLE_LONG_TESTS { 1_000_000 } else { 10_000 };
 
         // Create a large random catalog
-        let catalog = MockCatalog::random_stars(n_stars, 42);
-        let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(2.0));
+        let catalog = Arc::new(MockCatalog::random_stars(n_stars, 42));
+        let mut cached = CachedStarCatalog::new(catalog.clone(), Angle::from_degrees(2.0));
 
         // Use deterministic random sequence for reproducibility
         let mut randomizer = RandomEquatorial::with_seed(1337);
@@ -410,8 +411,8 @@ mod tests {
     #[test]
     fn test_cache_movement_patterns() {
         // Test various movement patterns to ensure cache behaves correctly
-        let catalog = MockCatalog::random_stars(10_000, 999);
-        let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
+        let catalog = Arc::new(MockCatalog::random_stars(10_000, 999));
+        let mut cached = CachedStarCatalog::new(catalog.clone(), Angle::from_degrees(1.0));
 
         let mut randomizer = RandomEquatorial::with_seed(777);
 
@@ -493,7 +494,7 @@ mod tests {
             },
         ];
 
-        let catalog = MockCatalog::new(stars);
+        let catalog = Arc::new(MockCatalog::new(stars));
         let mut cached = CachedStarCatalog::new(catalog, Angle::from_degrees(1.0));
 
         // Query near north pole

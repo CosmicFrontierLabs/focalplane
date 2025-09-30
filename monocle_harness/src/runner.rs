@@ -212,7 +212,7 @@ mod tests {
             .clone()
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
-        let catalog = create_test_catalog();
+        let catalog = Arc::new(create_test_catalog());
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
         let camera = SimulatorCamera::new(satellite, catalog, motion);
 
@@ -262,7 +262,7 @@ mod tests {
             .clone()
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
-        let catalog = create_test_catalog();
+        let catalog = Arc::new(create_test_catalog());
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
         let camera = SimulatorCamera::new(satellite, catalog, motion);
 
@@ -323,7 +323,7 @@ mod tests {
             .clone()
             .with_dimensions(256, 256);
         let satellite = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(0.0));
-        let catalog = create_test_catalog();
+        let catalog = Arc::new(create_test_catalog());
         let motion = Box::new(StaticPointing::new(0.0, 0.0));
         let camera = SimulatorCamera::new(satellite, catalog, motion);
 
