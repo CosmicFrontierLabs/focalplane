@@ -201,7 +201,7 @@ impl ExperimentResult {
             self.lock_acquired,
             self.acquisition_time_s,
             self.num_guide_stars,
-            if self.guide_star_magnitude.is_nan() { "".to_string() } else { format!("{:.2}", self.guide_star_magnitude) },
+            self.guide_star_magnitude,
             self.mean_x_error,
             self.mean_y_error,
             self.std_x_error,
