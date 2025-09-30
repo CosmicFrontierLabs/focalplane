@@ -26,6 +26,7 @@ cats/
 .vscode/
 experiment_output*/
 plots/
+fgs_output/
 
 # Manim animation output
 docs/presentation_scripts/media/

@@ -30,7 +30,7 @@ use simulator::{
 use starfield::catalogs::binary_catalog::BinaryCatalog;
 use starfield::framelib::random::RandomEquatorial;
 use starfield::Equatorial;
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -432,24 +432,30 @@ fn run_single_experiment(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse arguments first to get timestamp for log file
+    // Parse arguments first
     let args = Args::parse();
 
-    // Generate timestamp for log file
+    // Generate timestamp and create output directory
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let log_filename = format!("fgs_shootout_{timestamp}.log");
+    let output_dir = PathBuf::from(format!("fgs_output/experiment_{timestamp}"));
+    create_dir_all(&output_dir)?;
 
-    // Initialize logging to file
-    let log_file = File::create(&log_filename)?;
+    // Initialize logging to file in output directory
+    let log_path = output_dir.join("output.log");
+    let log_file = File::create(&log_path)?;
     env_logger::Builder::new()
         .filter_level(LevelFilter::Info)
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .init();
 
-    log::info!("FGS Shootout starting - log file: {log_filename}");
+    log::info!(
+        "FGS Shootout starting - output directory: {}",
+        output_dir.display()
+    );
 
     println!("FGS Performance Shootout");
     println!("========================");
+    println!("Output directory: {}", output_dir.display());
     println!("Number of pointings: {}", args.num_pointings);
     println!("F-number range: {:?}", args.f_number_range);
     println!("Exposure range (ms): {}", args.exposure_range_ms);
@@ -606,22 +612,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_time.as_secs_f64() / total_experiments as f64
     );
 
-    // Write results to CSV
-    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let output_filename = args.output_csv.replace("YYYYMMDD_HHMMSS", &timestamp);
+    // Write results to CSV in output directory
+    let results_path = output_dir.join("results.csv");
+    println!("\nWriting results to: {}", results_path.display());
 
-    println!("\nWriting results to: {output_filename}");
-
-    let mut output_file = File::create(&output_filename)?;
+    let mut output_file = File::create(&results_path)?;
     ExperimentResult::write_csv_header(&mut output_file)?;
 
     for result in &final_results {
         result.write_csv_row(&mut output_file)?;
     }
 
-    // Write detailed tracking data if we have any
-    let tracking_filename = output_filename.replace(".csv", "_tracking.csv");
-    let mut tracking_file = File::create(&tracking_filename)?;
+    // Write detailed tracking data
+    let tracking_path = output_dir.join("tracking.csv");
+    let mut tracking_file = File::create(&tracking_path)?;
 
     writeln!(
         tracking_file,
@@ -635,7 +639,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Tracking details written to: {tracking_filename}");
+    println!("Tracking details written to: {}", tracking_path.display());
 
     // Print some statistics by configuration
     println!("\n=== Lock Rate by F-number ===");
