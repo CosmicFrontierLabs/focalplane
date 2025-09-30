@@ -678,3 +678,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::image_proc::airy::PixelScaledAiryDisk;
+    use shared::units::LengthExt;
+    use simulator::image_proc::render::StarInFrame;
+    use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
+    use simulator::units::Length;
+    use starfield::catalogs::StarData;
+
+    fn create_test_star(x: f64, y: f64, magnitude: f64) -> StarInFrame {
+        // Create minimal spot flux for testing (values don't matter for position tests)
+        let wavelength = Length::from_meters(550e-9);
+        let disk = PixelScaledAiryDisk::with_fwhm(2.0, wavelength);
+        let spot_flux = SpotFlux { disk, flux: 1.0 };
+        let source_flux = SourceFlux {
+            photons: spot_flux.clone(),
+            electrons: spot_flux,
+        };
+
+        StarInFrame {
+            x,
+            y,
+            spot: source_flux,
+            star: StarData {
+                id: 1,
+                position: Equatorial::from_degrees(0.0, 0.0),
+                magnitude,
+                b_v: None,
+            },
+        }
+    }
+
+    #[test]
+    fn test_find_closest_star_within_distance() {
+        let stars = vec![
+            create_test_star(10.0, 10.0, 5.0),
+            create_test_star(20.0, 20.0, 6.0),
+        ];
+
+        let result = find_closest_rendered_star(&stars, 11.0, 11.0, 5.0);
+        assert!(result.is_some());
+        let star = result.unwrap();
+        assert_eq!(star.x, 10.0);
+        assert_eq!(star.y, 10.0);
+    }
+
+    #[test]
+    fn test_find_closest_star_outside_distance() {
+        let stars = vec![create_test_star(10.0, 10.0, 5.0)];
+
+        let result = find_closest_rendered_star(&stars, 20.0, 20.0, 5.0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_closest_star_multiple_stars() {
+        let stars = vec![
+            create_test_star(10.0, 10.0, 5.0),
+            create_test_star(12.0, 12.0, 6.0),
+            create_test_star(8.0, 8.0, 7.0),
+        ];
+
+        let result = find_closest_rendered_star(&stars, 11.0, 11.0, 10.0);
+        assert!(result.is_some());
+        let star = result.unwrap();
+        assert_eq!(star.x, 10.0);
+        assert_eq!(star.y, 10.0);
+    }
+
+    #[test]
+    fn test_find_closest_star_empty_list() {
+        let stars: Vec<StarInFrame> = vec![];
+
+        let result = find_closest_rendered_star(&stars, 10.0, 10.0, 5.0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_closest_star_exact_match() {
+        let stars = vec![create_test_star(10.0, 10.0, 5.0)];
+
+        let result = find_closest_rendered_star(&stars, 10.0, 10.0, 1.0);
+        assert!(result.is_some());
+        let star = result.unwrap();
+        assert_eq!(star.x, 10.0);
+        assert_eq!(star.y, 10.0);
+    }
+
+    #[test]
+    fn test_find_closest_star_at_boundary() {
+        let stars = vec![create_test_star(10.0, 10.0, 5.0)];
+
+        // Exactly at max distance (5.0 pixels away)
+        let result = find_closest_rendered_star(&stars, 13.0, 14.0, 5.0);
+        assert!(result.is_some());
+
+        // Just over max distance
+        let result = find_closest_rendered_star(&stars, 13.0, 14.0, 4.9);
+        assert!(result.is_none());
+    }
+}
