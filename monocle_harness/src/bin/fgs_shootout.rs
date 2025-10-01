@@ -11,7 +11,7 @@
 use chrono::Local;
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use log::LevelFilter;
+use log::{debug, LevelFilter};
 use monocle::{
     config::FgsConfig,
     state::{FgsEvent, FgsState},
@@ -109,10 +109,6 @@ struct Args {
     #[arg(long, default_value_t = 5.0)]
     centroid_multiplier: f64,
 
-    /// Verbose output
-    #[arg(short, long)]
-    verbose: bool,
-
     /// Random seed for reproducibility
     #[arg(long, default_value_t = 0)]
     seed: u64,
@@ -156,7 +152,6 @@ struct ExperimentResult {
 
     // Acquisition results
     lock_acquired: bool,
-    acquisition_time_s: f64,
     num_guide_stars: usize,
     guide_star_magnitude: f64, // Gaia magnitude of tracked star (NaN if unknown)
 
@@ -168,8 +163,6 @@ struct ExperimentResult {
     mean_y_error: f64,
     std_x_error: f64,
     std_y_error: f64,
-    max_error: f64,
-    rms_error: f64,
 }
 
 impl ExperimentResult {
@@ -179,9 +172,9 @@ impl ExperimentResult {
             file,
             "experiment_id,pointing_ra_deg,pointing_dec_deg,f_number,exposure_ms,\
             sensor,telescope,temperature_c,\
-            lock_acquired,acquisition_time_s,num_guide_stars,guide_star_magnitude,\
+            lock_acquired,num_guide_stars,guide_star_magnitude,\
             mean_x_error_pixels,mean_y_error_pixels,std_x_error_pixels,std_y_error_pixels,\
-            max_error_pixels,rms_error_pixels,num_tracked_points"
+            num_tracked_points"
         )
     }
 
@@ -189,7 +182,7 @@ impl ExperimentResult {
     fn write_csv_row(&self, file: &mut File) -> std::io::Result<()> {
         writeln!(
             file,
-            "{},{:.6},{:.6},{:.1},{:.1},{},{},{:.1},{},{:.3},{},{:.2},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{}",
+            "{},{:.6},{:.6},{:.1},{:.1},{},{},{:.1},{},{},{:.2},{:.6},{:.6},{:.6},{:.6},{}",
             self.params.experiment_id,
             self.params.pointing.ra.to_degrees(),
             self.params.pointing.dec.to_degrees(),
@@ -199,15 +192,12 @@ impl ExperimentResult {
             self.params.satellite_config.telescope.name,
             self.params.satellite_config.temperature.as_celsius(),
             self.lock_acquired,
-            self.acquisition_time_s,
             self.num_guide_stars,
             self.guide_star_magnitude,
             self.mean_x_error,
             self.mean_y_error,
             self.std_x_error,
             self.std_y_error,
-            self.max_error,
-            self.rms_error,
             self.tracking_points.len()
         )
     }
@@ -267,10 +257,7 @@ fn run_single_experiment(
     catalog: Arc<BinaryCatalog>,
     fgs_config: FgsConfig,
     tracked_points: usize,
-    verbose: bool,
 ) -> ExperimentResult {
-    let start_time = Instant::now();
-
     // Use the satellite configuration from params
     let satellite = params.satellite_config.clone();
 
@@ -310,8 +297,6 @@ fn run_single_experiment(
     fgs.process_next_frame()
         .expect("Failed to process calibration frame");
 
-    let acquisition_time = start_time.elapsed().as_secs_f64();
-
     // Check if we achieved lock and get guide star magnitude
     let (lock_acquired, num_guide_stars, guide_star_magnitude) = match fgs.state() {
         FgsState::Tracking { .. } => {
@@ -328,97 +313,88 @@ fn run_single_experiment(
         _ => (false, 0, f64::NAN),
     };
 
-    if verbose {
-        let mag_display = if guide_star_magnitude.is_nan() {
-            "N/A".to_string()
-        } else {
-            format!("{guide_star_magnitude:.2}")
-        };
-        println!(
-            "Experiment {}: Pointing ({:.2}, {:.2})°, f/{:.1}, {}ms exposure - Lock: {}, Stars: {}, Mag: {}",
-            params.experiment_id,
-            params.pointing.ra.to_degrees(),
-            params.pointing.dec.to_degrees(),
-            params.satellite_config.telescope.f_number(),
-            params.exposure_ms,
-            lock_acquired,
-            num_guide_stars,
-            mag_display
-        );
-    }
+    debug!(
+        "Experiment {}: Pointing ({:.2}, {:.2})°, f/{:.1}, {}ms exposure - Lock: {}, Stars: {}, Mag: {}",
+        params.experiment_id,
+        params.pointing.ra.to_degrees(),
+        params.pointing.dec.to_degrees(),
+        params.satellite_config.telescope.f_number(),
+        params.exposure_ms,
+        lock_acquired,
+        num_guide_stars,
+        if guide_star_magnitude.is_nan() { "N/A".to_string() } else { format!("{guide_star_magnitude:.2}") }
+    );
 
     // Tracking phase
     let mut tracking_points = Vec::new();
 
-    if lock_acquired {
-        // Get actual star position and magnitude from rendered stars for ground truth
-        let (actual_x, actual_y, magnitude) = if let Some(guide_star) = fgs.guide_star() {
-            if let Some(star) =
-                find_closest_rendered_star(&rendered_stars, guide_star.x, guide_star.y, 10.0)
-            {
-                (star.x, star.y, star.star.magnitude)
-            } else {
-                (f64::NAN, f64::NAN, f64::NAN)
-            }
-        } else {
-            (f64::NAN, f64::NAN, f64::NAN)
+    if !lock_acquired {
+        return ExperimentResult {
+            params,
+            lock_acquired: false,
+            num_guide_stars: 0,
+            guide_star_magnitude: f64::NAN,
+            tracking_points: Vec::new(),
+            mean_x_error: f64::NAN,
+            mean_y_error: f64::NAN,
+            std_x_error: f64::NAN,
+            std_y_error: f64::NAN,
         };
+    }
 
-        for _ in 0..tracked_points {
-            if let Ok(Some(update)) = fgs.process_next_frame() {
-                let point = TrackingPoint {
-                    time_s: update.timestamp.to_duration().as_secs_f64(),
-                    x_actual: actual_x,
-                    y_actual: actual_y,
-                    x_estimated: update.x,
-                    y_estimated: update.y,
-                    x_error_pixels: update.x - actual_x,
-                    y_error_pixels: update.y - actual_y,
-                    magnitude,
-                };
+    // Get actual star position and magnitude from rendered stars for ground truth
+    let guide_star = fgs
+        .guide_star()
+        .expect("Guide star should exist in tracking state");
+    let (actual_x, actual_y, magnitude) = if let Some(star) =
+        find_closest_rendered_star(&rendered_stars, guide_star.x, guide_star.y, 10.0)
+    {
+        (star.x, star.y, star.star.magnitude)
+    } else {
+        (f64::NAN, f64::NAN, f64::NAN)
+    };
 
-                tracking_points.push(point);
-            }
+    for _ in 0..tracked_points {
+        if let Ok(Some(update)) = fgs.process_next_frame() {
+            let point = TrackingPoint {
+                time_s: update.timestamp.to_duration().as_secs_f64(),
+                x_actual: actual_x,
+                y_actual: actual_y,
+                x_estimated: update.x,
+                y_estimated: update.y,
+                x_error_pixels: update.x - actual_x,
+                y_error_pixels: update.y - actual_y,
+                magnitude,
+            };
+
+            tracking_points.push(point);
         }
     }
 
     // Calculate statistics
-    let (mean_x_error, mean_y_error, std_x_error, std_y_error, max_error, rms_error) =
-        if !tracking_points.is_empty() {
-            let x_errors: Vec<f64> = tracking_points.iter().map(|p| p.x_error_pixels).collect();
-            let y_errors: Vec<f64> = tracking_points.iter().map(|p| p.y_error_pixels).collect();
+    let (mean_x_error, mean_y_error, std_x_error, std_y_error) = if !tracking_points.is_empty() {
+        let x_errors: Vec<f64> = tracking_points.iter().map(|p| p.x_error_pixels).collect();
+        let y_errors: Vec<f64> = tracking_points.iter().map(|p| p.y_error_pixels).collect();
 
-            let mean_x = x_errors.iter().sum::<f64>() / x_errors.len() as f64;
-            let mean_y = y_errors.iter().sum::<f64>() / y_errors.len() as f64;
+        let mean_x = x_errors.iter().sum::<f64>() / x_errors.len() as f64;
+        let mean_y = y_errors.iter().sum::<f64>() / y_errors.len() as f64;
 
-            let var_x =
-                x_errors.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>() / x_errors.len() as f64;
-            let var_y =
-                y_errors.iter().map(|y| (y - mean_y).powi(2)).sum::<f64>() / y_errors.len() as f64;
+        let var_x =
+            x_errors.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>() / x_errors.len() as f64;
+        let var_y =
+            y_errors.iter().map(|y| (y - mean_y).powi(2)).sum::<f64>() / y_errors.len() as f64;
 
-            let std_x = var_x.sqrt();
-            let std_y = var_y.sqrt();
+        let std_x = var_x.sqrt();
+        let std_y = var_y.sqrt();
 
-            let max_err = x_errors
-                .iter()
-                .chain(&y_errors)
-                .map(|e| e.abs())
-                .fold(0.0, f64::max);
-
-            let rms = ((x_errors.iter().map(|x| x.powi(2)).sum::<f64>()
-                + y_errors.iter().map(|y| y.powi(2)).sum::<f64>())
-                / (x_errors.len() + y_errors.len()) as f64)
-                .sqrt();
-
-            (mean_x, mean_y, std_x, std_y, max_err, rms)
-        } else {
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        };
+        (mean_x, mean_y, std_x, std_y)
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
 
     ExperimentResult {
         params,
         lock_acquired,
-        acquisition_time_s: acquisition_time,
         num_guide_stars,
         guide_star_magnitude,
         tracking_points,
@@ -426,8 +402,6 @@ fn run_single_experiment(
         mean_y_error,
         std_x_error,
         std_y_error,
-        max_error,
-        rms_error,
     }
 }
 
@@ -568,7 +542,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 catalog.clone(),
                 fgs_config.clone(),
                 args.tracked_points,
-                args.verbose,
             );
 
             results.lock().unwrap().push(result);
@@ -582,7 +555,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 catalog.clone(),
                 fgs_config.clone(),
                 args.tracked_points,
-                args.verbose,
             );
 
             results.lock().unwrap().push(result);
