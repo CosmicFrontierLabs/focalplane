@@ -282,8 +282,12 @@ fn run_single_experiment(
         .expect("Failed to capture initial frame");
     let rendered_stars = camera.get_last_rendered_stars().to_vec();
 
+    // Update config with camera's saturation value (95% of max to be conservative)
+    let mut fgs_config_with_sat = fgs_config.clone();
+    fgs_config_with_sat.filters.saturation_value = camera.saturation_value() * 0.95;
+
     // Create FGS
-    let mut fgs = FineGuidanceSystem::new(camera, fgs_config.clone());
+    let mut fgs = FineGuidanceSystem::new(camera, fgs_config_with_sat);
 
     // Start FGS
     fgs.process_event(FgsEvent::StartFgs)
@@ -484,7 +488,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create FGS configuration
     let fgs_config = FgsConfig {
         acquisition_frames: args.acquisition_frames,
-        min_guide_star_snr: args.min_snr,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: args.min_snr,
+            ..Default::default()
+        },
         max_guide_stars: args.max_guide_stars,
         roi_size: args.roi_size,
         centroid_radius_multiplier: args.centroid_multiplier,

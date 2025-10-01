@@ -21,7 +21,10 @@ fn test_fgs_with_synthetic_frames() {
     // Create FGS with test configuration
     let config = FgsConfig {
         acquisition_frames: 2,
-        min_guide_star_snr: 5.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 5.0,
+            ..Default::default()
+        },
         max_guide_stars: 3,
         roi_size: 32,
         centroid_radius_multiplier: 5.0,
@@ -92,7 +95,10 @@ fn test_fgs_with_synthetic_frames() {
 fn test_fgs_acquisition_to_tracking_transition() {
     let config = FgsConfig {
         acquisition_frames: 3,
-        min_guide_star_snr: 5.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 5.0,
+            ..Default::default()
+        },
         max_guide_stars: 2,
         ..Default::default()
     };
@@ -175,7 +181,10 @@ fn test_fgs_acquisition_to_tracking_transition() {
 fn test_fgs_with_moving_stars() {
     let config = FgsConfig {
         acquisition_frames: 1,
-        min_guide_star_snr: 5.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 5.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 32,
         centroid_radius_multiplier: 5.0,
@@ -244,7 +253,10 @@ fn test_fgs_with_moving_stars() {
 fn test_fgs_loses_tracking_with_large_motion() {
     let config = FgsConfig {
         acquisition_frames: 1,
-        min_guide_star_snr: 5.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 5.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 16, // Small ROI to test losing stars
         ..Default::default()

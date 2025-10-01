@@ -29,7 +29,10 @@ fn test_full_tracking_lifecycle() {
     // Create FGS with test configuration
     let config = FgsConfig {
         acquisition_frames: 3,
-        min_guide_star_snr: 10.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 10.0,
+            ..Default::default()
+        },
         max_guide_stars: 3,
         roi_size: 32,
         max_reacquisition_attempts: 3,
@@ -259,7 +262,10 @@ fn test_tracking_loss_and_recovery() {
 
     let config = FgsConfig {
         acquisition_frames: 2,
-        min_guide_star_snr: 10.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 10.0,
+            ..Default::default()
+        },
         max_guide_stars: 2,
         max_reacquisition_attempts: 5,
         ..Default::default()
@@ -345,7 +351,10 @@ fn test_image_sequence_processing() {
 
     let config = FgsConfig {
         acquisition_frames: 5,
-        min_guide_star_snr: 15.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 15.0,
+            ..Default::default()
+        },
         max_guide_stars: 4,
         ..Default::default()
     };

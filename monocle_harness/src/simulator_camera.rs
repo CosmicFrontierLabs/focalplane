@@ -353,6 +353,10 @@ impl CameraInterface for SimulatorCamera {
     fn is_capturing(&self) -> bool {
         self.continuous_state.lock().unwrap().is_active
     }
+
+    fn saturation_value(&self) -> f64 {
+        self.satellite.sensor.saturating_reading()
+    }
 }
 
 #[cfg(test)]

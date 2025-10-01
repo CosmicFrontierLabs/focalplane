@@ -12,6 +12,7 @@ use monocle::{
     FineGuidanceSystem,
 };
 use ndarray::Array2;
+use shared::camera_interface::CameraInterface;
 use std::sync::{Arc, Mutex};
 use test_helpers::test_timestamp;
 
@@ -19,15 +20,20 @@ use test_helpers::test_timestamp;
 fn test_star_detection_on_correct_cycle() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let config = FgsConfig {
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+
+    let mut config = FgsConfig {
         acquisition_frames: 2,
-        min_guide_star_snr: 3.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 3.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 32,
         ..Default::default()
     };
+    config.filters.saturation_value = camera.saturation_value() * 0.95;
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track when we enter each state
@@ -92,16 +98,21 @@ fn test_star_detection_on_correct_cycle() {
 fn test_position_accuracy() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let config = FgsConfig {
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+
+    let mut config = FgsConfig {
         acquisition_frames: 1,
-        min_guide_star_snr: 3.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 3.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 32,
         centroid_radius_multiplier: 5.0,
         ..Default::default()
     };
+    config.filters.saturation_value = camera.saturation_value() * 0.95;
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track reported positions
@@ -184,15 +195,20 @@ fn test_position_accuracy() {
 fn test_moving_star_tracking() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let config = FgsConfig {
+    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+
+    let mut config = FgsConfig {
         acquisition_frames: 1,
-        min_guide_star_snr: 3.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 3.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 48,
         ..Default::default()
     };
+    config.filters.saturation_value = camera.saturation_value() * 0.95;
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     let positions = Arc::new(Mutex::new(Vec::new()));

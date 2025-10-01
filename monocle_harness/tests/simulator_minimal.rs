@@ -29,7 +29,10 @@ fn test_basic_setup() {
     // Verify FGS can be created
     let fgs_config = FgsConfig {
         acquisition_frames: 3,
-        min_guide_star_snr: 10.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 10.0,
+            ..Default::default()
+        },
         max_guide_stars: 3,
         ..Default::default()
     };

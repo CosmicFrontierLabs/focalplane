@@ -5,8 +5,7 @@
 
 use ndarray::{Array2, ArrayView2};
 use shared::camera_interface::{CameraInterface, Timestamp};
-use shared::image_proc::detection::{detect_stars, StarDetection};
-use shared::image_proc::noise::quantify::estimate_noise_level;
+use shared::image_proc::detection::StarDetection;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +13,7 @@ pub mod callback;
 pub mod config;
 pub mod filters;
 pub mod mock_camera;
+pub mod selection;
 pub mod state;
 
 use crate::callback::{CallbackId, FgsCallback, PositionEstimate, TrackingLostReason};
@@ -454,121 +454,15 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
 
     /// Detect stars and select guide stars from averaged frame
     fn detect_and_select_guides(&mut self, _frame: ArrayView2<u16>) -> Result<(), String> {
-        // Get the averaged accumulated frame
         let averaged_frame = self
             .get_averaged_frame()
             .ok_or("No accumulated frame available for calibration")?;
 
-        // Estimate noise level using Chen et al. 2015 method
-        let noise_level = estimate_noise_level(&averaged_frame.view(), 8);
+        let (guide_star, detected_stars) =
+            selection::detect_and_select_guides(averaged_frame.view(), &self.config)?;
 
-        // Calculate detection threshold using configurable sigma multiplier
-        // Note: For images without background, this is appropriate
-        let detection_threshold = self.config.detection_threshold_sigma * noise_level;
-
-        log::info!(
-            "Estimated noise level: {noise_level:.2}, using {}-sigma threshold: {detection_threshold:.2}",
-            self.config.detection_threshold_sigma
-        );
-
-        // Detect stars in the averaged frame with 5-sigma threshold
-        log::debug!(
-            "Using detection threshold: {detection_threshold:.2}, background estimate: {noise_level:.2}"
-        );
-        let detections = detect_stars(&averaged_frame.view(), Some(detection_threshold));
-        log::debug!("Raw detections from detector: {} stars", detections.len());
-        self.detected_stars = detections.clone();
-
-        log::debug!("Detected {} raw stars before filtering", detections.len());
-        for (i, star) in detections.iter().enumerate() {
-            log::debug!(
-                "  Star {}: pos=({:.1},{:.1}), diameter={:.2}, aspect_ratio={:.2}, flux={:.0}",
-                i,
-                star.x,
-                star.y,
-                star.diameter,
-                star.aspect_ratio,
-                star.flux
-            );
-        }
-
-        // Apply filters for guide star selection
-        let image_shape = averaged_frame.dim();
-        let image_diagonal =
-            ((image_shape.0 as f64).powi(2) + (image_shape.1 as f64).powi(2)).sqrt();
-
-        // Filter and score stars
-        let mut candidates: Vec<(StarDetection, f64)> = detections
-            .into_iter()
-            .filter(|star| {
-                // Basic shape filter
-                let passes = star.aspect_ratio < 2.5 && star.diameter > 2.0 && star.diameter < 20.0;
-                if !passes {
-                    log::debug!(
-                        "Star filtered by shape: aspect_ratio={:.2}, diameter={:.2} (needs <2.5, 2-20)",
-                        star.aspect_ratio, star.diameter
-                    );
-                }
-                passes
-            })
-            .filter(|star| {
-                // SNR filter
-                let snr = filters::calculate_snr(star, &averaged_frame.view(), star.diameter / 2.0);
-                let passes = snr >= self.config.min_guide_star_snr;
-                if !passes {
-                    log::debug!(
-                        "Star filtered by SNR: {:.2} < {:.2} (min required)",
-                        snr, self.config.min_guide_star_snr
-                    );
-                }
-                passes
-            })
-            .map(|star| {
-                // Calculate quality score
-                let snr =
-                    filters::calculate_snr(&star, &averaged_frame.view(), star.diameter / 2.0);
-                let distance = filters::distance_from_center(&star, image_shape);
-                let quality = filters::calculate_quality_score(
-                    snr,
-                    distance,
-                    star.aspect_ratio,
-                    image_diagonal,
-                    (0.4, 0.3, 0.3), // SNR, position, PSF weights
-                );
-                (star, quality)
-            })
-            .collect();
-
-        // Sort by quality score
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        // Select the single best star
-        self.guide_star = candidates.into_iter().next().map(|(star, _)| GuideStar {
-            id: 0,
-            x: star.x,
-            y: star.y,
-            flux: star.flux,
-            snr: filters::calculate_snr(&star, &averaged_frame.view(), star.diameter / 2.0),
-            roi: AABB::from_coords(
-                (star.y as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
-                (star.x as i32 - self.config.roi_size as i32 / 2).max(0) as usize,
-                ((star.y as i32 + self.config.roi_size as i32 / 2)
-                    .min(averaged_frame.shape()[0] as i32 - 1)) as usize,
-                ((star.x as i32 + self.config.roi_size as i32 / 2)
-                    .min(averaged_frame.shape()[1] as i32 - 1)) as usize,
-            ),
-            diameter: star.diameter,
-        });
-
-        // Sort detected stars by flux for compatibility
-        self.detected_stars
-            .sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap());
-
-        log::info!(
-            "Detected {} stars in calibration frame with 5-sigma threshold, selected {} guide star for tracking",
-            self.detected_stars.len(),
-            if self.guide_star.is_some() { 1 } else { 0 }
-        );
+        self.guide_star = guide_star;
+        self.detected_stars = detected_stars;
 
         Ok(())
     }

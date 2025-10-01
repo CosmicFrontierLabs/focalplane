@@ -168,4 +168,8 @@ impl CameraInterface for MockCamera {
     fn is_capturing(&self) -> bool {
         self.is_capturing.load(Ordering::SeqCst)
     }
+
+    fn saturation_value(&self) -> f64 {
+        65535.0
+    }
 }

@@ -178,6 +178,57 @@ pub fn distance_from_center(detection: &StarDetection, image_shape: (usize, usiz
     (dx * dx + dy * dy).sqrt()
 }
 
+/// Check if a star is sufficiently far from image edges
+///
+/// Returns true if the star is at least min_edge_distance pixels from all edges.
+pub fn is_within_edge_distance(
+    detection: &StarDetection,
+    image_shape: (usize, usize),
+    min_edge_distance: f64,
+) -> bool {
+    let (height, width) = image_shape;
+    detection.x > min_edge_distance
+        && detection.y > min_edge_distance
+        && detection.x < (width as f64 - min_edge_distance)
+        && detection.y < (height as f64 - min_edge_distance)
+}
+
+/// Check if a star has saturated pixels
+///
+/// Returns false if any pixels within search_radius of the star center exceed saturation_threshold.
+/// Works with f64 images (e.g., averaged frames).
+pub fn has_no_saturation(
+    detection: &StarDetection,
+    image: &ArrayView2<f64>,
+    saturation_threshold: f64,
+    search_radius: f64,
+) -> bool {
+    let (height, width) = image.dim();
+
+    let x_center = detection.x.round() as isize;
+    let y_center = detection.y.round() as isize;
+
+    let search_radius_int = search_radius.ceil() as isize;
+    let x_min = (x_center - search_radius_int).max(0) as usize;
+    let x_max = ((x_center + search_radius_int + 1).min(width as isize)) as usize;
+    let y_min = (y_center - search_radius_int).max(0) as usize;
+    let y_max = ((y_center + search_radius_int + 1).min(height as isize)) as usize;
+
+    for y in y_min..y_max {
+        for x in x_min..x_max {
+            let dx = x as f64 - detection.x;
+            let dy = y as f64 - detection.y;
+            let distance = (dx * dx + dy * dy).sqrt();
+
+            if distance <= search_radius && image[[y, x]] >= saturation_threshold {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 /// Calculate a composite quality score for guide star selection
 ///
 /// Combines multiple metrics into a single score (0.0 to 1.0).
@@ -243,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_saturation_filter() {
+    fn test_saturation_filter_u16() {
         let mut image = Array2::<u16>::zeros((10, 10));
         image[[5, 5]] = 65535;
 
@@ -292,5 +343,132 @@ mod tests {
 
         assert!(!is_isolated(&star1, &detections, 10.0));
         assert!(is_isolated(&star1, &detections, 4.0));
+    }
+
+    #[test]
+    fn test_edge_distance_filter() {
+        let image_shape = (100, 100);
+
+        let star_center = StarDetection {
+            id: 0,
+            x: 50.0,
+            y: 50.0,
+            flux: 100.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        let star_too_close_left = StarDetection {
+            id: 1,
+            x: 5.0,
+            y: 50.0,
+            flux: 100.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        let star_too_close_bottom = StarDetection {
+            id: 2,
+            x: 50.0,
+            y: 95.0,
+            flux: 100.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        assert!(is_within_edge_distance(&star_center, image_shape, 10.0));
+        assert!(!is_within_edge_distance(
+            &star_too_close_left,
+            image_shape,
+            10.0
+        ));
+        assert!(!is_within_edge_distance(
+            &star_too_close_bottom,
+            image_shape,
+            10.0
+        ));
+
+        assert!(!is_within_edge_distance(
+            &star_too_close_left,
+            image_shape,
+            5.0
+        ));
+        assert!(is_within_edge_distance(
+            &star_too_close_left,
+            image_shape,
+            4.0
+        ));
+    }
+
+    #[test]
+    fn test_saturation_filter_f64() {
+        let mut image = Array2::<f64>::zeros((20, 20));
+
+        // Add background
+        for i in 0..20 {
+            for j in 0..20 {
+                image[[i, j]] = 100.0;
+            }
+        }
+
+        // Add a bright star at (10, 10) with a saturated pixel
+        image[[10, 10]] = 5000.0; // Saturated
+        image[[9, 10]] = 800.0;
+        image[[11, 10]] = 800.0;
+
+        let detection_saturated = StarDetection {
+            id: 0,
+            x: 10.0,
+            y: 10.0,
+            flux: 5000.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        let detection_not_saturated = StarDetection {
+            id: 1,
+            x: 5.0,
+            y: 5.0,
+            flux: 800.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        // Test with saturation threshold at 4000
+        assert!(!has_no_saturation(
+            &detection_saturated,
+            &image.view(),
+            4000.0,
+            2.0
+        ));
+        assert!(has_no_saturation(
+            &detection_not_saturated,
+            &image.view(),
+            4000.0,
+            2.0
+        ));
+
+        // Test with higher threshold - should pass
+        assert!(has_no_saturation(
+            &detection_saturated,
+            &image.view(),
+            6000.0,
+            2.0
+        ));
     }
 }

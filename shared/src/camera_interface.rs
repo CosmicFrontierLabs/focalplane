@@ -166,6 +166,12 @@ pub trait CameraInterface: Send + Sync {
 
     /// Check if camera is in continuous capture mode
     fn is_capturing(&self) -> bool;
+
+    /// Get sensor saturation value in DN
+    ///
+    /// Returns the pixel value at which the sensor saturates. This is used
+    /// for guide star filtering to reject saturated sources.
+    fn saturation_value(&self) -> f64;
 }
 
 /// Helper functions for working with ROIs

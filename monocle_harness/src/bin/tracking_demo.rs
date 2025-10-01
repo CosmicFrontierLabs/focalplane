@@ -121,15 +121,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let radians_per_pixel = satellite_config.plate_scale_per_pixel().as_radians();
 
     // Create FGS with configuration and camera
-    let config = FgsConfig {
+    let mut config = FgsConfig {
         acquisition_frames: args.acquisition_frames,
-        min_guide_star_snr: args.min_snr,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: args.min_snr,
+            ..Default::default()
+        },
         max_guide_stars: args.max_guide_stars,
         roi_size: args.roi_size,
         max_reacquisition_attempts: 3,
         centroid_radius_multiplier: args.centroid_multiplier,
         ..Default::default()
     };
+
+    // Update config with camera's saturation value (95% of max to be conservative)
+    config.filters.saturation_value = camera.saturation_value() * 0.95;
 
     let mut fgs = FineGuidanceSystem::new(camera, config);
 

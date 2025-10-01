@@ -20,8 +20,11 @@ fn test_single_stationary_star() {
 
     // Super simple config
     let config = FgsConfig {
-        acquisition_frames: 1,   // Just one frame
-        min_guide_star_snr: 0.1, // Even lower threshold
+        acquisition_frames: 1, // Just one frame
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 0.1, // Even lower threshold
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 64, // Big ROI so we don't lose it
         ..Default::default()
@@ -93,7 +96,10 @@ fn test_guidance_update_timestamp_correlation() {
 
     let config = FgsConfig {
         acquisition_frames: 1,
-        min_guide_star_snr: 5.0,
+        filters: monocle::config::GuideStarFilters {
+            snr_min: 5.0,
+            ..Default::default()
+        },
         max_guide_stars: 1,
         roi_size: 32,
         centroid_radius_multiplier: 5.0,
