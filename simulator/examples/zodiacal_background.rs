@@ -17,7 +17,7 @@ use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodiacal::SolarAngularCoordinates, ZodiacalLight};
 use simulator::shared_args::{DurationArg, SensorModel, TelescopeModel};
-use simulator::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
+use simulator::units::{LengthExt, TemperatureExt, Wavelength};
 
 /// Command line arguments for zodiacal background computation
 #[derive(Parser, Debug)]

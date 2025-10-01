@@ -6,7 +6,6 @@
 
 pub mod helpers;
 pub mod motion_profiles;
-pub mod runner;
 pub mod simulator_camera;
 pub mod tracking_plots;
 
@@ -16,6 +15,5 @@ pub use helpers::{
     create_simple_test_catalog, create_single_star_catalog,
 };
 pub use motion_profiles::TestMotions;
-pub use runner::{run_fgs, run_fgs_with_callback, RunnerResults};
 pub use simulator_camera::SimulatorCamera;
 pub use tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter};
