@@ -493,7 +493,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
 
         let guide_star = self
             .guide_star
-            .as_mut()
+            .as_ref()
             .ok_or("No guide star available for tracking")?;
 
         // Check if we're receiving an ROI frame that matches expected size
@@ -531,9 +531,7 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         let roi_f64 = roi.mapv(|v| v as f64);
 
         // Create mask for centroid calculation based on configurable radius
-        // Use guide star diameter as FWHM estimate
-        let fwhm = guide_star.diameter;
-        let radius = fwhm * self.config.centroid_radius_multiplier;
+        let radius = self.config.fwhm * self.config.centroid_radius_multiplier;
 
         // Create circular mask centered on expected position within ROI
         let roi_height = roi_max_row - roi_min_row + 1;
@@ -549,12 +547,6 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
         // Convert centroid position back to full frame coordinates
         let new_x = roi_min_col as f64 + centroid_result.x;
         let new_y = roi_min_row as f64 + centroid_result.y;
-
-        // Update guide star position
-        guide_star.x = new_x;
-        guide_star.y = new_y;
-        guide_star.flux = centroid_result.flux;
-        guide_star.diameter = centroid_result.diameter;
 
         Ok(Some(GuidanceUpdate {
             x: new_x,
@@ -585,10 +577,30 @@ mod tests {
         Timestamp::from_duration(Duration::from_millis(100))
     }
 
+    fn test_config() -> FgsConfig {
+        FgsConfig {
+            acquisition_frames: 3,
+            filters: crate::config::GuideStarFilters {
+                detection_threshold_sigma: 5.0,
+                snr_min: 5.0,
+                diameter_range: (2.0, 20.0),
+                aspect_ratio_max: 2.5,
+                saturation_value: 4000.0,
+                saturation_search_radius: 3.0,
+                minimum_edge_distance: 10.0,
+            },
+            max_guide_stars: 3,
+            roi_size: 32,
+            max_reacquisition_attempts: 5,
+            centroid_radius_multiplier: 5.0,
+            fwhm: 3.0,
+        }
+    }
+
     #[test]
     fn test_state_transitions() {
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
-        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
+        let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Should start in Idle
         assert_eq!(fgs.state(), &FgsState::Idle);
@@ -601,7 +613,7 @@ mod tests {
     #[test]
     fn test_process_frame() {
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
-        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
+        let mut fgs = FineGuidanceSystem::new(camera, test_config());
         let dummy_frame = Array2::<u16>::zeros((100, 100));
 
         // Should do nothing in Idle state
@@ -613,13 +625,7 @@ mod tests {
     #[test]
     fn test_frame_accumulation() {
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
-        let mut fgs = FineGuidanceSystem::new(
-            camera,
-            FgsConfig {
-                acquisition_frames: 3,
-                ..Default::default()
-            },
-        );
+        let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Start FGS
         let _ = fgs.process_event(FgsEvent::StartFgs);
@@ -665,7 +671,7 @@ mod tests {
     #[test]
     fn test_frame_accumulation_abort() {
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
-        let mut fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
+        let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Start FGS and accumulate some frames
         let _ = fgs.process_event(FgsEvent::StartFgs);
@@ -686,7 +692,7 @@ mod tests {
         use std::sync::Arc;
 
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
-        let fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
+        let fgs = FineGuidanceSystem::new(camera, test_config());
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
 
@@ -730,7 +736,7 @@ mod tests {
         use std::sync::Arc;
 
         let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
-        let fgs = FineGuidanceSystem::new(camera, FgsConfig::default());
+        let fgs = FineGuidanceSystem::new(camera, test_config());
 
         let counter1 = Arc::new(AtomicUsize::new(0));
         let counter2 = Arc::new(AtomicUsize::new(0));

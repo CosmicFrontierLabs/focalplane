@@ -131,6 +131,16 @@ struct ExperimentParams {
     experiment_id: usize,
 }
 
+/// FGS configuration parameters
+#[derive(Debug, Clone)]
+struct FgsParams {
+    acquisition_frames: usize,
+    min_snr: f64,
+    max_guide_stars: usize,
+    roi_size: usize,
+    centroid_radius_multiplier: f64,
+}
+
 /// Results from a single FGS tracking point
 #[derive(Debug, Clone)]
 struct TrackingPoint {
@@ -257,11 +267,14 @@ fn find_closest_rendered_star(
 fn run_single_experiment(
     params: ExperimentParams,
     catalog: Arc<BinaryCatalog>,
-    fgs_config: FgsConfig,
+    fgs_params: &FgsParams,
     tracked_points: usize,
 ) -> ExperimentResult {
     // Use the satellite configuration from params
     let satellite = params.satellite_config.clone();
+
+    // Compute FWHM from satellite optics
+    let pix_fwhm = satellite.airy_disk_pixel_space().fwhm();
 
     // Create simulator camera with catalog (Arc is cheap to clone, catalog itself is shared)
     let mut camera = SimulatorCamera::new(
@@ -282,19 +295,34 @@ fn run_single_experiment(
         .expect("Failed to capture initial frame");
     let rendered_stars = camera.get_last_rendered_stars().to_vec();
 
-    // Update config with camera's saturation value (95% of max to be conservative)
-    let mut fgs_config_with_sat = fgs_config.clone();
-    fgs_config_with_sat.filters.saturation_value = camera.saturation_value() * 0.95;
+    // Create FGS config with computed FWHM and camera saturation value
+    let fgs_config = FgsConfig {
+        acquisition_frames: fgs_params.acquisition_frames,
+        filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
+            snr_min: fgs_params.min_snr,
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: camera.saturation_value() * 0.95,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
+        },
+        max_guide_stars: fgs_params.max_guide_stars,
+        roi_size: fgs_params.roi_size,
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: fgs_params.centroid_radius_multiplier,
+        fwhm: pix_fwhm,
+    };
 
     // Create FGS
-    let mut fgs = FineGuidanceSystem::new(camera, fgs_config_with_sat);
+    let mut fgs = FineGuidanceSystem::new(camera, fgs_config);
 
     // Start FGS
     fgs.process_event(FgsEvent::StartFgs)
         .expect("Failed to start FGS");
 
     // Acquisition phase
-    for _ in 0..fgs_config.acquisition_frames {
+    for _ in 0..fgs_params.acquisition_frames {
         fgs.process_next_frame()
             .expect("Failed to process acquisition frame");
     }
@@ -485,19 +513,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         f_numbers.len() * exposures_ms.len() * pointings.len()
     );
 
-    // Create FGS configuration
-    let fgs_config = FgsConfig {
-        acquisition_frames: args.acquisition_frames,
-        filters: monocle::config::GuideStarFilters {
-            snr_min: args.min_snr,
-            ..Default::default()
-        },
-        max_guide_stars: args.max_guide_stars,
-        roi_size: args.roi_size,
-        centroid_radius_multiplier: args.centroid_multiplier,
-        ..Default::default()
-    };
-
     // Generate all experiment parameters with satellite configurations
     let mut all_params = Vec::new();
     let mut experiment_id = 0;
@@ -541,18 +556,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shared results vector
     let results = Arc::new(Mutex::new(Vec::new()));
 
+    // Create FGS parameters
+    let fgs_params = FgsParams {
+        acquisition_frames: args.acquisition_frames,
+        min_snr: args.min_snr,
+        max_guide_stars: args.max_guide_stars,
+        roi_size: args.roi_size,
+        centroid_radius_multiplier: args.centroid_multiplier,
+    };
+
     // Run experiments
     let experiment_start = Instant::now();
 
     if args.serial {
         // Serial execution
         for params in all_params {
-            let result = run_single_experiment(
-                params,
-                catalog.clone(),
-                fgs_config.clone(),
-                args.tracked_points,
-            );
+            let result =
+                run_single_experiment(params, catalog.clone(), &fgs_params, args.tracked_points);
 
             results.lock().unwrap().push(result);
             main_progress.inc(1);
@@ -560,12 +580,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Parallel execution
         all_params.into_par_iter().for_each(|params| {
-            let result = run_single_experiment(
-                params,
-                catalog.clone(),
-                fgs_config.clone(),
-                args.tracked_points,
-            );
+            let result =
+                run_single_experiment(params, catalog.clone(), &fgs_params, args.tracked_points);
 
             results.lock().unwrap().push(result);
             main_progress.inc(1);

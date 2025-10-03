@@ -30,11 +30,19 @@ fn test_basic_setup() {
     let fgs_config = FgsConfig {
         acquisition_frames: 3,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 10.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 3,
-        ..Default::default()
+        roi_size: 32,
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 5.0,
+        fwhm: 3.0,
     };
 
     let camera = create_jbt_hwk_camera();

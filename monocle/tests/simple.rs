@@ -22,12 +22,19 @@ fn test_single_stationary_star() {
     let config = FgsConfig {
         acquisition_frames: 1, // Just one frame
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 0.1, // Even lower threshold
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 64, // Big ROI so we don't lose it
-        ..Default::default()
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     let camera = MockCamera::new_repeating(Array2::<u16>::zeros((256, 256)));
@@ -97,14 +104,19 @@ fn test_guidance_update_timestamp_correlation() {
     let config = FgsConfig {
         acquisition_frames: 1,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 5.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 32,
-        centroid_radius_multiplier: 5.0,
         max_reacquisition_attempts: 5,
-        ..Default::default()
+        centroid_radius_multiplier: 5.0,
+        fwhm: 3.0,
     };
 
     // Create synthetic star

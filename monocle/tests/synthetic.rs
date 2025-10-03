@@ -22,13 +22,19 @@ fn test_fgs_with_synthetic_frames() {
     let config = FgsConfig {
         acquisition_frames: 2,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 5.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 3,
         roi_size: 32,
+        max_reacquisition_attempts: 5,
         centroid_radius_multiplier: 5.0,
-        ..Default::default()
+        fwhm: 3.0,
     };
 
     let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
@@ -96,11 +102,19 @@ fn test_fgs_acquisition_to_tracking_transition() {
     let config = FgsConfig {
         acquisition_frames: 3,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 5.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 2,
-        ..Default::default()
+        roi_size: 64,
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
@@ -182,13 +196,19 @@ fn test_fgs_with_moving_stars() {
     let config = FgsConfig {
         acquisition_frames: 1,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 5.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 32,
+        max_reacquisition_attempts: 5,
         centroid_radius_multiplier: 5.0,
-        ..Default::default()
+        fwhm: 3.0,
     };
 
     let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
@@ -254,12 +274,19 @@ fn test_fgs_loses_tracking_with_large_motion() {
     let config = FgsConfig {
         acquisition_frames: 1,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 5.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 16, // Small ROI to test losing stars
-        ..Default::default()
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));

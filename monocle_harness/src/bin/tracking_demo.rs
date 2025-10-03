@@ -124,14 +124,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = FgsConfig {
         acquisition_frames: args.acquisition_frames,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: args.min_snr,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: args.max_guide_stars,
         roi_size: args.roi_size,
         max_reacquisition_attempts: 3,
         centroid_radius_multiplier: args.centroid_multiplier,
-        ..Default::default()
+        fwhm: 3.0,
     };
 
     // Update config with camera's saturation value (95% of max to be conservative)

@@ -30,13 +30,19 @@ fn test_full_tracking_lifecycle() {
     let config = FgsConfig {
         acquisition_frames: 3,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 10.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 3,
         roi_size: 32,
         max_reacquisition_attempts: 3,
-        ..Default::default()
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame
@@ -263,12 +269,19 @@ fn test_tracking_loss_and_recovery() {
     let config = FgsConfig {
         acquisition_frames: 2,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 10.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 2,
+        roi_size: 64,
         max_reacquisition_attempts: 5,
-        ..Default::default()
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame
@@ -352,11 +365,19 @@ fn test_image_sequence_processing() {
     let config = FgsConfig {
         acquisition_frames: 5,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 15.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 4,
-        ..Default::default()
+        roi_size: 64,
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame

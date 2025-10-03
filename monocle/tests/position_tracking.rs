@@ -25,12 +25,19 @@ fn test_star_detection_on_correct_cycle() {
     let mut config = FgsConfig {
         acquisition_frames: 2,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 3.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 32,
-        ..Default::default()
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
     config.filters.saturation_value = camera.saturation_value() * 0.95;
 
@@ -103,13 +110,19 @@ fn test_position_accuracy() {
     let mut config = FgsConfig {
         acquisition_frames: 1,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 3.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 32,
+        max_reacquisition_attempts: 5,
         centroid_radius_multiplier: 5.0,
-        ..Default::default()
+        fwhm: 3.0,
     };
     config.filters.saturation_value = camera.saturation_value() * 0.95;
 
@@ -200,12 +213,19 @@ fn test_moving_star_tracking() {
     let mut config = FgsConfig {
         acquisition_frames: 1,
         filters: monocle::config::GuideStarFilters {
+            detection_threshold_sigma: 5.0,
             snr_min: 3.0,
-            ..Default::default()
+            diameter_range: (2.0, 20.0),
+            aspect_ratio_max: 2.5,
+            saturation_value: 4000.0,
+            saturation_search_radius: 3.0,
+            minimum_edge_distance: 10.0,
         },
         max_guide_stars: 1,
         roi_size: 48,
-        ..Default::default()
+        max_reacquisition_attempts: 5,
+        centroid_radius_multiplier: 3.0,
+        fwhm: 3.0,
     };
     config.filters.saturation_value = camera.saturation_value() * 0.95;
 
