@@ -70,9 +70,9 @@ for col_idx, exposure in enumerate(exposure_times):
     )
     mean_x = exposure_data['std_x_error_pixels'].mean()
     ax_x.axvline(mean_x, color=color_x, linestyle='--', linewidth=2, alpha=0.5)
-    ax_x.text(mean_x, ax_x.get_ylim()[1] * 0.95, f'μ={mean_x:.3f}',
+    ax_x.text(mean_x, ax_x.get_ylim()[1] * 0.95, f'μ={mean_x:.3f} (n={len(exposure_data)})',
               ha='center', va='top', fontsize=10, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-    ax_x.set_title(f'Exposure: {exposure} ms (n={len(exposure_data)})')
+    ax_x.set_title(f'Exposure: {exposure} ms')
     ax_x.set_xlabel('std_x_error_pixels')
     ax_x.set_ylabel('Frequency')
     ax_x.set_xlim(x_min, x_max)
