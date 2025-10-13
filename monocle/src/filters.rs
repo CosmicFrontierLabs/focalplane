@@ -6,104 +6,7 @@
 use ndarray::ArrayView2;
 use shared::image_proc::detection::StarDetection;
 
-/// Filter stars by signal-to-noise ratio
-///
-/// Calculates SNR using aperture photometry with background annulus estimation.
-/// Returns true if the star's SNR exceeds the minimum threshold.
-pub fn filter_by_snr(
-    detection: &StarDetection,
-    image: &ArrayView2<f64>,
-    min_snr: f64,
-    aperture_radius: f64,
-) -> bool {
-    let snr = calculate_snr(detection, image, aperture_radius);
-    snr >= min_snr
-}
-
-/// Calculate signal-to-noise ratio for a detected star
-///
-/// Uses aperture photometry with a background annulus to estimate SNR.
-/// SNR = (peak - background) / noise_rms
-pub fn calculate_snr(
-    detection: &StarDetection,
-    image: &ArrayView2<f64>,
-    aperture_radius: f64,
-) -> f64 {
-    // Define annulus for background estimation
-    let background_inner_radius = 2.0 * aperture_radius;
-    let background_outer_radius = 3.0 * aperture_radius;
-
-    let (height, width) = image.dim();
-
-    // Calculate bounding box
-    let x_center = detection.x.round() as isize;
-    let y_center = detection.y.round() as isize;
-
-    let x_min = (x_center - background_outer_radius.ceil() as isize).max(0) as usize;
-    let x_max =
-        ((x_center + background_outer_radius.ceil() as isize + 1).min(width as isize)) as usize;
-    let y_min = (y_center - background_outer_radius.ceil() as isize).max(0) as usize;
-    let y_max =
-        ((y_center + background_outer_radius.ceil() as isize + 1).min(height as isize)) as usize;
-
-    // Collect pixels
-    let mut background_pixels = Vec::new();
-    let mut aperture_pixels = Vec::new();
-
-    for y in y_min..y_max {
-        for x in x_min..x_max {
-            let dx = x as f64 - detection.x;
-            let dy = y as f64 - detection.y;
-            let distance = (dx * dx + dy * dy).sqrt();
-
-            if distance <= aperture_radius {
-                aperture_pixels.push(image[[y, x]]);
-            } else if distance >= background_inner_radius && distance <= background_outer_radius {
-                background_pixels.push(image[[y, x]]);
-            }
-        }
-    }
-
-    if aperture_pixels.is_empty() || background_pixels.len() < 10 {
-        return 0.0;
-    }
-
-    // Estimate background using median
-    background_pixels.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let background_median = if background_pixels.len() % 2 == 0 {
-        let mid = background_pixels.len() / 2;
-        (background_pixels[mid - 1] + background_pixels[mid]) / 2.0
-    } else {
-        background_pixels[background_pixels.len() / 2]
-    };
-
-    // Find peak in aperture
-    let peak_value = aperture_pixels.iter().fold(0.0, |max, &val| val.max(max));
-    let signal = peak_value - background_median;
-
-    // Estimate noise using MAD
-    let mut deviations: Vec<f64> = background_pixels
-        .iter()
-        .map(|&val| (val - background_median).abs())
-        .collect();
-    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    let mad = if deviations.len() % 2 == 0 {
-        let mid = deviations.len() / 2;
-        (deviations[mid - 1] + deviations[mid]) / 2.0
-    } else {
-        deviations[deviations.len() / 2]
-    };
-
-    // Convert MAD to RMS (sigma ≈ 1.4826 * MAD for Gaussian)
-    let noise_rms = 1.4826 * mad;
-
-    if noise_rms <= 0.0 {
-        return f64::MAX;
-    }
-
-    signal / noise_rms
-}
+pub use shared::image_proc::source_snr::{calculate_snr, filter_by_snr};
 
 /// Filter stars that have saturated pixels
 ///
@@ -257,41 +160,6 @@ pub fn calculate_quality_score(
 mod tests {
     use super::*;
     use ndarray::Array2;
-
-    #[test]
-    fn test_snr_calculation() {
-        // Create test image with a star
-        let mut image = Array2::<f64>::zeros((20, 20));
-
-        // Add background
-        for i in 0..20 {
-            for j in 0..20 {
-                image[[i, j]] = 100.0;
-            }
-        }
-
-        // Add star at center
-        image[[10, 10]] = 1000.0;
-        image[[9, 10]] = 800.0;
-        image[[11, 10]] = 800.0;
-        image[[10, 9]] = 800.0;
-        image[[10, 11]] = 800.0;
-
-        let detection = StarDetection {
-            id: 0,
-            x: 10.0,
-            y: 10.0,
-            flux: 4200.0,
-            m_xx: 1.0,
-            m_yy: 1.0,
-            m_xy: 0.0,
-            aspect_ratio: 1.0,
-            diameter: 2.0,
-        };
-
-        let snr = calculate_snr(&detection, &image.view(), 2.0);
-        assert!(snr > 10.0);
-    }
 
     #[test]
     fn test_saturation_filter_u16() {

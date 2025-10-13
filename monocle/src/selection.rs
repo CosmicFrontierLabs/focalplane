@@ -136,8 +136,15 @@ pub fn detect_and_select_guides(
     let after_snr_filter: Vec<StarDetection> = after_saturation_filter
         .iter()
         .filter(|star| {
-            filters::calculate_snr(star, &averaged_frame, star.diameter / 2.0)
-                >= config.filters.snr_min
+            let aperture = star.diameter / 2.0;
+            filters::filter_by_snr(
+                star,
+                &averaged_frame,
+                config.filters.snr_min,
+                aperture,
+                aperture * 2.0,
+                aperture * 3.0,
+            )
         })
         .cloned()
         .collect();
@@ -154,21 +161,37 @@ pub fn detect_and_select_guides(
         stats.log("Final candidates (sorted by flux)");
     }
 
-    let guide_star = candidates.into_iter().next().map(|star| GuideStar {
-        id: 0,
-        x: star.x,
-        y: star.y,
-        flux: star.flux,
-        snr: filters::calculate_snr(&star, &averaged_frame, star.diameter / 2.0),
-        roi: AABB::from_coords(
-            (star.y as i32 - config.roi_size as i32 / 2).max(0) as usize,
-            (star.x as i32 - config.roi_size as i32 / 2).max(0) as usize,
-            ((star.y as i32 + config.roi_size as i32 / 2).min(averaged_frame.shape()[0] as i32 - 1))
-                as usize,
-            ((star.x as i32 + config.roi_size as i32 / 2).min(averaged_frame.shape()[1] as i32 - 1))
-                as usize,
-        ),
-        diameter: star.diameter,
+    let guide_star = candidates.into_iter().next().and_then(|star| {
+        let aperture = star.diameter / 2.0;
+        let snr = filters::calculate_snr(
+            &star,
+            &averaged_frame,
+            aperture,
+            aperture * 2.0,
+            aperture * 3.0,
+        )
+        .map_err(|e| {
+            log::warn!("Failed to calculate SNR for selected guide star: {e}");
+            e
+        })
+        .ok()?;
+
+        Some(GuideStar {
+            id: 0,
+            x: star.x,
+            y: star.y,
+            flux: star.flux,
+            snr,
+            roi: AABB::from_coords(
+                (star.y as i32 - config.roi_size as i32 / 2).max(0) as usize,
+                (star.x as i32 - config.roi_size as i32 / 2).max(0) as usize,
+                ((star.y as i32 + config.roi_size as i32 / 2)
+                    .min(averaged_frame.shape()[0] as i32 - 1)) as usize,
+                ((star.x as i32 + config.roi_size as i32 / 2)
+                    .min(averaged_frame.shape()[1] as i32 - 1)) as usize,
+            ),
+            diameter: star.diameter,
+        })
     });
 
     let mut detected_stars = detections;

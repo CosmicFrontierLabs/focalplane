@@ -46,6 +46,7 @@ pub mod io;
 pub mod noise;
 pub mod overlay;
 pub mod smear;
+pub mod source_snr;
 pub mod test_patterns;
 
 // Re-export key functionality for easier access
@@ -63,3 +64,4 @@ pub use overlay::{
     draw_bounding_boxes, draw_simple_boxes, draw_stars_with_sizes, draw_stars_with_x_markers,
     overlay_to_image,
 };
+pub use source_snr::{calculate_snr, filter_by_snr};
