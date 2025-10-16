@@ -31,6 +31,10 @@ fgs_output/
 # Manim animation output
 docs/presentation_scripts/media/
 
+# Display calibration assets
+display_assets/
+!display_assets/apriltags/
+
 # Python
 __pycache__/
 *.py[cod]

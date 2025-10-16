@@ -7,6 +7,7 @@ members = [
     "monocle",
     "monocle_harness",
     "shared",
+    "display-util",
 ]
 resolver = "2"
 
