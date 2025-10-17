@@ -24,6 +24,10 @@ echo "Building $PACKAGE_NAME for ARM64 (aarch64-unknown-linux-gnu)..."
 # Ensure target is installed
 rustup target add aarch64-unknown-linux-gnu 2>/dev/null || true
 
+# Get project root directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
 # Build command
 BUILD_CMD="cargo build --target aarch64-unknown-linux-gnu --release --package $PACKAGE_NAME"
 
@@ -31,8 +35,9 @@ if [ -n "$BINARY_NAME" ]; then
     BUILD_CMD="$BUILD_CMD --bin $BINARY_NAME"
 fi
 
-# Execute build with ARM64 linker
+# Execute build with ARM64 linker and third-party library paths
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+RUSTFLAGS="-L ${PROJECT_ROOT}/third_party/playerone-sdk/lib/arm64" \
     $BUILD_CMD
 
 echo "✓ ARM64 build complete!"

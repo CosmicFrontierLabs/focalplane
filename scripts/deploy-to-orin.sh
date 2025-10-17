@@ -100,6 +100,7 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    RUSTFLAGS="-L ${PROJECT_ROOT}/third_party/playerone-sdk/lib/arm64" \
         $BUILD_CMD
 
     print_success "Build completed"
