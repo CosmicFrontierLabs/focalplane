@@ -12,9 +12,19 @@ The simulator allows quantitative evaluation of tracking accuracy under realisti
 
 The project is organized as a Rust workspace with multiple packages:
 
-- **simulator**: Space telescope optical and sensor simulation
-- **track**: Star tracking and attitude determination algorithms
-- **viz**: Visualization tools for simulation output
+### Core Simulation & Analysis
+- **simulator**: Space telescope optical and sensor simulation with realistic noise models, star field rendering, and sensor performance analysis tools
+- **monocle**: Modular Orientation, Navigation & Optical Control Logic Engine - implements Fine Guidance System (FGS) tracking algorithms and attitude determination
+- **monocle_harness**: Test harness and benchmarking tools for monocle tracking algorithms
+
+### Flight Hardware
+- **flight-software**: Production monitoring system for NVIDIA Jetson Orin flight computers with Prometheus/Grafana integration for power, thermal, and system telemetry
+- **orin-dev**: Development and testing tools for Jetson Orin platform including PlayerOne camera integration (non-flight software)
+
+### Utilities
+- **shared**: Shared utilities and common code across packages
+- **display-util**: Display and visualization utilities for fullscreen output
+- **test_helpers**: Common test utilities and fixtures
 
 ## Features
 
@@ -33,26 +43,62 @@ The project is organized as a Rust workspace with multiple packages:
 
 ## Getting Started
 
+### Building
 ```bash
 # Build all packages
-cargo build
+cargo build --release
 
-# Run telescope simulation with star field to compare sensor performance across different models
-# Random sampling mode (default)
+# Build specific package
+cargo build --release --package simulator
+cargo build --release --package monocle
+```
+
+### Simulation & Analysis
+
+```bash
+# Compare sensor performance across different models
 cargo run --bin sensor_shootout -- --experiments 100
 
-# Single-shot debug mode pointing at the Pleiades cluster for visual comparison
+# Single-shot debug mode pointing at the Pleiades cluster
 cargo run --bin sensor_shootout -- --single-shot-debug "56.75,24.12" --experiments 1
 
-# Generate plots and analysis
-cargo run --bin camera_qe_plot --package simulator
-cargo run --bin stellar_color_plot --package simulator
+# Estimate detection performance across magnitudes and sensors
+cargo run --bin sensor_floor_est --package simulator
 
 # Test centroid accuracy across sub-pixel positions
 cargo run --bin centroid_accuracy_test --package simulator
 
-# Estimate detection performance across magnitudes and sensors
-cargo run --bin sensor_floor_est --package simulator
+# Generate analysis plots
+cargo run --bin camera_qe_plot --package simulator
+cargo run --bin stellar_color_plot --package simulator
+```
+
+### Tracking & FGS
+
+```bash
+# Run FGS tracking demo with different motion patterns
+cargo run --bin tracking_demo --motion sine_ra --duration 20
+cargo run --bin tracking_demo --motion circular --frame-rate 30
+cargo run --bin tracking_demo --motion chaotic --duration 30 --verbose
+
+# Benchmark FGS performance
+cargo run --bin fgs_shootout --package monocle_harness
+```
+
+### Flight Hardware (Jetson Orin)
+
+```bash
+# Run flight monitor locally
+cargo run --bin flight_monitor --package flight-software
+
+# Or use Docker stack with Prometheus/Grafana
+cd flight-software && docker-compose up -d
+
+# PlayerOne camera tools (orin-dev package)
+cargo run --bin playerone_info --package orin-dev
+
+# Deploy to Orin
+scripts/deploy-to-orin.sh --package flight-software --binary flight_monitor
 ```
 
 ## Logging
