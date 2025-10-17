@@ -24,9 +24,12 @@ The project is organized as a Rust workspace with multiple packages:
 - **test-bench**: AprilTag detection and calibration test bench
   - **poa_cameras**: PlayerOne Astronomy camera support for hardware testing (non-flight software)
 
+### Test Infrastructure
+- **test-bench**: AprilTag detection and calibration test bench
+  - **display-util**: Display and visualization utilities for fullscreen pattern output
+
 ### Utilities
 - **shared**: Shared utilities and common code across packages
-- **display-util**: Display and visualization utilities for fullscreen output
 - **test_helpers**: Common test utilities and fixtures
 
 ## Features

@@ -6,8 +6,8 @@ members = [
     "monocle",
     "monocle_harness",
     "shared",
-    "display-util",
     "test-bench",
+    "test-bench/display-util",
 ]
 resolver = "2"
 
