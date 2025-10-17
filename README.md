@@ -19,7 +19,10 @@ The project is organized as a Rust workspace with multiple packages:
 
 ### Flight Hardware
 - **flight-software**: Production monitoring system for NVIDIA Jetson Orin flight computers with Prometheus/Grafana integration for power, thermal, and system telemetry
-- **orin-dev**: Development and testing tools for Jetson Orin platform including PlayerOne camera integration (non-flight software)
+
+### Test Infrastructure
+- **test-bench**: AprilTag detection and calibration test bench
+  - **poa_cameras**: PlayerOne Astronomy camera support for hardware testing (non-flight software)
 
 ### Utilities
 - **shared**: Shared utilities and common code across packages
@@ -94,8 +97,8 @@ cargo run --bin flight_monitor --package flight-software
 # Or use Docker stack with Prometheus/Grafana
 cd flight-software && docker-compose up -d
 
-# PlayerOne camera tools (orin-dev package)
-cargo run --bin playerone_info --package orin-dev
+# PlayerOne camera tools (poa_cameras package)
+cargo run --bin playerone_info --package poa_cameras
 
 # Deploy to Orin
 scripts/deploy-to-orin.sh --package flight-software --binary flight_monitor

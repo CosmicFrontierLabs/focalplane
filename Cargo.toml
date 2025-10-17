@@ -3,7 +3,6 @@ members = [
     "simulator",
     "test_helpers",
     "flight-software",
-    "orin-dev",
     "monocle",
     "monocle_harness",
     "shared",

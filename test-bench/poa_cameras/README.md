@@ -1,6 +1,6 @@
-# Orin Dev - Development Tools for Jetson Orin
+# POA Cameras - PlayerOne Astronomy Camera Support
 
-Development and testing tools for the Jetson Orin platform. This package contains experimental and development software that is **not intended for flight**, unlike the `flight-software` package.
+PlayerOne Astronomy camera support for the test bench. This package contains experimental and development software that is **not intended for flight**, unlike the `flight-software` package.
 
 ## Purpose
 
@@ -39,8 +39,8 @@ For development/testing on x86_64:
 sudo apt-get install libusb-1.0-0-dev
 
 # Build with x64 libs
-RUSTFLAGS="-L $(pwd)/../third_party/playerone-sdk/lib/x64" \
-cargo build --release --package orin-dev
+RUSTFLAGS="-L $(pwd)/../../third_party/playerone-sdk/lib/x64" \
+cargo build --release --package poa_cameras
 ```
 
 ### ARM64 Cross-Compilation (for Jetson Orin)
@@ -63,7 +63,7 @@ sudo apt-get update
 sudo apt-get install libusb-1.0-0:arm64
 
 # Build (if dependencies satisfied)
-../scripts/build-arm64.sh orin-dev playerone_info
+../../scripts/build-arm64.sh poa_cameras playerone_info
 ```
 
 **Known Issue**: Ubuntu x86_64 repositories typically don't provide ARM64 packages, causing `apt-get install libusb-1.0-0:arm64` to fail with 404 errors.
@@ -85,7 +85,7 @@ rsync -avz --exclude target --exclude .git \
 
 # On Orin: Build
 cd ~/meter-sim
-cargo build --release --package orin-dev
+cargo build --release --package poa_cameras
 ```
 
 ## Deployment to Jetson Orin
@@ -94,10 +94,10 @@ cargo build --release --package orin-dev
 
 ```bash
 # Deploy and run playerone_info
-../scripts/deploy-to-orin.sh --package orin-dev --binary playerone_info --run './playerone_info --detailed'
+../../scripts/deploy-to-orin.sh --package poa_cameras --binary playerone_info --run './playerone_info --detailed'
 
 # Deploy all binaries and keep on remote
-../scripts/deploy-to-orin.sh --package orin-dev --keep-remote
+../../scripts/deploy-to-orin.sh --package poa_cameras --keep-remote
 ```
 
 ### Environment Variables
@@ -108,7 +108,7 @@ cargo build --release --package orin-dev
 
 ### PlayerOne SDK
 
-**SDK Version**: 3.9.0 (vendored in `../third_party/playerone-sdk/`)
+**SDK Version**: 3.9.0 (vendored in `../../third_party/playerone-sdk/`)
 
 The PlayerOne SDK native libraries are included in the repository under `third_party/playerone-sdk/` for:
 - ARM64 (Jetson Orin, Raspberry Pi 4+)

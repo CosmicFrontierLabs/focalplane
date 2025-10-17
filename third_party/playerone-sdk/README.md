@@ -38,14 +38,14 @@ The build system will automatically use the ARM64 libraries when cross-compiling
 ```bash
 PLAYERONE_LIB_PATH=$(pwd)/third_party/playerone-sdk/lib/arm64 \
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-cargo build --target aarch64-unknown-linux-gnu --release --package orin-dev
+cargo build --target aarch64-unknown-linux-gnu --release --package poa_cameras
 ```
 
 ### Building for x86_64 (Development)
 
 ```bash
 PLAYERONE_LIB_PATH=$(pwd)/third_party/playerone-sdk/lib/x64 \
-cargo build --release --package orin-dev
+cargo build --release --package poa_cameras
 ```
 
 ### Runtime Setup

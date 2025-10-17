@@ -1,9 +1,9 @@
 [package]
-name = "orin-dev"
+name = "poa_cameras"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Development and testing tools for Jetson Orin (non-flight software)"
+description = "PlayerOne Astronomy camera support for test bench"
 repository.workspace = true
 license.workspace = true
 

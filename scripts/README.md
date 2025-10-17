@@ -17,7 +17,7 @@ Usage:
 
 # Examples
 ./scripts/build-arm64.sh flight-software
-./scripts/build-arm64.sh orin-dev playerone_info
+./scripts/build-arm64.sh poa_cameras playerone_info
 ```
 
 ### deploy-to-orin.sh
@@ -26,14 +26,14 @@ Build and deploy packages to remote Jetson Orin device.
 Usage:
 ```bash
 # Deploy package and run command
-./scripts/deploy-to-orin.sh --package orin-dev --binary playerone_info --run './playerone_info --detailed'
+./scripts/deploy-to-orin.sh --package poa_cameras --binary playerone_info --run './playerone_info --detailed'
 
 # Deploy without building (use existing binaries)
 ./scripts/deploy-to-orin.sh --package flight-software --skip-build --keep-remote
 ```
 
 Options:
-- `--package PKG` - Package to deploy (flight-software, orin-dev)
+- `--package PKG` - Package to deploy (flight-software, poa_cameras)
 - `--binary BIN` - Specific binary to deploy
 - `--skip-build` - Skip build step
 - `--keep-remote` - Keep remote directory after deployment
