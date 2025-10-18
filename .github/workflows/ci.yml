@@ -22,7 +22,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfontconfig1-dev libcfitsio-dev libsdl2-dev libsdl2-image-dev
+        sudo apt-get install -y libfontconfig1-dev libcfitsio-dev libsdl2-dev libsdl2-image-dev libplayeronecamera2
       
     - name: Cache cargo dependencies
       uses: actions/cache@v3

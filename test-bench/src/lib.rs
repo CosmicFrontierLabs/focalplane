@@ -1,3 +1,4 @@
+pub mod camera_server;
 pub mod display_assets;
 pub mod display_patterns;
 pub mod playerone_camera;

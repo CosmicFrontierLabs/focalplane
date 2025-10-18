@@ -1,8 +1,8 @@
 use clap::Parser;
-use flight_software::camera::v4l2_utils::get_available_resolutions;
-use flight_software::hil::{show_camera_info, AppState, FrameStats};
-use flight_software::v4l2_capture::{CameraConfig, CaptureSession};
 use log::{error, info};
+use nsv455::camera::v4l2_utils::get_available_resolutions;
+use nsv455::hil::{show_camera_info, AppState, FrameStats};
+use nsv455::v4l2_capture::{CameraConfig, CaptureSession};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -151,7 +151,7 @@ async fn main() {
         stats: Arc::new(Mutex::new(FrameStats::default())),
     });
 
-    let app = flight_software::hil::create_router(state);
+    let app = nsv455::hil::create_router(state);
 
     let addr = format!("0.0.0.0:{}", args.port);
     info!("Starting camera status server on http://{addr}/");

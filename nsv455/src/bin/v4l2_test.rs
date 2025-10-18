@@ -1,8 +1,8 @@
 use anyhow::Result;
-use flight_software::v4l2_capture::{
+use image::{ImageBuffer, Luma};
+use nsv455::v4l2_capture::{
     CameraConfig, CaptureResult, CaptureSession, ResolutionProfile, V4L2Capture,
 };
-use image::{ImageBuffer, Luma};
 use std::time::Instant;
 use tracing::{error, info};
 

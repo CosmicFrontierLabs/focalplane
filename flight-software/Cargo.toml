@@ -30,6 +30,7 @@ base64 = "0.22"
 env_logger = "0.11.8"
 log = "0.4.27"
 gpiod = "0.3.0"
+nsv455 = { version = "0.1.0", path = "../nsv455" }
 
 [dev-dependencies]
 tokio-test = "0.4"

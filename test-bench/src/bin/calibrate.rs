@@ -12,7 +12,7 @@ trait SdlResultExt<T> {
 
 impl<T> SdlResultExt<T> for std::result::Result<T, String> {
     fn sdl_context(self, msg: &str) -> Result<T> {
-        self.map_err(|e| anyhow::anyhow!("{}: {}", msg, e))
+        self.map_err(|e| anyhow::anyhow!("{msg}: {e}"))
     }
 }
 
@@ -100,10 +100,10 @@ fn list_displays(video_subsystem: &sdl2::VideoSubsystem) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let sdl_context = sdl2::init().map_err(|e| anyhow::anyhow!("SDL init failed: {}", e))?;
+    let sdl_context = sdl2::init().map_err(|e| anyhow::anyhow!("SDL init failed: {e}"))?;
     let video_subsystem = sdl_context
         .video()
-        .map_err(|e| anyhow::anyhow!("Video subsystem init failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Video subsystem init failed: {e}"))?;
 
     if args.list {
         return list_displays(&video_subsystem);
@@ -115,11 +115,7 @@ fn main() -> Result<()> {
         .num_video_displays()
         .sdl_context("Failed to get display count")?;
     if display_index >= num_displays as u32 {
-        anyhow::bail!(
-            "Display {} not found (have {} displays)",
-            display_index,
-            num_displays
-        );
+        anyhow::bail!("Display {display_index} not found (have {num_displays} displays)");
     }
 
     let bounds = video_subsystem
@@ -248,11 +244,11 @@ fn main() -> Result<()> {
             args.width,
             args.height,
         )
-        .map_err(|e| anyhow::anyhow!("Failed to create texture: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create texture: {e:?}"))?;
 
     texture
         .update(None, img.as_raw(), (args.width * 3) as usize)
-        .map_err(|e| anyhow::anyhow!("Failed to update texture: {:?}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to update texture: {e:?}"))?;
 
     let window_width = mode.w as u32;
     let window_height = mode.h as u32;
@@ -271,7 +267,7 @@ fn main() -> Result<()> {
 
     let mut event_pump = sdl_context
         .event_pump()
-        .map_err(|e| anyhow::anyhow!("Failed to get event pump: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to get event pump: {e}"))?;
 
     let is_animated = matches!(args.pattern, PatternType::Static);
     let mut static_buffer = if is_animated {
@@ -301,14 +297,14 @@ fn main() -> Result<()> {
             );
             texture
                 .update(None, buffer, (args.width * 3) as usize)
-                .map_err(|e| anyhow::anyhow!("Failed to update texture: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to update texture: {e}"))?;
         }
 
         canvas.set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
         canvas.clear();
         canvas
             .copy(&texture, None, Some(dst_rect))
-            .map_err(|e| anyhow::anyhow!("Failed to copy texture: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to copy texture: {e}"))?;
         canvas.present();
 
         std::thread::sleep(std::time::Duration::from_millis(16));

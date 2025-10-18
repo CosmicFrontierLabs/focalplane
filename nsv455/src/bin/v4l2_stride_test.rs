@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use flight_software::v4l2_capture::{CameraConfig, V4L2Capture};
+use nsv455::v4l2_capture::{CameraConfig, V4L2Capture};
 use v4l::prelude::*;
 use v4l::video::Capture;
 

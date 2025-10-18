@@ -1,6 +1,6 @@
 #[cfg(feature = "hardware-tests")]
 mod tests {
-    use flight_software::camera::v4l2_utils::{
+    use nsv455::camera::v4l2_utils::{
         collect_camera_metadata, get_available_resolutions, query_menu_item, CameraMetadata,
         Resolution,
     };

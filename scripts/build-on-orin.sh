@@ -28,15 +28,18 @@ usage() {
     echo "Usage: $0 --package PACKAGE [OPTIONS]"
     echo ""
     echo "Required:"
-    echo "  --package PKG        Package to build (e.g., orin-dev)"
+    echo "  --package PKG        Package to build (e.g., test-bench)"
     echo ""
     echo "Options:"
-    echo "  --binary BIN         Specific binary to build"
+    echo "  --binary BIN         Specific binary to build (e.g., camera_server)"
     echo "  --run CMD            Command to run after successful build"
     echo "  -h, --help           Show this help"
     echo ""
     echo "Environment Variables:"
     echo "  ORIN_HOST            Remote host (default: meawoppl@192.168.15.246)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 --package test-bench --binary camera_server --run './target/release/camera_server -p 3000'"
     exit 0
 }
 

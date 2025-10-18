@@ -1,6 +1,6 @@
 #[cfg(feature = "hardware-tests")]
 mod tests {
-    use flight_software::camera::neutralino_imx455::read_sensor_temperatures;
+    use nsv455::camera::neutralino_imx455::read_sensor_temperatures;
 
     #[test]
     fn test_read_sensor_temperatures() {

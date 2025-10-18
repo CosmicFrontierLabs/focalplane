@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::gpio::{GpioController, ORIN_PX04_LINE};
 
-use super::state::AppState;
+use nsv455::hil::AppState;
 
 // Barker-13 sequence for correlation
 const BARKER_13: [bool; 13] = [

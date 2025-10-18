@@ -3,10 +3,11 @@ use axum::{
     extract::State,
     http::{header, StatusCode},
     response::{Html, Response},
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use image::{ImageBuffer, Luma};
+use rust_embed::RustEmbed;
 use std::sync::Arc;
 
 use crate::camera::neutralino_imx455::read_sensor_temperatures;
@@ -14,6 +15,10 @@ use crate::camera::v4l2_utils::collect_camera_metadata;
 
 use super::image_utils::{compute_histogram, process_raw_to_pixels};
 use super::state::AppState;
+
+#[derive(RustEmbed)]
+#[folder = "templates/"]
+struct Templates;
 
 pub async fn capture_frame_data(
     state: &AppState,
@@ -172,9 +177,10 @@ pub async fn stats_endpoint(State(state): State<Arc<AppState>>) -> Response {
         .unwrap()
 }
 
-const CAMERA_STATUS_HTML: &str = include_str!("../../templates/camera_status.html");
-
 pub async fn camera_status_page(State(state): State<Arc<AppState>>) -> Html<String> {
+    let template_content = Templates::get("camera_status.html")
+        .map(|file| String::from_utf8_lossy(&file.data).to_string())
+        .unwrap_or_else(|| "<html><body>Template not found</body></html>".to_string());
     // Collect camera metadata
     let metadata = collect_camera_metadata(&state.device_path).unwrap_or_default();
 
@@ -212,7 +218,7 @@ pub async fn camera_status_page(State(state): State<Arc<AppState>>) -> Html<Stri
         .join("\n");
 
     // Build HTML page with template
-    let html = CAMERA_STATUS_HTML
+    let html = template_content
         .replace("{device}", &state.device_path)
         .replace("{driver}", &metadata.driver)
         .replace("{card}", &metadata.card)
@@ -230,10 +236,5 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/jpeg", get(jpeg_frame_endpoint))
         .route("/raw", get(raw_frame_endpoint))
         .route("/stats", get(stats_endpoint))
-        .route("/gpio_pattern", post(super::latency::gpio_pattern_endpoint))
-        .route(
-            "/latency_measure",
-            post(super::latency::latency_measurement_endpoint),
-        )
         .with_state(state)
 }
