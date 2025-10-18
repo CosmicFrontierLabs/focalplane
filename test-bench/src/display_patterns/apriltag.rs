@@ -1,4 +1,4 @@
-use crate::assets::Assets;
+use crate::display_assets::Assets;
 use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgb};
 use ndarray::{concatenate, Array2, Axis};

@@ -1,12 +1,10 @@
-mod assets;
-mod patterns;
-
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
 use std::path::PathBuf;
+use test_bench::display_patterns as patterns;
 
 trait SdlResultExt<T> {
     fn sdl_context(self, msg: &str) -> Result<T>;

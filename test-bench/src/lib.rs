@@ -1,3 +1,8 @@
+pub mod display_assets;
+pub mod display_patterns;
+pub mod playerone_camera;
+pub mod poa_errors;
+
 #[cfg(test)]
 mod tests {
     #[test]
