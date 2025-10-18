@@ -1,8 +1,6 @@
 pub mod camera_server;
-pub mod display_assets;
 pub mod display_patterns;
-pub mod playerone_camera;
-pub mod poa_errors;
+pub mod poa;
 
 #[cfg(test)]
 mod tests {

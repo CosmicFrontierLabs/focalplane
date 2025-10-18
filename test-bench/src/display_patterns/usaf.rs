@@ -1,4 +1,4 @@
-use crate::display_assets::Assets;
+use crate::display_patterns::assets::Assets;
 use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgb};
 use std::sync::Arc;

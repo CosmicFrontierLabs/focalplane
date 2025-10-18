@@ -2,7 +2,7 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use test_bench::camera_server::{AppState, FrameStats};
-use test_bench::playerone_camera::PlayerOneCamera;
+use test_bench::poa::camera::PlayerOneCamera;
 use tokio::sync::Mutex;
 use tracing::info;
 
