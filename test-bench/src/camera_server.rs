@@ -29,7 +29,7 @@ pub struct FrameStats {
     pub fps_samples: Vec<f32>,
     #[allow(dead_code)]
     pub last_frame_time: std::time::Instant,
-    pub last_temperature_c: f64,
+    pub last_temperatures: std::collections::HashMap<String, f64>,
     pub histogram: Vec<u32>,
 }
 
@@ -39,7 +39,7 @@ impl Default for FrameStats {
             total_frames: 0,
             fps_samples: Vec::new(),
             last_frame_time: std::time::Instant::now(),
-            last_temperature_c: 0.0,
+            last_temperatures: std::collections::HashMap::new(),
             histogram: Vec::new(),
         }
     }
@@ -68,7 +68,7 @@ async fn capture_frame_data<C: CameraInterface>(
 
         stats.total_frames += 1;
         stats.last_frame_time = now;
-        stats.last_temperature_c = metadata.temperature_c;
+        stats.last_temperatures = metadata.temperatures.clone();
     }
 
     result.map_err(|e| e.to_string())
@@ -106,6 +106,10 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     };
 
     let pixels_8bit = process_raw_to_pixels(&frame);
+
+    let mut stats = state.stats.lock().await;
+    stats.histogram = compute_histogram(&pixels_8bit);
+    drop(stats);
 
     let camera = state.camera.lock().await;
     let config = camera.get_config();
@@ -172,7 +176,7 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
         "height": height,
         "timestamp_sec": metadata.timestamp.seconds,
         "timestamp_nanos": metadata.timestamp.nanos,
-        "temperature_c": metadata.temperature_c,
+        "temperatures": metadata.temperatures,
         "exposure_us": metadata.exposure.as_micros(),
         "frame_number": metadata.frame_number,
         "image_base64": encoded,
@@ -199,7 +203,7 @@ async fn stats_endpoint<C: CameraInterface + 'static>(
     let json = serde_json::json!({
         "total_frames": stats.total_frames,
         "avg_fps": avg_fps,
-        "temperature_c": stats.last_temperature_c,
+        "temperatures": stats.last_temperatures,
         "histogram": stats.histogram,
     });
 
@@ -222,12 +226,11 @@ async fn camera_status_page<C: CameraInterface + 'static>(
     let config = camera.get_config();
     let width = config.width;
     let height = config.height;
+    let camera_name = camera.name().to_string();
     drop(camera);
 
     let html = template_content
-        .replace("{device}", "CameraInterface")
-        .replace("{driver}", "Generic")
-        .replace("{card}", "camera-server")
+        .replace("{device}", &camera_name)
         .replace("{width}", &width.to_string())
         .replace("{height}", &height.to_string())
         .replace("{resolutions_list}", "")

@@ -115,13 +115,16 @@ impl CameraInterface for MockCamera {
         let mut elapsed = self.elapsed_time.lock().unwrap();
         *elapsed += self.exposure;
 
+        let mut temperatures = std::collections::HashMap::new();
+        temperatures.insert("sensor".to_string(), 20.0);
+
         let metadata = FrameMetadata {
             frame_number: (*self.frame_index.lock().unwrap()).saturating_sub(1) as u64,
             exposure: self.exposure,
             timestamp: Timestamp::from_duration(*elapsed),
             pointing: None,
             roi: *self.current_roi.lock().unwrap(),
-            temperature_c: 20.0,
+            temperatures,
         };
         Ok((output_frame, metadata))
     }
@@ -171,5 +174,9 @@ impl CameraInterface for MockCamera {
 
     fn saturation_value(&self) -> f64 {
         65535.0
+    }
+
+    fn name(&self) -> &str {
+        "MockCamera"
     }
 }

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>V4L2 Camera Monitor</title>
+    <title>Camera Monitor</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -117,12 +117,6 @@
             <span class="metadata-label">Device:</span><br>{device}
         </div>
         <div class="metadata-item">
-            <span class="metadata-label">Driver:</span><br>{driver}
-        </div>
-        <div class="metadata-item">
-            <span class="metadata-label">Card:</span><br>{card}
-        </div>
-        <div class="metadata-item">
             <span class="metadata-label">Resolution:</span><br>{width}x{height}
         </div>
         
@@ -153,10 +147,7 @@
         <div class="stats-placeholder">
             <div id="stats-fps">FPS: Calculating...</div>
             <div id="stats-frames">Frames: 0</div>
-            <div id="stats-timestamp">Timestamp: --</div>
-            <div id="stats-fpga-temp">FPGA Temp: --°C</div>
-            <div id="stats-pcb-temp">PCB Temp: --°C</div>
-            <div id="stats-errors">Errors: 0</div>
+            <div id="stats-temperatures"></div>
         </div>
         
         <h2 style="margin-top: 30px;">Histogram</h2>
@@ -224,37 +215,24 @@
             fetch('/stats')
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('stats-fps').textContent = 'FPS: ' + data.current_fps.toFixed(1);
+                    document.getElementById('stats-fps').textContent = 'FPS: ' + (data.avg_fps || 0).toFixed(1);
                     document.getElementById('stats-frames').textContent = 'Frames: ' + data.total_frames;
-                    document.getElementById('stats-errors').textContent = 'Errors: ' + data.errors;
-                    
-                    // Display timestamp with fixed decimal places
-                    if (data.timestamp_sec !== undefined && data.timestamp_usec !== undefined) {
-                        // Convert microseconds to fractional seconds (6 decimal places)
-                        const seconds = data.timestamp_sec;
-                        const microseconds = String(Math.abs(data.timestamp_usec)).padStart(6, '0');
-                        const timestampStr = seconds + '.' + microseconds + 's';
-                        document.getElementById('stats-timestamp').textContent = 'Timestamp: ' + timestampStr;
+
+                    // Display temperatures dynamically
+                    const tempDiv = document.getElementById('stats-temperatures');
+                    if (data.temperatures && Object.keys(data.temperatures).length > 0) {
+                        let tempHTML = '';
+                        for (const [location, temp] of Object.entries(data.temperatures)) {
+                            const displayName = location.charAt(0).toUpperCase() + location.slice(1);
+                            tempHTML += '<div>' + displayName + ': ' + temp.toFixed(1) + '°C</div>';
+                        }
+                        tempDiv.innerHTML = tempHTML;
                     } else {
-                        document.getElementById('stats-timestamp').textContent = 'Timestamp: --';
+                        tempDiv.innerHTML = '<div>Temperature: --°C</div>';
                     }
-                    
-                    // Display FPGA temperature
-                    if (data.fpga_temp_c !== null && data.fpga_temp_c !== undefined) {
-                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: ' + data.fpga_temp_c.toFixed(3) + '°C';
-                    } else {
-                        document.getElementById('stats-fpga-temp').textContent = 'FPGA Temp: --°C';
-                    }
-                    
-                    // Display PCB temperature
-                    if (data.pcb_temp_c !== null && data.pcb_temp_c !== undefined) {
-                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: ' + data.pcb_temp_c.toFixed(3) + '°C';
-                    } else {
-                        document.getElementById('stats-pcb-temp').textContent = 'PCB Temp: --°C';
-                    }
-                    
+
                     // Draw histogram
-                    if (data.histogram) {
+                    if (data.histogram && data.histogram.length > 0) {
                         drawHistogram(data.histogram);
                     }
                 })

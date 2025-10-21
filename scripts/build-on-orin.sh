@@ -101,15 +101,37 @@ else
     print_success "Rust already installed: $RUST_CHECK"
 fi
 
-# Step 3: Ensure libusb is installed
-print_info "Checking libusb-1.0-dev on Orin..."
-LIBUSB_CHECK=$(ssh "$REMOTE_HOST" "dpkg -l | grep libusb-1.0-0-dev || echo 'not_found'")
-if [ "$LIBUSB_CHECK" = "not_found" ]; then
-    print_warning "libusb-1.0-dev not found. Installing..."
-    ssh "$REMOTE_HOST" "sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev"
-    print_success "libusb-1.0-dev installed"
+# Step 3: Check and install required system libraries
+print_info "Checking required system libraries on Orin..."
+
+MISSING_PACKAGES=()
+
+check_package() {
+    local package_name=$1
+    local check_result=$(ssh "$REMOTE_HOST" "dpkg -l | grep \"^ii  $package_name\" || echo 'not_found'")
+    if [ "$check_result" = "not_found" ]; then
+        MISSING_PACKAGES+=("$package_name")
+        return 1
+    else
+        print_success "$package_name already installed"
+        return 0
+    fi
+}
+
+check_package "libusb-1.0-0-dev" || print_warning "libusb-1.0-0-dev not found"
+check_package "libssl-dev" || print_warning "libssl-dev not found"
+check_package "pkg-config" || print_warning "pkg-config not found"
+check_package "libcfitsio-dev" || print_warning "libcfitsio-dev not found"
+check_package "libclang-dev" || print_warning "libclang-dev not found"
+check_package "clang" || print_warning "clang not found"
+
+if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+    print_warning "Missing packages: ${MISSING_PACKAGES[*]}"
+    print_info "Installing missing packages..."
+    ssh "$REMOTE_HOST" "sudo apt-get update && sudo apt-get install -y ${MISSING_PACKAGES[*]}"
+    print_success "All required packages installed"
 else
-    print_success "libusb-1.0-dev already installed"
+    print_success "All required system libraries already installed"
 fi
 
 # Step 4: Create build directory structure
@@ -132,7 +154,6 @@ rsync -avz --delete \
     --exclude 'experiment_output*/' \
     --exclude 'docs/presentation_scripts/media/' \
     --exclude 'docs/presentation_scripts/.venv/' \
-    --exclude 'display_assets/' \
     --exclude '__pycache__/' \
     --exclude '*.png' \
     --exclude '*.jpg' \

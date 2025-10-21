@@ -4,6 +4,7 @@ use shared::camera_interface::{
     CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
 };
 use shared::image_proc::detection::aabb::AABB;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +20,7 @@ pub struct PlayerOneCamera {
     is_capturing: Arc<AtomicBool>,
     latest_frame: FrameBuffer,
     capture_thread: Option<std::thread::JoinHandle<()>>,
+    name: String,
 }
 
 impl PlayerOneCamera {
@@ -37,6 +39,7 @@ impl PlayerOneCamera {
     pub fn from_descriptor(descriptor: CameraDescription) -> CameraResult<Self> {
         let max_width = descriptor.properties().max_width as usize;
         let max_height = descriptor.properties().max_height as usize;
+        let camera_name = descriptor.properties().camera_model_name.clone();
 
         let mut camera = descriptor
             .open()
@@ -61,6 +64,7 @@ impl PlayerOneCamera {
             is_capturing: Arc::new(AtomicBool::new(false)),
             latest_frame: Arc::new(Mutex::new(None)),
             capture_thread: None,
+            name: camera_name,
         })
     }
 
@@ -122,13 +126,16 @@ impl PlayerOneCamera {
 
         let frame_num = self.frame_number.fetch_add(1, Ordering::SeqCst);
 
+        let mut temperatures = HashMap::new();
+        temperatures.insert("sensor".to_string(), temperature);
+
         let metadata = FrameMetadata {
             frame_number: frame_num,
             exposure: self.exposure,
             timestamp,
             pointing: None,
             roi: self.roi,
-            temperature_c: temperature,
+            temperatures,
         };
 
         Ok((array, metadata))
@@ -271,13 +278,16 @@ impl CameraInterface for PlayerOneCamera {
 
                     let frame_num = frame_number.fetch_add(1, Ordering::SeqCst);
 
+                    let mut temperatures = HashMap::new();
+                    temperatures.insert("sensor".to_string(), temperature);
+
                     let metadata = FrameMetadata {
                         frame_number: frame_num,
                         exposure,
                         timestamp,
                         pointing: None,
                         roi,
-                        temperature_c: temperature,
+                        temperatures,
                     };
 
                     if let Ok(mut frame) = latest_frame.lock() {
@@ -309,6 +319,10 @@ impl CameraInterface for PlayerOneCamera {
 
     fn saturation_value(&self) -> f64 {
         65535.0
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 

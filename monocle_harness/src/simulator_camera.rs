@@ -231,13 +231,19 @@ impl CameraInterface for SimulatorCamera {
                 self.elapsed_time += self.exposure;
 
                 // Convert elapsed time to seconds and nanoseconds
+                let mut temperatures = std::collections::HashMap::new();
+                temperatures.insert(
+                    "sensor".to_string(),
+                    self.satellite.temperature.as_celsius(),
+                );
+
                 let metadata = FrameMetadata {
                     frame_number: self.frame_number,
                     exposure: self.exposure,
                     timestamp: Timestamp::from_duration(self.elapsed_time),
                     pointing: Some(self.pointing()),
                     roi: self.roi,
-                    temperature_c: self.satellite.temperature.as_celsius(),
+                    temperatures,
                 };
                 // Return properly sized ROI filled with zeros
                 let roi_height = roi.max_row - roi.min_row + 1;
@@ -258,14 +264,19 @@ impl CameraInterface for SimulatorCamera {
 
         self.frame_number += 1;
 
-        // Convert elapsed time to seconds and nanoseconds
+        let mut temperatures = std::collections::HashMap::new();
+        temperatures.insert(
+            "sensor".to_string(),
+            self.satellite.temperature.as_celsius(),
+        );
+
         let metadata = FrameMetadata {
             frame_number: self.frame_number,
             exposure: self.exposure,
             timestamp: Timestamp::from_duration(self.elapsed_time),
             pointing: Some(self.pointing()),
             roi: self.roi,
-            temperature_c: self.satellite.temperature.as_celsius(),
+            temperatures,
         };
 
         // Increment elapsed time by exposure duration
@@ -356,6 +367,10 @@ impl CameraInterface for SimulatorCamera {
 
     fn saturation_value(&self) -> f64 {
         self.satellite.sensor.saturating_reading()
+    }
+
+    fn name(&self) -> &str {
+        "SimulatorCamera"
     }
 }
 

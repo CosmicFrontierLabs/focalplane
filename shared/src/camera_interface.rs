@@ -6,6 +6,7 @@
 use crate::image_proc::detection::AABB;
 use ndarray::{Array2, ArrayView2};
 use starfield::Equatorial;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -92,8 +93,9 @@ pub struct FrameMetadata {
     pub pointing: Option<Equatorial>,
     /// Current ROI if set
     pub roi: Option<AABB>,
-    /// Sensor temperature in Celsius
-    pub temperature_c: f64,
+    /// Temperature readings from various sensors (e.g., "sensor", "fpga", "pcb")
+    /// Key is the sensor location/name, value is temperature in Celsius
+    pub temperatures: HashMap<String, f64>,
 }
 
 /// Configuration for camera initialization
@@ -172,6 +174,11 @@ pub trait CameraInterface: Send + Sync {
     /// Returns the pixel value at which the sensor saturates. This is used
     /// for guide star filtering to reject saturated sources.
     fn saturation_value(&self) -> f64;
+
+    /// Get camera name/identifier
+    ///
+    /// Returns a human-readable name for this camera instance
+    fn name(&self) -> &str;
 }
 
 /// Helper functions for working with ROIs
