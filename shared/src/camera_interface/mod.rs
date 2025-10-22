@@ -109,6 +109,8 @@ pub struct CameraConfig {
     pub height: usize,
     /// Exposure duration
     pub exposure: Duration,
+    /// ADC bit depth (8, 12, 14, 16 bits typical)
+    pub bit_depth: u8,
 }
 
 /// Trait for unified camera interface
@@ -181,6 +183,22 @@ pub trait CameraInterface: Send + Sync {
     ///
     /// Returns a human-readable name for this camera instance
     fn name(&self) -> &str;
+
+    /// Get ADC bit depth
+    ///
+    /// Returns the bit depth of the analog-to-digital converter (ADC)
+    /// Typical values are 8, 12, 14, or 16 bits
+    fn get_bit_depth(&self) -> u8;
+
+    /// Set ADC bit depth
+    ///
+    /// # Arguments
+    /// * `bit_depth` - New bit depth value (typically 8, 12, 14, or 16)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(CameraError)` if bit depth is unsupported
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()>;
 }
 
 /// Helper functions for working with ROIs

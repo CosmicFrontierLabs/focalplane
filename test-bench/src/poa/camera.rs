@@ -53,6 +53,7 @@ impl PlayerOneCamera {
             width: max_width,
             height: max_height,
             exposure: Duration::from_millis(100),
+            bit_depth: 16,
         };
 
         Ok(Self {
@@ -323,6 +324,15 @@ impl CameraInterface for PlayerOneCamera {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn get_bit_depth(&self) -> u8 {
+        self.config.bit_depth
+    }
+
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
+        self.config.bit_depth = bit_depth;
+        Ok(())
     }
 }
 

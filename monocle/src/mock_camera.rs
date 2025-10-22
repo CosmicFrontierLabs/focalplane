@@ -33,6 +33,7 @@ impl MockCamera {
                 width: 100,
                 height: 100,
                 exposure: Duration::from_millis(10),
+                bit_depth: 16,
             },
             is_capturing: Arc::new(AtomicBool::new(false)),
             exposure: Duration::from_millis(10),
@@ -178,5 +179,14 @@ impl CameraInterface for MockCamera {
 
     fn name(&self) -> &str {
         "MockCamera"
+    }
+
+    fn get_bit_depth(&self) -> u8 {
+        self.config.bit_depth
+    }
+
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
+        self.config.bit_depth = bit_depth;
+        Ok(())
     }
 }

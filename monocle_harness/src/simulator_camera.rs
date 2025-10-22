@@ -74,6 +74,7 @@ impl SimulatorCamera {
             width,
             height,
             exposure: Duration::from_millis(100),
+            bit_depth: sensor.bit_depth,
         };
 
         // Calculate FOV for cache size
@@ -371,6 +372,15 @@ impl CameraInterface for SimulatorCamera {
 
     fn name(&self) -> &str {
         "SimulatorCamera"
+    }
+
+    fn get_bit_depth(&self) -> u8 {
+        self.config.bit_depth
+    }
+
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
+        self.config.bit_depth = bit_depth;
+        Ok(())
     }
 }
 

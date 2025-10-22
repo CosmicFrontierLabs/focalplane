@@ -128,6 +128,15 @@ impl CameraInterface for MockCameraInterface {
     fn name(&self) -> &str {
         "MockCamera"
     }
+
+    fn get_bit_depth(&self) -> u8 {
+        self.config.bit_depth
+    }
+
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
+        self.config.bit_depth = bit_depth;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +149,7 @@ mod tests {
             width: 640,
             height: 480,
             exposure: Duration::from_millis(100),
+            bit_depth: 16,
         };
         MockCameraInterface::new_zeros(config)
     }
@@ -242,6 +252,7 @@ mod tests {
             width: 640,
             height: 480,
             exposure: Duration::from_millis(100),
+            bit_depth: 16,
         })
         .with_saturation(16383.0);
         assert_eq!(custom_camera.saturation_value(), 16383.0);
@@ -251,5 +262,17 @@ mod tests {
     fn test_camera_name() {
         let camera = create_test_camera();
         assert_eq!(camera.name(), "MockCamera");
+    }
+
+    #[test]
+    fn test_bit_depth() {
+        let mut camera = create_test_camera();
+        assert_eq!(camera.get_bit_depth(), 16);
+
+        camera.set_bit_depth(12).unwrap();
+        assert_eq!(camera.get_bit_depth(), 12);
+
+        camera.set_bit_depth(14).unwrap();
+        assert_eq!(camera.get_bit_depth(), 14);
     }
 }
