@@ -3,6 +3,23 @@ use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgb};
 use ndarray::{concatenate, Array2, Axis};
 
+pub fn generate_as_array(width: usize, height: usize) -> Result<Array2<u16>> {
+    let rgb_img = generate(width as u32, height as u32)?;
+    let mut array = Array2::zeros((height, width));
+
+    for y in 0..height {
+        for x in 0..width {
+            if x < rgb_img.width() as usize && y < rgb_img.height() as usize {
+                let pixel = rgb_img.get_pixel(x as u32, y as u32);
+                let gray_value = ((pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3) as u16;
+                array[[y, x]] = gray_value * 256;
+            }
+        }
+    }
+
+    Ok(array)
+}
+
 const TAG_SIZE: u32 = 8;
 const GRID_SIZE: usize = 9;
 

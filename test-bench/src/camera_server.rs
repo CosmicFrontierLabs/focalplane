@@ -14,6 +14,8 @@ use shared::camera_interface::{CameraInterface, FrameMetadata};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::calibration_overlay::{analyze_calibration_pattern, render_annotated_image};
+
 #[derive(RustEmbed)]
 #[folder = "templates/"]
 struct Templates;
@@ -239,11 +241,87 @@ async fn camera_status_page<C: CameraInterface + 'static>(
     Html(html)
 }
 
+async fn annotated_frame_endpoint<C: CameraInterface + 'static>(
+    State(state): State<Arc<AppState<C>>>,
+) -> Response {
+    use std::time::Instant;
+
+    let start_capture = Instant::now();
+    let (frame, _metadata) = match capture_frame_data(&state).await {
+        Ok(data) => data,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("Failed to capture frame: {e}")))
+                .unwrap()
+        }
+    };
+    let capture_time = start_capture.elapsed();
+
+    let camera = state.camera.lock().await;
+    let bit_depth = camera.get_bit_depth();
+    drop(camera);
+
+    let start_analysis = Instant::now();
+    let analysis = match analyze_calibration_pattern(&frame, bit_depth) {
+        Ok(a) => a,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("Failed to analyze pattern: {e}")))
+                .unwrap()
+        }
+    };
+    let analysis_time = start_analysis.elapsed();
+
+    let start_render = Instant::now();
+    let annotated_img = match render_annotated_image(&frame, &analysis) {
+        Ok(img) => img,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("Failed to render annotations: {e}")))
+                .unwrap()
+        }
+    };
+    let render_time = start_render.elapsed();
+
+    let rgb_img = annotated_img.to_rgb8();
+
+    let start_compress = Instant::now();
+    let mut jpeg_bytes = Vec::new();
+    if let Err(e) = rgb_img.write_to(
+        &mut std::io::Cursor::new(&mut jpeg_bytes),
+        image::ImageFormat::Jpeg,
+    ) {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from(format!("Failed to encode JPEG: {e}")))
+            .unwrap();
+    }
+    let compress_time = start_compress.elapsed();
+
+    tracing::info!(
+        "Annotated frame timing: capture={:.1}ms, analysis={:.1}ms, render={:.1}ms, compress={:.1}ms, total={:.1}ms",
+        capture_time.as_secs_f64() * 1000.0,
+        analysis_time.as_secs_f64() * 1000.0,
+        render_time.as_secs_f64() * 1000.0,
+        compress_time.as_secs_f64() * 1000.0,
+        (capture_time + analysis_time + render_time + compress_time).as_secs_f64() * 1000.0
+    );
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .body(Body::from(jpeg_bytes))
+        .unwrap()
+}
+
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {
     Router::new()
         .route("/", get(camera_status_page::<C>))
         .route("/jpeg", get(jpeg_frame_endpoint::<C>))
         .route("/raw", get(raw_frame_endpoint::<C>))
+        .route("/annotated", get(annotated_frame_endpoint::<C>))
         .route("/stats", get(stats_endpoint::<C>))
         .with_state(state)
 }

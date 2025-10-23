@@ -126,10 +126,19 @@
         <h2 style="margin-top: 30px;">Test Patterns</h2>
         {test_patterns}
         
+        <h2 style="margin-top: 30px;">Display Options</h2>
+        <div class="metadata-item">
+            <label style="cursor: pointer;">
+                <input type="checkbox" id="show-annotation" style="width: 20px; height: 20px; vertical-align: middle;">
+                <span style="margin-left: 5px;">Show Analysis</span>
+            </label>
+        </div>
+
         <h2 style="margin-top: 30px;">Endpoints</h2>
         <div class="metadata-item">
             <a href="/jpeg" style="color: #00ff00;">JPEG Frame</a><br>
             <a href="/raw" style="color: #00ff00;">Raw Frame</a><br>
+            <a href="/annotated" style="color: #00ff00;">Annotated Frame</a><br>
             <a href="/stats" style="color: #00ff00;">Frame Stats (JSON)</a>
         </div>
     </div>
@@ -158,8 +167,12 @@
         let errorCount = 0;
         
         function updateImage() {
+            // Check if annotation is enabled
+            const showAnnotation = document.getElementById('show-annotation').checked;
+            const endpoint = showAnnotation ? '/annotated' : '/jpeg';
+
             // Use fetch to get headers
-            fetch('/jpeg?t=' + Date.now())
+            fetch(endpoint + '?t=' + Date.now())
                 .then(response => {
                     // Extract timestamp from headers
                     const timestampSec = response.headers.get('X-Timestamp-Sec');
@@ -276,6 +289,11 @@
             }
         }
         
+        // Add checkbox listener to immediately update when toggled
+        document.getElementById('show-annotation').addEventListener('change', function() {
+            updateImage();
+        });
+
         // Start updates
         updateImage();
         setInterval(updateStats, 1000); // Update stats every second

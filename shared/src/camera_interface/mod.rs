@@ -201,6 +201,72 @@ pub trait CameraInterface: Send + Sync {
     fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()>;
 }
 
+impl CameraInterface for Box<dyn CameraInterface> {
+    fn set_roi(&mut self, roi: AABB) -> CameraResult<()> {
+        (**self).set_roi(roi)
+    }
+
+    fn clear_roi(&mut self) -> CameraResult<()> {
+        (**self).clear_roi()
+    }
+
+    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
+        (**self).capture_frame()
+    }
+
+    fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
+        (**self).set_exposure(exposure)
+    }
+
+    fn get_exposure(&self) -> Duration {
+        (**self).get_exposure()
+    }
+
+    fn get_config(&self) -> &CameraConfig {
+        (**self).get_config()
+    }
+
+    fn is_ready(&self) -> bool {
+        (**self).is_ready()
+    }
+
+    fn get_roi(&self) -> Option<AABB> {
+        (**self).get_roi()
+    }
+
+    fn start_continuous_capture(&mut self) -> CameraResult<()> {
+        (**self).start_continuous_capture()
+    }
+
+    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
+        (**self).stop_continuous_capture()
+    }
+
+    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
+        (**self).get_latest_frame()
+    }
+
+    fn is_capturing(&self) -> bool {
+        (**self).is_capturing()
+    }
+
+    fn saturation_value(&self) -> f64 {
+        (**self).saturation_value()
+    }
+
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn get_bit_depth(&self) -> u8 {
+        (**self).get_bit_depth()
+    }
+
+    fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
+        (**self).set_bit_depth(bit_depth)
+    }
+}
+
 /// Helper functions for working with ROIs
 pub trait AABBExt {
     /// Validate that ROI fits within sensor dimensions
