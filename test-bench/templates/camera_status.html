@@ -160,7 +160,13 @@
         </div>
         
         <h2 style="margin-top: 30px;">Histogram</h2>
+        <div style="margin-bottom: 10px;">
+            <label style="font-size: 0.8em; cursor: pointer;">
+                <input type="checkbox" id="log-scale-toggle" style="cursor: pointer;"> Log Scale
+            </label>
+        </div>
         <canvas id="histogram-canvas" width="300" height="150" style="width: 100%; border: 1px solid #00ff00; background: #111;"></canvas>
+        <div id="histogram-info" style="font-size: 0.7em; color: #00aa00; margin-top: 5px;"></div>
     </div>
     
     <script>
@@ -246,7 +252,7 @@
 
                     // Draw histogram
                     if (data.histogram && data.histogram.length > 0) {
-                        drawHistogram(data.histogram);
+                        drawHistogram(data.histogram, data.histogram_mean, data.histogram_max);
                     }
                 })
                 .catch(err => {
@@ -254,29 +260,55 @@
                 });
         }
         
-        function drawHistogram(histogram) {
+        function drawHistogram(histogram, mean, maxValue) {
             const canvas = document.getElementById('histogram-canvas');
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
             const barWidth = width / histogram.length;
-            
+            const useLogScale = document.getElementById('log-scale-toggle').checked;
+
             // Clear canvas
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, width, height);
-            
+
+            // Apply log scaling if enabled
+            let scaledHistogram = histogram.slice();
+            if (useLogScale) {
+                scaledHistogram = histogram.map(v => v > 0 ? Math.log10(v + 1) : 0);
+            }
+
             // Find max value for scaling
-            const maxVal = Math.max(...histogram, 1);
-            
+            const maxVal = Math.max(...scaledHistogram, 1);
+
             // Draw bars
             ctx.fillStyle = '#00ff00';
-            histogram.forEach((value, i) => {
-                const barHeight = (value / maxVal) * (height - 10);
+            scaledHistogram.forEach((value, i) => {
+                const barHeight = (value / maxVal) * (height - 20);
                 const x = i * barWidth;
                 const y = height - barHeight;
                 ctx.fillRect(x, y, barWidth - 1, barHeight);
             });
-            
+
+            // Draw mean line
+            if (mean !== undefined && maxValue !== undefined && maxValue > 0) {
+                const meanBin = Math.floor((mean / 65536) * 256);
+                const meanX = meanBin * barWidth + barWidth / 2;
+
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(meanX, 0);
+                ctx.lineTo(meanX, height);
+                ctx.stroke();
+
+                // Draw mean annotation
+                ctx.fillStyle = '#ffff00';
+                ctx.font = '10px Courier New';
+                const meanText = 'μ=' + Math.round(mean);
+                ctx.fillText(meanText, Math.min(meanX + 3, width - 50), 12);
+            }
+
             // Draw grid lines
             ctx.strokeStyle = '#004400';
             ctx.lineWidth = 0.5;
@@ -287,8 +319,19 @@
                 ctx.lineTo(width, y);
                 ctx.stroke();
             }
+
+            // Update histogram info
+            const infoDiv = document.getElementById('histogram-info');
+            if (mean !== undefined && maxValue !== undefined) {
+                infoDiv.textContent = 'Mean: ' + Math.round(mean) + ' ADU | Max: ' + maxValue + ' ADU | Range: 0-65535';
+            }
         }
-        
+
+        // Log scale toggle handler
+        document.getElementById('log-scale-toggle').addEventListener('change', function() {
+            updateStats();
+        });
+
         // Add checkbox listener to immediately update when toggled
         document.getElementById('show-annotation').addEventListener('change', function() {
             updateImage();

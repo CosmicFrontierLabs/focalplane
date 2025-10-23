@@ -33,6 +33,8 @@ pub struct FrameStats {
     pub last_frame_time: std::time::Instant,
     pub last_temperatures: std::collections::HashMap<String, f64>,
     pub histogram: Vec<u32>,
+    pub histogram_mean: f64,
+    pub histogram_max: u16,
 }
 
 impl Default for FrameStats {
@@ -43,6 +45,8 @@ impl Default for FrameStats {
             last_frame_time: std::time::Instant::now(),
             last_temperatures: std::collections::HashMap::new(),
             histogram: Vec::new(),
+            histogram_mean: 0.0,
+            histogram_max: 0,
         }
     }
 }
@@ -76,12 +80,24 @@ async fn capture_frame_data<C: CameraInterface>(
     result.map_err(|e| e.to_string())
 }
 
-fn compute_histogram(pixels: &[u8]) -> Vec<u32> {
+fn compute_histogram_u16(frame: &Array2<u16>) -> Vec<u32> {
     let mut histogram = vec![0u32; 256];
-    for &pixel in pixels {
-        histogram[pixel as usize] += 1;
+    for &pixel in frame.iter() {
+        let bin = ((pixel as u32 * 256) / 65536) as usize;
+        let bin = bin.min(255);
+        histogram[bin] += 1;
     }
     histogram
+}
+
+fn compute_mean_u16(frame: &Array2<u16>) -> f64 {
+    let sum: u64 = frame.iter().map(|&v| v as u64).sum();
+    let count = frame.len() as u64;
+    if count > 0 {
+        sum as f64 / count as f64
+    } else {
+        0.0
+    }
 }
 
 fn process_raw_to_pixels(frame: &Array2<u16>) -> Vec<u8> {
@@ -110,7 +126,9 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     let pixels_8bit = process_raw_to_pixels(&frame);
 
     let mut stats = state.stats.lock().await;
-    stats.histogram = compute_histogram(&pixels_8bit);
+    stats.histogram = compute_histogram_u16(&frame);
+    stats.histogram_mean = compute_mean_u16(&frame);
+    stats.histogram_max = *frame.iter().max().unwrap_or(&0);
     drop(stats);
 
     let camera = state.camera.lock().await;
@@ -162,7 +180,9 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
     let pixels_8bit = process_raw_to_pixels(&frame);
 
     let mut stats = state.stats.lock().await;
-    stats.histogram = compute_histogram(&pixels_8bit);
+    stats.histogram = compute_histogram_u16(&frame);
+    stats.histogram_mean = compute_mean_u16(&frame);
+    stats.histogram_max = *frame.iter().max().unwrap_or(&0);
     drop(stats);
 
     let camera = state.camera.lock().await;
@@ -207,6 +227,8 @@ async fn stats_endpoint<C: CameraInterface + 'static>(
         "avg_fps": avg_fps,
         "temperatures": stats.last_temperatures,
         "histogram": stats.histogram,
+        "histogram_mean": stats.histogram_mean,
+        "histogram_max": stats.histogram_max,
     });
 
     let json = serde_json::to_string(&json).unwrap();
