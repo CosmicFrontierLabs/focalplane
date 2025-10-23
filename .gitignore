@@ -20,6 +20,7 @@ target/
 test_output/
 histogram_output.txt
 **/.claude/settings.local.json
+ext_ref/
 
 # Were I keep star catalogs
 cats/

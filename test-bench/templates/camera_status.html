@@ -212,19 +212,19 @@
                     const ms = String(updateTime.getMilliseconds()).padStart(3, '0');
                     // Insert milliseconds before AM/PM
                     const timeStr = baseTime.replace(/(\d{2}:\d{2}:\d{2})( [AP]M)/, '$1.' + ms + '$2');
-                    document.getElementById('update-time').textContent = 
+                    document.getElementById('update-time').textContent =
                         'Updated: ' + timeStr;
-                    
-                    // Schedule next update
-                    setTimeout(updateImage, 100); // 10 FPS target
+
+                    // Long-polling: immediately fetch next frame
+                    updateImage();
                 })
                 .catch(err => {
                     errorCount++;
                     document.getElementById('stats-errors').textContent = 'Errors: ' + errorCount;
                     document.getElementById('connection-status').textContent = 'Connection Error';
                     document.getElementById('connection-status').className = 'error';
-                    
-                    // Retry after delay
+
+                    // Retry after delay on error
                     setTimeout(updateImage, 1000);
                 });
         }

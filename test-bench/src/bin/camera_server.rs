@@ -4,10 +4,10 @@ use shared::camera_interface::{CameraConfig, CameraInterface};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use test_bench::camera_server::{AppState, FrameStats};
+use test_bench::camera_server::{analysis_loop, capture_loop, AppState, FrameStats};
 use test_bench::display_patterns::apriltag;
 use test_bench::poa::camera::PlayerOneCamera;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -82,9 +82,28 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
     info!("Set camera exposure to {}ms", args.exposure_ms);
 
+    let bit_depth = camera.get_bit_depth();
+    info!("Camera bit depth: {}", bit_depth);
+
     let state = Arc::new(AppState {
         camera: Arc::new(Mutex::new(camera)),
         stats: Arc::new(Mutex::new(FrameStats::default())),
+        latest_frame: Arc::new(RwLock::new(None)),
+        latest_annotated: Arc::new(RwLock::new(None)),
+        annotated_notify: Arc::new(tokio::sync::Notify::new()),
+        bit_depth,
+    });
+
+    info!("Starting background capture loop...");
+    let capture_state = state.clone();
+    tokio::spawn(async move {
+        capture_loop(capture_state).await;
+    });
+
+    info!("Starting background analysis loop...");
+    let analysis_state = state.clone();
+    tokio::spawn(async move {
+        analysis_loop(analysis_state).await;
     });
 
     let app = test_bench::camera_server::create_router(state);
@@ -98,7 +117,11 @@ async fn main() -> anyhow::Result<()> {
     info!("JPEG endpoint: http://{}/jpeg", addr);
     info!("Raw data endpoint: http://{}/raw", addr);
     info!("Stats endpoint: http://{}/stats", addr);
-    info!("Annotated endpoint: http://{}/annotated", addr);
+    info!("Annotated endpoint (JPEG): http://{}/annotated", addr);
+    info!(
+        "Annotated endpoint (uncompressed GRAY8): http://{}/annotated_raw",
+        addr
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)

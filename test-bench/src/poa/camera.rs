@@ -25,9 +25,9 @@ fn aabb_to_roi(aabb: &AABB) -> ROI {
 pub struct PlayerOneCamera {
     camera: Arc<Mutex<Camera>>,
     config: CameraConfig,
-    roi: Option<AABB>,
     frame_number: Arc<AtomicU64>,
     is_capturing: Arc<AtomicBool>,
+    is_streaming: Arc<AtomicBool>,
     latest_frame: FrameBuffer,
     capture_thread: Option<std::thread::JoinHandle<()>>,
     name: String,
@@ -69,9 +69,9 @@ impl PlayerOneCamera {
         Ok(Self {
             camera: Arc::new(Mutex::new(camera)),
             config,
-            roi: None,
             frame_number: Arc::new(AtomicU64::new(0)),
             is_capturing: Arc::new(AtomicBool::new(false)),
+            is_streaming: Arc::new(AtomicBool::new(false)),
             latest_frame: Arc::new(Mutex::new(None)),
             capture_thread: None,
             name: camera_name,
@@ -84,21 +84,30 @@ impl PlayerOneCamera {
             .lock()
             .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
 
-        let (width, height) = if let Some(aabb) = &self.roi {
-            let roi = aabb_to_roi(aabb);
-            camera
-                .set_roi(&roi)
-                .map_err(|e| CameraError::ConfigError(format!("Failed to set ROI: {e}")))?;
-            (roi.width as usize, roi.height as usize)
-        } else {
-            (self.config.width, self.config.height)
-        };
+        if !self.is_streaming.load(Ordering::SeqCst) {
+            camera.start_exposure().map_err(|e| {
+                CameraError::CaptureError(format!("Failed to start streaming: {e}"))
+            })?;
+            self.is_streaming.store(true, Ordering::SeqCst);
+            tracing::info!("Started continuous streaming mode");
+        }
+
+        let current_hw_roi = camera.roi();
+        let (width, height) = (
+            current_hw_roi.width as usize,
+            current_hw_roi.height as usize,
+        );
 
         let mut buffer = camera.create_image_buffer();
 
+        let (exposure_us, _auto) = camera
+            .exposure()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to read exposure: {e}")))?;
+        let timeout_ms = (exposure_us / 1000) as i32 + 500;
+
         camera
-            .capture(&mut buffer, Some(5000))
-            .map_err(|e| CameraError::CaptureError(format!("Capture failed: {e}")))?;
+            .get_image_data(&mut buffer, Some(timeout_ms))
+            .map_err(|e| CameraError::CaptureError(format!("Get image data failed: {e}")))?;
 
         let u16_data: Vec<u16> = buffer
             .chunks_exact(2)
@@ -108,13 +117,16 @@ impl PlayerOneCamera {
         let array = Array2::from_shape_vec((height, width), u16_data)
             .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
 
+        let temp_start = std::time::Instant::now();
         let temperature = camera
             .temperature()
             .map_err(|e| CameraError::HardwareError(format!("Failed to read temperature: {e}")))?;
+        let temp_elapsed = temp_start.elapsed();
 
-        let (exposure_us, _auto) = camera
-            .exposure()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to read exposure: {e}")))?;
+        tracing::info!(
+            "temperature() took {:.2}ms",
+            temp_elapsed.as_secs_f64() * 1000.0
+        );
 
         drop(camera);
 
@@ -130,12 +142,27 @@ impl PlayerOneCamera {
         let mut temperatures = HashMap::new();
         temperatures.insert("sensor".to_string(), temperature);
 
+        let roi_aabb = if current_hw_roi.width == self.config.width as u32
+            && current_hw_roi.height == self.config.height as u32
+            && current_hw_roi.start_x == 0
+            && current_hw_roi.start_y == 0
+        {
+            None
+        } else {
+            Some(AABB {
+                min_col: current_hw_roi.start_x as usize,
+                min_row: current_hw_roi.start_y as usize,
+                max_col: (current_hw_roi.start_x + current_hw_roi.width - 1) as usize,
+                max_row: (current_hw_roi.start_y + current_hw_roi.height - 1) as usize,
+            })
+        };
+
         let metadata = FrameMetadata {
             frame_number: frame_num,
             exposure,
             timestamp,
             pointing: None,
-            roi: self.roi,
+            roi: roi_aabb,
             temperatures,
         };
 
@@ -165,12 +192,31 @@ impl CameraInterface for PlayerOneCamera {
             ));
         }
 
-        self.roi = Some(roi);
+        let poa_roi = aabb_to_roi(&roi);
+        let mut camera = self
+            .camera
+            .lock()
+            .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
+
+        let current_hw_roi = camera.roi();
+        if current_hw_roi.start_x != poa_roi.start_x
+            || current_hw_roi.start_y != poa_roi.start_y
+            || current_hw_roi.width != poa_roi.width
+            || current_hw_roi.height != poa_roi.height
+        {
+            let roi_set_start = std::time::Instant::now();
+            camera
+                .set_roi(&poa_roi)
+                .map_err(|e| CameraError::ConfigError(format!("Failed to set ROI: {e}")))?;
+            tracing::info!(
+                "ROI set took {:.2}ms",
+                roi_set_start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         Ok(())
     }
 
     fn clear_roi(&mut self) -> CameraResult<()> {
-        self.roi = None;
         let mut camera = self
             .camera
             .lock()
@@ -220,7 +266,23 @@ impl CameraInterface for PlayerOneCamera {
     }
 
     fn get_roi(&self) -> Option<AABB> {
-        self.roi
+        let camera = self.camera.lock().ok()?;
+        let hw_roi = camera.roi();
+
+        if hw_roi.width == self.config.width as u32
+            && hw_roi.height == self.config.height as u32
+            && hw_roi.start_x == 0
+            && hw_roi.start_y == 0
+        {
+            None
+        } else {
+            Some(AABB {
+                min_col: hw_roi.start_x as usize,
+                min_row: hw_roi.start_y as usize,
+                max_col: (hw_roi.start_x + hw_roi.width - 1) as usize,
+                max_row: (hw_roi.start_y + hw_roi.height - 1) as usize,
+            })
+        }
     }
 
     fn start_continuous_capture(&mut self) -> CameraResult<()> {
@@ -231,7 +293,6 @@ impl CameraInterface for PlayerOneCamera {
         self.is_capturing.store(true, Ordering::SeqCst);
 
         let camera = Arc::clone(&self.camera);
-        let roi = self.roi;
         let config = self.config.clone();
         let is_capturing = Arc::clone(&self.is_capturing);
         let frame_number = Arc::clone(&self.frame_number);
@@ -249,15 +310,8 @@ impl CameraInterface for PlayerOneCamera {
                     Err(_) => break,
                 };
 
-                let (width, height) = if let Some(aabb) = roi {
-                    let roi = aabb_to_roi(&aabb);
-                    if camera.set_roi(&roi).is_err() {
-                        break;
-                    }
-                    (roi.width as usize, roi.height as usize)
-                } else {
-                    (config.width, config.height)
-                };
+                let hw_roi = camera.roi();
+                let (width, height) = (hw_roi.width as usize, hw_roi.height as usize);
 
                 let mut buffer = camera.create_image_buffer();
 
@@ -272,6 +326,21 @@ impl CameraInterface for PlayerOneCamera {
 
                 if let Ok(array) = Array2::from_shape_vec((height, width), u16_data) {
                     let temperature = camera.temperature().unwrap_or(0.0);
+
+                    let roi_aabb = if hw_roi.width == config.width as u32
+                        && hw_roi.height == config.height as u32
+                        && hw_roi.start_x == 0
+                        && hw_roi.start_y == 0
+                    {
+                        None
+                    } else {
+                        Some(AABB {
+                            min_col: hw_roi.start_x as usize,
+                            min_row: hw_roi.start_y as usize,
+                            max_col: (hw_roi.start_x + hw_roi.width - 1) as usize,
+                            max_row: (hw_roi.start_y + hw_roi.height - 1) as usize,
+                        })
+                    };
 
                     drop(camera);
 
@@ -290,7 +359,7 @@ impl CameraInterface for PlayerOneCamera {
                         exposure,
                         timestamp,
                         pointing: None,
-                        roi,
+                        roi: roi_aabb,
                         temperatures,
                     };
 
@@ -342,5 +411,12 @@ impl CameraInterface for PlayerOneCamera {
 impl Drop for PlayerOneCamera {
     fn drop(&mut self) {
         let _ = self.stop_continuous_capture();
+
+        if self.is_streaming.load(Ordering::SeqCst) {
+            if let Ok(mut camera) = self.camera.lock() {
+                let _ = camera.stop_exposure();
+                self.is_streaming.store(false, Ordering::SeqCst);
+            }
+        }
     }
 }
