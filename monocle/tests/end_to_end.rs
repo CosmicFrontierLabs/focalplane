@@ -5,7 +5,6 @@ use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     callback::FgsCallbackEvent,
     config::FgsConfig,
-    mock_camera::MockCamera,
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
@@ -45,7 +44,7 @@ fn test_full_tracking_lifecycle() {
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track events
@@ -283,7 +282,7 @@ fn test_tracking_loss_and_recovery() {
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track lost events
@@ -378,7 +377,7 @@ fn test_image_sequence_processing() {
     };
 
     // Create mock camera with empty frames - we'll provide frames directly to process_frame
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Create a sequence of images with gradually moving stars

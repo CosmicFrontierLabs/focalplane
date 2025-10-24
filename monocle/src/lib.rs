@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 pub mod callback;
 pub mod config;
 pub mod filters;
-pub mod mock_camera;
 pub mod selection;
 pub mod state;
 
@@ -569,12 +568,22 @@ impl<C: CameraInterface> FineGuidanceSystem<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mock_camera::MockCamera;
     use ndarray::Array2;
+    use shared::camera_interface::mock::MockCameraInterface;
     use std::time::Duration;
 
     fn test_timestamp() -> Timestamp {
         Timestamp::from_duration(Duration::from_millis(100))
+    }
+
+    fn create_test_camera(width: usize, height: usize) -> MockCameraInterface {
+        let config = shared::camera_interface::CameraConfig {
+            width,
+            height,
+            exposure: Duration::from_millis(10),
+            bit_depth: 16,
+        };
+        MockCameraInterface::new_repeating(config, Array2::<u16>::zeros((height, width)))
     }
 
     fn test_config() -> FgsConfig {
@@ -598,7 +607,7 @@ mod tests {
 
     #[test]
     fn test_state_transitions() {
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let camera = create_test_camera(100, 100);
         let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Should start in Idle
@@ -611,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_process_frame() {
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let camera = create_test_camera(100, 100);
         let mut fgs = FineGuidanceSystem::new(camera, test_config());
         let dummy_frame = Array2::<u16>::zeros((100, 100));
 
@@ -623,7 +632,7 @@ mod tests {
 
     #[test]
     fn test_frame_accumulation() {
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
+        let camera = create_test_camera(10, 10);
         let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Start FGS
@@ -669,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_frame_accumulation_abort() {
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((10, 10)));
+        let camera = create_test_camera(10, 10);
         let mut fgs = FineGuidanceSystem::new(camera, test_config());
 
         // Start FGS and accumulate some frames
@@ -690,7 +699,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let camera = create_test_camera(100, 100);
         let fgs = FineGuidanceSystem::new(camera, test_config());
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
@@ -734,7 +743,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        let camera = MockCamera::new_repeating(Array2::<u16>::zeros((100, 100)));
+        let camera = create_test_camera(100, 100);
         let fgs = FineGuidanceSystem::new(camera, test_config());
 
         let counter1 = Arc::new(AtomicUsize::new(0));

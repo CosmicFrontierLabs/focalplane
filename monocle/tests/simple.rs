@@ -6,7 +6,6 @@ mod test_helpers;
 use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     config::FgsConfig,
-    mock_camera::MockCamera,
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
@@ -36,7 +35,7 @@ fn test_single_stationary_star() {
         fwhm: 3.0,
     };
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((256, 256)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((256, 256)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Create a frame with a single star using the shared renderer
@@ -130,7 +129,7 @@ fn test_guidance_update_timestamp_correlation() {
     let frame = create_synthetic_star_image(&image_config, &[star]);
 
     // Create camera with test frames
-    let camera = MockCamera::new_repeating(frame.clone());
+    let camera = test_helpers::create_mock_camera(frame.clone());
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Start FGS

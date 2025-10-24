@@ -7,7 +7,6 @@ use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     callback::FgsCallbackEvent,
     config::FgsConfig,
-    mock_camera::MockCamera,
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
@@ -20,7 +19,7 @@ use test_helpers::test_timestamp;
 fn test_star_detection_on_correct_cycle() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
 
     let mut config = FgsConfig {
         acquisition_frames: 2,
@@ -104,7 +103,7 @@ fn test_star_detection_on_correct_cycle() {
 fn test_position_accuracy() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
 
     let mut config = FgsConfig {
         acquisition_frames: 1,
@@ -206,7 +205,7 @@ fn test_position_accuracy() {
 fn test_moving_star_tracking() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((512, 512)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((512, 512)));
 
     let mut config = FgsConfig {
         acquisition_frames: 1,

@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
                 bit_depth: 16,
             };
 
-            Box::new(MockCameraInterface::new(config, inverted_frame))
+            Box::new(MockCameraInterface::new_repeating(config, inverted_frame))
         }
         CameraType::Poa => {
             info!("Initializing PlayerOne camera with ID {}", args.camera_id);

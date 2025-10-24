@@ -9,25 +9,33 @@ pub struct MockCameraInterface {
     roi: Option<AABB>,
     frame_count: u64,
     saturation: f64,
-    frame_data: Array2<u16>,
+    frames: Vec<Array2<u16>>,
+    frame_index: usize,
     is_capturing: bool,
+    elapsed_time: Duration,
 }
 
 impl MockCameraInterface {
-    pub fn new(config: CameraConfig, frame_data: Array2<u16>) -> Self {
+    pub fn new(config: CameraConfig, frames: Vec<Array2<u16>>) -> Self {
         Self {
             config,
             roi: None,
             frame_count: 0,
             saturation: 65535.0,
-            frame_data,
+            frames,
+            frame_index: 0,
             is_capturing: false,
+            elapsed_time: Duration::ZERO,
         }
+    }
+
+    pub fn new_repeating(config: CameraConfig, frame: Array2<u16>) -> Self {
+        Self::new(config, vec![frame])
     }
 
     pub fn new_zeros(config: CameraConfig) -> Self {
         let frame_data = Array2::zeros((config.height, config.width));
-        Self::new(config, frame_data)
+        Self::new_repeating(config, frame_data)
     }
 
     pub fn with_saturation(mut self, saturation: f64) -> Self {
@@ -35,23 +43,49 @@ impl MockCameraInterface {
         self
     }
 
-    fn generate_frame(&self) -> Array2<u16> {
-        if let Some(roi) = &self.roi {
-            roi.extract_from_frame(&self.frame_data.view())
+    pub fn reset(&mut self) {
+        self.frame_index = 0;
+        self.frame_count = 0;
+        self.elapsed_time = Duration::ZERO;
+    }
+
+    fn generate_frame(&mut self) -> CameraResult<Array2<u16>> {
+        let frame_idx = if self.frames.len() == 1 {
+            0
         } else {
-            self.frame_data.clone()
-        }
+            if self.frame_index >= self.frames.len() {
+                return Err(crate::camera_interface::CameraError::CaptureError(
+                    "No more frames".to_string(),
+                ));
+            }
+            let current = self.frame_index;
+            self.frame_index += 1;
+            current
+        };
+
+        let frame = &self.frames[frame_idx];
+
+        let output_frame = if let Some(roi) = &self.roi {
+            roi.extract_from_frame(&frame.view())
+        } else {
+            frame.clone()
+        };
+
+        Ok(output_frame)
     }
 
     fn generate_metadata(&self) -> FrameMetadata {
-        let timestamp = Timestamp::new(self.frame_count, 0);
+        let timestamp = Timestamp::from_duration(self.elapsed_time);
+        let mut temperatures = HashMap::new();
+        temperatures.insert("sensor".to_string(), 20.0);
+
         FrameMetadata {
             frame_number: self.frame_count,
             exposure: self.config.exposure,
             timestamp,
             pointing: None,
             roi: self.roi,
-            temperatures: HashMap::new(),
+            temperatures,
         }
     }
 }
@@ -69,8 +103,9 @@ impl CameraInterface for MockCameraInterface {
     }
 
     fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
+        let frame = self.generate_frame()?;
+        self.elapsed_time += self.config.exposure;
         self.frame_count += 1;
-        let frame = self.generate_frame();
         let metadata = self.generate_metadata();
         Ok((frame, metadata))
     }
@@ -111,10 +146,7 @@ impl CameraInterface for MockCameraInterface {
             return None;
         }
 
-        self.frame_count += 1;
-        let frame = self.generate_frame();
-        let metadata = self.generate_metadata();
-        Some((frame, metadata))
+        self.capture_frame().ok()
     }
 
     fn is_capturing(&self) -> bool {
@@ -152,6 +184,15 @@ mod tests {
             bit_depth: 16,
         };
         MockCameraInterface::new_zeros(config)
+    }
+
+    fn create_config(width: usize, height: usize, exposure_ms: u64) -> CameraConfig {
+        CameraConfig {
+            width,
+            height,
+            exposure: Duration::from_millis(exposure_ms),
+            bit_depth: 16,
+        }
     }
 
     #[test]
@@ -248,13 +289,8 @@ mod tests {
         let camera = create_test_camera();
         assert_eq!(camera.saturation_value(), 65535.0);
 
-        let custom_camera = MockCameraInterface::new_zeros(CameraConfig {
-            width: 640,
-            height: 480,
-            exposure: Duration::from_millis(100),
-            bit_depth: 16,
-        })
-        .with_saturation(16383.0);
+        let custom_camera =
+            MockCameraInterface::new_zeros(create_config(640, 480, 100)).with_saturation(16383.0);
         assert_eq!(custom_camera.saturation_value(), 16383.0);
     }
 
@@ -262,6 +298,90 @@ mod tests {
     fn test_camera_name() {
         let camera = create_test_camera();
         assert_eq!(camera.name(), "MockCamera");
+    }
+
+    #[test]
+    fn test_multiple_frames() {
+        let config = create_config(10, 10, 10);
+
+        let mut frame1 = Array2::zeros((10, 10));
+        frame1[[5, 5]] = 100;
+        let mut frame2 = Array2::zeros((10, 10));
+        frame2[[3, 3]] = 200;
+        let mut frame3 = Array2::zeros((10, 10));
+        frame3[[7, 7]] = 300;
+
+        let mut camera = MockCameraInterface::new(config, vec![frame1, frame2, frame3]);
+
+        let (f1, _) = camera.capture_frame().unwrap();
+        assert_eq!(f1[[5, 5]], 100);
+
+        let (f2, _) = camera.capture_frame().unwrap();
+        assert_eq!(f2[[3, 3]], 200);
+
+        let (f3, _) = camera.capture_frame().unwrap();
+        assert_eq!(f3[[7, 7]], 300);
+
+        assert!(camera.capture_frame().is_err());
+    }
+
+    #[test]
+    fn test_repeating_mode() {
+        let config = create_config(10, 10, 10);
+
+        let mut frame = Array2::zeros((10, 10));
+        frame[[5, 5]] = 42;
+
+        let mut camera = MockCameraInterface::new_repeating(config, frame);
+
+        for _ in 0..10 {
+            let (f, _) = camera.capture_frame().unwrap();
+            assert_eq!(f[[5, 5]], 42);
+        }
+    }
+
+    #[test]
+    fn test_elapsed_time_tracking() {
+        let config = create_config(10, 10, 100);
+
+        let mut camera = MockCameraInterface::new_zeros(config);
+
+        let (_, meta1) = camera.capture_frame().unwrap();
+        assert_eq!(meta1.timestamp.to_duration(), Duration::from_millis(100));
+
+        let (_, meta2) = camera.capture_frame().unwrap();
+        assert_eq!(meta2.timestamp.to_duration(), Duration::from_millis(200));
+
+        let (_, meta3) = camera.capture_frame().unwrap();
+        assert_eq!(meta3.timestamp.to_duration(), Duration::from_millis(300));
+    }
+
+    #[test]
+    fn test_reset() {
+        let config = create_config(10, 10, 50);
+
+        let frame1 = Array2::ones((10, 10));
+        let frame2 = Array2::ones((10, 10)) * 2;
+
+        let mut camera = MockCameraInterface::new(config, vec![frame1, frame2]);
+
+        camera.capture_frame().unwrap();
+        let (_, meta) = camera.capture_frame().unwrap();
+        assert_eq!(meta.frame_number, 2);
+        assert_eq!(meta.timestamp.to_duration(), Duration::from_millis(100));
+
+        camera.reset();
+
+        let (_, meta) = camera.capture_frame().unwrap();
+        assert_eq!(meta.frame_number, 1);
+        assert_eq!(meta.timestamp.to_duration(), Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_temperature_metadata() {
+        let mut camera = create_test_camera();
+        let (_, metadata) = camera.capture_frame().unwrap();
+        assert_eq!(metadata.temperatures.get("sensor"), Some(&20.0));
     }
 
     #[test]

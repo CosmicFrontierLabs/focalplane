@@ -7,7 +7,6 @@ use common::{create_synthetic_star_image, StarParams, SyntheticImageConfig};
 use monocle::{
     callback::FgsCallbackEvent,
     config::FgsConfig,
-    mock_camera::MockCamera,
     state::{FgsEvent, FgsState},
     FineGuidanceSystem,
 };
@@ -36,7 +35,7 @@ fn test_fgs_with_synthetic_frames() {
         fwhm: 3.0,
     };
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((300, 300)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Define synthetic stars - make them brighter
@@ -115,7 +114,7 @@ fn test_fgs_acquisition_to_tracking_transition() {
         fwhm: 3.0,
     };
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((300, 300)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Track state transitions
@@ -208,7 +207,7 @@ fn test_fgs_with_moving_stars() {
         fwhm: 3.0,
     };
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((300, 300)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     // Single very bright star for simplicity
@@ -285,7 +284,7 @@ fn test_fgs_loses_tracking_with_large_motion() {
         fwhm: 3.0,
     };
 
-    let camera = MockCamera::new_repeating(Array2::<u16>::zeros((300, 300)));
+    let camera = test_helpers::create_mock_camera(Array2::<u16>::zeros((300, 300)));
     let mut fgs = FineGuidanceSystem::new(camera, config);
 
     let base_star = vec![StarParams::with_fwhm(64.0, 64.0, 60000.0, 3.0)];
