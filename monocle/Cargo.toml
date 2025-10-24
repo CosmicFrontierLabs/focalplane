@@ -12,7 +12,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 
 # Array processing
-ndarray = "0.15"
+ndarray = "0.16"
 
 # Internal dependencies
 shared = { path = "../shared" }

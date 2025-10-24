@@ -990,7 +990,7 @@ checksum = "b7a592bcce7aad95013afdd2e73e1267b99b38cddbdf125012ac1d1aa403449d"
 dependencies = [
  "fitsio-sys",
  "libc",
- "ndarray 0.16.1",
+ "ndarray",
 ]
 
 [[package]]
@@ -2074,7 +2074,7 @@ dependencies = [
  "approx",
  "env_logger",
  "log",
- "ndarray 0.15.6",
+ "ndarray",
  "rand",
  "rand_chacha",
  "serde",
@@ -2092,7 +2092,7 @@ dependencies = [
  "indicatif",
  "log",
  "monocle",
- "ndarray 0.15.6",
+ "ndarray",
  "plotters",
  "rand",
  "rand_chacha",
@@ -2158,20 +2158,6 @@ dependencies = [
 
 [[package]]
 name = "ndarray"
-version = "0.15.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "rawpointer",
- "rayon",
-]
-
-[[package]]
-name = "ndarray"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
@@ -2183,6 +2169,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+ "rayon",
 ]
 
 [[package]]
@@ -3402,7 +3389,7 @@ dependencies = [
  "itertools 0.11.0",
  "log",
  "nalgebra",
- "ndarray 0.15.6",
+ "ndarray",
  "num-complex",
  "num-traits",
  "once_cell",
@@ -3490,7 +3477,7 @@ dependencies = [
  "indicatif",
  "log",
  "nalgebra",
- "ndarray 0.15.6",
+ "ndarray",
  "num-complex",
  "num-traits",
  "num_cpus",
@@ -3569,9 +3556,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "starfield"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d02cd04d45eff38d12b01ee795bc5d43cbfd678a1389941d832f76864f964a4b"
+checksum = "9d1da925e5d997bbfc1f019c7f9b3a7b70c395b9bd4909f9a113514ec4bc9bd4"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -3583,7 +3570,7 @@ dependencies = [
  "log",
  "md5",
  "nalgebra",
- "ndarray 0.15.6",
+ "ndarray",
  "num",
  "once_cell",
  "rand",
@@ -3750,7 +3737,7 @@ dependencies = [
  "clap",
  "image 0.25.8",
  "imageproc",
- "ndarray 0.15.6",
+ "ndarray",
  "playerone-sdk",
  "rand",
  "resvg",

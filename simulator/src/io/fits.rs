@@ -129,7 +129,17 @@ pub fn read_fits_to_hashmap<P: AsRef<Path>>(
                     })?;
 
                 // Flip vertically to match ndarray convention (FITS origin is bottom-left)
-                let flipped = fits_array.slice(ndarray::s![..;-1, ..]).to_owned();
+                // Manually collect to ensure proper standard layout
+                let flipped_view = fits_array.slice(ndarray::s![..;-1, ..]);
+                let flipped = Array2::from_shape_vec(
+                    (naxis2, naxis1),
+                    flipped_view.iter().copied().collect(),
+                )
+                .map_err(|_| {
+                    FitsError::InvalidDataType(format!(
+                        "Cannot create flipped array for HDU '{hdu_name}'"
+                    ))
+                })?;
                 data_map.insert(hdu_name, flipped);
             }
         }
@@ -160,8 +170,9 @@ macro_rules! impl_write_fits_data {
                     hdu: &fitsio::hdu::FitsHdu,
                 ) -> Result<(), FitsError> {
                     // Flip vertically to match FITS convention (origin at bottom-left)
-                    let flipped = self.slice(ndarray::s![..;-1, ..]).to_owned();
-                    let flat_data: Vec<$t> = flipped.into_raw_vec();
+                    // Collect into Vec manually to ensure proper row-major order
+                    let flipped = self.slice(ndarray::s![..;-1, ..]);
+                    let flat_data: Vec<$t> = flipped.iter().copied().collect();
                     hdu.write_image(fptr, &flat_data)?;
                     Ok(())
                 }
@@ -221,6 +232,7 @@ pub fn write_typed_fits<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_relative_eq;
     use ndarray::Array2;
     use shared::image_proc::test_patterns::*;
     use std::fs;
@@ -292,10 +304,10 @@ mod tests {
         assert_eq!(read_array2.dim(), (2, 2));
 
         // Check values (allowing for floating point precision)
-        // After vertical flip, data positions change
-        assert!((read_array1[[0, 0]] - 1.5).abs() < 1e-10);
-        assert!((read_array2[[1, 0]] - 2.5).abs() < 1e-10); // was [0,0], now [1,0] after flip
-        assert!((read_array2[[0, 1]] - 3.7).abs() < 1e-10); // was [1,1], now [0,1] after flip
+        // After roundtrip (write flip + read flip), positions should be restored to original
+        assert_relative_eq!(read_array1[[0, 0]], 1.5, epsilon = 1e-10);
+        assert_relative_eq!(read_array2[[0, 0]], 2.5, epsilon = 1e-10);
+        assert_relative_eq!(read_array2[[1, 1]], 3.7, epsilon = 1e-10);
     }
 
     #[test]

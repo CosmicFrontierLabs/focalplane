@@ -7,10 +7,10 @@ edition = "2021"
 shared = { path = "../shared" }
 simulator = { path = "../simulator" }
 monocle = { path = "../monocle" }
-starfield = "0.2.2"
+starfield = "0.2.3"
 
 # For simulator_camera
-ndarray = "0.15"
+ndarray = "0.16"
 
 # For tracking_demo binary
 clap = { version = "4", features = ["derive"] }

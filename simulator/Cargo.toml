@@ -8,10 +8,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-starfield = "0.2.2" # Star catalog functionality
+starfield = "0.2.3" # Star catalog functionality
 nalgebra = "0.32" # Linear algebra
 image = "0.25" # Image processing
-ndarray = { version = "0.15", features = [
+ndarray = { version = "0.16", features = [
     "rayon",
 ] } # Multidimensional arrays with parallel computing
 fitsio = { version = "0.21", features = ["array"] } # FITS file I/O with ndarray support

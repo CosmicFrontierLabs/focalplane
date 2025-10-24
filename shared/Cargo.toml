@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # Core math and arrays
 nalgebra = "0.32"
-ndarray = { version = "0.15", features = ["rayon"] }
+ndarray = { version = "0.16", features = ["rayon"] }
 num-traits = "0.2"
 num-complex = "0.4.6"
 float-cmp = "0.9"
@@ -17,7 +17,7 @@ float-cmp = "0.9"
 # Image processing
 image = "0.25"
 fitsio = { version = "0.21", features = ["array"] }
-starfield = "0.2.2"
+starfield = "0.2.3"
 
 # Scientific computing
 rustfft = "6.3.0"

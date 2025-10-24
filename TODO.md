@@ -18,7 +18,7 @@
   - Useful for benchmarking network throughput vs compression overhead
 
 ### Dependencies
-- [ ] Update ndarray from 0.15 to 0.16 across all crates
-  - Currently using 0.15 in shared/camera_interface
-  - Need to update camera-server and other dependent crates
+- [x] Update ndarray from 0.15 to 0.16 across all crates
+  - Updated all crates to use ndarray 0.16
+  - Updated starfield to 0.2.3 for ndarray 0.16 compatibility
 

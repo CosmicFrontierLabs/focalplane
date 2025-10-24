@@ -28,7 +28,7 @@ bytes = "1.5"
 clap = { version = "4.5", features = ["derive"] }
 image = "0.25"
 imageproc = "0.25"
-ndarray = "0.15"
+ndarray = "0.16"
 playerone-sdk = "0.2.0"
 rand = "0.8"
 resvg = { version = "0.45.0", features = ["text"] }
