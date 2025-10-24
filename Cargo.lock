@@ -2228,6 +2228,7 @@ dependencies = [
  "image 0.25.8",
  "libc",
  "log",
+ "ndarray",
  "prometheus 0.14.0",
  "rust-embed",
  "serde",
