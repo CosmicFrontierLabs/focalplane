@@ -3,6 +3,8 @@ pub mod assets;
 pub mod checkerboard;
 pub mod circling_pixel;
 pub mod pixel;
+pub mod pixel_grid;
 pub mod static_noise;
 pub mod uniform;
 pub mod usaf;
+pub mod wiggling_gaussian;

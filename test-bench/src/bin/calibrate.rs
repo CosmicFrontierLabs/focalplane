@@ -25,6 +25,8 @@ enum PatternType {
     April,
     CirclingPixel,
     Uniform,
+    WigglingGaussian,
+    PixelGrid,
 }
 
 #[derive(Parser, Debug)]
@@ -81,6 +83,23 @@ struct Args {
 
     #[arg(long, help = "Uniform brightness level (0-255)", default_value = "0")]
     uniform_level: u8,
+
+    #[arg(
+        long,
+        help = "Gaussian sigma (standard deviation in pixels)",
+        default_value = "20"
+    )]
+    gaussian_sigma: f64,
+
+    #[arg(
+        long,
+        help = "Wiggle radius as percentage of FOV (0-100)",
+        default_value = "25"
+    )]
+    wiggle_radius_percent: u32,
+
+    #[arg(long, help = "Pixel grid spacing in pixels", default_value = "50")]
+    grid_spacing: u32,
 
     #[arg(short, long, help = "Invert pattern colors (black <-> white)")]
     invert: bool,
@@ -275,6 +294,47 @@ fn main() -> Result<()> {
                 "Uniform Screen",
             )
         }
+        PatternType::WigglingGaussian => {
+            println!("Generating wiggling gaussian pattern");
+            println!("  Pattern size: {pattern_width}x{pattern_height}");
+            println!("  Gaussian sigma: {}", args.gaussian_sigma);
+            println!("  Wiggle radius: {}% FOV", args.wiggle_radius_percent);
+            println!("  Rotation period: 10 seconds");
+            println!(
+                "  Display {}: {}x{} at ({}, {})",
+                display_index,
+                mode.w,
+                mode.h,
+                bounds.x(),
+                bounds.y()
+            );
+            (
+                patterns::wiggling_gaussian::generate(
+                    pattern_width,
+                    pattern_height,
+                    args.gaussian_sigma,
+                    args.wiggle_radius_percent,
+                ),
+                "Wiggling Gaussian",
+            )
+        }
+        PatternType::PixelGrid => {
+            println!("Generating pixel grid pattern");
+            println!("  Pattern size: {pattern_width}x{pattern_height}");
+            println!("  Grid spacing: {} pixels", args.grid_spacing);
+            println!(
+                "  Display {}: {}x{} at ({}, {})",
+                display_index,
+                mode.w,
+                mode.h,
+                bounds.x(),
+                bounds.y()
+            );
+            (
+                patterns::pixel_grid::generate(pattern_width, pattern_height, args.grid_spacing),
+                "Pixel Grid",
+            )
+        }
     };
 
     if args.invert {
@@ -338,7 +398,7 @@ fn main() -> Result<()> {
 
     let is_animated = matches!(
         args.pattern,
-        PatternType::Static | PatternType::CirclingPixel
+        PatternType::Static | PatternType::CirclingPixel | PatternType::WigglingGaussian
     );
     let mut static_buffer = if is_animated {
         Some(vec![0u8; (pattern_width * pattern_height * 3) as usize])
@@ -375,6 +435,15 @@ fn main() -> Result<()> {
                         pattern_height,
                         args.orbit_count,
                         args.orbit_radius_percent,
+                    );
+                }
+                PatternType::WigglingGaussian => {
+                    patterns::wiggling_gaussian::generate_into_buffer(
+                        buffer,
+                        pattern_width,
+                        pattern_height,
+                        args.gaussian_sigma,
+                        args.wiggle_radius_percent,
                     );
                 }
                 _ => {}
