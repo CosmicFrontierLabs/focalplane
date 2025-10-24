@@ -91,12 +91,8 @@ struct Args {
     )]
     gaussian_sigma: f64,
 
-    #[arg(
-        long,
-        help = "Wiggle radius as percentage of FOV (0-100)",
-        default_value = "25"
-    )]
-    wiggle_radius_percent: u32,
+    #[arg(long, help = "Wiggle radius in pixels", default_value = "3")]
+    wiggle_radius_pixels: f64,
 
     #[arg(long, help = "Pixel grid spacing in pixels", default_value = "50")]
     grid_spacing: u32,
@@ -298,7 +294,7 @@ fn main() -> Result<()> {
             println!("Generating wiggling gaussian pattern");
             println!("  Pattern size: {pattern_width}x{pattern_height}");
             println!("  Gaussian sigma: {}", args.gaussian_sigma);
-            println!("  Wiggle radius: {}% FOV", args.wiggle_radius_percent);
+            println!("  Wiggle radius: {} pixels", args.wiggle_radius_pixels);
             println!("  Rotation period: 10 seconds");
             println!(
                 "  Display {}: {}x{} at ({}, {})",
@@ -313,7 +309,7 @@ fn main() -> Result<()> {
                     pattern_width,
                     pattern_height,
                     args.gaussian_sigma,
-                    args.wiggle_radius_percent,
+                    args.wiggle_radius_pixels,
                 ),
                 "Wiggling Gaussian",
             )
@@ -443,7 +439,7 @@ fn main() -> Result<()> {
                         pattern_width,
                         pattern_height,
                         args.gaussian_sigma,
-                        args.wiggle_radius_percent,
+                        args.wiggle_radius_pixels,
                     );
                 }
                 _ => {}

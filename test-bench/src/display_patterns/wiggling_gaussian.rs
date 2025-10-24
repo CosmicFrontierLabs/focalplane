@@ -6,7 +6,7 @@ pub fn generate_into_buffer(
     width: u32,
     height: u32,
     sigma: f64,
-    wiggle_radius_percent: u32,
+    wiggle_radius_pixels: f64,
 ) {
     buffer.fill(0);
 
@@ -21,11 +21,8 @@ pub fn generate_into_buffer(
     let rotation_period = 10.0;
     let angle = (elapsed % rotation_period) / rotation_period * 2.0 * std::f64::consts::PI;
 
-    let fov_size = width.min(height) as f64;
-    let wiggle_radius = fov_size * (wiggle_radius_percent as f64 / 200.0);
-
-    let gaussian_x = center_x + wiggle_radius * angle.cos();
-    let gaussian_y = center_y + wiggle_radius * angle.sin();
+    let gaussian_x = center_x + wiggle_radius_pixels * angle.cos();
+    let gaussian_y = center_y + wiggle_radius_pixels * angle.sin();
 
     for y in 0..height {
         for x in 0..width {
@@ -48,10 +45,10 @@ pub fn generate(
     width: u32,
     height: u32,
     sigma: f64,
-    wiggle_radius_percent: u32,
+    wiggle_radius_pixels: f64,
 ) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
     let mut buffer = vec![0u8; (width * height * 3) as usize];
-    generate_into_buffer(&mut buffer, width, height, sigma, wiggle_radius_percent);
+    generate_into_buffer(&mut buffer, width, height, sigma, wiggle_radius_pixels);
     ImageBuffer::from_raw(width, height, buffer).unwrap()
 }
 
@@ -61,7 +58,7 @@ mod tests {
 
     #[test]
     fn test_wiggling_gaussian_pattern_generation() {
-        let img = generate(640, 480, 20.0, 25);
+        let img = generate(640, 480, 20.0, 50.0);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
     }
