@@ -14,7 +14,7 @@ echo "Installing pre-commit hooks..."
 # Create pre-commit hook
 cat > "$HOOKS_DIR/pre-commit" << 'EOF'
 #!/bin/bash
-# Pre-commit hook to run cargo fmt and clippy checks
+# Pre-commit hook to run cargo fmt, check, and clippy
 #
 # This matches the CI checks in .github/workflows/
 
@@ -31,7 +31,16 @@ if git diff --cached --name-only | grep -q '\.rs$'; then
         exit 1
     fi
     echo "✅ Code formatting is correct."
-    
+
+    # Run cargo check (matching CI)
+    echo "Running cargo check..."
+    if ! cargo check --locked --all-targets > /dev/null 2>&1; then
+        echo "❌ Cargo check failed!"
+        echo "Please run 'cargo check --locked --all-targets' to see the issues."
+        exit 1
+    fi
+    echo "✅ Cargo check passed."
+
     # Run cargo clippy with warnings as errors (matching CI)
     echo "Running clippy checks..."
     if ! cargo clippy -- -D warnings > /dev/null 2>&1; then
@@ -52,6 +61,7 @@ echo "✅ Pre-commit hook installed successfully!"
 echo ""
 echo "The pre-commit hook will:"
 echo "  - Check code formatting with 'cargo fmt'"
+echo "  - Run 'cargo check --locked --all-targets'"
 echo "  - Run clippy linting with warnings as errors"
 echo ""
 echo "To bypass the hook (not recommended), use: git commit --no-verify"
