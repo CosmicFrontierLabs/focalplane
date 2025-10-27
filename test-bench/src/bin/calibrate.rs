@@ -27,6 +27,7 @@ enum PatternType {
     Uniform,
     WigglingGaussian,
     PixelGrid,
+    SiemensStar,
 }
 
 #[derive(Parser, Debug)]
@@ -96,6 +97,9 @@ struct Args {
 
     #[arg(long, help = "Pixel grid spacing in pixels", default_value = "50")]
     grid_spacing: u32,
+
+    #[arg(long, help = "Number of spokes in Siemens star", default_value = "24")]
+    siemens_spokes: u32,
 
     #[arg(short, long, help = "Invert pattern colors (black <-> white)")]
     invert: bool,
@@ -329,6 +333,27 @@ fn main() -> Result<()> {
             (
                 patterns::pixel_grid::generate(pattern_width, pattern_height, args.grid_spacing),
                 "Pixel Grid",
+            )
+        }
+        PatternType::SiemensStar => {
+            println!("Generating Siemens star pattern");
+            println!("  Pattern size: {pattern_width}x{pattern_height}");
+            println!("  Number of spokes: {}", args.siemens_spokes);
+            println!(
+                "  Display {}: {}x{} at ({}, {})",
+                display_index,
+                mode.w,
+                mode.h,
+                bounds.x(),
+                bounds.y()
+            );
+            (
+                patterns::siemens_star::generate(
+                    pattern_width,
+                    pattern_height,
+                    args.siemens_spokes,
+                ),
+                "Siemens Star",
             )
         }
     };

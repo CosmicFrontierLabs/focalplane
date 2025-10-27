@@ -4,6 +4,7 @@ pub mod checkerboard;
 pub mod circling_pixel;
 pub mod pixel;
 pub mod pixel_grid;
+pub mod siemens_star;
 pub mod static_noise;
 pub mod uniform;
 pub mod usaf;
