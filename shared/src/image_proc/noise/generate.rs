@@ -71,7 +71,8 @@ pub fn simple_normal_array(
     use rand::rngs::StdRng;
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let normal_dist = Normal::new(mean, std_dev).unwrap();
+    let normal_dist = Normal::new(mean, std_dev)
+        .expect("Normal distribution parameters must be valid (std_dev > 0)");
     Array2::from_shape_fn(size, |_| normal_dist.sample(&mut rng))
 }
 
@@ -93,8 +94,10 @@ fn generate_gaussian_noise(
         Some(64), // Process 64 rows at a time
         |chunk, rng| {
             // Create distributions
-            let read_noise_dist = Normal::new(read_noise, read_noise.sqrt()).unwrap();
-            let dark_noise_dist = Normal::new(0.0, dark_current_mean.sqrt()).unwrap();
+            let read_noise_dist = Normal::new(read_noise, read_noise.sqrt())
+                .expect("Read noise parameters must be valid (read_noise >= 0)");
+            let dark_noise_dist = Normal::new(0.0, dark_current_mean.sqrt())
+                .expect("Dark current parameters must be valid (dark_current_mean >= 0)");
 
             // Fill the chunk with noise values
             chunk.iter_mut().for_each(|pixel| {
@@ -124,8 +127,10 @@ fn generate_poisson_noise(
         Some(64), // Process 64 rows at a time
         |chunk, rng| {
             // Create distributions
-            let read_noise_dist = Normal::new(read_noise, read_noise.sqrt()).unwrap();
-            let dark_poisson = Poisson::new(dark_current_mean).unwrap();
+            let read_noise_dist = Normal::new(read_noise, read_noise.sqrt())
+                .expect("Read noise parameters must be valid (read_noise >= 0)");
+            let dark_poisson = Poisson::new(dark_current_mean)
+                .expect("Poisson parameter must be valid (dark_current_mean >= 0)");
 
             // Fill the chunk with noise values
             chunk.iter_mut().for_each(|pixel| {
@@ -211,11 +216,13 @@ pub fn apply_poisson_photon_noise(
                     // For very small means, use Gaussian approximation to avoid numerical issues
                     let sampled_electrons = if mean_electrons < 20.0 {
                         // Use Poisson distribution directly
-                        let poisson = Poisson::new(mean_electrons).unwrap();
+                        let poisson = Poisson::new(mean_electrons)
+                            .expect("Poisson parameter must be valid (mean_electrons > 0)");
                         poisson.sample(rng)
                     } else {
                         // For large means, use normal approximation (faster and numerically stable)
-                        let normal = Normal::new(mean_electrons, mean_electrons.sqrt()).unwrap();
+                        let normal = Normal::new(mean_electrons, mean_electrons.sqrt())
+                            .expect("Normal parameters must be valid (mean_electrons > 0)");
                         normal.sample(rng).max(0.0)
                     };
                     *pixel = sampled_electrons;
