@@ -73,12 +73,32 @@
             color: #666666;
         }
         
+        #camera-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 10px;
+        }
+
         #camera-frame {
             max-width: 100%;
             max-height: 75vh;
             border: 2px solid #00ff00;
             background: #111;
-            margin-top: 10px;
+            display: block;
+        }
+
+        #overlay-svg {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: calc(100% - 4px);
+            height: calc(100% - 4px);
+            pointer-events: none;
+        }
+
+        #overlay-svg svg {
+            width: 100%;
+            height: 100%;
         }
         
         .frame-info {
@@ -148,7 +168,10 @@
             <span id="update-time"></span><br>
             <span id="frame-timestamp" style="color: #00aa00; font-size: 0.9em;"></span>
         </div>
-        <img id="camera-frame" src="/jpeg" alt="Camera Frame">
+        <div id="camera-container">
+            <img id="camera-frame" src="/jpeg" alt="Camera Frame">
+            <div id="overlay-svg"></div>
+        </div>
     </div>
     
     <div class="column right-panel">
@@ -195,49 +218,40 @@
         let errorCount = 0;
         
         function updateImage() {
-            // Check if annotation is enabled
-            const showAnnotation = document.getElementById('show-annotation').checked;
-            const endpoint = showAnnotation ? '/annotated' : '/jpeg';
-
-            // Use fetch to get headers
-            fetch(endpoint + '?t=' + Date.now())
+            fetch('/jpeg?t=' + Date.now())
                 .then(response => {
-                    // Extract timestamp from headers
                     const timestampSec = response.headers.get('X-Timestamp-Sec');
                     const timestampUsec = response.headers.get('X-Timestamp-Usec');
-                    
+
                     if (timestampSec && timestampUsec) {
                         const microseconds = String(Math.abs(parseInt(timestampUsec))).padStart(6, '0');
                         const timestampStr = timestampSec + '.' + microseconds + 's';
                         document.getElementById('frame-timestamp').textContent = 'Frame: ' + timestampStr;
                     }
-                    
+
                     return response.blob();
                 })
                 .then(blob => {
                     const img = document.getElementById('camera-frame');
                     const objectURL = URL.createObjectURL(blob);
-                    
+
                     img.onload = function() {
                         URL.revokeObjectURL(objectURL);
                     };
-                    
+
                     img.src = objectURL;
-                    
+
                     document.getElementById('connection-status').textContent = 'Connected';
                     document.getElementById('connection-status').className = '';
-                    
-                    // Show time with millisecond precision (before AM/PM)
+
                     const updateTime = new Date();
                     const timeOptions = { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' };
                     const baseTime = updateTime.toLocaleTimeString('en-US', timeOptions);
                     const ms = String(updateTime.getMilliseconds()).padStart(3, '0');
-                    // Insert milliseconds before AM/PM
                     const timeStr = baseTime.replace(/(\d{2}:\d{2}:\d{2})( [AP]M)/, '$1.' + ms + '$2');
                     document.getElementById('update-time').textContent =
                         'Updated: ' + timeStr;
 
-                    // Long-polling: immediately fetch next frame
                     updateImage();
                 })
                 .catch(err => {
@@ -246,9 +260,28 @@
                     document.getElementById('connection-status').textContent = 'Connection Error';
                     document.getElementById('connection-status').className = 'error';
 
-                    // Retry after delay on error
                     setTimeout(updateImage, 1000);
                 });
+        }
+
+        function updateOverlay() {
+            const showAnnotation = document.getElementById('show-annotation').checked;
+            const overlayDiv = document.getElementById('overlay-svg');
+
+            if (showAnnotation) {
+                fetch('/overlay-svg?t=' + Date.now())
+                    .then(response => response.text())
+                    .then(svgText => {
+                        overlayDiv.innerHTML = svgText;
+                        setTimeout(updateOverlay, 100);
+                    })
+                    .catch(err => {
+                        console.error('Overlay fetch error:', err);
+                        setTimeout(updateOverlay, 1000);
+                    });
+            } else {
+                overlayDiv.innerHTML = '';
+            }
         }
         
         // Stats update function
@@ -354,9 +387,8 @@
             updateStats();
         });
 
-        // Add checkbox listener to immediately update when toggled
         document.getElementById('show-annotation').addEventListener('change', function() {
-            updateImage();
+            updateOverlay();
         });
 
         // Zoom functionality
@@ -462,7 +494,8 @@
 
         // Start updates
         updateImage();
-        setInterval(updateStats, 1000); // Update stats every second
+        updateOverlay();
+        setInterval(updateStats, 1000);
     </script>
 </body>
 </html>

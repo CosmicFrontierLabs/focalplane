@@ -17,7 +17,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 
-use crate::calibration_overlay::{analyze_calibration_pattern, render_annotated_image};
+use crate::calibration_overlay::{
+    analyze_calibration_pattern, render_annotated_image, render_svg_overlay,
+};
 use clap::Args;
 
 #[derive(RustEmbed)]
@@ -60,6 +62,7 @@ pub struct AppState<C: CameraInterface> {
     pub stats: Arc<Mutex<FrameStats>>,
     pub latest_frame: Arc<RwLock<Option<TimestampedFrame>>>,
     pub latest_annotated: Arc<RwLock<Option<(DynamicImage, u64)>>>,
+    pub latest_overlay_svg: Arc<RwLock<Option<(String, u64)>>>,
     pub annotated_notify: Arc<Notify>,
     pub zoom_region: Arc<RwLock<Option<ZoomRegion>>>,
     pub zoom_notify: Arc<Notify>,
@@ -458,6 +461,29 @@ async fn annotated_raw_endpoint<C: CameraInterface + 'static>(
     }
 }
 
+async fn overlay_svg_endpoint<C: CameraInterface + 'static>(
+    State(state): State<Arc<AppState<C>>>,
+) -> Response {
+    state.annotated_notify.notified().await;
+
+    let svg_opt = {
+        let latest = state.latest_overlay_svg.read().await;
+        latest.clone()
+    };
+
+    match svg_opt {
+        Some((svg_data, frame_num)) => Response::builder()
+            .header(header::CONTENT_TYPE, "image/svg+xml")
+            .header("X-Frame-Number", frame_num.to_string())
+            .body(Body::from(svg_data))
+            .unwrap(),
+        None => Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::from("No overlay SVG available yet"))
+            .unwrap(),
+    }
+}
+
 async fn fits_frame_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
 ) -> Response {
@@ -659,6 +685,7 @@ pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> R
         .route("/fits", get(fits_frame_endpoint::<C>))
         .route("/annotated", get(annotated_frame_endpoint::<C>))
         .route("/annotated_raw", get(annotated_raw_endpoint::<C>))
+        .route("/overlay-svg", get(overlay_svg_endpoint::<C>))
         .route("/stats", get(stats_endpoint::<C>))
         .route(
             "/zoom",
@@ -688,6 +715,7 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         stats: Arc::new(Mutex::new(FrameStats::default())),
         latest_frame: Arc::new(RwLock::new(None)),
         latest_annotated: Arc::new(RwLock::new(None)),
+        latest_overlay_svg: Arc::new(RwLock::new(None)),
         annotated_notify: Arc::new(Notify::new()),
         zoom_region: Arc::new(RwLock::new(None)),
         zoom_notify: Arc::new(Notify::new()),
@@ -806,6 +834,13 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
             let frame_age = start_total.duration_since(capture_timestamp);
             let bit_depth = state.bit_depth;
             let frame_num = metadata.frame_number;
+
+            let camera = state.camera.lock().await;
+            let config = camera.get_config();
+            let width = config.width as u32;
+            let height = config.height as u32;
+            drop(camera);
+
             let frame_for_analysis = frame.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let start_analysis = std::time::Instant::now();
@@ -814,14 +849,15 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
 
                 let start_render = std::time::Instant::now();
                 let annotated_img = render_annotated_image(&frame_for_analysis, &analysis)?;
+                let svg_overlay = render_svg_overlay(width, height, &analysis)?;
                 let render_time = start_render.elapsed();
 
-                Ok::<_, anyhow::Error>((annotated_img, analysis_time, render_time))
+                Ok::<_, anyhow::Error>((annotated_img, svg_overlay, analysis_time, render_time))
             })
             .await;
 
             match result {
-                Ok(Ok((annotated_img, analysis_time, render_time))) => {
+                Ok(Ok((annotated_img, svg_overlay, analysis_time, render_time))) => {
                     let total_time = start_total.elapsed();
                     last_analysis_time = start_total;
 
@@ -851,6 +887,10 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
                     let mut latest = state.latest_annotated.write().await;
                     *latest = Some((annotated_img, frame_num));
                     drop(latest);
+
+                    let mut latest_svg = state.latest_overlay_svg.write().await;
+                    *latest_svg = Some((svg_overlay, frame_num));
+                    drop(latest_svg);
 
                     state.annotated_notify.notify_waiters();
 

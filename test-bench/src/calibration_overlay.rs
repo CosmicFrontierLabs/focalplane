@@ -13,16 +13,11 @@ pub use crate::calibration::bars::{
 };
 pub use crate::calibration::psf_pixels::{measure_psf_pixels, PixelMeasurement};
 
-pub fn render_annotated_image(
-    frame: &Array2<u16>,
+pub fn render_svg_overlay(
+    width: u32,
+    height: u32,
     analysis: &CalibrationAnalysis,
-) -> Result<DynamicImage> {
-    let gray_img = u16_to_gray_image(frame);
-    let base_img = DynamicImage::ImageLuma8(gray_img);
-
-    let width = base_img.width();
-    let height = base_img.height();
-
+) -> Result<String> {
     let avg_tag_height = if !analysis.apriltag_detections.is_empty() {
         let total_height: f64 = analysis
             .apriltag_detections
@@ -45,8 +40,9 @@ pub fn render_annotated_image(
 
     let font_size = (avg_tag_height / 8.0).max(8.0) * 2.0;
 
-    let mut svg_data =
-        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">"#);
+    let mut svg_data = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" preserveAspectRatio="none">"#
+    );
 
     for det in &analysis.apriltag_detections {
         let center = det.center();
@@ -139,6 +135,21 @@ pub fn render_annotated_image(
 
     svg_data.push_str("</svg>");
 
+    Ok(svg_data)
+}
+
+pub fn render_annotated_image(
+    frame: &Array2<u16>,
+    analysis: &CalibrationAnalysis,
+) -> Result<DynamicImage> {
+    let gray_img = u16_to_gray_image(frame);
+    let base_img = DynamicImage::ImageLuma8(gray_img);
+
+    let width = base_img.width();
+    let height = base_img.height();
+
+    let svg_data = render_svg_overlay(width, height, analysis)?;
+
     Ok(overlay_to_image(&base_img, &svg_data))
 }
 
@@ -146,7 +157,6 @@ pub fn render_annotated_image(
 mod tests {
     use super::*;
     use crate::display_patterns::apriltag;
-    use shared::image_proc::image::u16_to_gray_image;
 
     fn load_test_image(bit_depth: u8) -> Array2<u16> {
         let rgb_img =

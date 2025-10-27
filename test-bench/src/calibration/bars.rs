@@ -4,9 +4,6 @@ use ndarray::Array2;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::collections::HashMap;
 
-#[cfg(test)]
-use shared::test_util::get_output_dir;
-
 /// Compute FFT-based contrast from 1D intensity profile.
 ///
 /// This function analyzes the frequency content of an intensity profile
