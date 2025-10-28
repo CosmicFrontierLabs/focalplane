@@ -113,6 +113,26 @@ pub struct CameraConfig {
     pub bit_depth: u8,
 }
 
+impl CameraConfig {
+    /// Get saturation value in DN (Digital Numbers) based on bit depth
+    ///
+    /// Returns a simple estimate of sensor saturation based on ADC bit depth.
+    /// This returns (2^bit_depth - 1), which is the maximum ADC value.
+    ///
+    /// # Note
+    /// This is a simplified placeholder calculation. For more accurate saturation
+    /// values, implementations should account for max well depth and conversion gain
+    /// (DN per electron), as real sensors may saturate below the ADC maximum due to
+    /// well capacity limits. See `simulator::hardware::sensor::SensorConfig::saturating_reading()`
+    /// for a physics-based implementation.
+    ///
+    /// # Returns
+    /// Maximum digital number value for the given bit depth
+    pub fn get_saturation(&self) -> f64 {
+        (2_u32.pow(self.bit_depth as u32) - 1) as f64
+    }
+}
+
 /// Trait for unified camera interface
 ///
 /// This trait abstracts camera operations to allow testing with the simulator
@@ -458,5 +478,44 @@ mod tests {
         assert_eq!(extracted.shape(), &[10, 10]);
         assert_eq!(extracted[[0, 0]], 1000);
         assert_eq!(extracted[[9, 9]], 1000);
+    }
+
+    #[test]
+    fn test_camera_config_saturation() {
+        // Test 8-bit depth
+        let config_8bit = CameraConfig {
+            width: 640,
+            height: 480,
+            exposure: Duration::from_millis(100),
+            bit_depth: 8,
+        };
+        assert_eq!(config_8bit.get_saturation(), 255.0);
+
+        // Test 12-bit depth
+        let config_12bit = CameraConfig {
+            width: 640,
+            height: 480,
+            exposure: Duration::from_millis(100),
+            bit_depth: 12,
+        };
+        assert_eq!(config_12bit.get_saturation(), 4095.0);
+
+        // Test 14-bit depth
+        let config_14bit = CameraConfig {
+            width: 640,
+            height: 480,
+            exposure: Duration::from_millis(100),
+            bit_depth: 14,
+        };
+        assert_eq!(config_14bit.get_saturation(), 16383.0);
+
+        // Test 16-bit depth
+        let config_16bit = CameraConfig {
+            width: 640,
+            height: 480,
+            exposure: Duration::from_millis(100),
+            bit_depth: 16,
+        };
+        assert_eq!(config_16bit.get_saturation(), 65535.0);
     }
 }
