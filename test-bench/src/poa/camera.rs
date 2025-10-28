@@ -139,14 +139,27 @@ impl PlayerOneCamera {
                 CameraError::CaptureError(format!("Failed to start streaming: {e}"))
             })?;
 
-            Self::wait_for_first_frame_with_retry(&mut camera, &mut buffer, timeout_ms)?;
-
-            self.is_streaming.store(true, Ordering::SeqCst);
-            tracing::info!("Started continuous streaming mode");
+            match Self::wait_for_first_frame_with_retry(&mut camera, &mut buffer, timeout_ms) {
+                Ok(_) => {
+                    self.is_streaming.store(true, Ordering::SeqCst);
+                    tracing::info!("Started continuous streaming mode");
+                }
+                Err(e) => {
+                    self.is_streaming.store(false, Ordering::SeqCst);
+                    return Err(e);
+                }
+            }
         } else {
-            camera
-                .get_image_data(&mut buffer, Some(timeout_ms))
-                .map_err(|e| CameraError::CaptureError(format!("Get image data failed: {e}")))?;
+            match camera.get_image_data(&mut buffer, Some(timeout_ms)) {
+                Ok(_) => {}
+                Err(e) => {
+                    self.is_streaming.store(false, Ordering::SeqCst);
+                    tracing::warn!("Lost streaming mode, will restart on next capture");
+                    return Err(CameraError::CaptureError(format!(
+                        "Get image data failed: {e}"
+                    )));
+                }
+            }
         }
 
         let now = SystemTime::now()
