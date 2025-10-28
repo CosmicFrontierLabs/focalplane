@@ -5,7 +5,8 @@ set -euo pipefail
 # Builds locally, transfers to remote Orin, and optionally runs binaries
 
 # Configuration
-REMOTE_HOST="${ORIN_HOST:-cosmicfrontiers@192.168.15.229}"
+REMOTE_HOST="${ORIN_HOST:-cosmicfrontiers@orin-nano.tail944341.ts.net}"
+TAILSCALE_DEVICE_NAME="orin-nano"
 TARGET="aarch64-unknown-linux-gnu"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -85,6 +86,26 @@ REMOTE_TEMP_DIR="/home/cosmicfrontiers/${PACKAGE_NAME}-deploy-$(date +%Y%m%d_%H%
 
 print_info "Deploying $PACKAGE_NAME to Jetson Orin..."
 print_info "Remote host: $REMOTE_HOST"
+
+# Step 0: Check Tailscale connectivity
+print_info "Checking Tailscale connectivity..."
+if ! command -v tailscale &> /dev/null; then
+    print_error "Tailscale not installed. Install from: https://tailscale.com/download"
+    exit 1
+fi
+
+TAILSCALE_STATUS=$(tailscale status 2>&1)
+if echo "$TAILSCALE_STATUS" | grep -q "Logged out"; then
+    print_error "Tailscale not logged in. Run: tailscale login"
+    exit 1
+fi
+
+if ! echo "$TAILSCALE_STATUS" | grep -q "$TAILSCALE_DEVICE_NAME"; then
+    print_error "Device '$TAILSCALE_DEVICE_NAME' not found on Tailscale network"
+    print_error "Ensure Orin is powered on and running Tailscale"
+    exit 1
+fi
+print_success "Tailscale verified - device '$TAILSCALE_DEVICE_NAME' is online"
 
 # Step 1: Build
 if [ "$SKIP_BUILD" = false ]; then

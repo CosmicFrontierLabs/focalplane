@@ -13,7 +13,7 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_waiting() { echo -e "${YELLOW}[WAITING]${NC} $1"; }
 
-ORIN_HOST="meawoppl@192.168.15.246"
+ORIN_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
 MAX_ATTEMPTS=60
 SLEEP_INTERVAL=5
 

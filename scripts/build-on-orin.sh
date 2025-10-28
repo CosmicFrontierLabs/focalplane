@@ -5,7 +5,8 @@ set -euo pipefail
 # This script syncs source code to Orin and builds natively, avoiding cross-compilation issues
 
 # Configuration
-REMOTE_HOST="${ORIN_HOST:-meawoppl@192.168.15.246}"
+REMOTE_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
+TAILSCALE_DEVICE_NAME="orin-nano"
 REMOTE_BUILD_DIR="rust-builds"
 PACKAGE_NAME=""
 BINARY_NAME=""
@@ -45,7 +46,7 @@ usage() {
     echo "  -h, --help           Show this help"
     echo ""
     echo "Environment Variables:"
-    echo "  ORIN_HOST            Remote host (default: meawoppl@192.168.15.246)"
+    echo "  ORIN_HOST            Remote host (default: meawoppl@orin-nano.tail944341.ts.net)"
     echo ""
     echo "Examples:"
     echo "  $0 --package test-bench --binary camera_server --run './target/release/camera_server -p 3000'"
@@ -89,6 +90,36 @@ PROJECT_NAME="$(basename "$PROJECT_ROOT")"
 
 print_info "Building $PACKAGE_NAME on Jetson Orin at $REMOTE_HOST"
 print_info "Remote build directory: ~/$REMOTE_BUILD_DIR/$PROJECT_NAME"
+
+# Step 0: Check Tailscale connectivity
+print_info "Checking Tailscale connectivity..."
+if ! command -v tailscale &> /dev/null; then
+    print_error "Tailscale is not installed on this machine"
+    print_error "Please install Tailscale from: https://tailscale.com/download"
+    exit 1
+fi
+
+TAILSCALE_STATUS=$(tailscale status 2>&1)
+if echo "$TAILSCALE_STATUS" | grep -q "Logged out"; then
+    print_error "Tailscale is not logged in"
+    print_error "Please run: tailscale login"
+    exit 1
+fi
+
+if ! echo "$TAILSCALE_STATUS" | grep -q "$TAILSCALE_DEVICE_NAME"; then
+    print_error "Device '$TAILSCALE_DEVICE_NAME' not found on Tailscale network"
+    print_error ""
+    print_error "Please ensure:"
+    print_error "  1. The Orin Nano is powered on"
+    print_error "  2. Tailscale is running on the Orin Nano"
+    print_error "  3. The device is logged into your Tailscale network"
+    print_error ""
+    print_error "Available devices:"
+    echo "$TAILSCALE_STATUS" | head -10
+    exit 1
+fi
+
+print_success "Tailscale connectivity verified - device '$TAILSCALE_DEVICE_NAME' is online"
 
 # Step 1: Check SSH connection
 print_info "Testing SSH connection..."
