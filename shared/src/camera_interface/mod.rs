@@ -208,6 +208,22 @@ pub trait CameraInterface: Send + Sync {
     /// # Returns
     /// A unique serial number string for this camera
     fn get_serial(&self) -> String;
+
+    /// Get current gain setting
+    ///
+    /// # Returns
+    /// Current gain value (camera-specific units)
+    fn get_gain(&self) -> f64;
+
+    /// Set camera gain
+    ///
+    /// # Arguments
+    /// * `gain` - Gain value to set (camera-specific units)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(CameraError)` if gain value is unsupported or out of range
+    fn set_gain(&mut self, gain: f64) -> CameraResult<()>;
 }
 
 impl CameraInterface for Box<dyn CameraInterface> {
@@ -277,6 +293,14 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn get_serial(&self) -> String {
         (**self).get_serial()
+    }
+
+    fn get_gain(&self) -> f64 {
+        (**self).get_gain()
+    }
+
+    fn set_gain(&mut self, gain: f64) -> CameraResult<()> {
+        (**self).set_gain(gain)
     }
 }
 

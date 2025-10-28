@@ -13,6 +13,7 @@ pub struct MockCameraInterface {
     frame_index: usize,
     is_capturing: bool,
     elapsed_time: Duration,
+    gain: f64,
 }
 
 impl MockCameraInterface {
@@ -26,6 +27,7 @@ impl MockCameraInterface {
             frame_index: 0,
             is_capturing: false,
             elapsed_time: Duration::ZERO,
+            gain: 0.0,
         }
     }
 
@@ -172,6 +174,15 @@ impl CameraInterface for MockCameraInterface {
 
     fn get_serial(&self) -> String {
         "MOCK-00000".to_string()
+    }
+
+    fn get_gain(&self) -> f64 {
+        self.gain
+    }
+
+    fn set_gain(&mut self, gain: f64) -> CameraResult<()> {
+        self.gain = gain;
+        Ok(())
     }
 }
 
@@ -398,5 +409,20 @@ mod tests {
 
         camera.set_bit_depth(14).unwrap();
         assert_eq!(camera.get_bit_depth(), 14);
+    }
+
+    #[test]
+    fn test_gain() {
+        let mut camera = create_test_camera();
+        assert_eq!(camera.get_gain(), 0.0);
+
+        camera.set_gain(100.0).unwrap();
+        assert_eq!(camera.get_gain(), 100.0);
+
+        camera.set_gain(50.5).unwrap();
+        assert_eq!(camera.get_gain(), 50.5);
+
+        camera.set_gain(0.0).unwrap();
+        assert_eq!(camera.get_gain(), 0.0);
     }
 }

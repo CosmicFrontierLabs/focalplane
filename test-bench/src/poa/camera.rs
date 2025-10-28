@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const CAPTURE_TIMEOUT_PADDING: Duration = Duration::from_millis(500);
+
 type FrameBuffer = Arc<Mutex<Option<(Array2<u16>, FrameMetadata)>>>;
 
 fn aabb_to_roi(aabb: &AABB) -> ROI {
@@ -81,19 +83,43 @@ impl PlayerOneCamera {
         })
     }
 
+    fn wait_for_first_frame_with_retry(
+        camera: &mut Camera,
+        buffer: &mut [u8],
+        timeout_ms: i32,
+    ) -> CameraResult<()> {
+        let start_time = std::time::Instant::now();
+        let max_retry_duration = Duration::from_secs(10);
+        let mut attempt = 0;
+
+        loop {
+            attempt += 1;
+            match camera.get_image_data(buffer, Some(timeout_ms)) {
+                Ok(_) => {
+                    tracing::info!(
+                        "First frame captured successfully after {} attempts",
+                        attempt
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    if start_time.elapsed() >= max_retry_duration {
+                        return Err(CameraError::CaptureError(format!(
+                            "Failed to capture first frame after {attempt} attempts in 10 seconds: {e}"
+                        )));
+                    }
+                    tracing::warn!("Capture attempt {} failed, retrying: {}", attempt, e);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
     fn capture_internal(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
         let mut camera = self
             .camera
             .lock()
             .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
-
-        if !self.is_streaming.load(Ordering::SeqCst) {
-            camera.start_exposure().map_err(|e| {
-                CameraError::CaptureError(format!("Failed to start streaming: {e}"))
-            })?;
-            self.is_streaming.store(true, Ordering::SeqCst);
-            tracing::info!("Started continuous streaming mode");
-        }
 
         let current_hw_roi = camera.roi();
         let (width, height) = (
@@ -106,44 +132,47 @@ impl PlayerOneCamera {
         let (exposure_us, _auto) = camera
             .exposure()
             .map_err(|e| CameraError::HardwareError(format!("Failed to read exposure: {e}")))?;
-        let timeout_ms = (exposure_us / 1000) as i32 + 500;
+        let timeout_ms = (exposure_us / 1000) as i32 + CAPTURE_TIMEOUT_PADDING.as_millis() as i32;
 
-        camera
-            .get_image_data(&mut buffer, Some(timeout_ms))
-            .map_err(|e| CameraError::CaptureError(format!("Get image data failed: {e}")))?;
+        if !self.is_streaming.load(Ordering::SeqCst) {
+            camera.start_exposure().map_err(|e| {
+                CameraError::CaptureError(format!("Failed to start streaming: {e}"))
+            })?;
 
-        let u16_data: Vec<u16> = buffer
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
+            Self::wait_for_first_frame_with_retry(&mut camera, &mut buffer, timeout_ms)?;
 
-        let array = Array2::from_shape_vec((height, width), u16_data)
-            .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
-
-        let temp_start = std::time::Instant::now();
-        let temperature = camera
-            .temperature()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to read temperature: {e}")))?;
-        let temp_elapsed = temp_start.elapsed();
-
-        tracing::debug!(
-            "temperature() took {:.2}ms",
-            temp_elapsed.as_secs_f64() * 1000.0
-        );
-
-        drop(camera);
-
-        let exposure = Duration::from_micros(exposure_us as u64);
+            self.is_streaming.store(true, Ordering::SeqCst);
+            tracing::info!("Started continuous streaming mode");
+        } else {
+            camera
+                .get_image_data(&mut buffer, Some(timeout_ms))
+                .map_err(|e| CameraError::CaptureError(format!("Get image data failed: {e}")))?;
+        }
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0));
         let timestamp = Timestamp::from_duration(now);
 
+        let u16_data: Vec<u16> = buffer
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+
         let frame_num = self.frame_number.fetch_add(1, Ordering::SeqCst);
 
         let mut temperatures = HashMap::new();
-        temperatures.insert("sensor".to_string(), temperature);
+        temperatures.insert(
+            "sensor".to_string(),
+            camera.temperature().map_err(|e| {
+                CameraError::HardwareError(format!("Failed to read temperature: {e}"))
+            })?,
+        );
+
+        drop(camera);
+
+        let array = Array2::from_shape_vec((height, width), u16_data)
+            .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
 
         let roi_aabb = if current_hw_roi.width == self.config.width as u32
             && current_hw_roi.height == self.config.height as u32
@@ -162,7 +191,7 @@ impl PlayerOneCamera {
 
         let metadata = FrameMetadata {
             frame_number: frame_num,
-            exposure,
+            exposure: Duration::from_micros(exposure_us as u64),
             timestamp,
             pointing: None,
             roi: roi_aabb,
@@ -412,6 +441,26 @@ impl CameraInterface for PlayerOneCamera {
 
     fn get_serial(&self) -> String {
         self.serial_number.clone()
+    }
+
+    fn get_gain(&self) -> f64 {
+        self.camera
+            .lock()
+            .ok()
+            .and_then(|camera| camera.gain().ok())
+            .map(|(gain, _is_auto)| gain as f64)
+            .unwrap_or(0.0)
+    }
+
+    fn set_gain(&mut self, gain: f64) -> CameraResult<()> {
+        let mut camera = self
+            .camera
+            .lock()
+            .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
+
+        camera
+            .set_gain(gain as i64, false)
+            .map_err(|e| CameraError::ConfigError(format!("Failed to set gain: {e}")))
     }
 }
 

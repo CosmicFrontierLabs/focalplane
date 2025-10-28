@@ -386,6 +386,14 @@ impl CameraInterface for SimulatorCamera {
     fn get_serial(&self) -> String {
         "SIM-00000".to_string()
     }
+
+    fn get_gain(&self) -> f64 {
+        0.0
+    }
+
+    fn set_gain(&mut self, _gain: f64) -> CameraResult<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,9 @@
 - [ ] Add NSV455 camera support to camera_server
   - Create NSV455 CameraInterface implementation
   - Update camera_server to support NSV455 alongside PlayerOne cameras
+- [ ] Implement gain control for NSV455 camera
+  - Add get_gain() and set_gain() methods to NSV455 CameraInterface implementation
+  - Location: nsv455/src/camera/neutralino_imx455.rs (if CameraInterface impl exists)
 - [ ] Refactor Array2<u16> ↔ image conversions into shared module
   - Duplicate conversion code exists in multiple locations (calibration_analysis.rs, display_patterns/apriltag.rs, etc.)
   - Create shared utility functions for bidirectional conversions with proper grayscale handling
