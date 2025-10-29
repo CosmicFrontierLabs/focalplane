@@ -30,6 +30,7 @@ rayon = "1.7"
 rand = "0.8"
 rand_distr = "0.4"
 log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 url = "2.5"
 urlencoding = "2.1"
@@ -45,7 +46,6 @@ usvg = "0.45.0"
 # Units
 uom = "0.37.0"
 serde_json = "1.0.145"
-serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
 approx = "0.5"

@@ -27,6 +27,10 @@ path = "src/bin/playerone_info.rs"
 name = "cam_track"
 path = "src/bin/cam_track.rs"
 
+[[bin]]
+name = "dark_frame_analysis"
+path = "src/bin/dark_frame_analysis.rs"
+
 [dependencies]
 anyhow = "1.0"
 apriltag = "0.4.0"
