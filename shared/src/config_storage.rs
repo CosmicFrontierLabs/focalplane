@@ -1,0 +1,236 @@
+//! Configuration storage for camera calibration data.
+//!
+//! Provides centralized storage for camera-specific configuration like bad pixel maps.
+//! All config is stored in ~/.cf_config/ by default.
+
+use crate::bad_pixel_map::BadPixelMap;
+use std::path::{Path, PathBuf};
+
+/// Configuration storage manager for camera calibration data.
+///
+/// Manages loading and saving of camera-specific configuration files
+/// from a centralized directory (defaults to ~/.cf_config/).
+#[derive(Debug, Clone)]
+pub struct ConfigStorage {
+    /// Root directory for all configuration (e.g., ~/.cf_config)
+    root_path: PathBuf,
+}
+
+impl ConfigStorage {
+    /// Create a new config storage with default path (~/.cf_config)
+    pub fn new() -> std::io::Result<Self> {
+        let home = std::env::var("HOME")
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+        let root_path = PathBuf::from(home).join(".cf_config");
+        Ok(Self { root_path })
+    }
+
+    /// Create a new config storage with custom root path
+    pub fn with_path(root_path: PathBuf) -> Self {
+        Self { root_path }
+    }
+
+    /// Get the root configuration path
+    pub fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+
+    /// Get the bad pixel maps directory path
+    fn bad_pixel_maps_dir(&self) -> PathBuf {
+        self.root_path.join("bad_pixel_maps")
+    }
+
+    /// Generate filename for a bad pixel map given model and serial number
+    fn bad_pixel_map_filename(&self, model: &str, serial: &str) -> PathBuf {
+        let filename = format!("{model}-{serial}.json");
+        self.bad_pixel_maps_dir().join(filename)
+    }
+
+    /// Get bad pixel map for a given camera model and serial number.
+    ///
+    /// Returns None if no bad pixel map exists for this camera.
+    /// Returns Some(Err) if the file exists but cannot be loaded.
+    pub fn get_bad_pixel_map(
+        &self,
+        model: &str,
+        serial: &str,
+    ) -> Option<Result<BadPixelMap, std::io::Error>> {
+        let path = self.bad_pixel_map_filename(model, serial);
+
+        if !path.exists() {
+            return None;
+        }
+
+        Some(BadPixelMap::load_from_file(&path))
+    }
+
+    /// Save a bad pixel map for a given camera.
+    ///
+    /// Creates the bad_pixel_maps directory if it doesn't exist.
+    pub fn save_bad_pixel_map(&self, map: &BadPixelMap) -> std::io::Result<()> {
+        let dir = self.bad_pixel_maps_dir();
+        std::fs::create_dir_all(&dir)?;
+
+        let path = self.bad_pixel_map_filename(&map.sensor_model, &map.camera_serial);
+        map.save_to_file(&path)
+    }
+
+    /// List all bad pixel maps available in storage.
+    ///
+    /// Returns a list of (model, serial) pairs for which bad pixel maps exist.
+    pub fn list_bad_pixel_maps(&self) -> std::io::Result<Vec<(String, String)>> {
+        let dir = self.bad_pixel_maps_dir();
+
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut maps = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Some((model, serial)) = filename.split_once('-') {
+                        maps.push((model.to_string(), serial.to_string()));
+                    }
+                }
+            }
+        }
+
+        Ok(maps)
+    }
+
+    /// Delete a bad pixel map for a given camera.
+    ///
+    /// Returns Ok(true) if the file was deleted, Ok(false) if it didn't exist.
+    pub fn delete_bad_pixel_map(&self, model: &str, serial: &str) -> std::io::Result<bool> {
+        let path = self.bad_pixel_map_filename(model, serial);
+
+        if !path.exists() {
+            return Ok(false);
+        }
+
+        std::fs::remove_file(path)?;
+        Ok(true)
+    }
+}
+
+impl Default for ConfigStorage {
+    fn default() -> Self {
+        Self::new().unwrap_or_else(|_| Self::with_path(PathBuf::from(".cf_config")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn create_test_storage() -> ConfigStorage {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "cf_config_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        ConfigStorage::with_path(temp_dir)
+    }
+
+    #[test]
+    fn test_config_storage_creation() {
+        let storage = create_test_storage();
+        assert!(storage.root_path().to_str().is_some());
+    }
+
+    #[test]
+    fn test_bad_pixel_map_filename() {
+        let storage = create_test_storage();
+        let path = storage.bad_pixel_map_filename("IMX455", "sn-006");
+
+        assert!(path.to_str().unwrap().contains("bad_pixel_maps"));
+        assert!(path.to_str().unwrap().ends_with("IMX455-sn-006.json"));
+    }
+
+    #[test]
+    fn test_save_and_load_bad_pixel_map() {
+        let storage = create_test_storage();
+
+        let mut map =
+            BadPixelMap::new("TestSensor".to_string(), "TEST-001".to_string(), 1704067200);
+        map.add_pixel(10, 20);
+        map.add_pixel(30, 40);
+
+        storage.save_bad_pixel_map(&map).unwrap();
+
+        let loaded = storage
+            .get_bad_pixel_map("TestSensor", "TEST-001")
+            .expect("Map should exist")
+            .expect("Map should load successfully");
+
+        assert_eq!(loaded.sensor_model, "TestSensor");
+        assert_eq!(loaded.camera_serial, "TEST-001");
+        assert_eq!(loaded.num_bad_pixels(), 2);
+        assert!(loaded.is_bad_pixel(10, 20));
+        assert!(loaded.is_bad_pixel(30, 40));
+
+        std::fs::remove_dir_all(storage.root_path()).ok();
+    }
+
+    #[test]
+    fn test_get_nonexistent_map() {
+        let storage = create_test_storage();
+        let result = storage.get_bad_pixel_map("Nonexistent", "SN-999");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_list_bad_pixel_maps() {
+        let storage = create_test_storage();
+
+        let map1 = BadPixelMap::new("Sensor1".to_string(), "SN-001".to_string(), 1704067200);
+        let map2 = BadPixelMap::new("Sensor2".to_string(), "SN-002".to_string(), 1704067200);
+
+        storage.save_bad_pixel_map(&map1).unwrap();
+        storage.save_bad_pixel_map(&map2).unwrap();
+
+        let mut maps = storage.list_bad_pixel_maps().unwrap();
+        maps.sort();
+
+        assert_eq!(maps.len(), 2);
+        assert!(maps.contains(&("Sensor1".to_string(), "SN-001".to_string())));
+        assert!(maps.contains(&("Sensor2".to_string(), "SN-002".to_string())));
+
+        std::fs::remove_dir_all(storage.root_path()).ok();
+    }
+
+    #[test]
+    fn test_delete_bad_pixel_map() {
+        let storage = create_test_storage();
+
+        let map = BadPixelMap::new("TestSensor".to_string(), "TEST-DEL".to_string(), 1704067200);
+        storage.save_bad_pixel_map(&map).unwrap();
+
+        assert!(storage
+            .get_bad_pixel_map("TestSensor", "TEST-DEL")
+            .is_some());
+
+        let deleted = storage
+            .delete_bad_pixel_map("TestSensor", "TEST-DEL")
+            .unwrap();
+        assert!(deleted);
+
+        assert!(storage
+            .get_bad_pixel_map("TestSensor", "TEST-DEL")
+            .is_none());
+
+        let deleted_again = storage
+            .delete_bad_pixel_map("TestSensor", "TEST-DEL")
+            .unwrap();
+        assert!(!deleted_again);
+
+        std::fs::remove_dir_all(storage.root_path()).ok();
+    }
+}

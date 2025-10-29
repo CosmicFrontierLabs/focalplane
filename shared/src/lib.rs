@@ -9,6 +9,7 @@ pub mod bad_pixel_map;
 pub mod barker;
 pub mod cached_star_catalog;
 pub mod camera_interface;
+pub mod config_storage;
 pub mod image_proc;
 pub mod range_arg;
 pub mod star_projector;
