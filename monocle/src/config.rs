@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use shared::bad_pixel_map::BadPixelMap;
 
 /// Guide star filtering criteria
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +18,10 @@ pub struct GuideStarFilters {
     pub saturation_search_radius: f64,
     /// Minimum distance from image edge in pixels
     pub minimum_edge_distance: f64,
+    /// Bad pixel map for filtering sources near defective pixels
+    pub bad_pixel_map: BadPixelMap,
+    /// Minimum distance from bad pixels in pixels
+    pub minimum_bad_pixel_distance: f64,
 }
 
 /// Configuration for the Fine Guidance System

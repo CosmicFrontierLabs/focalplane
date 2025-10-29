@@ -127,6 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             saturation_value: 4000.0,
             saturation_search_radius: 3.0,
             minimum_edge_distance: 10.0,
+            bad_pixel_map: shared::bad_pixel_map::BadPixelMap::empty(),
+            minimum_bad_pixel_distance: 5.0,
         },
         roi_size: args.roi_size,
         max_reacquisition_attempts: 3,

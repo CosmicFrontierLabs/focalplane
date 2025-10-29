@@ -28,6 +28,8 @@ fn test_single_stationary_star() {
             saturation_value: 4000.0,
             saturation_search_radius: 3.0,
             minimum_edge_distance: 10.0,
+            bad_pixel_map: shared::bad_pixel_map::BadPixelMap::empty(),
+            minimum_bad_pixel_distance: 5.0,
         },
         roi_size: 64, // Big ROI so we don't lose it
         max_reacquisition_attempts: 5,
@@ -109,6 +111,8 @@ fn test_guidance_update_timestamp_correlation() {
             saturation_value: 4000.0,
             saturation_search_radius: 3.0,
             minimum_edge_distance: 10.0,
+            bad_pixel_map: shared::bad_pixel_map::BadPixelMap::empty(),
+            minimum_bad_pixel_distance: 5.0,
         },
         roi_size: 32,
         max_reacquisition_attempts: 5,

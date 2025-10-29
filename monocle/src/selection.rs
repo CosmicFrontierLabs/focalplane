@@ -114,8 +114,25 @@ pub fn detect_and_select_guides(
         stats.log("After edge distance filter");
     }
 
+    // Apply bad pixel filter
+    let after_bad_pixel_filter: Vec<StarDetection> = after_edge_filter
+        .iter()
+        .filter(|star| {
+            filters::is_far_from_bad_pixels(
+                star,
+                &config.filters.bad_pixel_map,
+                config.filters.minimum_bad_pixel_distance,
+            )
+        })
+        .cloned()
+        .collect();
+
+    if let Some(stats) = calculate_detection_stats(&after_bad_pixel_filter) {
+        stats.log("After bad pixel filter");
+    }
+
     // Apply saturation filter
-    let after_saturation_filter: Vec<StarDetection> = after_edge_filter
+    let after_saturation_filter: Vec<StarDetection> = after_bad_pixel_filter
         .iter()
         .filter(|star| {
             filters::has_no_saturation(

@@ -35,6 +35,16 @@ impl BadPixelMap {
         }
     }
 
+    /// Create an empty bad pixel map for testing or when no defects are known
+    pub fn empty() -> Self {
+        Self {
+            sensor_model: String::new(),
+            camera_serial: String::new(),
+            timestamp: 0,
+            pixels: Vec::new(),
+        }
+    }
+
     /// Add a bad pixel to the map
     pub fn add_pixel(&mut self, x: usize, y: usize) {
         self.pixels.push((x, y));

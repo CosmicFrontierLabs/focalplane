@@ -4,6 +4,7 @@
 //! from detected stellar sources based on SNR, saturation, and other criteria.
 
 use ndarray::ArrayView2;
+use shared::bad_pixel_map::BadPixelMap;
 use shared::image_proc::detection::StarDetection;
 
 pub use shared::image_proc::source_snr::{calculate_snr, filter_by_snr};
@@ -156,6 +157,29 @@ pub fn calculate_quality_score(
     snr_weight * snr_score + position_weight * position_score + psf_weight * psf_score
 }
 
+/// Check if a star is sufficiently far from bad pixels
+///
+/// Returns true if the star is at least min_distance pixels away from all bad pixels.
+/// Returns true if the bad_pixel_map is empty.
+pub fn is_far_from_bad_pixels(
+    detection: &StarDetection,
+    bad_pixel_map: &BadPixelMap,
+    min_distance: f64,
+) -> bool {
+    if bad_pixel_map.num_bad_pixels() == 0 {
+        return true;
+    }
+
+    let x = detection.x.round() as usize;
+    let y = detection.y.round() as usize;
+
+    if let Some(distance) = bad_pixel_map.distance_to_nearest_bad_pixel(x, y) {
+        distance >= min_distance
+    } else {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +298,60 @@ mod tests {
             &star_too_close_left,
             image_shape,
             4.0
+        ));
+    }
+
+    #[test]
+    fn test_bad_pixel_filter() {
+        use shared::bad_pixel_map::BadPixelMap;
+
+        let mut map = BadPixelMap::new("TestCam".to_string(), "TEST-001".to_string(), 1704067200);
+        map.add_pixel(10, 10);
+        map.add_pixel(50, 50);
+
+        let star_near_bad_pixel = StarDetection {
+            id: 0,
+            x: 12.0,
+            y: 10.0,
+            flux: 1000.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        let star_far_from_bad_pixels = StarDetection {
+            id: 1,
+            x: 100.0,
+            y: 100.0,
+            flux: 1000.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        let star_on_bad_pixel = StarDetection {
+            id: 2,
+            x: 50.0,
+            y: 50.0,
+            flux: 1000.0,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 2.0,
+        };
+
+        assert!(!is_far_from_bad_pixels(&star_near_bad_pixel, &map, 5.0));
+        assert!(is_far_from_bad_pixels(&star_far_from_bad_pixels, &map, 5.0));
+        assert!(!is_far_from_bad_pixels(&star_on_bad_pixel, &map, 0.5));
+        assert!(is_far_from_bad_pixels(
+            &star_near_bad_pixel,
+            &BadPixelMap::empty(),
+            5.0
         ));
     }
 
