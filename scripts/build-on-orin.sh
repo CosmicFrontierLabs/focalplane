@@ -268,6 +268,14 @@ print_info "Building $PACKAGE_NAME on Orin..."
 echo ""
 
 BUILD_CMD="cd ~/$REMOTE_BUILD_DIR/$PROJECT_NAME && source ~/.cargo/env && cargo build --release --package $PACKAGE_NAME"
+
+# Add feature flags based on device type
+if [ "$DEVICE_TYPE" = "orin" ]; then
+    BUILD_CMD="$BUILD_CMD --features playerone"
+elif [ "$DEVICE_TYPE" = "neut" ]; then
+    BUILD_CMD="$BUILD_CMD --features nsv455"
+fi
+
 if [ -n "$BINARY_NAME" ]; then
     BUILD_CMD="$BUILD_CMD --bin $BINARY_NAME"
 fi
