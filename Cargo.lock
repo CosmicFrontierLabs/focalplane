@@ -3401,6 +3401,8 @@ dependencies = [
  "resvg",
  "rustfft",
  "scilib",
+ "serde",
+ "serde_json",
  "starfield",
  "tempfile",
  "thiserror 1.0.69",

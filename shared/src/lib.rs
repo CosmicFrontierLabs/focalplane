@@ -5,6 +5,7 @@
 //! consistency.
 
 pub mod algo;
+pub mod bad_pixel_map;
 pub mod barker;
 pub mod cached_star_catalog;
 pub mod camera_interface;
