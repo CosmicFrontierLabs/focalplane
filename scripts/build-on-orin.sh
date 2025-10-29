@@ -1,17 +1,32 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build Rust projects directly on Jetson Orin
-# This script syncs source code to Orin and builds natively, avoiding cross-compilation issues
+# Build Rust projects directly on remote ARM devices
+# This script syncs source code to remote host and builds natively, avoiding cross-compilation issues
+#
+# Camera Hardware Configuration:
+# - Neutralino (--neut): NSV455 camera (V4L2-based)
+#   * Binaries like cam_serve_nsv do NOT require the "playerone" feature flag
+#   * V4L2 libraries are incompatible with PlayerOne SDK in the same binary
+# - Orin Nano (--orin): PlayerOne astronomy cameras
+#   * Binaries like cam_serve_poa REQUIRE the "playerone" feature flag
+#   * Build with: cargo build --release --features playerone --bin cam_serve_poa
 
 # Configuration
-REMOTE_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
-TAILSCALE_DEVICE_NAME="orin-nano"
+REMOTE_HOST=""
+DEVICE_TYPE=""
+TAILSCALE_DEVICE_NAME=""
 REMOTE_BUILD_DIR="rust-builds"
 PACKAGE_NAME=""
 BINARY_NAME=""
 RUN_AFTER_BUILD=false
 RUN_COMMAND=""
+
+# Host presets
+ORIN_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
+ORIN_TAILSCALE_NAME="orin-nano"
+NEUT_HOST="cosmicfrontiers@192.168.15.229"
+NEUT_DEVICE_NAME="neutralino"
 
 # Apt dependencies management
 # The semaphore file caches apt package verification to speed up repeated builds.
@@ -19,7 +34,7 @@ RUN_COMMAND=""
 #   1. Increment APT_DEPS_VERSION
 #   2. Add the check_package call in the apt checks section
 # The script will detect the version change and recheck all packages on the next run.
-APT_DEPS_VERSION=1
+APT_DEPS_VERSION=2
 APT_SEMAPHORE_FILE=".meter-sim-apt-deps-installed"
 
 # Colors
@@ -35,10 +50,14 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 usage() {
-    echo "Usage: $0 --package PACKAGE [OPTIONS]"
+    echo "Usage: $0 --package PACKAGE [--orin|--neut] [OPTIONS]"
     echo ""
     echo "Required:"
     echo "  --package PKG        Package to build (e.g., test-bench)"
+    echo ""
+    echo "Device Selection (one required):"
+    echo "  --orin               Build on Jetson Orin Nano (${ORIN_HOST})"
+    echo "  --neut               Build on Neutralino computer (${NEUT_HOST})"
     echo ""
     echo "Options:"
     echo "  --binary BIN         Specific binary to build (e.g., camera_server)"
@@ -46,15 +65,28 @@ usage() {
     echo "  -h, --help           Show this help"
     echo ""
     echo "Environment Variables:"
-    echo "  ORIN_HOST            Remote host (default: meawoppl@orin-nano.tail944341.ts.net)"
+    echo "  ORIN_HOST            Override Orin host (default: meawoppl@orin-nano.tail944341.ts.net)"
     echo ""
     echo "Examples:"
-    echo "  $0 --package test-bench --binary camera_server --run './target/release/camera_server -p 3000'"
+    echo "  $0 --package test-bench --orin --binary camera_server"
+    echo "  $0 --package test-bench --neut --binary cam_serve_nsv --run './target/release/cam_serve_nsv'"
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --orin)
+            DEVICE_TYPE="orin"
+            REMOTE_HOST="$ORIN_HOST"
+            TAILSCALE_DEVICE_NAME="$ORIN_TAILSCALE_NAME"
+            shift
+            ;;
+        --neut)
+            DEVICE_TYPE="neut"
+            REMOTE_HOST="$NEUT_HOST"
+            TAILSCALE_DEVICE_NAME="$NEUT_DEVICE_NAME"
+            shift
+            ;;
         --package)
             PACKAGE_NAME="$2"
             shift 2
@@ -83,43 +115,50 @@ if [ -z "$PACKAGE_NAME" ]; then
     usage
 fi
 
+if [ -z "$DEVICE_TYPE" ]; then
+    print_error "Device type is required. Use --orin or --neut"
+    usage
+fi
+
 # Get project root
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 PROJECT_NAME="$(basename "$PROJECT_ROOT")"
 
-print_info "Building $PACKAGE_NAME on Jetson Orin at $REMOTE_HOST"
+print_info "Building $PACKAGE_NAME on ${DEVICE_TYPE} at $REMOTE_HOST"
 print_info "Remote build directory: ~/$REMOTE_BUILD_DIR/$PROJECT_NAME"
 
-# Step 0: Check Tailscale connectivity
-print_info "Checking Tailscale connectivity..."
-if ! command -v tailscale &> /dev/null; then
-    print_error "Tailscale is not installed on this machine"
-    print_error "Please install Tailscale from: https://tailscale.com/download"
-    exit 1
-fi
+# Step 0: Check Tailscale connectivity (only for Orin)
+if [ "$DEVICE_TYPE" = "orin" ]; then
+    print_info "Checking Tailscale connectivity..."
+    if ! command -v tailscale &> /dev/null; then
+        print_error "Tailscale is not installed on this machine"
+        print_error "Please install Tailscale from: https://tailscale.com/download"
+        exit 1
+    fi
 
-TAILSCALE_STATUS=$(tailscale status 2>&1)
-if echo "$TAILSCALE_STATUS" | grep -q "Logged out"; then
-    print_error "Tailscale is not logged in"
-    print_error "Please run: tailscale login"
-    exit 1
-fi
+    TAILSCALE_STATUS=$(tailscale status 2>&1)
+    if echo "$TAILSCALE_STATUS" | grep -q "Logged out"; then
+        print_error "Tailscale is not logged in"
+        print_error "Please run: tailscale login"
+        exit 1
+    fi
 
-if ! echo "$TAILSCALE_STATUS" | grep -q "$TAILSCALE_DEVICE_NAME"; then
-    print_error "Device '$TAILSCALE_DEVICE_NAME' not found on Tailscale network"
-    print_error ""
-    print_error "Please ensure:"
-    print_error "  1. The Orin Nano is powered on"
-    print_error "  2. Tailscale is running on the Orin Nano"
-    print_error "  3. The device is logged into your Tailscale network"
-    print_error ""
-    print_error "Available devices:"
-    echo "$TAILSCALE_STATUS" | head -10
-    exit 1
-fi
+    if ! echo "$TAILSCALE_STATUS" | grep -q "$TAILSCALE_DEVICE_NAME"; then
+        print_error "Device '$TAILSCALE_DEVICE_NAME' not found on Tailscale network"
+        print_error ""
+        print_error "Please ensure:"
+        print_error "  1. The Orin Nano is powered on"
+        print_error "  2. Tailscale is running on the Orin Nano"
+        print_error "  3. The device is logged into your Tailscale network"
+        print_error ""
+        print_error "Available devices:"
+        echo "$TAILSCALE_STATUS" | head -10
+        exit 1
+    fi
 
-print_success "Tailscale connectivity verified - device '$TAILSCALE_DEVICE_NAME' is online"
+    print_success "Tailscale connectivity verified - device '$TAILSCALE_DEVICE_NAME' is online"
+fi
 
 # Step 1: Check SSH connection
 print_info "Testing SSH connection..."
@@ -173,6 +212,7 @@ else
     check_package "libcfitsio-dev" || print_warning "libcfitsio-dev not found"
     check_package "libclang-dev" || print_warning "libclang-dev not found"
     check_package "clang" || print_warning "clang not found"
+    check_package "libapriltag-dev" || print_warning "libapriltag-dev not found"
 
     if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
         print_warning "Missing packages: ${MISSING_PACKAGES[*]}"

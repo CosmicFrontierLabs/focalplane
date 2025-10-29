@@ -22,7 +22,7 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfontconfig1-dev libcfitsio-dev libsdl2-dev libsdl2-image-dev libplayeronecamera2 libapriltag-dev
+        sudo apt-get install -y libfontconfig1-dev libcfitsio-dev libsdl2-dev libsdl2-image-dev libplayeronecamera2 libapriltag-dev libssl-dev pkg-config
       
     - name: Cache cargo dependencies
       uses: actions/cache@v3
@@ -38,52 +38,4 @@ jobs:
 
     - name: Run tests
       run: cargo test --verbose
-
-  cross-compile-arm64:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: aarch64-unknown-linux-gnu
-    
-    - name: Add ARM64 target
-      run: rustup target add aarch64-unknown-linux-gnu
-        
-    - name: Install ARM64 cross-compilation tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-        
-    - name: Cache cargo dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
-        
-    - name: Build flight-software for ARM64
-      run: |
-        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-        cargo build --target aarch64-unknown-linux-gnu --release --bin flight_monitor
-        
-    - name: Verify ARM64 binary
-      run: |
-        file target/aarch64-unknown-linux-gnu/release/flight_monitor
-        ls -lh target/aarch64-unknown-linux-gnu/release/flight_monitor
-        
-    - name: Test binary architecture
-      run: |
-        ARCH=$(file target/aarch64-unknown-linux-gnu/release/flight_monitor | grep -o "ARM aarch64")
-        if [ "$ARCH" = "ARM aarch64" ]; then
-          echo "✓ ARM64 binary verified successfully"
-        else
-          echo "✗ Binary is not ARM64 architecture"
-          exit 1
-        fi
 

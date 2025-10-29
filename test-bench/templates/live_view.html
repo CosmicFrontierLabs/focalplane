@@ -216,9 +216,19 @@
     
     <script>
         let errorCount = 0;
-        
+
+        // Helper function to create fetch with timeout
+        // TODO: Reduce timeout to ~30s when Neutralino gets proper ethernet (currently 10 Mbps adapter)
+        function fetchWithTimeout(url, options = {}, timeout = 120000) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+            return fetch(url, { ...options, signal: controller.signal })
+                .finally(() => clearTimeout(timeoutId));
+        }
+
         function updateImage() {
-            fetch('/jpeg?t=' + Date.now())
+            fetchWithTimeout('/jpeg?t=' + Date.now())
                 .then(response => {
                     const timestampSec = response.headers.get('X-Timestamp-Sec');
                     const timestampUsec = response.headers.get('X-Timestamp-Usec');
@@ -269,7 +279,7 @@
             const overlayDiv = document.getElementById('overlay-svg');
 
             if (showAnnotation) {
-                fetch('/overlay-svg?t=' + Date.now())
+                fetchWithTimeout('/overlay-svg?t=' + Date.now())
                     .then(response => response.text())
                     .then(svgText => {
                         overlayDiv.innerHTML = svgText;
@@ -406,7 +416,7 @@
 
             console.log('Zoom click at:', clickX, clickY);
 
-            fetch('/zoom', {
+            fetchWithTimeout('/zoom', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({x: clickX, y: clickY})
@@ -436,7 +446,7 @@
                 return;
             }
 
-            fetch('/zoom?t=' + Date.now())
+            fetchWithTimeout('/zoom?t=' + Date.now())
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Zoom fetch failed: ' + response.statusText);

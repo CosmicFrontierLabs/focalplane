@@ -2,6 +2,8 @@ mod calibration;
 pub mod calibration_overlay;
 pub mod camera_server;
 pub mod display_patterns;
+
+#[cfg(feature = "playerone")]
 pub mod poa;
 
 #[cfg(test)]

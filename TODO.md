@@ -16,6 +16,11 @@
 - [ ] Add uncompressed frame endpoint for speed testing
   - Create endpoint that returns raw frame data without JPEG compression
   - Useful for benchmarking network throughput vs compression overhead
+- [ ] Reduce web viewer fetch timeout when Neutralino gets proper ethernet
+  - Location: test-bench/templates/live_view.html:222
+  - Current: 120 second timeout for 10 Mbps adapter (NSV455 full-res frames are ~102MB)
+  - Needed: Reduce to ~30 seconds when proper ethernet is installed
+  - Why: Current timeout is unnecessarily long for normal network conditions
 
 ### Dependencies
 - [x] Update ndarray from 0.15 to 0.16 across all crates
@@ -230,4 +235,3 @@
   - Example: `shared/src/algo/icp.rs` (squared_distance, find_closest_points)
   - Action: Either add unit tests or change visibility to `pub(crate)` or private
   - Why: All public API functions should have test coverage
-
