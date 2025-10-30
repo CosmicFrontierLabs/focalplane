@@ -58,12 +58,23 @@ pub fn detect_and_select_guides(
     averaged_frame: ArrayView2<f64>,
     config: &FgsConfig,
 ) -> Result<(Option<GuideStar>, Vec<StarDetection>), String> {
+    use shared::image_proc::noise::quantify::estimate_background;
+
+    // Calculate downsample factor to get ~100 samples for fast background estimation
+    // For image of size (H, W), downsample n gives ~(H*W)/n² samples
+    // We want (H*W)/n² > 100, so n < sqrt((H*W)/100)
+    let (height, width) = averaged_frame.dim();
+    let total_pixels = (height * width) as f64;
+    let downsample = ((total_pixels / 100.0).sqrt() as usize).max(1);
+
+    let background_level = estimate_background(&averaged_frame, downsample);
     let noise_level = estimate_noise_level(&averaged_frame, 8);
 
-    let detection_threshold = config.filters.detection_threshold_sigma * noise_level;
+    let detection_threshold =
+        background_level + (config.filters.detection_threshold_sigma * noise_level);
 
     log::info!(
-        "Estimated noise level: {noise_level:.2}, using {}-sigma threshold: {detection_threshold:.2}",
+        "Background: {background_level:.2}, Noise: {noise_level:.2}, using {}-sigma threshold: {detection_threshold:.2}",
         config.filters.detection_threshold_sigma
     );
 

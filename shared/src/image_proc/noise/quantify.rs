@@ -119,6 +119,43 @@ pub fn estimate_noise_level(image: &ArrayView2<f64>, patch_size: usize) -> f64 {
     (eigenvalues[0..mid].iter().sum::<f64>() / mid as f64).sqrt()
 }
 
+/// Estimate background level using median of downsampled image pixels
+///
+/// Computes median pixel value for robust background estimation.
+/// Supports optional downsampling for faster computation on large images.
+///
+/// # Algorithm
+/// 1. Sample pixels uniformly (every `downsample` pixels in both dimensions)
+/// 2. Sort sampled values
+/// 3. Return median value
+///
+/// # Arguments
+/// * `image` - 2D array of pixel values
+/// * `downsample` - Sampling stride (1 = no downsampling, 2 = every other pixel, etc.)
+///
+/// # Returns
+/// Median pixel value in same units as input
+///
+/// # Performance
+/// With downsample=N, samples ~1/N² pixels, making this O(W*H/N²) where W,H are image dimensions.
+/// For 9576x6388 image with downsample=10, processes ~610k pixels instead of 61M pixels.
+pub fn estimate_background(image: &ArrayView2<f64>, downsample: usize) -> f64 {
+    let (height, width) = image.dim();
+    let downsample = downsample.max(1); // Ensure at least 1
+
+    // Sample pixels uniformly with stride
+    let mut sampled: Vec<f64> = Vec::new();
+    for i in (0..height).step_by(downsample) {
+        for j in (0..width).step_by(downsample) {
+            sampled.push(image[[i, j]]);
+        }
+    }
+
+    // Sort and find median
+    sampled.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sampled[sampled.len() / 2]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +239,104 @@ mod tests {
         // Should return a positive noise estimate
         assert!(noise_level > 0.0);
         assert!(noise_level < 10.0); // Should be reasonable for our test case
+    }
+
+    #[test]
+    fn test_estimate_background_uniform() {
+        // Test with uniform image - should return the constant value
+        let image = Array2::from_elem((100, 100), 150.0);
+
+        let background = estimate_background(&image.view(), 1);
+        assert_relative_eq!(background, 150.0, epsilon = 1e-10);
+
+        // Should work with any downsample factor
+        let background_10 = estimate_background(&image.view(), 10);
+        assert_relative_eq!(background_10, 150.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_estimate_background_with_noise() {
+        // Test with noisy background - median should be close to mean
+        let background_level = 150.0;
+        let noise_std = 5.0;
+        let image = simple_normal_array((100, 100), background_level, noise_std, 42);
+
+        let estimated_bg = estimate_background(&image.view(), 1);
+
+        // Median should be close to the true background
+        assert_relative_eq!(estimated_bg, background_level, epsilon = 10.0);
+    }
+
+    #[test]
+    fn test_estimate_background_robust_to_outliers() {
+        // Test that median is robust to bright stars (outliers)
+        let mut image = Array2::from_elem((100, 100), 150.0);
+
+        // Add some bright "stars" (outliers)
+        image[[10, 10]] = 1000.0;
+        image[[20, 20]] = 2000.0;
+        image[[30, 30]] = 1500.0;
+        image[[40, 40]] = 3000.0;
+
+        let background = estimate_background(&image.view(), 1);
+
+        // Median should still be close to 150 despite outliers
+        assert_relative_eq!(background, 150.0, epsilon = 1.0);
+    }
+
+    #[test]
+    fn test_estimate_background_downsample_factor() {
+        // Test that different downsample factors give similar results
+        let background_level = 150.0;
+        let noise_std = 3.0;
+        let image = simple_normal_array((1000, 1000), background_level, noise_std, 123);
+
+        let bg_1 = estimate_background(&image.view(), 1);
+        let bg_10 = estimate_background(&image.view(), 10);
+        let bg_100 = estimate_background(&image.view(), 100);
+
+        // All should be close to the true background
+        assert_relative_eq!(bg_1, background_level, epsilon = 5.0);
+        assert_relative_eq!(bg_10, background_level, epsilon = 5.0);
+        assert_relative_eq!(bg_100, background_level, epsilon = 10.0);
+
+        // Should be roughly similar to each other
+        assert!((bg_1 - bg_10).abs() < 10.0);
+        assert!((bg_10 - bg_100).abs() < 15.0);
+    }
+
+    #[test]
+    fn test_estimate_background_small_image() {
+        // Test with small image
+        let image = Array2::from_elem((10, 10), 100.0);
+
+        let background = estimate_background(&image.view(), 1);
+        assert_relative_eq!(background, 100.0, epsilon = 1e-10);
+
+        // With large downsample on small image
+        let background_large = estimate_background(&image.view(), 5);
+        assert_relative_eq!(background_large, 100.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_estimate_background_gradient() {
+        // Test with gradient - median should be near middle value
+        let image = Array2::from_shape_fn((100, 100), |(i, j)| 100.0 + (i as f64 + j as f64) / 2.0);
+
+        let background = estimate_background(&image.view(), 1);
+
+        // Median should be somewhere in the middle of the range [100, 200]
+        assert!(background > 120.0);
+        assert!(background < 180.0);
+    }
+
+    #[test]
+    fn test_estimate_background_zero_downsample() {
+        // Test that downsample factor is clamped to at least 1
+        let image = Array2::from_elem((100, 100), 150.0);
+
+        // Even with downsample=0, should work (internally clamped to 1)
+        let background = estimate_background(&image.view(), 0);
+        assert_relative_eq!(background, 150.0, epsilon = 1e-10);
     }
 }
