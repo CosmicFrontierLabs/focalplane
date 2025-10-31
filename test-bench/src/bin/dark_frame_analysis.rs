@@ -278,19 +278,10 @@ fn run_analysis<C: CameraInterface>(mut camera: C, args: &Args) -> Result<()> {
     if args.save_to_config_store {
         let config_store =
             ConfigStorage::new().with_context(|| "Failed to initialize config storage")?;
-        config_store
+        let saved_path = config_store
             .save_bad_pixel_map(&bad_pixel_map)
             .with_context(|| "Failed to save bad pixel map to config store")?;
-        info!(
-            "Bad pixel map also saved to config store: {:?}",
-            config_store
-                .root_path()
-                .join("bad_pixel_maps")
-                .join(format!(
-                    "{}-{}.json",
-                    bad_pixel_map.sensor_model, bad_pixel_map.camera_serial
-                ))
-        );
+        info!("Bad pixel map also saved to config store: {:?}", saved_path);
     }
 
     if args.save_maps {
