@@ -1,8 +1,4 @@
-//! PlayerOne astronomy camera tracking binary using monocle FGS.
-//!
-//! IMPORTANT: This binary CANNOT be combined with cam_serve_nsv in the same executable.
-//! The v4l2 libraries used by NSV455 cameras enumerate and claim USB video devices at
-//! program initialization, which conflicts with the PlayerOne SDK's USB device access.
+//! Camera tracking binary using monocle FGS for all camera types.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -17,18 +13,14 @@ use simulator::io::fits::{write_typed_fits, FitsDataType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use test_bench::poa::camera::PlayerOneCamera;
+use test_bench::camera_init::{initialize_camera, CameraArgs};
 use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
-#[command(
-    author,
-    version,
-    about = "Tracking binary for PlayerOne astronomy cameras"
-)]
+#[command(author, version, about = "Tracking binary for all camera types")]
 struct Args {
-    #[arg(short = 'i', long, default_value = "0")]
-    camera_id: i32,
+    #[command(flatten)]
+    camera: CameraArgs,
 
     #[arg(long, default_value = "5")]
     acquisition_frames: usize,
@@ -75,9 +67,8 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    info!("Initializing PlayerOne camera with ID {}", args.camera_id);
-    let mut camera = PlayerOneCamera::new(args.camera_id)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize POA camera: {e}"))?;
+    info!("Initializing camera...");
+    let mut camera = initialize_camera(&args.camera)?;
 
     let exposure = Duration::from_millis(args.exposure_ms);
     info!("Setting camera exposure to {}ms", args.exposure_ms);

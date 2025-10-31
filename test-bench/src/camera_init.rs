@@ -17,6 +17,13 @@ pub enum CameraType {
 }
 
 /// Common camera initialization arguments
+///
+/// Supports different camera types via feature flags:
+/// - Mock camera: Always available
+/// - PlayerOne cameras: Requires "playerone" feature
+/// - NSV455 cameras: Requires "nsv455" feature
+///
+/// IMPORTANT: playerone and nsv455 features are mutually exclusive due to USB conflicts.
 #[derive(Parser, Debug, Clone)]
 pub struct CameraArgs {
     /// Type of camera to use

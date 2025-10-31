@@ -1,11 +1,4 @@
-//! Unified camera HTTP server.
-//!
-//! Supports different camera types via feature flags:
-//! - Mock camera: Always available
-//! - PlayerOne cameras: Requires "playerone" feature
-//! - NSV455 cameras: Requires "nsv455" feature
-//!
-//! IMPORTANT: playerone and nsv455 features are mutually exclusive due to USB conflicts.
+//! Unified camera HTTP server for all camera types.
 
 use clap::Parser;
 use test_bench::camera_init::{initialize_camera, CameraArgs};
@@ -13,7 +6,7 @@ use test_bench::camera_server::CommonServerArgs;
 use tracing::info;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "HTTP server for astronomy cameras")]
+#[command(author, version, about = "HTTP server for all camera types")]
 struct Args {
     #[command(flatten)]
     camera: CameraArgs,
