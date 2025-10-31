@@ -84,27 +84,75 @@ pub fn detect_and_select_guides(
         stats.log("Initial detections");
     }
 
+    // Apply bad pixel filter
+    let after_bad_pixel_filter: Vec<StarDetection> = detections
+        .iter()
+        .filter(|star| {
+            let passes = filters::is_far_from_bad_pixels(
+                star,
+                &config.filters.bad_pixel_map,
+                config.filters.minimum_bad_pixel_distance,
+            );
+            if !passes {
+                log::warn!(
+                    "Star rejected by bad pixel filter: position=({:.1}, {:.1}), diameter={:.2}, min_bad_pixel_distance={:.1}, flux={:.0}",
+                    star.x, star.y, star.diameter, config.filters.minimum_bad_pixel_distance, star.flux
+                );
+            }
+            passes
+        })
+        .cloned()
+        .collect();
+
+    if let Some(stats) = calculate_detection_stats(&after_bad_pixel_filter) {
+        stats.log("After bad pixel filter");
+    } else {
+        log::warn!("All stars filtered out by bad pixel filter");
+    }
+
     // Apply diameter filter
     let (diameter_min, diameter_max) = config.filters.diameter_range;
-    let after_diameter_filter: Vec<StarDetection> = detections
+    let after_diameter_filter: Vec<StarDetection> = after_bad_pixel_filter
         .iter()
-        .filter(|star| star.diameter > diameter_min && star.diameter < diameter_max)
+        .filter(|star| {
+            let passes = star.diameter > diameter_min && star.diameter < diameter_max;
+            if !passes {
+                log::warn!(
+                    "Star rejected by diameter filter: diameter={:.2} (range: {:.2}-{:.2}), flux={:.0}, position=({:.1}, {:.1})",
+                    star.diameter, diameter_min, diameter_max, star.flux, star.x, star.y
+                );
+            }
+            passes
+        })
         .cloned()
         .collect();
 
     if let Some(stats) = calculate_detection_stats(&after_diameter_filter) {
         stats.log("After diameter filter");
+    } else {
+        log::warn!("All stars filtered out by diameter filter");
     }
 
     // Apply aspect ratio filter
     let after_aspect_filter: Vec<StarDetection> = after_diameter_filter
         .iter()
-        .filter(|star| star.aspect_ratio < config.filters.aspect_ratio_max)
+        .filter(|star| {
+            let passes = star.aspect_ratio < config.filters.aspect_ratio_max;
+            if !passes {
+                log::warn!(
+                    "Star rejected by aspect ratio filter: aspect_ratio={:.2} (max: {:.2}), diameter={:.2}, flux={:.0}, position=({:.1}, {:.1})",
+                    star.aspect_ratio, config.filters.aspect_ratio_max, star.diameter, star.flux, star.x, star.y
+                );
+            }
+            passes
+        })
         .cloned()
         .collect();
 
     if let Some(stats) = calculate_detection_stats(&after_aspect_filter) {
         stats.log("After aspect ratio filter");
+    } else {
+        log::warn!("All stars filtered out by aspect ratio filter");
     }
 
     // Apply edge distance filter
@@ -112,52 +160,53 @@ pub fn detect_and_select_guides(
     let after_edge_filter: Vec<StarDetection> = after_aspect_filter
         .iter()
         .filter(|star| {
-            filters::is_within_edge_distance(
+            let passes = filters::is_within_edge_distance(
                 star,
                 image_shape,
                 config.filters.minimum_edge_distance,
-            )
+            );
+            if !passes {
+                log::warn!(
+                    "Star rejected by edge distance filter: position=({:.1}, {:.1}), diameter={:.2}, min_edge_distance={:.1}, image_size=({}, {}), flux={:.0}",
+                    star.x, star.y, star.diameter, config.filters.minimum_edge_distance, image_shape.0, image_shape.1, star.flux
+                );
+            }
+            passes
         })
         .cloned()
         .collect();
 
     if let Some(stats) = calculate_detection_stats(&after_edge_filter) {
         stats.log("After edge distance filter");
-    }
-
-    // Apply bad pixel filter
-    let after_bad_pixel_filter: Vec<StarDetection> = after_edge_filter
-        .iter()
-        .filter(|star| {
-            filters::is_far_from_bad_pixels(
-                star,
-                &config.filters.bad_pixel_map,
-                config.filters.minimum_bad_pixel_distance,
-            )
-        })
-        .cloned()
-        .collect();
-
-    if let Some(stats) = calculate_detection_stats(&after_bad_pixel_filter) {
-        stats.log("After bad pixel filter");
+    } else {
+        log::warn!("All stars filtered out by edge distance filter");
     }
 
     // Apply saturation filter
-    let after_saturation_filter: Vec<StarDetection> = after_bad_pixel_filter
+    let after_saturation_filter: Vec<StarDetection> = after_edge_filter
         .iter()
         .filter(|star| {
-            filters::has_no_saturation(
+            let passes = filters::has_no_saturation(
                 star,
                 &averaged_frame,
                 config.filters.saturation_value,
                 config.filters.saturation_search_radius,
-            )
+            );
+            if !passes {
+                log::warn!(
+                    "Star rejected by saturation filter: position=({:.1}, {:.1}), diameter={:.2}, saturation_value={:.0}, search_radius={:.1}, flux={:.0}",
+                    star.x, star.y, star.diameter, config.filters.saturation_value, config.filters.saturation_search_radius, star.flux
+                );
+            }
+            passes
         })
         .cloned()
         .collect();
 
     if let Some(stats) = calculate_detection_stats(&after_saturation_filter) {
         stats.log("After saturation filter");
+    } else {
+        log::warn!("All stars filtered out by saturation filter");
     }
 
     // Apply SNR filter
@@ -165,20 +214,29 @@ pub fn detect_and_select_guides(
         .iter()
         .filter(|star| {
             let aperture = star.diameter / 2.0;
-            filters::filter_by_snr(
+            let passes = filters::filter_by_snr(
                 star,
                 &averaged_frame,
                 config.filters.snr_min,
                 aperture,
                 aperture * 2.0,
                 aperture * 3.0,
-            )
+            );
+            if !passes {
+                log::warn!(
+                    "Star rejected by SNR filter: position=({:.1}, {:.1}), diameter={:.2}, min_snr={:.1}, flux={:.0}",
+                    star.x, star.y, star.diameter, config.filters.snr_min, star.flux
+                );
+            }
+            passes
         })
         .cloned()
         .collect();
 
     if let Some(stats) = calculate_detection_stats(&after_snr_filter) {
         stats.log("After SNR filter");
+    } else {
+        log::warn!("All stars filtered out by SNR filter");
     }
 
     // Sort by flux descending
