@@ -8,14 +8,6 @@ repository.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "hil_server"
-path = "src/bin/hil_server.rs"
-
-[[bin]]
-name = "v4l2_test"
-path = "src/bin/v4l2_test.rs"
-
-[[bin]]
 name = "v4l2_stride_test"
 path = "src/bin/v4l2_stride_test.rs"
 
