@@ -21,7 +21,6 @@ pub struct MockCameraInterface {
     frame_count: u64,
     saturation: f64,
     source: FrameSource,
-    is_capturing: bool,
     elapsed_time: Duration,
     gain: f64,
 }
@@ -34,7 +33,6 @@ impl MockCameraInterface {
             frame_count: 0,
             saturation: 65535.0,
             source: FrameSource::Pregenerated { frames, index: 0 },
-            is_capturing: false,
             elapsed_time: Duration::ZERO,
             gain: 0.0,
         }
@@ -59,7 +57,6 @@ impl MockCameraInterface {
             frame_count: 0,
             saturation: 65535.0,
             source: FrameSource::Generated(Box::new(generator)),
-            is_capturing: false,
             elapsed_time: Duration::ZERO,
             gain: 0.0,
         }
@@ -143,14 +140,6 @@ impl CameraInterface for MockCameraInterface {
         Ok(())
     }
 
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        let frame = self.generate_frame()?;
-        self.elapsed_time += self.config.exposure;
-        self.frame_count += 1;
-        let metadata = self.generate_metadata();
-        Ok((frame, metadata))
-    }
-
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
         self.config.exposure = exposure;
         Ok(())
@@ -170,28 +159,6 @@ impl CameraInterface for MockCameraInterface {
 
     fn get_roi(&self) -> Option<AABB> {
         self.roi
-    }
-
-    fn start_continuous_capture(&mut self) -> CameraResult<()> {
-        self.is_capturing = true;
-        Ok(())
-    }
-
-    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
-        self.is_capturing = false;
-        Ok(())
-    }
-
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
-        if !self.is_capturing {
-            return None;
-        }
-
-        self.capture_frame().ok()
-    }
-
-    fn is_capturing(&self) -> bool {
-        self.is_capturing
     }
 
     fn saturation_value(&self) -> f64 {
@@ -221,6 +188,23 @@ impl CameraInterface for MockCameraInterface {
 
     fn set_gain(&mut self, gain: f64) -> CameraResult<()> {
         self.gain = gain;
+        Ok(())
+    }
+
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()> {
+        loop {
+            let frame = self.generate_frame()?;
+            self.elapsed_time += self.config.exposure;
+            self.frame_count += 1;
+            let metadata = self.generate_metadata();
+
+            if !callback(&frame, &metadata) {
+                break;
+            }
+        }
         Ok(())
     }
 }
@@ -308,24 +292,25 @@ mod tests {
     }
 
     #[test]
-    fn test_continuous_capture() {
+    fn test_stream() {
         let mut camera = create_test_camera();
 
-        assert!(!camera.is_capturing());
-        assert!(camera.get_latest_frame().is_none());
+        let mut frame_count = 0;
+        let mut last_frame_shape = None;
+        let mut last_metadata_frame_number = None;
 
-        camera.start_continuous_capture().unwrap();
-        assert!(camera.is_capturing());
+        camera
+            .stream(&mut |frame, metadata| {
+                frame_count += 1;
+                last_frame_shape = Some(frame.shape().to_vec());
+                last_metadata_frame_number = Some(metadata.frame_number);
+                frame_count < 3
+            })
+            .unwrap();
 
-        let result = camera.get_latest_frame();
-        assert!(result.is_some());
-
-        let (frame, metadata) = result.unwrap();
-        assert_eq!(frame.shape(), &[480, 640]);
-        assert_eq!(metadata.frame_number, 1);
-
-        camera.stop_continuous_capture().unwrap();
-        assert!(!camera.is_capturing());
+        assert_eq!(frame_count, 3);
+        assert_eq!(last_frame_shape, Some(vec![480, 640]));
+        assert_eq!(last_metadata_frame_number, Some(3));
     }
 
     #[test]

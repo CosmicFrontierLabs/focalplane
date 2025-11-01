@@ -20,15 +20,8 @@ use simulator::scene::Scene;
 use simulator::star_math::field_diameter;
 use starfield::catalogs::binary_catalog::BinaryCatalog;
 use starfield::Equatorial;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-
-/// Camera state for continuous capture mode
-struct ContinuousCaptureState {
-    is_active: bool,
-    latest_frame: Option<(Array2<u16>, FrameMetadata)>,
-    frame_counter: u64,
-}
 
 /// Simulator-backed camera for testing FGS and tracking algorithms.
 ///
@@ -53,8 +46,6 @@ pub struct SimulatorCamera {
     frame_number: u64,
     /// RNG seed for noise generation
     noise_seed: u64,
-    /// Continuous capture state
-    continuous_state: Arc<Mutex<ContinuousCaptureState>>,
     /// Stars rendered in the last frame (with pixel positions)
     last_rendered_stars: Vec<StarInFrame>,
 }
@@ -93,11 +84,6 @@ impl SimulatorCamera {
             exposure: Duration::from_millis(100),
             frame_number: 0,
             noise_seed: 42,
-            continuous_state: Arc::new(Mutex::new(ContinuousCaptureState {
-                is_active: false,
-                latest_frame: None,
-                frame_counter: 0,
-            })),
             last_rendered_stars: Vec::new(),
         }
     }
@@ -216,80 +202,6 @@ impl CameraInterface for SimulatorCamera {
         Ok(())
     }
 
-    /// Capture a single frame with current settings.
-    /// Advances internal time by exposure duration and applies ROI if set.
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        // Generate full frame
-        let mut frame = self.generate_frame()?;
-
-        // Apply ROI if set
-        if let Some(roi) = &self.roi {
-            // Clamp ROI to actual frame bounds to avoid panics
-            let (height, width) = frame.dim();
-
-            // Check if ROI is completely outside frame bounds
-            // For testing, we'll be more lenient and just return an empty frame
-            if roi.min_row >= height || roi.min_col >= width {
-                // Return a small empty frame rather than error
-                // This allows tests to continue even with bad ROIs
-                self.frame_number += 1;
-                self.elapsed_time += self.exposure;
-
-                // Convert elapsed time to seconds and nanoseconds
-                let mut temperatures = std::collections::HashMap::new();
-                temperatures.insert(
-                    "sensor".to_string(),
-                    self.satellite.temperature.as_celsius(),
-                );
-
-                let metadata = FrameMetadata {
-                    frame_number: self.frame_number,
-                    exposure: self.exposure,
-                    timestamp: Timestamp::from_duration(self.elapsed_time),
-                    pointing: Some(self.pointing()),
-                    roi: self.roi,
-                    temperatures,
-                };
-                // Return properly sized ROI filled with zeros
-                let roi_height = roi.max_row - roi.min_row + 1;
-                let roi_width = roi.max_col - roi.min_col + 1;
-                return Ok((Array2::zeros((roi_height, roi_width)), metadata));
-            }
-
-            // Clamp ROI to frame bounds
-            let clamped_roi = AABB {
-                min_row: roi.min_row.min(height - 1),
-                min_col: roi.min_col.min(width - 1),
-                max_row: roi.max_row.min(height - 1),
-                max_col: roi.max_col.min(width - 1),
-            };
-
-            frame = clamped_roi.extract_from_frame(&frame.view());
-        }
-
-        self.frame_number += 1;
-
-        let mut temperatures = std::collections::HashMap::new();
-        temperatures.insert(
-            "sensor".to_string(),
-            self.satellite.temperature.as_celsius(),
-        );
-
-        let metadata = FrameMetadata {
-            frame_number: self.frame_number,
-            exposure: self.exposure,
-            timestamp: Timestamp::from_duration(self.elapsed_time),
-            pointing: Some(self.pointing()),
-            roi: self.roi,
-            temperatures,
-        };
-
-        // Increment elapsed time by exposure duration
-        self.elapsed_time += self.exposure;
-
-        Ok((frame, metadata))
-    }
-
     /// Set the exposure duration for frame capture.
     /// Must be positive, returns error for zero duration.
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
@@ -322,52 +234,86 @@ impl CameraInterface for SimulatorCamera {
         self.roi
     }
 
-    /// Start continuous capture mode.
-    /// Frames are generated on demand via get_latest_frame().
-    fn start_continuous_capture(&mut self) -> CameraResult<()> {
-        let mut state = self.continuous_state.lock().unwrap();
-        state.is_active = true;
-        state.frame_counter = 0;
-        Ok(())
-    }
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()> {
+        loop {
+            // Generate full frame
+            let mut frame = self.generate_frame()?;
 
-    /// Stop continuous capture mode and clear buffered frame.
-    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
-        let mut state = self.continuous_state.lock().unwrap();
-        state.is_active = false;
-        state.latest_frame = None;
-        Ok(())
-    }
+            // Apply ROI if set
+            if let Some(roi) = &self.roi {
+                // Clamp ROI to actual frame bounds to avoid panics
+                let (height, width) = frame.dim();
 
-    /// Get the latest frame in continuous capture mode.
-    /// Generates a new frame if one isn't buffered.
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
-        // Check if capturing is active first
-        let is_active = {
-            let state = self.continuous_state.lock().unwrap();
-            state.is_active
-        }; // Lock is dropped here
+                // Check if ROI is completely outside frame bounds
+                if roi.min_row >= height || roi.min_col >= width {
+                    // Return a small empty frame rather than error
+                    self.frame_number += 1;
+                    self.elapsed_time += self.exposure;
 
-        if !is_active {
-            return None;
-        }
+                    let mut temperatures = std::collections::HashMap::new();
+                    temperatures.insert(
+                        "sensor".to_string(),
+                        self.satellite.temperature.as_celsius(),
+                    );
 
-        // In real hardware this would check for new frames
-        // For simulator, we generate a new frame each call
-        match self.capture_frame() {
-            Ok((frame, metadata)) => {
-                // Update state after capture
-                let mut state = self.continuous_state.lock().unwrap();
-                state.frame_counter += 1;
-                state.latest_frame = Some((frame.clone(), metadata.clone()));
-                Some((frame, metadata))
+                    let metadata = FrameMetadata {
+                        frame_number: self.frame_number,
+                        exposure: self.exposure,
+                        timestamp: Timestamp::from_duration(self.elapsed_time),
+                        pointing: Some(self.pointing()),
+                        roi: self.roi,
+                        temperatures,
+                    };
+
+                    let roi_height = roi.max_row - roi.min_row + 1;
+                    let roi_width = roi.max_col - roi.min_col + 1;
+                    let empty_frame = Array2::zeros((roi_height, roi_width));
+
+                    if !callback(&empty_frame, &metadata) {
+                        break;
+                    }
+                    continue;
+                }
+
+                // Clamp ROI to frame bounds
+                let clamped_roi = AABB {
+                    min_row: roi.min_row.min(height - 1),
+                    min_col: roi.min_col.min(width - 1),
+                    max_row: roi.max_row.min(height - 1),
+                    max_col: roi.max_col.min(width - 1),
+                };
+
+                frame = clamped_roi.extract_from_frame(&frame.view());
             }
-            Err(_) => None,
-        }
-    }
 
-    fn is_capturing(&self) -> bool {
-        self.continuous_state.lock().unwrap().is_active
+            self.frame_number += 1;
+
+            let mut temperatures = std::collections::HashMap::new();
+            temperatures.insert(
+                "sensor".to_string(),
+                self.satellite.temperature.as_celsius(),
+            );
+
+            let metadata = FrameMetadata {
+                frame_number: self.frame_number,
+                exposure: self.exposure,
+                timestamp: Timestamp::from_duration(self.elapsed_time),
+                pointing: Some(self.pointing()),
+                roi: self.roi,
+                temperatures,
+            };
+
+            // Increment elapsed time by exposure duration
+            self.elapsed_time += self.exposure;
+
+            if !callback(&frame, &metadata) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn saturation_value(&self) -> f64 {
@@ -474,19 +420,6 @@ mod tests {
         // Invalid exposure (zero duration)
         assert!(camera.set_exposure(Duration::ZERO).is_err());
         assert_eq!(camera.get_exposure(), Duration::from_millis(200)); // Unchanged
-    }
-
-    #[test]
-    fn test_continuous_capture_state() {
-        let mut camera = create_test_camera();
-
-        assert!(!camera.is_capturing());
-
-        assert!(camera.start_continuous_capture().is_ok());
-        assert!(camera.is_capturing());
-
-        assert!(camera.stop_continuous_capture().is_ok());
-        assert!(!camera.is_capturing());
     }
 
     #[test]

@@ -157,7 +157,20 @@ pub trait CameraInterface: Send + Sync {
     /// # Returns
     /// * `Ok((frame, metadata))` containing the image data and metadata
     /// * `Err(CameraError)` if capture fails
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)>;
+    ///
+    /// # Performance Notes
+    /// This is not a high-performance interface and typically incurs camera startup
+    /// overhead on each call. For continuous capture, use `stream()` instead.
+    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
+        let mut result: Option<(Array2<u16>, FrameMetadata)> = None;
+
+        self.stream(&mut |frame, metadata| {
+            result = Some((frame.clone(), metadata.clone()));
+            false
+        })?;
+
+        result.ok_or_else(|| CameraError::CaptureError("No frame captured".to_string()))
+    }
 
     /// Set exposure time
     ///
@@ -176,23 +189,6 @@ pub trait CameraInterface: Send + Sync {
 
     /// Get current ROI (if set)
     fn get_roi(&self) -> Option<AABB>;
-
-    /// Start continuous capture mode
-    ///
-    /// In this mode, the camera continuously captures frames that can be
-    /// retrieved with `get_latest_frame()`. This is useful for live tracking.
-    fn start_continuous_capture(&mut self) -> CameraResult<()>;
-
-    /// Stop continuous capture mode
-    fn stop_continuous_capture(&mut self) -> CameraResult<()>;
-
-    /// Get the latest frame from continuous capture
-    ///
-    /// Returns None if no new frame is available since last call
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)>;
-
-    /// Check if camera is in continuous capture mode
-    fn is_capturing(&self) -> bool;
 
     /// Get sensor saturation value in DN
     ///
@@ -260,6 +256,32 @@ pub trait CameraInterface: Send + Sync {
     /// * `Ok(())` if the ROI size is valid
     /// * `Err(CameraError)` with details if the ROI size is invalid
     fn check_roi_size(&self, width: usize, height: usize) -> CameraResult<()>;
+
+    /// Stream frames continuously with a callback
+    ///
+    /// This method replaces the start/stop continuous capture pattern with a
+    /// callback-based streaming API. The camera will continuously capture frames
+    /// and invoke the callback with the frame data and metadata. The callback
+    /// returns true to continue streaming or false to stop.
+    ///
+    /// # Arguments
+    /// * `callback` - Function called for each frame. Returns true to continue, false to stop.
+    ///
+    /// # Returns
+    /// * `Ok(())` when streaming completes normally (callback returned false)
+    /// * `Err(CameraError)` if capture fails or timeout occurs
+    ///
+    /// # Performance Notes
+    /// The callback is expected to return quickly. If you need to perform long-running
+    /// operations on frame data, clone the data and process it on your own time/thread
+    /// to avoid blocking the camera stream.
+    ///
+    /// # Notes
+    /// Timeout is computed automatically based on the camera's current exposure time.
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()>;
 }
 
 impl CameraInterface for Box<dyn CameraInterface> {
@@ -269,10 +291,6 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn clear_roi(&mut self) -> CameraResult<()> {
         (**self).clear_roi()
-    }
-
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        (**self).capture_frame()
     }
 
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
@@ -293,22 +311,6 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn get_roi(&self) -> Option<AABB> {
         (**self).get_roi()
-    }
-
-    fn start_continuous_capture(&mut self) -> CameraResult<()> {
-        (**self).start_continuous_capture()
-    }
-
-    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
-        (**self).stop_continuous_capture()
-    }
-
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
-        (**self).get_latest_frame()
-    }
-
-    fn is_capturing(&self) -> bool {
-        (**self).is_capturing()
     }
 
     fn saturation_value(&self) -> f64 {
@@ -341,6 +343,13 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn check_roi_size(&self, width: usize, height: usize) -> CameraResult<()> {
         (**self).check_roi_size(width, height)
+    }
+
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()> {
+        (**self).stream(callback)
     }
 }
 

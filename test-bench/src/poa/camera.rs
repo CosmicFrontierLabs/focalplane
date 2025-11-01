@@ -5,13 +5,9 @@ use shared::camera_interface::{
 };
 use shared::image_proc::detection::aabb::AABB;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-const CAPTURE_TIMEOUT_PADDING: Duration = Duration::from_millis(500);
-
-type FrameBuffer = Arc<Mutex<Option<(Array2<u16>, FrameMetadata)>>>;
 
 fn aabb_to_roi(aabb: &AABB) -> ROI {
     let width = (aabb.max_col - aabb.min_col + 1) as u32;
@@ -28,10 +24,6 @@ pub struct PlayerOneCamera {
     camera: Arc<Mutex<Camera>>,
     config: CameraConfig,
     frame_number: Arc<AtomicU64>,
-    is_capturing: Arc<AtomicBool>,
-    is_streaming: Arc<AtomicBool>,
-    latest_frame: FrameBuffer,
-    capture_thread: Option<std::thread::JoinHandle<()>>,
     name: String,
     serial_number: String,
 }
@@ -74,144 +66,9 @@ impl PlayerOneCamera {
             camera: Arc::new(Mutex::new(camera)),
             config,
             frame_number: Arc::new(AtomicU64::new(0)),
-            is_capturing: Arc::new(AtomicBool::new(false)),
-            is_streaming: Arc::new(AtomicBool::new(false)),
-            latest_frame: Arc::new(Mutex::new(None)),
-            capture_thread: None,
             name: camera_name,
             serial_number,
         })
-    }
-
-    fn wait_for_first_frame_with_retry(
-        camera: &mut Camera,
-        buffer: &mut [u8],
-        timeout_ms: i32,
-    ) -> CameraResult<()> {
-        let start_time = std::time::Instant::now();
-        let max_retry_duration = Duration::from_secs(10);
-        let mut attempt = 0;
-
-        loop {
-            attempt += 1;
-            match camera.get_image_data(buffer, Some(timeout_ms)) {
-                Ok(_) => {
-                    tracing::info!(
-                        "First frame captured successfully after {} attempts",
-                        attempt
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    if start_time.elapsed() >= max_retry_duration {
-                        return Err(CameraError::CaptureError(format!(
-                            "Failed to capture first frame after {attempt} attempts in 10 seconds: {e}"
-                        )));
-                    }
-                    tracing::warn!("Capture attempt {} failed, retrying: {}", attempt, e);
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-    }
-
-    fn capture_internal(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        let mut camera = self
-            .camera
-            .lock()
-            .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
-
-        let current_hw_roi = camera.roi();
-        let (width, height) = (
-            current_hw_roi.width as usize,
-            current_hw_roi.height as usize,
-        );
-
-        let mut buffer = camera.create_image_buffer();
-
-        let (exposure_us, _auto) = camera
-            .exposure()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to read exposure: {e}")))?;
-        let timeout_ms = (exposure_us / 1000) as i32 + CAPTURE_TIMEOUT_PADDING.as_millis() as i32;
-
-        if !self.is_streaming.load(Ordering::SeqCst) {
-            camera.start_exposure().map_err(|e| {
-                CameraError::CaptureError(format!("Failed to start streaming: {e}"))
-            })?;
-
-            match Self::wait_for_first_frame_with_retry(&mut camera, &mut buffer, timeout_ms) {
-                Ok(_) => {
-                    self.is_streaming.store(true, Ordering::SeqCst);
-                    tracing::info!("Started continuous streaming mode");
-                }
-                Err(e) => {
-                    self.is_streaming.store(false, Ordering::SeqCst);
-                    return Err(e);
-                }
-            }
-        } else {
-            match camera.get_image_data(&mut buffer, Some(timeout_ms)) {
-                Ok(_) => {}
-                Err(e) => {
-                    self.is_streaming.store(false, Ordering::SeqCst);
-                    tracing::warn!("Lost streaming mode, will restart on next capture");
-                    return Err(CameraError::CaptureError(format!(
-                        "Get image data failed: {e}"
-                    )));
-                }
-            }
-        }
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::from_secs(0));
-        let timestamp = Timestamp::from_duration(now);
-
-        let u16_data: Vec<u16> = buffer
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-
-        let frame_num = self.frame_number.fetch_add(1, Ordering::SeqCst);
-
-        let mut temperatures = HashMap::new();
-        temperatures.insert(
-            "sensor".to_string(),
-            camera.temperature().map_err(|e| {
-                CameraError::HardwareError(format!("Failed to read temperature: {e}"))
-            })?,
-        );
-
-        drop(camera);
-
-        let array = Array2::from_shape_vec((height, width), u16_data)
-            .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
-
-        let roi_aabb = if current_hw_roi.width == self.config.width as u32
-            && current_hw_roi.height == self.config.height as u32
-            && current_hw_roi.start_x == 0
-            && current_hw_roi.start_y == 0
-        {
-            None
-        } else {
-            Some(AABB {
-                min_col: current_hw_roi.start_x as usize,
-                min_row: current_hw_roi.start_y as usize,
-                max_col: (current_hw_roi.start_x + current_hw_roi.width - 1) as usize,
-                max_row: (current_hw_roi.start_y + current_hw_roi.height - 1) as usize,
-            })
-        };
-
-        let metadata = FrameMetadata {
-            frame_number: frame_num,
-            exposure: Duration::from_micros(exposure_us as u64),
-            timestamp,
-            pointing: None,
-            roi: roi_aabb,
-            temperatures,
-        };
-
-        Ok((array, metadata))
     }
 }
 
@@ -286,10 +143,6 @@ impl CameraInterface for PlayerOneCamera {
         Ok(())
     }
 
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        self.capture_internal()
-    }
-
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
         let mut camera = self
             .camera
@@ -344,109 +197,79 @@ impl CameraInterface for PlayerOneCamera {
         }
     }
 
-    fn start_continuous_capture(&mut self) -> CameraResult<()> {
-        if self.is_capturing.load(Ordering::SeqCst) {
-            return Ok(());
-        }
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()> {
+        let mut camera = self
+            .camera
+            .lock()
+            .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
 
-        self.is_capturing.store(true, Ordering::SeqCst);
-
-        let camera = Arc::clone(&self.camera);
         let config = self.config.clone();
-        let is_capturing = Arc::clone(&self.is_capturing);
         let frame_number = Arc::clone(&self.frame_number);
-        let latest_frame = Arc::clone(&self.latest_frame);
 
-        let handle = std::thread::spawn(move || {
-            while is_capturing.load(Ordering::SeqCst) {
-                let mut camera = match camera.lock() {
-                    Ok(cam) => cam,
-                    Err(_) => break,
-                };
+        let timeout_ms = Some(((config.exposure.as_millis() * 3) as u32).max(1000));
 
-                let exposure = match camera.exposure() {
-                    Ok((exposure_us, _auto)) => Duration::from_micros(exposure_us as u64),
-                    Err(_) => break,
-                };
-
-                let hw_roi = camera.roi();
+        camera
+            .stream(timeout_ms, |cam, buffer| {
+                let hw_roi = cam.roi();
                 let (width, height) = (hw_roi.width as usize, hw_roi.height as usize);
 
-                let mut buffer = camera.create_image_buffer();
-
-                if camera.capture(&mut buffer, Some(5000)).is_err() {
-                    break;
-                }
+                let (exposure_us, _auto) = match cam.exposure() {
+                    Ok(exp) => exp,
+                    Err(_) => return false,
+                };
 
                 let u16_data: Vec<u16> = buffer
                     .chunks_exact(2)
                     .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
                     .collect();
 
-                if let Ok(array) = Array2::from_shape_vec((height, width), u16_data) {
-                    let temperature = camera.temperature().unwrap_or(0.0);
+                let array = match Array2::from_shape_vec((height, width), u16_data) {
+                    Ok(arr) => arr,
+                    Err(_) => return false,
+                };
 
-                    let roi_aabb = if hw_roi.width == config.width as u32
-                        && hw_roi.height == config.height as u32
-                        && hw_roi.start_x == 0
-                        && hw_roi.start_y == 0
-                    {
-                        None
-                    } else {
-                        Some(AABB {
-                            min_col: hw_roi.start_x as usize,
-                            min_row: hw_roi.start_y as usize,
-                            max_col: (hw_roi.start_x + hw_roi.width - 1) as usize,
-                            max_row: (hw_roi.start_y + hw_roi.height - 1) as usize,
-                        })
-                    };
+                let temperature = cam.temperature().unwrap_or(f64::NAN);
 
-                    drop(camera);
+                let roi_aabb = if hw_roi.width == config.width as u32
+                    && hw_roi.height == config.height as u32
+                    && hw_roi.start_x == 0
+                    && hw_roi.start_y == 0
+                {
+                    None
+                } else {
+                    Some(AABB {
+                        min_col: hw_roi.start_x as usize,
+                        min_row: hw_roi.start_y as usize,
+                        max_col: (hw_roi.start_x + hw_roi.width - 1) as usize,
+                        max_row: (hw_roi.start_y + hw_roi.height - 1) as usize,
+                    })
+                };
 
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or(Duration::from_secs(0));
-                    let timestamp = Timestamp::from_duration(now);
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or(Duration::from_secs(0));
+                let timestamp = Timestamp::from_duration(now);
 
-                    let frame_num = frame_number.fetch_add(1, Ordering::SeqCst);
+                let frame_num = frame_number.fetch_add(1, Ordering::SeqCst);
 
-                    let mut temperatures = HashMap::new();
-                    temperatures.insert("sensor".to_string(), temperature);
+                let mut temperatures = HashMap::new();
+                temperatures.insert("sensor".to_string(), temperature);
 
-                    let metadata = FrameMetadata {
-                        frame_number: frame_num,
-                        exposure,
-                        timestamp,
-                        pointing: None,
-                        roi: roi_aabb,
-                        temperatures,
-                    };
+                let metadata = FrameMetadata {
+                    frame_number: frame_num,
+                    exposure: Duration::from_micros(exposure_us as u64),
+                    timestamp,
+                    pointing: None,
+                    roi: roi_aabb,
+                    temperatures,
+                };
 
-                    if let Ok(mut frame) = latest_frame.lock() {
-                        *frame = Some((array, metadata));
-                    }
-                }
-            }
-        });
-
-        self.capture_thread = Some(handle);
-        Ok(())
-    }
-
-    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
-        self.is_capturing.store(false, Ordering::SeqCst);
-        if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
-        }
-        Ok(())
-    }
-
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
-        self.latest_frame.lock().ok()?.take()
-    }
-
-    fn is_capturing(&self) -> bool {
-        self.is_capturing.load(Ordering::SeqCst)
+                callback(&array, &metadata)
+            })
+            .map_err(|e| CameraError::CaptureError(format!("Stream failed: {e}")))
     }
 
     fn saturation_value(&self) -> f64 {
@@ -488,18 +311,5 @@ impl CameraInterface for PlayerOneCamera {
         camera
             .set_gain(gain as i64, false)
             .map_err(|e| CameraError::ConfigError(format!("Failed to set gain: {e}")))
-    }
-}
-
-impl Drop for PlayerOneCamera {
-    fn drop(&mut self) {
-        let _ = self.stop_continuous_capture();
-
-        if self.is_streaming.load(Ordering::SeqCst) {
-            if let Ok(mut camera) = self.camera.lock() {
-                let _ = camera.stop_exposure();
-                self.is_streaming.store(false, Ordering::SeqCst);
-            }
-        }
     }
 }

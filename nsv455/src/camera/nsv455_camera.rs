@@ -1,6 +1,4 @@
-use crate::camera::neutralino_imx455::{
-    calculate_padding_pixels, calculate_stride, read_sensor_temperatures,
-};
+use crate::camera::neutralino_imx455::{calculate_stride, read_sensor_temperatures};
 use crate::v4l2_capture::{CameraConfig as V4L2Config, V4L2Capture};
 use ndarray::Array2;
 use shared::camera_interface::{
@@ -8,24 +6,19 @@ use shared::camera_interface::{
 };
 use shared::image_proc::detection::aabb::AABB;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use v4l::buffer::Type;
 use v4l::io::mmap::Stream as MmapStream;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 
-type FrameBuffer = Arc<Mutex<Option<(Array2<u16>, FrameMetadata)>>>;
-
 pub struct NSV455Camera {
     device_path: String,
     v4l2_config: V4L2Config,
     config: CameraConfig,
     frame_number: Arc<AtomicU64>,
-    is_capturing: Arc<AtomicBool>,
-    latest_frame: FrameBuffer,
-    capture_thread: Option<std::thread::JoinHandle<()>>,
     roi: Option<AABB>,
 }
 
@@ -53,104 +46,8 @@ impl NSV455Camera {
             v4l2_config,
             config,
             frame_number: Arc::new(AtomicU64::new(0)),
-            is_capturing: Arc::new(AtomicBool::new(false)),
-            latest_frame: Arc::new(Mutex::new(None)),
-            capture_thread: None,
             roi: None,
         })
-    }
-
-    fn capture_internal(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        let capture = V4L2Capture::new(self.v4l2_config.clone()).map_err(|e| {
-            CameraError::HardwareError(format!("Failed to create V4L2Capture: {e}"))
-        })?;
-
-        let mut device = capture
-            .open_device()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
-
-        capture
-            .configure_device(&mut device)
-            .map_err(|e| CameraError::ConfigError(format!("Failed to configure device: {e}")))?;
-
-        let actual_format = device
-            .format()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
-
-        let mut stream = MmapStream::new(&device, Type::VideoCapture)
-            .map_err(|e| CameraError::CaptureError(format!("Failed to create stream: {e}")))?;
-
-        let (buf, meta) = stream
-            .next()
-            .map_err(|e| CameraError::CaptureError(format!("Failed to capture frame: {e}")))?;
-
-        let frame_data = buf.to_vec();
-        let width = actual_format.width as usize;
-        let height = actual_format.height as usize;
-        let stride = calculate_stride(actual_format.width, actual_format.height, frame_data.len());
-        let padding_pixels =
-            calculate_padding_pixels(actual_format.width, actual_format.height, frame_data.len());
-
-        let mut pixels = Vec::with_capacity(width * height);
-
-        for row in 0..height {
-            let row_start = row * stride;
-            let row_end = row_start + (width * 2);
-
-            if row_end <= frame_data.len() {
-                for col in 0..width {
-                    let pixel_start = row_start + (col * 2);
-                    if pixel_start + 1 < frame_data.len() {
-                        let pixel_value = u16::from_le_bytes([
-                            frame_data[pixel_start],
-                            frame_data[pixel_start + 1],
-                        ]);
-                        pixels.push(pixel_value);
-                    }
-                }
-            }
-        }
-
-        if pixels.len() != width * height {
-            return Err(CameraError::CaptureError(format!(
-                "Pixel count mismatch: expected {}, got {}. Stride: {}, padding: {} pixels",
-                width * height,
-                pixels.len(),
-                stride,
-                padding_pixels
-            )));
-        }
-
-        let array = Array2::from_shape_vec((height, width), pixels)
-            .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
-
-        let (fpga_temp, pcb_temp) = read_sensor_temperatures(&self.device_path);
-
-        let timestamp = Timestamp::new(
-            meta.timestamp.sec as u64,
-            (meta.timestamp.usec * 1000) as u64,
-        );
-
-        let frame_num = self.frame_number.fetch_add(1, Ordering::SeqCst);
-
-        let mut temperatures = HashMap::new();
-        if let Some(temp) = fpga_temp {
-            temperatures.insert("fpga".to_string(), temp as f64);
-        }
-        if let Some(temp) = pcb_temp {
-            temperatures.insert("pcb".to_string(), temp as f64);
-        }
-
-        let metadata = FrameMetadata {
-            frame_number: frame_num,
-            exposure: self.config.exposure,
-            timestamp,
-            pointing: None,
-            roi: self.roi,
-            temperatures,
-        };
-
-        Ok((array, metadata))
     }
 }
 
@@ -183,10 +80,6 @@ impl CameraInterface for NSV455Camera {
         Ok(())
     }
 
-    fn capture_frame(&mut self) -> CameraResult<(Array2<u16>, FrameMetadata)> {
-        self.capture_internal()
-    }
-
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
         self.config.exposure = exposure;
         self.v4l2_config.exposure = exposure.as_micros() as i32;
@@ -209,138 +102,103 @@ impl CameraInterface for NSV455Camera {
         self.roi
     }
 
-    fn start_continuous_capture(&mut self) -> CameraResult<()> {
-        if self.is_capturing.load(Ordering::SeqCst) {
-            return Ok(());
-        }
+    fn stream(
+        &mut self,
+        callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
+    ) -> CameraResult<()> {
+        let capture = V4L2Capture::new(self.v4l2_config.clone()).map_err(|e| {
+            CameraError::HardwareError(format!("Failed to create V4L2 capture: {e}"))
+        })?;
 
-        self.is_capturing.store(true, Ordering::SeqCst);
+        let mut device = capture
+            .open_device()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
 
-        let v4l2_config = self.v4l2_config.clone();
-        let device_path = self.device_path.clone();
-        let config = self.config.clone();
-        let is_capturing = Arc::clone(&self.is_capturing);
-        let frame_number = Arc::clone(&self.frame_number);
-        let latest_frame = Arc::clone(&self.latest_frame);
-        let roi = self.roi;
+        capture
+            .configure_device(&mut device)
+            .map_err(|e| CameraError::ConfigError(format!("Failed to configure device: {e}")))?;
 
-        let handle = std::thread::spawn(move || {
-            let capture = match V4L2Capture::new(v4l2_config.clone()) {
-                Ok(cap) => cap,
-                Err(_) => return,
-            };
+        let actual_format = device
+            .format()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
 
-            let mut device = match capture.open_device() {
-                Ok(dev) => dev,
-                Err(_) => return,
-            };
+        let width = actual_format.width as usize;
+        let height = actual_format.height as usize;
 
-            if capture.configure_device(&mut device).is_err() {
-                return;
-            }
+        let mut stream = MmapStream::new(&device, Type::VideoCapture)
+            .map_err(|e| CameraError::HardwareError(format!("Failed to create stream: {e}")))?;
 
-            let actual_format = match device.format() {
-                Ok(fmt) => fmt,
-                Err(_) => return,
-            };
+        loop {
+            let (buf, meta) = stream
+                .next()
+                .map_err(|e| CameraError::CaptureError(format!("Failed to get frame: {e}")))?;
 
-            let width = actual_format.width as usize;
-            let height = actual_format.height as usize;
+            let frame_data = buf.to_vec();
+            let stride =
+                calculate_stride(actual_format.width, actual_format.height, frame_data.len());
 
-            let mut stream = match MmapStream::new(&device, Type::VideoCapture) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
+            // TODO: Extra memcopy in the inner loop that could be avoided with a cast.
+            // We're returning a pointer to a strided 2D array, so we could potentially
+            // cast directly to Array2<u16> with custom strides instead of copying pixels.
+            let mut pixels = Vec::with_capacity(width * height);
 
-            while is_capturing.load(Ordering::SeqCst) {
-                let (buf, meta) = match stream.next() {
-                    Ok(frame) => frame,
-                    Err(_) => break,
-                };
+            for row in 0..height {
+                let row_start = row * stride;
+                let row_end = row_start + (width * 2);
 
-                let frame_data = buf.to_vec();
-                let stride =
-                    calculate_stride(actual_format.width, actual_format.height, frame_data.len());
-
-                let mut pixels = Vec::with_capacity(width * height);
-
-                for row in 0..height {
-                    let row_start = row * stride;
-                    let row_end = row_start + (width * 2);
-
-                    if row_end <= frame_data.len() {
-                        for col in 0..width {
-                            let pixel_start = row_start + (col * 2);
-                            if pixel_start + 1 < frame_data.len() {
-                                let pixel_value = u16::from_le_bytes([
-                                    frame_data[pixel_start],
-                                    frame_data[pixel_start + 1],
-                                ]);
-                                pixels.push(pixel_value);
-                            }
+                if row_end <= frame_data.len() {
+                    for col in 0..width {
+                        let pixel_start = row_start + (col * 2);
+                        if pixel_start + 1 < frame_data.len() {
+                            let pixel_value = u16::from_le_bytes([
+                                frame_data[pixel_start],
+                                frame_data[pixel_start + 1],
+                            ]);
+                            pixels.push(pixel_value);
                         }
                     }
                 }
-
-                if pixels.len() != width * height {
-                    continue;
-                }
-
-                let array = match Array2::from_shape_vec((height, width), pixels) {
-                    Ok(arr) => arr,
-                    Err(_) => continue,
-                };
-
-                let (fpga_temp, pcb_temp) = read_sensor_temperatures(&device_path);
-
-                let timestamp = Timestamp::new(
-                    meta.timestamp.sec as u64,
-                    (meta.timestamp.usec * 1000) as u64,
-                );
-
-                let frame_num = frame_number.fetch_add(1, Ordering::SeqCst);
-
-                let mut temperatures = HashMap::new();
-                if let Some(temp) = fpga_temp {
-                    temperatures.insert("fpga".to_string(), temp as f64);
-                }
-                if let Some(temp) = pcb_temp {
-                    temperatures.insert("pcb".to_string(), temp as f64);
-                }
-
-                let metadata = FrameMetadata {
-                    frame_number: frame_num,
-                    exposure: config.exposure,
-                    timestamp,
-                    pointing: None,
-                    roi,
-                    temperatures,
-                };
-
-                if let Ok(mut frame) = latest_frame.lock() {
-                    *frame = Some((array, metadata));
-                }
             }
-        });
 
-        self.capture_thread = Some(handle);
-        Ok(())
-    }
+            if pixels.len() != width * height {
+                continue;
+            }
 
-    fn stop_continuous_capture(&mut self) -> CameraResult<()> {
-        self.is_capturing.store(false, Ordering::SeqCst);
-        if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
+            let array = Array2::from_shape_vec((height, width), pixels)
+                .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
+
+            let (fpga_temp, pcb_temp) = read_sensor_temperatures(&self.device_path);
+
+            let timestamp = Timestamp::new(
+                meta.timestamp.sec as u64,
+                (meta.timestamp.usec * 1000) as u64,
+            );
+
+            let frame_num = self.frame_number.fetch_add(1, Ordering::SeqCst);
+
+            let mut temperatures = HashMap::new();
+            if let Some(temp) = fpga_temp {
+                temperatures.insert("fpga".to_string(), temp as f64);
+            }
+            if let Some(temp) = pcb_temp {
+                temperatures.insert("pcb".to_string(), temp as f64);
+            }
+
+            let metadata = FrameMetadata {
+                frame_number: frame_num,
+                exposure: self.config.exposure,
+                timestamp,
+                pointing: None,
+                roi: self.roi,
+                temperatures,
+            };
+
+            if !callback(&array, &metadata) {
+                break;
+            }
         }
+
         Ok(())
-    }
-
-    fn get_latest_frame(&mut self) -> Option<(Array2<u16>, FrameMetadata)> {
-        self.latest_frame.lock().ok()?.take()
-    }
-
-    fn is_capturing(&self) -> bool {
-        self.is_capturing.load(Ordering::SeqCst)
     }
 
     fn saturation_value(&self) -> f64 {
@@ -371,11 +229,5 @@ impl CameraInterface for NSV455Camera {
 
     fn get_serial(&self) -> String {
         self.device_path.clone()
-    }
-}
-
-impl Drop for NSV455Camera {
-    fn drop(&mut self) {
-        let _ = self.stop_continuous_capture();
     }
 }
