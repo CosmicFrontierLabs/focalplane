@@ -1,7 +1,8 @@
 use ndarray::Array2;
 use playerone_sdk::{Camera, CameraDescription, ImageFormat};
 use shared::camera_interface::{
-    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
+    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, SensorGeometry,
+    Timestamp,
 };
 use shared::image_proc::detection::aabb::AABB;
 use std::collections::HashMap;
@@ -10,6 +11,30 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::roi::{aabb_to_roi, roi_to_aabb};
+
+fn get_sensor_geometry_for_camera(
+    camera_name: &str,
+    width: usize,
+    height: usize,
+) -> SensorGeometry {
+    if camera_name.to_lowercase().contains("zeus") {
+        SensorGeometry {
+            width: 9568,
+            height: 6380,
+            pixel_size_microns: 3.76,
+        }
+    } else {
+        tracing::warn!(
+            "Unknown PlayerOne camera '{}' - using detected dimensions with NaN pixel size",
+            camera_name
+        );
+        SensorGeometry {
+            width,
+            height,
+            pixel_size_microns: f64::NAN,
+        }
+    }
+}
 
 pub struct PlayerOneCamera {
     camera: Arc<Mutex<Camera>>,
@@ -158,6 +183,10 @@ impl CameraInterface for PlayerOneCamera {
 
     fn get_config(&self) -> &CameraConfig {
         &self.config
+    }
+
+    fn geometry(&self) -> SensorGeometry {
+        get_sensor_geometry_for_camera(&self.name, self.config.width, self.config.height)
     }
 
     fn is_ready(&self) -> bool {

@@ -1,4 +1,6 @@
-use super::{AABBExt, CameraConfig, CameraInterface, CameraResult, FrameMetadata, Timestamp};
+use super::{
+    AABBExt, CameraConfig, CameraInterface, CameraResult, FrameMetadata, SensorGeometry, Timestamp,
+};
 use crate::image_proc::detection::AABB;
 use ndarray::Array2;
 use std::collections::HashMap;
@@ -151,6 +153,14 @@ impl CameraInterface for MockCameraInterface {
 
     fn get_config(&self) -> &CameraConfig {
         &self.config
+    }
+
+    fn geometry(&self) -> SensorGeometry {
+        SensorGeometry {
+            width: self.config.width,
+            height: self.config.height,
+            pixel_size_microns: 3.45, // Default pixel size for mock camera
+        }
     }
 
     fn is_ready(&self) -> bool {

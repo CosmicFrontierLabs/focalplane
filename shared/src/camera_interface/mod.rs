@@ -101,6 +101,21 @@ pub struct FrameMetadata {
     pub temperatures: HashMap<String, f64>,
 }
 
+/// Immutable sensor physical geometry
+///
+/// This struct represents the physical characteristics of the sensor that
+/// never change after initialization. These are hardware properties, not
+/// runtime settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensorGeometry {
+    /// Sensor width in pixels
+    pub width: usize,
+    /// Sensor height in pixels
+    pub height: usize,
+    /// Physical pixel size in microns (µm)
+    pub pixel_size_microns: f64,
+}
+
 /// Configuration for camera initialization
 #[derive(Debug, Clone)]
 pub struct CameraConfig {
@@ -183,6 +198,12 @@ pub trait CameraInterface: Send + Sync {
 
     /// Get camera configuration
     fn get_config(&self) -> &CameraConfig;
+
+    /// Get sensor geometry (immutable physical properties)
+    ///
+    /// Returns the sensor's physical dimensions and pixel size.
+    /// These are hardware characteristics that never change during operation.
+    fn geometry(&self) -> SensorGeometry;
 
     /// Check if camera is ready to capture
     fn is_ready(&self) -> bool;
@@ -303,6 +324,10 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn get_config(&self) -> &CameraConfig {
         (**self).get_config()
+    }
+
+    fn geometry(&self) -> SensorGeometry {
+        (**self).geometry()
     }
 
     fn is_ready(&self) -> bool {

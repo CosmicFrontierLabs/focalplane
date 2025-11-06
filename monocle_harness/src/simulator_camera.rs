@@ -9,7 +9,8 @@ use crate::motion_profiles::PointingMotion;
 use ndarray::Array2;
 use shared::cached_star_catalog::CachedStarCatalog;
 use shared::camera_interface::{
-    AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
+    AABBExt, CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata,
+    SensorGeometry, Timestamp,
 };
 use shared::image_proc::detection::AABB;
 use shared::units::TemperatureExt;
@@ -18,6 +19,7 @@ use simulator::image_proc::render::StarInFrame;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::star_math::field_diameter;
+use simulator::units::LengthExt;
 use starfield::catalogs::binary_catalog::BinaryCatalog;
 use starfield::Equatorial;
 use std::sync::Arc;
@@ -222,6 +224,15 @@ impl CameraInterface for SimulatorCamera {
     /// Get the camera configuration (width, height, exposure).
     fn get_config(&self) -> &CameraConfig {
         &self.config
+    }
+
+    /// Get sensor geometry from satellite configuration
+    fn geometry(&self) -> SensorGeometry {
+        SensorGeometry {
+            width: self.config.width,
+            height: self.config.height,
+            pixel_size_microns: self.satellite.sensor.pixel_size().as_micrometers(),
+        }
     }
 
     /// Check if camera is ready. Always returns true for simulator.

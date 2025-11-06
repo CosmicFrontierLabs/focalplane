@@ -2,7 +2,8 @@ use crate::camera::neutralino_imx455::{calculate_stride, read_sensor_temperature
 use crate::v4l2_capture::{CameraConfig as V4L2Config, V4L2Capture};
 use ndarray::Array2;
 use shared::camera_interface::{
-    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, Timestamp,
+    CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, SensorGeometry,
+    Timestamp,
 };
 use shared::image_proc::detection::aabb::AABB;
 use std::collections::HashMap;
@@ -92,6 +93,14 @@ impl CameraInterface for NSV455Camera {
 
     fn get_config(&self) -> &CameraConfig {
         &self.config
+    }
+
+    fn geometry(&self) -> SensorGeometry {
+        SensorGeometry {
+            width: self.config.width,
+            height: self.config.height,
+            pixel_size_microns: 3.76, // IMX455 sensor
+        }
     }
 
     fn is_ready(&self) -> bool {
