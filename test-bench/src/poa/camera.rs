@@ -1,3 +1,4 @@
+use bytemuck;
 use ndarray::Array2;
 use playerone_sdk::{Camera, CameraDescription, ImageFormat};
 use shared::camera_interface::{
@@ -232,12 +233,9 @@ impl CameraInterface for PlayerOneCamera {
                     Err(_) => return false,
                 };
 
-                let u16_data: Vec<u16> = buffer
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                    .collect();
+                let u16_data = bytemuck::cast_slice::<u8, u16>(buffer);
 
-                let array = match Array2::from_shape_vec((height, width), u16_data) {
+                let array = match Array2::from_shape_vec((height, width), u16_data.to_vec()) {
                     Ok(arr) => arr,
                     Err(_) => return false,
                 };
