@@ -1,13 +1,22 @@
-use super::{
-    AABBExt, CameraConfig, CameraInterface, CameraResult, FrameMetadata, SensorGeometry, Timestamp,
-};
+use super::{AABBExt, CameraInterface, CameraResult, FrameMetadata, SensorGeometry, Timestamp};
 use crate::image_proc::detection::AABB;
 use ndarray::Array2;
 use std::collections::HashMap;
 use std::time::Duration;
 
-type FrameGenerator =
-    Box<dyn FnMut(u64, Duration, Option<AABB>, &CameraConfig) -> Array2<u16> + Send + Sync>;
+/// Parameters passed to frame generators
+#[derive(Debug, Clone)]
+pub struct FrameGenerationParams {
+    pub frame_number: u64,
+    pub timestamp: Duration,
+    pub roi: Option<AABB>,
+    pub width: usize,
+    pub height: usize,
+    pub exposure: Duration,
+    pub bit_depth: u8,
+}
+
+type FrameGenerator = Box<dyn FnMut(&FrameGenerationParams) -> Array2<u16> + Send + Sync>;
 
 enum FrameSource {
     Pregenerated {
@@ -18,7 +27,10 @@ enum FrameSource {
 }
 
 pub struct MockCameraInterface {
-    config: CameraConfig,
+    width: usize,
+    height: usize,
+    exposure: Duration,
+    bit_depth: u8,
     roi: Option<AABB>,
     frame_count: u64,
     saturation: f64,
@@ -28,9 +40,12 @@ pub struct MockCameraInterface {
 }
 
 impl MockCameraInterface {
-    pub fn new(config: CameraConfig, frames: Vec<Array2<u16>>) -> Self {
+    pub fn new(dimensions: (usize, usize), bit_depth: u8, frames: Vec<Array2<u16>>) -> Self {
         Self {
-            config,
+            width: dimensions.0,
+            height: dimensions.1,
+            exposure: Duration::from_millis(100),
+            bit_depth,
             roi: None,
             frame_count: 0,
             saturation: 65535.0,
@@ -40,21 +55,24 @@ impl MockCameraInterface {
         }
     }
 
-    pub fn new_repeating(config: CameraConfig, frame: Array2<u16>) -> Self {
-        Self::new(config, vec![frame])
+    pub fn new_repeating(dimensions: (usize, usize), bit_depth: u8, frame: Array2<u16>) -> Self {
+        Self::new(dimensions, bit_depth, vec![frame])
     }
 
-    pub fn new_zeros(config: CameraConfig) -> Self {
-        let frame_data = Array2::zeros((config.height, config.width));
-        Self::new_repeating(config, frame_data)
+    pub fn new_zeros(dimensions: (usize, usize), bit_depth: u8) -> Self {
+        let frame_data = Array2::zeros((dimensions.1, dimensions.0));
+        Self::new_repeating(dimensions, bit_depth, frame_data)
     }
 
-    pub fn with_generator<F>(config: CameraConfig, generator: F) -> Self
+    pub fn with_generator<F>(dimensions: (usize, usize), bit_depth: u8, generator: F) -> Self
     where
-        F: FnMut(u64, Duration, Option<AABB>, &CameraConfig) -> Array2<u16> + Send + Sync + 'static,
+        F: FnMut(&FrameGenerationParams) -> Array2<u16> + Send + Sync + 'static,
     {
         Self {
-            config,
+            width: dimensions.0,
+            height: dimensions.1,
+            exposure: Duration::from_millis(100),
+            bit_depth,
             roi: None,
             frame_count: 0,
             saturation: 65535.0,
@@ -95,9 +113,16 @@ impl MockCameraInterface {
                 frames[frame_idx].clone()
             }
             FrameSource::Generated(generator) => {
-                let next_frame_number = self.frame_count + 1;
-                let next_timestamp = self.elapsed_time + self.config.exposure;
-                generator(next_frame_number, next_timestamp, self.roi, &self.config)
+                let params = FrameGenerationParams {
+                    frame_number: self.frame_count + 1,
+                    timestamp: self.elapsed_time + self.exposure,
+                    roi: self.roi,
+                    width: self.width,
+                    height: self.height,
+                    exposure: self.exposure,
+                    bit_depth: self.bit_depth,
+                };
+                generator(&params)
             }
         };
 
@@ -117,7 +142,7 @@ impl MockCameraInterface {
 
         FrameMetadata {
             frame_number: self.frame_count,
-            exposure: self.config.exposure,
+            exposure: self.exposure,
             timestamp,
             pointing: None,
             roi: self.roi,
@@ -132,7 +157,7 @@ impl CameraInterface for MockCameraInterface {
     }
 
     fn set_roi(&mut self, roi: AABB) -> CameraResult<()> {
-        roi.validate_for_sensor(self.config.width, self.config.height)?;
+        roi.validate_for_sensor(self.width, self.height)?;
         self.roi = Some(roi);
         Ok(())
     }
@@ -143,22 +168,18 @@ impl CameraInterface for MockCameraInterface {
     }
 
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
-        self.config.exposure = exposure;
+        self.exposure = exposure;
         Ok(())
     }
 
     fn get_exposure(&self) -> Duration {
-        self.config.exposure
-    }
-
-    fn get_config(&self) -> &CameraConfig {
-        &self.config
+        self.exposure
     }
 
     fn geometry(&self) -> SensorGeometry {
         SensorGeometry {
-            width: self.config.width,
-            height: self.config.height,
+            width: self.width,
+            height: self.height,
             pixel_size_microns: 3.45, // Default pixel size for mock camera
         }
     }
@@ -180,11 +201,11 @@ impl CameraInterface for MockCameraInterface {
     }
 
     fn get_bit_depth(&self) -> u8 {
-        self.config.bit_depth
+        self.bit_depth
     }
 
     fn set_bit_depth(&mut self, bit_depth: u8) -> CameraResult<()> {
-        self.config.bit_depth = bit_depth;
+        self.bit_depth = bit_depth;
         Ok(())
     }
 
@@ -207,7 +228,7 @@ impl CameraInterface for MockCameraInterface {
     ) -> CameraResult<()> {
         loop {
             let frame = self.generate_frame()?;
-            self.elapsed_time += self.config.exposure;
+            self.elapsed_time += self.exposure;
             self.frame_count += 1;
             let metadata = self.generate_metadata();
 
@@ -225,22 +246,7 @@ mod tests {
     use std::time::Duration;
 
     fn create_test_camera() -> MockCameraInterface {
-        let config = CameraConfig {
-            width: 640,
-            height: 480,
-            exposure: Duration::from_millis(100),
-            bit_depth: 16,
-        };
-        MockCameraInterface::new_zeros(config)
-    }
-
-    fn create_config(width: usize, height: usize, exposure_ms: u64) -> CameraConfig {
-        CameraConfig {
-            width,
-            height,
-            exposure: Duration::from_millis(exposure_ms),
-            bit_depth: 16,
-        }
+        MockCameraInterface::new_zeros((640, 480), 16)
     }
 
     #[test]
@@ -338,8 +344,7 @@ mod tests {
         let camera = create_test_camera();
         assert_eq!(camera.saturation_value(), 65535.0);
 
-        let custom_camera =
-            MockCameraInterface::new_zeros(create_config(640, 480, 100)).with_saturation(16383.0);
+        let custom_camera = MockCameraInterface::new_zeros((640, 480), 16).with_saturation(16383.0);
         assert_eq!(custom_camera.saturation_value(), 16383.0);
     }
 
@@ -351,8 +356,6 @@ mod tests {
 
     #[test]
     fn test_multiple_frames() {
-        let config = create_config(10, 10, 10);
-
         let mut frame1 = Array2::zeros((10, 10));
         frame1[[5, 5]] = 100;
         let mut frame2 = Array2::zeros((10, 10));
@@ -360,7 +363,7 @@ mod tests {
         let mut frame3 = Array2::zeros((10, 10));
         frame3[[7, 7]] = 300;
 
-        let mut camera = MockCameraInterface::new(config, vec![frame1, frame2, frame3]);
+        let mut camera = MockCameraInterface::new((10, 10), 16, vec![frame1, frame2, frame3]);
 
         let (f1, _) = camera.capture_frame().unwrap();
         assert_eq!(f1[[5, 5]], 100);
@@ -376,12 +379,10 @@ mod tests {
 
     #[test]
     fn test_repeating_mode() {
-        let config = create_config(10, 10, 10);
-
         let mut frame = Array2::zeros((10, 10));
         frame[[5, 5]] = 42;
 
-        let mut camera = MockCameraInterface::new_repeating(config, frame);
+        let mut camera = MockCameraInterface::new_repeating((10, 10), 16, frame);
 
         for _ in 0..10 {
             let (f, _) = camera.capture_frame().unwrap();
@@ -391,9 +392,8 @@ mod tests {
 
     #[test]
     fn test_elapsed_time_tracking() {
-        let config = create_config(10, 10, 100);
-
-        let mut camera = MockCameraInterface::new_zeros(config);
+        let mut camera = MockCameraInterface::new_zeros((10, 10), 16);
+        camera.set_exposure(Duration::from_millis(100)).unwrap();
 
         let (_, meta1) = camera.capture_frame().unwrap();
         assert_eq!(meta1.timestamp.to_duration(), Duration::from_millis(100));
@@ -407,12 +407,11 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let config = create_config(10, 10, 50);
-
         let frame1 = Array2::ones((10, 10));
         let frame2 = Array2::ones((10, 10)) * 2;
 
-        let mut camera = MockCameraInterface::new(config, vec![frame1, frame2]);
+        let mut camera = MockCameraInterface::new((10, 10), 16, vec![frame1, frame2]);
+        camera.set_exposure(Duration::from_millis(50)).unwrap();
 
         camera.capture_frame().unwrap();
         let (_, meta) = camera.capture_frame().unwrap();

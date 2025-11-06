@@ -11,7 +11,7 @@ use ndarray::Array2;
 use rand::{Rng, SeedableRng};
 use shared::{
     bad_pixel_map::BadPixelMap,
-    camera_interface::{mock::MockCameraInterface, CameraConfig, CameraInterface},
+    camera_interface::{mock::MockCameraInterface, CameraInterface},
     config_storage::ConfigStorage,
     dark_frame::DarkFrameAnalysis,
 };
@@ -134,16 +134,7 @@ fn create_mock_camera(exposure_ms: Option<f64>) -> MockCameraInterface {
 
     let width = 1280;
     let height = 960;
-    let exposure = exposure_ms
-        .map(|ms| Duration::from_micros((ms * 1000.0) as u64))
-        .unwrap_or_else(|| Duration::from_millis(100));
-
-    let config = CameraConfig {
-        width,
-        height,
-        exposure,
-        bit_depth: 12,
-    };
+    let bit_depth = 12;
 
     let bias = 100.0;
     let read_noise = 5.0;
@@ -163,36 +154,50 @@ fn create_mock_camera(exposure_ms: Option<f64>) -> MockCameraInterface {
         .map(|_| (rng.gen_range(0..width), rng.gen_range(0..height)))
         .collect();
 
-    MockCameraInterface::with_generator(config, move |frame_number, _timestamp, _roi, config| {
-        let noise =
-            simple_normal_array((config.height, config.width), 0.0, read_noise, frame_number);
+    let mut camera =
+        MockCameraInterface::with_generator((width, height), bit_depth, move |params| {
+            let noise = simple_normal_array(
+                (params.height, params.width),
+                0.0,
+                read_noise,
+                params.frame_number,
+            );
 
-        let mut frame_u16 = Array2::from_shape_fn((config.height, config.width), |(y, x)| {
-            let value = bias + noise[[y, x]];
-            value.clamp(0.0, 4095.0) as u16
-        });
+            let mut frame_u16 = Array2::from_shape_fn((params.height, params.width), |(y, x)| {
+                let value = bias + noise[[y, x]];
+                value.clamp(0.0, 4095.0) as u16
+            });
 
-        for &((x, y), stuck_value) in &hot_pixel_data {
-            frame_u16[[y, x]] = stuck_value;
-        }
+            for &((x, y), stuck_value) in &hot_pixel_data {
+                frame_u16[[y, x]] = stuck_value;
+            }
 
-        for &(x, y) in &dead_pixel_locations {
-            frame_u16[[y, x]] = 0;
-        }
+            for &(x, y) in &dead_pixel_locations {
+                frame_u16[[y, x]] = 0;
+            }
 
-        frame_u16
-    })
-    .with_saturation(4095.0)
+            frame_u16
+        })
+        .with_saturation(4095.0);
+
+    if let Some(ms) = exposure_ms {
+        let exposure = Duration::from_micros((ms * 1000.0) as u64);
+        camera.set_exposure(exposure).unwrap();
+    }
+
+    camera
 }
 
 fn run_analysis<C: CameraInterface>(mut camera: C, args: &Args) -> Result<()> {
-    let config = camera.get_config();
-    info!("Sensor: {}x{} pixels", config.width, config.height);
-    info!("Exposure: {:?}", config.exposure);
-    info!("Bit depth: {} bits", config.bit_depth);
+    let geometry = camera.geometry();
+    let exposure = camera.get_exposure();
+    let bit_depth = camera.get_bit_depth();
+    info!("Sensor: {}x{} pixels", geometry.width, geometry.height);
+    info!("Exposure: {:?}", exposure);
+    info!("Bit depth: {} bits", bit_depth);
     info!("Saturation value: {:.0}", camera.saturation_value());
 
-    let mut analysis = DarkFrameAnalysis::new(config.width, config.height);
+    let mut analysis = DarkFrameAnalysis::new(geometry.width, geometry.height);
 
     info!("\nCapturing {} dark frames...", args.num_frames);
     info!("(Ensure lens cap is on or camera is in complete darkness)");

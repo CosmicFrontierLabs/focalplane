@@ -214,9 +214,9 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     drop(stats);
 
     let camera = state.camera.lock().await;
-    let config = camera.get_config();
-    let width = config.width as u32;
-    let height = config.height as u32;
+    let geometry = camera.geometry();
+    let width = geometry.width as u32;
+    let height = geometry.height as u32;
     drop(camera);
 
     let img = match ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, pixels_8bit) {
@@ -268,9 +268,9 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
     drop(stats);
 
     let camera = state.camera.lock().await;
-    let config = camera.get_config();
-    let width = config.width;
-    let height = config.height;
+    let geometry = camera.geometry();
+    let width = geometry.width;
+    let height = geometry.height;
     drop(camera);
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels_8bit);
@@ -361,9 +361,9 @@ async fn camera_status_page<C: CameraInterface + 'static>(
         .unwrap_or_else(|| "<html><body>Template not found</body></html>".to_string());
 
     let camera = state.camera.lock().await;
-    let config = camera.get_config();
-    let width = config.width;
-    let height = config.height;
+    let geometry = camera.geometry();
+    let width = geometry.width;
+    let height = geometry.height;
     let camera_name = camera.name().to_string();
     drop(camera);
 
@@ -836,9 +836,9 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
             let frame_num = metadata.frame_number;
 
             let camera = state.camera.lock().await;
-            let config = camera.get_config();
-            let width = config.width as u32;
-            let height = config.height as u32;
+            let geometry = camera.geometry();
+            let width = geometry.width as u32;
+            let height = geometry.height as u32;
             drop(camera);
 
             let frame_for_analysis = frame.clone();

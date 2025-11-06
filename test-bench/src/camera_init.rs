@@ -73,18 +73,12 @@ pub fn initialize_camera(args: &CameraArgs) -> anyhow::Result<Box<dyn CameraInte
         #[cfg(feature = "nsv455")]
         CameraType::Nsv => {
             tracing::info!(
-                "Initializing NSV455 camera at {} ({}x{})",
-                args.device_path,
-                args.width,
-                args.height
+                "Initializing NSV455 camera at {} (fixed IMX455 geometry: 9568x6380, 3.76μm)",
+                args.device_path
             );
             use nsv455::camera::nsv455_camera::NSV455Camera;
-            let camera = NSV455Camera::new(
-                args.device_path.clone(),
-                args.width as u32,
-                args.height as u32,
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to initialize NSV455 camera: {e}"))?;
+            let camera = NSV455Camera::new(args.device_path.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to initialize NSV455 camera: {e}"))?;
             Ok(Box::new(camera))
         }
     }
@@ -96,7 +90,6 @@ fn create_mock_camera(
 ) -> anyhow::Result<shared::camera_interface::mock::MockCameraInterface> {
     use crate::display_patterns::apriltag;
     use shared::camera_interface::mock::MockCameraInterface;
-    use shared::camera_interface::CameraConfig;
 
     tracing::info!("Generating AprilTag calibration pattern...");
     tracing::info!("  Target size: {}x{}", width, height);
@@ -105,12 +98,10 @@ fn create_mock_camera(
         .context("Failed to generate AprilTag pattern")?;
     let inverted_frame = apriltag_frame.mapv(|v| 65535 - v);
 
-    let config = CameraConfig {
-        width,
-        height,
-        exposure: std::time::Duration::from_millis(100),
-        bit_depth: 16,
-    };
+    let mut camera = MockCameraInterface::new_repeating((width, height), 16, inverted_frame);
+    camera
+        .set_exposure(std::time::Duration::from_millis(100))
+        .unwrap();
 
-    Ok(MockCameraInterface::new_repeating(config, inverted_frame))
+    Ok(camera)
 }

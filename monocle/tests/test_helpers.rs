@@ -1,5 +1,5 @@
 use ndarray::Array2;
-use shared::camera_interface::{mock::MockCameraInterface, CameraConfig, Timestamp};
+use shared::camera_interface::{mock::MockCameraInterface, CameraInterface, Timestamp};
 use std::time::Duration;
 
 /// Helper function to create a test timestamp
@@ -10,11 +10,7 @@ pub fn test_timestamp() -> Timestamp {
 /// Helper function to create a mock camera with a repeating frame
 pub fn create_mock_camera(frame: Array2<u16>) -> MockCameraInterface {
     let (height, width) = frame.dim();
-    let config = CameraConfig {
-        width,
-        height,
-        exposure: Duration::from_millis(10),
-        bit_depth: 16,
-    };
-    MockCameraInterface::new_repeating(config, frame)
+    let mut camera = MockCameraInterface::new_repeating((width, height), 16, frame);
+    camera.set_exposure(Duration::from_millis(10)).unwrap();
+    camera
 }

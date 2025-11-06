@@ -182,10 +182,6 @@ impl CameraInterface for PlayerOneCamera {
             .unwrap_or(Duration::from_millis(100))
     }
 
-    fn get_config(&self) -> &CameraConfig {
-        &self.config
-    }
-
     fn geometry(&self) -> SensorGeometry {
         get_sensor_geometry_for_camera(&self.name, self.config.width, self.config.height)
     }

@@ -196,9 +196,6 @@ pub trait CameraInterface: Send + Sync {
     /// Get current exposure duration
     fn get_exposure(&self) -> Duration;
 
-    /// Get camera configuration
-    fn get_config(&self) -> &CameraConfig;
-
     /// Get sensor geometry (immutable physical properties)
     ///
     /// Returns the sensor's physical dimensions and pixel size.
@@ -320,10 +317,6 @@ impl CameraInterface for Box<dyn CameraInterface> {
 
     fn get_exposure(&self) -> Duration {
         (**self).get_exposure()
-    }
-
-    fn get_config(&self) -> &CameraConfig {
-        (**self).get_config()
     }
 
     fn geometry(&self) -> SensorGeometry {

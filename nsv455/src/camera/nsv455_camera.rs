@@ -24,11 +24,16 @@ pub struct NSV455Camera {
 }
 
 impl NSV455Camera {
-    pub fn new(device_path: String, width: u32, height: u32) -> CameraResult<Self> {
+    /// IMX455 sensor fixed dimensions (from sensor.rs specifications)
+    pub const SENSOR_WIDTH: u32 = 9568;
+    pub const SENSOR_HEIGHT: u32 = 6380;
+    pub const PIXEL_SIZE_MICRONS: f64 = 3.76;
+
+    pub fn new(device_path: String) -> CameraResult<Self> {
         let v4l2_config = V4L2Config {
             device_path: device_path.clone(),
-            width,
-            height,
+            width: Self::SENSOR_WIDTH,
+            height: Self::SENSOR_HEIGHT,
             framerate: 23_000_000,
             gain: 360,
             exposure: 140,
@@ -36,8 +41,8 @@ impl NSV455Camera {
         };
 
         let config = CameraConfig {
-            width: width as usize,
-            height: height as usize,
+            width: Self::SENSOR_WIDTH as usize,
+            height: Self::SENSOR_HEIGHT as usize,
             exposure: Duration::from_millis(100),
             bit_depth: 16,
         };
@@ -91,15 +96,11 @@ impl CameraInterface for NSV455Camera {
         self.config.exposure
     }
 
-    fn get_config(&self) -> &CameraConfig {
-        &self.config
-    }
-
     fn geometry(&self) -> SensorGeometry {
         SensorGeometry {
             width: self.config.width,
             height: self.config.height,
-            pixel_size_microns: 3.76, // IMX455 sensor
+            pixel_size_microns: Self::PIXEL_SIZE_MICRONS,
         }
     }
 

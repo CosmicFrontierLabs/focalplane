@@ -586,13 +586,13 @@ mod tests {
     }
 
     fn create_test_camera(width: usize, height: usize) -> MockCameraInterface {
-        let config = shared::camera_interface::CameraConfig {
-            width,
-            height,
-            exposure: Duration::from_millis(10),
-            bit_depth: 16,
-        };
-        MockCameraInterface::new_repeating(config, Array2::<u16>::zeros((height, width)))
+        let mut camera = MockCameraInterface::new_repeating(
+            (width, height),
+            16,
+            Array2::<u16>::zeros((height, width)),
+        );
+        camera.set_exposure(Duration::from_millis(10)).unwrap();
+        camera
     }
 
     fn test_config() -> FgsConfig {

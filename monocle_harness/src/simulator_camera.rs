@@ -221,11 +221,6 @@ impl CameraInterface for SimulatorCamera {
         self.exposure
     }
 
-    /// Get the camera configuration (width, height, exposure).
-    fn get_config(&self) -> &CameraConfig {
-        &self.config
-    }
-
     /// Get sensor geometry from satellite configuration
     fn geometry(&self) -> SensorGeometry {
         SensorGeometry {
@@ -376,9 +371,9 @@ mod tests {
         assert_eq!(pointing, Equatorial::from_degrees(0.0, 0.0));
 
         // Verify sensor dimensions are 512x512 (JBT/HWK test config)
-        let config = camera.get_config();
-        assert_eq!(config.width, 512);
-        assert_eq!(config.height, 512);
+        let geometry = camera.geometry();
+        assert_eq!(geometry.width, 512);
+        assert_eq!(geometry.height, 512);
     }
 
     #[test]
@@ -408,14 +403,14 @@ mod tests {
     #[test]
     fn test_invalid_roi() {
         let mut camera = create_test_camera();
-        let config = camera.get_config();
+        let geometry = camera.geometry();
 
         // ROI beyond sensor bounds
         let roi = AABB {
             min_row: 0,
             min_col: 0,
             max_row: 100,
-            max_col: config.width + 100,
+            max_col: geometry.width + 100,
         };
         assert!(camera.set_roi(roi).is_err());
     }
