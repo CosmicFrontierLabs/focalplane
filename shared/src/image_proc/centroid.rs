@@ -416,4 +416,106 @@ mod tests {
             "Should have 1 saturated pixel above 65535"
         );
     }
+
+    #[test]
+    fn benchmark_centroid_tracking_parameters() {
+        use std::time::Instant;
+
+        // Typical tracking parameters from monocle FGS
+        const ROI_SIZE: usize = 32;
+        const FWHM: f64 = 4.0;
+        const CENTROID_RADIUS_MULTIPLIER: f64 = 3.0;
+        const ITERATIONS: usize = 10000;
+
+        // Calculate typical mask radius
+        let mask_radius = FWHM * CENTROID_RADIUS_MULTIPLIER;
+
+        // Create realistic synthetic star data for ROI
+        let mut image = Array2::from_elem((ROI_SIZE, ROI_SIZE), 100.0); // Background
+        let mut mask = Array2::from_elem((ROI_SIZE, ROI_SIZE), false);
+
+        // Generate Gaussian star profile centered in ROI
+        let center_x = ROI_SIZE as f64 / 2.0;
+        let center_y = ROI_SIZE as f64 / 2.0;
+        let peak_intensity = 8000.0;
+        let sigma = FWHM / 2.355; // Convert FWHM to Gaussian sigma
+
+        for row in 0..ROI_SIZE {
+            for col in 0..ROI_SIZE {
+                let dx = col as f64 - center_x;
+                let dy = row as f64 - center_y;
+                let dist = (dx * dx + dy * dy).sqrt();
+
+                // Add Gaussian intensity
+                let gauss_intensity =
+                    peak_intensity * (-(dx * dx + dy * dy) / (2.0 * sigma * sigma)).exp();
+                image[[row, col]] += gauss_intensity;
+
+                // Create circular mask based on centroid radius
+                if dist <= mask_radius {
+                    mask[[row, col]] = true;
+                }
+            }
+        }
+
+        // Warmup iterations
+        for _ in 0..100 {
+            let _ = compute_centroid_from_mask(&image.view(), &mask.view());
+        }
+
+        // Benchmark iterations with detailed timing
+        let mut timings = Vec::with_capacity(ITERATIONS);
+
+        for _ in 0..ITERATIONS {
+            let start = Instant::now();
+            let _result = compute_centroid_from_mask(&image.view(), &mask.view());
+            let duration = start.elapsed();
+            timings.push(duration);
+        }
+
+        // Calculate statistics
+        timings.sort();
+        let total_nanos: u128 = timings.iter().map(|d| d.as_nanos()).sum();
+        let mean_nanos = total_nanos / ITERATIONS as u128;
+        let median_nanos = timings[ITERATIONS / 2].as_nanos();
+        let p95_nanos = timings[(ITERATIONS as f64 * 0.95) as usize].as_nanos();
+        let p99_nanos = timings[(ITERATIONS as f64 * 0.99) as usize].as_nanos();
+        let min_nanos = timings[0].as_nanos();
+        let max_nanos = timings[ITERATIONS - 1].as_nanos();
+
+        // Print results
+        println!("\n========== CENTROID TIMING BENCHMARK ==========");
+        println!("Configuration:");
+        println!("  ROI Size: {}x{} pixels", ROI_SIZE, ROI_SIZE);
+        println!("  FWHM: {:.1} pixels", FWHM);
+        println!(
+            "  Centroid Radius Multiplier: {:.1}x",
+            CENTROID_RADIUS_MULTIPLIER
+        );
+        println!("  Mask Radius: {:.1} pixels", mask_radius);
+        println!("  Iterations: {}", ITERATIONS);
+        println!("\nTiming Results:");
+        println!("  Mean:   {:>8.2} µs", mean_nanos as f64 / 1000.0);
+        println!("  Median: {:>8.2} µs", median_nanos as f64 / 1000.0);
+        println!("  Min:    {:>8.2} µs", min_nanos as f64 / 1000.0);
+        println!("  Max:    {:>8.2} µs", max_nanos as f64 / 1000.0);
+        println!("  P95:    {:>8.2} µs", p95_nanos as f64 / 1000.0);
+        println!("  P99:    {:>8.2} µs", p99_nanos as f64 / 1000.0);
+        println!("===============================================\n");
+
+        // Verify result is reasonable
+        let final_result = compute_centroid_from_mask(&image.view(), &mask.view());
+        assert!(
+            (final_result.x - center_x).abs() < 0.1,
+            "Centroid x should be near center"
+        );
+        assert!(
+            (final_result.y - center_y).abs() < 0.1,
+            "Centroid y should be near center"
+        );
+        assert!(
+            final_result.flux > peak_intensity,
+            "Flux should be significant"
+        );
+    }
 }

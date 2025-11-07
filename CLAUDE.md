@@ -60,6 +60,7 @@ IMPORTANT: Always run `cargo fmt` before committing any code changes!
 - **Architecture**: Separation between celestial mechanics, optics simulation, and tracking algorithms.
 - **Performance**: Prefer vectorized operations. Profile computation-heavy code. Consider GPU acceleration for image processing.
 - **Testing**: NEVER special case testing in production algorithms. Tests should validate real algorithm behavior, not special-cased shortcuts. Do NOT use doctests - write proper unit tests in test modules instead.
+- **Performance Testing**: NEVER assert timing/speed in unit tests. CI environments vary widely in performance (threading, load, virtualization). Tests should report timing metrics for visibility but only assert correctness. If performance benchmarks are needed, create dedicated benchmark binaries that run in controlled environments.
 - **Space context**: Avoid terrestrial telescope conventions (elevation/azimuth, horizon coordinates) - use generic pointing directions, celestial coordinates, or instrument-relative axes instead.
 
 ## Git Commits
