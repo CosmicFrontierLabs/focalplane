@@ -12,7 +12,7 @@ use image::{DynamicImage, ImageBuffer, Luma};
 use ndarray::{s, Array2};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use shared::camera_interface::{CameraInterface, FrameMetadata};
+use shared::camera_interface::{CameraInterface, FrameMetadata, SensorGeometry};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -67,6 +67,8 @@ pub struct AppState<C: CameraInterface> {
     pub zoom_region: Arc<RwLock<Option<ZoomRegion>>>,
     pub zoom_notify: Arc<Notify>,
     pub bit_depth: u8,
+    pub camera_name: String,
+    pub camera_geometry: SensorGeometry,
 }
 
 #[derive(Debug, Clone)]
@@ -133,35 +135,6 @@ fn extract_patch(
     patch
 }
 
-async fn capture_frame_data<C: CameraInterface>(
-    state: &AppState<C>,
-) -> Result<(Array2<u16>, FrameMetadata), String> {
-    let mut camera = state.camera.lock().await;
-    let result = camera
-        .capture_frame()
-        .map_err(|e| format!("Failed to capture frame: {e}"));
-
-    if let Ok((ref _frame_data, ref metadata)) = result {
-        let mut stats = state.stats.lock().await;
-        let now = std::time::Instant::now();
-        let elapsed = now.duration_since(stats.last_frame_time).as_secs_f32();
-
-        if elapsed > 0.0 {
-            let fps = 1.0 / elapsed;
-            stats.fps_samples.push(fps);
-            if stats.fps_samples.len() > 10 {
-                stats.fps_samples.remove(0);
-            }
-        }
-
-        stats.total_frames += 1;
-        stats.last_frame_time = now;
-        stats.last_temperatures = metadata.temperatures.clone();
-    }
-
-    result.map_err(|e| e.to_string())
-}
-
 fn compute_histogram_u16(frame: &Array2<u16>) -> Vec<u32> {
     let mut histogram = vec![0u32; 256];
     for &pixel in frame.iter() {
@@ -195,12 +168,17 @@ fn process_raw_to_pixels(frame: &Array2<u16>) -> Vec<u8> {
 async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
 ) -> Response {
-    let (frame, _metadata) = match capture_frame_data(&state).await {
-        Ok(data) => data,
-        Err(e) => {
+    let frame_data = {
+        let latest = state.latest_frame.read().await;
+        latest.clone()
+    };
+
+    let (frame, _metadata) = match frame_data {
+        Some((f, m, _timestamp)) => (f, m),
+        None => {
             return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("Failed to capture frame: {e}")))
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(Body::from("No frame available yet"))
                 .unwrap()
         }
     };
@@ -213,11 +191,8 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     stats.histogram_max = *frame.iter().max().unwrap_or(&0);
     drop(stats);
 
-    let camera = state.camera.lock().await;
-    let geometry = camera.geometry();
-    let width = geometry.width() as u32;
-    let height = geometry.height() as u32;
-    drop(camera);
+    let height = frame.nrows() as u32;
+    let width = frame.ncols() as u32;
 
     let img = match ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, pixels_8bit) {
         Some(img) => img,
@@ -249,12 +224,17 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
 async fn raw_frame_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
 ) -> Response {
-    let (frame, metadata) = match capture_frame_data(&state).await {
-        Ok(data) => data,
-        Err(e) => {
+    let frame_data = {
+        let latest = state.latest_frame.read().await;
+        latest.clone()
+    };
+
+    let (frame, metadata) = match frame_data {
+        Some((f, m, _timestamp)) => (f, m),
+        None => {
             return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("Failed to capture frame: {e}")))
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(Body::from("No frame available yet"))
                 .unwrap()
         }
     };
@@ -267,11 +247,8 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
     stats.histogram_max = *frame.iter().max().unwrap_or(&0);
     drop(stats);
 
-    let camera = state.camera.lock().await;
-    let geometry = camera.geometry();
-    let width = geometry.width();
-    let height = geometry.height();
-    drop(camera);
+    let height = frame.nrows();
+    let width = frame.ncols();
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels_8bit);
 
@@ -360,15 +337,12 @@ async fn camera_status_page<C: CameraInterface + 'static>(
         .map(|file| String::from_utf8_lossy(&file.data).to_string())
         .unwrap_or_else(|| "<html><body>Template not found</body></html>".to_string());
 
-    let camera = state.camera.lock().await;
-    let geometry = camera.geometry();
-    let width = geometry.width();
-    let height = geometry.height();
-    let camera_name = camera.name().to_string();
-    drop(camera);
+    let width = state.camera_geometry.width();
+    let height = state.camera_geometry.height();
+    let camera_name = &state.camera_name;
 
     let html = template_content
-        .replace("{device}", &camera_name)
+        .replace("{device}", camera_name)
         .replace("{width}", &width.to_string())
         .replace("{height}", &height.to_string())
         .replace("{resolutions_list}", "")
@@ -487,12 +461,17 @@ async fn overlay_svg_endpoint<C: CameraInterface + 'static>(
 async fn fits_frame_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
 ) -> Response {
-    let (frame, metadata) = match capture_frame_data(&state).await {
-        Ok(data) => data,
-        Err(e) => {
+    let frame_data = {
+        let latest = state.latest_frame.read().await;
+        latest.clone()
+    };
+
+    let (frame, metadata) = match frame_data {
+        Some((f, m, _timestamp)) => (f, m),
+        None => {
             return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("Failed to capture frame: {e}")))
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(Body::from("No frame available yet"))
                 .unwrap()
         }
     };
@@ -710,6 +689,15 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
     let bit_depth = camera.get_bit_depth();
     info!("Camera bit depth: {}", bit_depth);
 
+    let camera_name = camera.name().to_string();
+    let camera_geometry = camera.geometry();
+    info!(
+        "Camera: {} ({}x{})",
+        camera_name,
+        camera_geometry.width(),
+        camera_geometry.height()
+    );
+
     let state = Arc::new(AppState {
         camera: Arc::new(Mutex::new(camera)),
         stats: Arc::new(Mutex::new(FrameStats::default())),
@@ -720,12 +708,14 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         zoom_region: Arc::new(RwLock::new(None)),
         zoom_notify: Arc::new(Notify::new()),
         bit_depth: bit_depth.as_u8(),
+        camera_name,
+        camera_geometry,
     });
 
     info!("Starting background capture loop...");
     let capture_state = state.clone();
-    tokio::spawn(async move {
-        capture_loop(capture_state).await;
+    std::thread::spawn(move || {
+        capture_loop_blocking(capture_state);
     });
 
     info!("Starting background analysis loop...");
@@ -762,59 +752,60 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
     Ok(())
 }
 
-pub async fn capture_loop<C: CameraInterface + Send + 'static>(state: Arc<AppState<C>>) {
-    loop {
+pub fn capture_loop_blocking<C: CameraInterface + Send + 'static>(state: Arc<AppState<C>>) {
+    let mut camera = state.camera.blocking_lock();
+
+    let state_clone = state.clone();
+    let result = camera.stream(&mut |frame, metadata| {
         let start_capture = std::time::Instant::now();
+        let frame_num = metadata.frame_number;
 
-        let mut camera = state.camera.lock().await;
-        let result = camera.capture_frame();
-        drop(camera);
+        let frame_owned = frame.clone();
+        let metadata_owned = metadata.clone();
 
-        let capture_time = start_capture.elapsed();
+        {
+            let mut stats = state_clone.stats.blocking_lock();
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(stats.last_frame_time).as_secs_f32();
 
-        match result {
-            Ok((frame, metadata)) => {
-                let frame_num = metadata.frame_number;
-
-                let mut stats = state.stats.lock().await;
-                let now = std::time::Instant::now();
-                let elapsed = now.duration_since(stats.last_frame_time).as_secs_f32();
-
-                if elapsed > 0.0 {
-                    let fps = 1.0 / elapsed;
-                    stats.fps_samples.push(fps);
-                    if stats.fps_samples.len() > 10 {
-                        stats.fps_samples.remove(0);
-                    }
+            if elapsed > 0.0 {
+                let fps = 1.0 / elapsed;
+                stats.fps_samples.push(fps);
+                if stats.fps_samples.len() > 10 {
+                    stats.fps_samples.remove(0);
                 }
-
-                stats
-                    .capture_timing_ms
-                    .push(capture_time.as_secs_f32() * 1000.0);
-                if stats.capture_timing_ms.len() > 100 {
-                    stats.capture_timing_ms.remove(0);
-                }
-
-                stats.total_frames += 1;
-                stats.last_frame_time = now;
-                stats.last_temperatures = metadata.temperatures.clone();
-                drop(stats);
-
-                let capture_timestamp = std::time::Instant::now();
-                let mut latest = state.latest_frame.write().await;
-                *latest = Some((frame, metadata, capture_timestamp));
-
-                tracing::debug!(
-                    "Capture: {:.1}ms, frame_num={}",
-                    capture_time.as_secs_f64() * 1000.0,
-                    frame_num
-                );
             }
-            Err(e) => {
-                tracing::error!("Capture loop error: {e}");
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            let capture_time = start_capture.elapsed();
+            stats
+                .capture_timing_ms
+                .push(capture_time.as_secs_f32() * 1000.0);
+            if stats.capture_timing_ms.len() > 100 {
+                stats.capture_timing_ms.remove(0);
             }
+
+            stats.total_frames += 1;
+            stats.last_frame_time = now;
+            stats.last_temperatures = metadata_owned.temperatures.clone();
+
+            tracing::debug!(
+                "Stream: {:.1}ms, frame_num={}",
+                capture_time.as_secs_f64() * 1000.0,
+                frame_num
+            );
         }
+
+        {
+            let capture_timestamp = std::time::Instant::now();
+            let mut latest = state_clone.latest_frame.blocking_write();
+            *latest = Some((frame_owned, metadata_owned, capture_timestamp));
+        }
+
+        true
+    });
+
+    if let Err(e) = result {
+        tracing::error!("Camera stream error: {e}");
     }
 }
 
@@ -835,11 +826,8 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
             let bit_depth = state.bit_depth;
             let frame_num = metadata.frame_number;
 
-            let camera = state.camera.lock().await;
-            let geometry = camera.geometry();
-            let width = geometry.width() as u32;
-            let height = geometry.height() as u32;
-            drop(camera);
+            let width = state.camera_geometry.width() as u32;
+            let height = state.camera_geometry.height() as u32;
 
             let frame_for_analysis = frame.clone();
             let result = tokio::task::spawn_blocking(move || {
