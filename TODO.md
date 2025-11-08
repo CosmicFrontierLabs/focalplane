@@ -38,13 +38,6 @@
   - Location: .github/workflows/ci.yml
 
 ### Monocle (FGS/Tracking)
-- [ ] process_event shouldn't produce guidance updates unless from the most recent frame
-  - Location: `monocle/src/lib.rs` (process_event function)
-  - Current: process_event can return guidance updates from any ProcessFrame event
-  - Needed: Only return guidance updates when processing the most recent frame via process_next_frame
-  - Why: Guidance updates should only come from real-time frame processing, not historical/cached frames
-  - Benefit: Clearer separation between frame processing and guidance generation
-
 - [ ] Refactor star selection into filter bank architecture with debug mode
   - Location: `monocle/src/selection.rs:61-67` (detect_and_select_guides function)
   - Current: Star filtering is done sequentially with separate filter stages

@@ -35,6 +35,12 @@ pub enum CameraSettingsUpdate {
     ClearROI,
 }
 
+/// Result type for state handlers that may produce guidance updates and camera settings
+type StateTransitionResult = (
+    FgsState,
+    (Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>),
+);
+
 /// Apply camera settings updates to a camera
 ///
 /// Helper function to apply a list of camera settings updates returned by the FGS.
@@ -117,8 +123,6 @@ pub struct FineGuidanceSystem {
     frames_accumulated: usize,
     /// Detected stars from calibration (sorted by flux, brightest first)
     detected_stars: Vec<StarDetection>,
-    /// Last guidance update
-    last_update: Option<GuidanceUpdate>,
     /// Registered callbacks
     callbacks: Arc<Mutex<HashMap<CallbackId, FgsCallback>>>,
     /// Next callback ID
@@ -137,7 +141,6 @@ impl FineGuidanceSystem {
             accumulated_frame: None,
             frames_accumulated: 0,
             detected_stars: Vec::new(),
-            last_update: None,
             callbacks: Arc::new(Mutex::new(HashMap::new())),
             next_callback_id: Arc::new(Mutex::new(0)),
             current_track_id: 0,
@@ -274,12 +277,14 @@ impl FineGuidanceSystem {
     }
 
     /// Handle frame processing during Tracking state
+    ///
+    /// Returns (new_state, (guidance_update_if_fresh, camera_settings))
     fn handle_tracking_frame(
         &mut self,
         frames_processed: usize,
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
-    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<StateTransitionResult, String> {
         let update_opt = self.track(frame, timestamp)?;
 
         // Only process if we got a valid update
@@ -288,12 +293,11 @@ impl FineGuidanceSystem {
                 // Emit tracking update event
                 self.emit_tracking_update_event(&update);
 
-                self.last_update = Some(update.clone());
                 Ok((
                     FgsState::Tracking {
                         frames_processed: frames_processed + 1,
                     },
-                    vec![],
+                    (Some(update), vec![]),
                 ))
             } else {
                 log::warn!("Lost all guide stars, entering Reacquiring");
@@ -303,7 +307,7 @@ impl FineGuidanceSystem {
 
                 Ok((
                     FgsState::Reacquiring { attempts: 0 },
-                    vec![CameraSettingsUpdate::ClearROI],
+                    (None, vec![CameraSettingsUpdate::ClearROI]),
                 ))
             }
         } else {
@@ -312,7 +316,7 @@ impl FineGuidanceSystem {
                 FgsState::Tracking {
                     frames_processed: frames_processed + 1,
                 },
-                vec![],
+                (None, vec![]),
             ))
         }
     }
@@ -393,7 +397,7 @@ impl FineGuidanceSystem {
     /// Process an event and potentially transition states
     ///
     /// Returns a tuple containing:
-    /// - Optional guidance update (only when processing frames in Tracking state)
+    /// - Optional guidance update (only fresh updates from Tracking state, never cached)
     /// - Vector of camera settings updates that the caller must apply
     pub fn process_event(
         &mut self,
@@ -401,48 +405,61 @@ impl FineGuidanceSystem {
     ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), String> {
         use FgsState::*;
 
-        let (new_state, camera_updates) = match (&self.state, event) {
+        let (new_state, guidance_update, camera_updates) = match (&self.state, event) {
             // From Idle
-            (Idle, FgsEvent::StartFgs) => self.handle_idle_start(),
+            (Idle, FgsEvent::StartFgs) => {
+                let (state, settings) = self.handle_idle_start();
+                (state, None, settings)
+            }
 
             // From Acquiring
             (Acquiring { frames_collected }, FgsEvent::ProcessFrame(frame, timestamp)) => {
-                self.handle_acquiring_frame(*frames_collected, frame, timestamp)?
+                let (state, settings) =
+                    self.handle_acquiring_frame(*frames_collected, frame, timestamp)?;
+                (state, None, settings)
             }
-            (Acquiring { .. }, FgsEvent::Abort) => self.handle_acquiring_abort(),
+            (Acquiring { .. }, FgsEvent::Abort) => {
+                let (state, settings) = self.handle_acquiring_abort();
+                (state, None, settings)
+            }
 
             // From Calibrating
             (Calibrating, FgsEvent::ProcessFrame(frame, timestamp)) => {
-                self.handle_calibrating_frame(frame, timestamp)?
+                let (state, settings) = self.handle_calibrating_frame(frame, timestamp)?;
+                (state, None, settings)
             }
 
-            // From Tracking
+            // From Tracking - only state that produces guidance updates
             (Tracking { frames_processed }, FgsEvent::ProcessFrame(frame, timestamp)) => {
-                self.handle_tracking_frame(*frames_processed, frame, timestamp)?
+                let (state, (update, settings)) =
+                    self.handle_tracking_frame(*frames_processed, frame, timestamp)?;
+                (state, update, settings)
             }
             (Tracking { .. }, FgsEvent::StopFgs) => {
                 log::info!("Stopping FGS, returning to Idle");
-                (Idle, vec![CameraSettingsUpdate::ClearROI])
+                (Idle, None, vec![CameraSettingsUpdate::ClearROI])
             }
 
             // From Reacquiring
             (Reacquiring { attempts }, FgsEvent::ProcessFrame(frame, timestamp)) => {
-                self.handle_reacquiring_frame(*attempts, frame, timestamp)?
+                let (state, settings) =
+                    self.handle_reacquiring_frame(*attempts, frame, timestamp)?;
+                (state, None, settings)
             }
             (Reacquiring { .. }, FgsEvent::Abort) => {
                 log::info!("Aborting reacquisition, returning to Idle");
-                (Idle, vec![CameraSettingsUpdate::ClearROI])
+                (Idle, None, vec![CameraSettingsUpdate::ClearROI])
             }
 
             // Invalid transitions
             _ => {
                 log::warn!("Invalid state transition");
-                (self.state.clone(), vec![])
+                (self.state.clone(), None, vec![])
             }
         };
 
         self.state = new_state;
-        Ok((self.last_update.clone(), camera_updates))
+        Ok((guidance_update, camera_updates))
     }
 
     /// Process a single image frame
