@@ -2,19 +2,42 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use crossbeam_channel::{bounded, Sender};
+use image::{ImageBuffer, Luma};
 use monocle::{
     callback::FgsCallbackEvent,
     config::{FgsConfig, GuideStarFilters},
     state::FgsEvent,
     FineGuidanceSystem,
 };
-use shared::{camera_interface::CameraInterface, config_storage::ConfigStorage};
-use simulator::io::fits::{write_typed_fits, FitsDataType};
-use std::collections::HashMap;
+use ndarray::Array2;
+use serde::Serialize;
+use shared::camera_interface::{CameraInterface, Timestamp};
+use shared::config_storage::ConfigStorage;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_bench::camera_init::{initialize_camera, CameraArgs};
 use tracing::{info, warn};
+
+#[derive(Debug, Clone)]
+struct FrameRecord {
+    frame_number: usize,
+    timestamp: Timestamp,
+    frame_data: Array2<u16>,
+    metadata: FrameMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FrameMetadata {
+    frame_number: usize,
+    timestamp: Timestamp,
+    track_id: Option<u32>,
+    centroid_x: Option<f64>,
+    centroid_y: Option<f64>,
+    width: usize,
+    height: usize,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Tracking binary for all camera types")]
@@ -46,20 +69,159 @@ struct Args {
     gain: Option<f64>,
 
     #[arg(
-        short = 't',
         long,
         help = "Maximum runtime in seconds (runs indefinitely if not specified)"
     )]
     max_runtime_secs: Option<u64>,
-
-    #[arg(long, help = "Save averaged acquisition frames as FITS file")]
-    save_fits: bool,
 
     #[arg(
         long,
         help = "Output tracking data to CSV file (track_id,x,y,timestamp)"
     )]
     csv_output: Option<String>,
+
+    #[arg(
+        long,
+        help = "Export frames to directory as PNG + JSON (enables background export thread pool)"
+    )]
+    export_frames: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value = "4",
+        help = "Number of worker threads for frame export (requires --export-frames)"
+    )]
+    export_workers: usize,
+
+    #[arg(
+        long,
+        default_value = "100",
+        help = "Frame export queue buffer size (number of frames to buffer in RAM)"
+    )]
+    export_buffer_size: usize,
+}
+
+fn log_fgs_state(state: &monocle::FgsState) {
+    match state {
+        monocle::FgsState::Acquiring { frames_collected } => {
+            if frames_collected % 5 == 0 {
+                info!("Acquiring... collected {} frames", frames_collected);
+            }
+        }
+        monocle::FgsState::Calibrating => {
+            info!("Calibrating guide stars...");
+        }
+        monocle::FgsState::Tracking { frames_processed } => {
+            if frames_processed % 100 == 0 && *frames_processed > 0 {
+                info!("Tracking... processed {} frames", frames_processed);
+            }
+        }
+        monocle::FgsState::Reacquiring { attempts } => {
+            warn!("Reacquiring lock... attempt {}", attempts);
+        }
+        monocle::FgsState::Idle => {
+            info!("System idle");
+        }
+    }
+}
+
+fn run_tracking_stream(
+    camera: &mut Box<dyn CameraInterface>,
+    fgs: &mut FineGuidanceSystem,
+    max_runtime_secs: Option<u64>,
+    start_time: Instant,
+) -> Result<()> {
+    loop {
+        info!("Starting camera stream");
+        let pending_settings: Arc<Mutex<Vec<monocle::CameraSettingsUpdate>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let pending_settings_clone = pending_settings.clone();
+        let should_exit = Arc::new(Mutex::new(false));
+        let should_exit_clone = should_exit.clone();
+
+        let stream_result = camera.stream(&mut |frame, metadata| {
+            if let Some(max_secs) = max_runtime_secs {
+                if start_time.elapsed().as_secs() >= max_secs {
+                    info!("Max runtime of {} seconds reached, exiting", max_secs);
+                    *should_exit_clone.lock().unwrap() = true;
+                    return false;
+                }
+            }
+
+            match fgs.process_frame(frame.view(), metadata.timestamp) {
+                Ok((_update, settings)) => {
+                    if !settings.is_empty() {
+                        info!(
+                            "Camera settings changed ({} updates), stopping stream to apply...",
+                            settings.len()
+                        );
+                        *pending_settings_clone.lock().unwrap() = settings;
+                        return false;
+                    }
+
+                    log_fgs_state(fgs.state());
+                    true
+                }
+                Err(e) => {
+                    warn!("Frame processing error: {}", e);
+                    true
+                }
+            }
+        });
+
+        match stream_result {
+            Ok(_) => {
+                if *should_exit.lock().unwrap() {
+                    info!("Exiting tracking stream");
+                    break;
+                }
+
+                let settings = pending_settings.lock().unwrap().clone();
+                if !settings.is_empty() {
+                    info!("Applying {} camera settings...", settings.len());
+                    monocle::apply_camera_settings(camera, settings);
+                    info!("Settings applied, restarting stream");
+                } else {
+                    info!("Stream completed");
+                    break;
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Camera stream failed: {e}"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn save_frame_record(record: &FrameRecord, export_dir: &PathBuf) -> Result<()> {
+    let base_name = format!("frame_{:06}", record.frame_number);
+
+    let json_path = export_dir.join(format!("{}.json", base_name));
+    let json_data = serde_json::to_string_pretty(&record.metadata)
+        .context("Failed to serialize frame metadata")?;
+    std::fs::write(&json_path, json_data)
+        .with_context(|| format!("Failed to write JSON to {}", json_path.display()))?;
+
+    let png_path = export_dir.join(format!("{}.png", base_name));
+    let (height, width) = record.frame_data.dim();
+
+    let raw_data: Vec<u16> = record
+        .frame_data
+        .as_slice()
+        .context("Frame data not contiguous in memory")?
+        .to_vec();
+
+    let img_buffer: ImageBuffer<Luma<u16>, Vec<u16>> =
+        ImageBuffer::from_raw(width as u32, height as u32, raw_data)
+            .context("Failed to create image buffer from frame data")?;
+
+    img_buffer
+        .save(&png_path)
+        .with_context(|| format!("Failed to save PNG to {}", png_path.display()))?;
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -147,10 +309,55 @@ fn main() -> Result<()> {
         None
     };
 
+    let frame_export_sender: Option<Sender<FrameRecord>> =
+        if let Some(ref export_dir) = args.export_frames {
+            info!(
+                "Initializing frame export to: {} with {} workers",
+                export_dir.display(),
+                args.export_workers
+            );
+
+            std::fs::create_dir_all(export_dir).with_context(|| {
+                format!(
+                    "Failed to create export directory: {}",
+                    export_dir.display()
+                )
+            })?;
+
+            let (sender, receiver) = bounded::<FrameRecord>(args.export_buffer_size);
+
+            for worker_id in 0..args.export_workers {
+                let receiver = receiver.clone();
+                let export_dir = export_dir.clone();
+
+                std::thread::spawn(move || {
+                    info!("Export worker {} started", worker_id);
+                    while let Ok(record) = receiver.recv() {
+                        if let Err(e) = save_frame_record(&record, &export_dir) {
+                            warn!(
+                                "Worker {} failed to save frame {}: {}",
+                                worker_id, record.frame_number, e
+                            );
+                        }
+                    }
+                    info!("Export worker {} shutting down", worker_id);
+                });
+            }
+
+            Some(sender)
+        } else {
+            None
+        };
+
+    let current_tracking_state: Arc<Mutex<Option<(u32, f64, f64, Timestamp)>>> =
+        Arc::new(Mutex::new(None));
+
     info!("Creating Fine Guidance System");
     let mut fgs = FineGuidanceSystem::new(config);
 
     let csv_writer_clone = csv_writer.clone();
+    let tracking_state_clone = current_tracking_state.clone();
+    let frame_export_sender_clone = frame_export_sender.clone();
     let _callback_id = fgs.register_callback(move |event| match event {
         FgsCallbackEvent::TrackingStarted {
             track_id,
@@ -161,12 +368,24 @@ fn main() -> Result<()> {
                 "🎯 TRACKING LOCKED - track_id: {}, pixel location: (x={:.2}, y={:.2}), guide stars: {}",
                 track_id, initial_position.x, initial_position.y, num_guide_stars
             );
+            if let Ok(mut state) = tracking_state_clone.lock() {
+                *state = Some((
+                    *track_id,
+                    initial_position.x,
+                    initial_position.y,
+                    initial_position.timestamp,
+                ));
+            }
         }
         FgsCallbackEvent::TrackingUpdate { track_id, position } => {
             info!(
                 "📍 Tracking update - track_id: {}, pixel location: (x={:.4}, y={:.4}), timestamp: {}",
                 track_id, position.x, position.y, position.timestamp
             );
+
+            if let Ok(mut state) = tracking_state_clone.lock() {
+                *state = Some((*track_id, position.x, position.y, position.timestamp));
+            }
 
             if let Some(ref writer) = csv_writer_clone {
                 if let Ok(mut csv) = writer.lock() {
@@ -205,6 +424,35 @@ fn main() -> Result<()> {
                 expected_width, expected_height, actual_width, actual_height
             );
         }
+        FgsCallbackEvent::FrameProcessed {
+            frame_number,
+            timestamp,
+            frame_data,
+            track_id,
+            position,
+        } => {
+            if let Some(ref sender) = frame_export_sender_clone {
+                let (height, width) = frame_data.dim();
+                let record = FrameRecord {
+                    frame_number: *frame_number,
+                    timestamp: *timestamp,
+                    frame_data: (**frame_data).clone(),
+                    metadata: FrameMetadata {
+                        frame_number: *frame_number,
+                        timestamp: *timestamp,
+                        track_id: *track_id,
+                        centroid_x: position.as_ref().map(|p| p.x),
+                        centroid_y: position.as_ref().map(|p| p.y),
+                        width,
+                        height,
+                    },
+                };
+
+                if let Err(_) = sender.try_send(record) {
+                    warn!("Frame export queue full, dropping frame {frame_number}");
+                }
+            }
+        }
     });
 
     info!("Starting FGS acquisition");
@@ -223,85 +471,5 @@ fn main() -> Result<()> {
         info!("Entering tracking loop - press Ctrl+C to exit");
     }
 
-    let mut prev_state = fgs.state().clone();
-    let mut fits_saved = false;
-
-    loop {
-        if let Some(max_secs) = args.max_runtime_secs {
-            if start_time.elapsed().as_secs() >= max_secs {
-                info!("Max runtime of {} seconds reached, exiting", max_secs);
-                break;
-            }
-        }
-        let frame_result = camera
-            .capture_frame()
-            .map_err(|e| anyhow::anyhow!("Camera capture failed: {e}"));
-        match frame_result {
-            Ok((frame, metadata)) => match fgs.process_frame(frame.view(), metadata.timestamp) {
-                Ok((_update, settings)) => {
-                    monocle::apply_camera_settings(&mut camera, settings);
-                    let state = fgs.state();
-                    match state {
-                        monocle::FgsState::Acquiring { frames_collected } => {
-                            if frames_collected % 5 == 0 {
-                                info!("Acquiring... collected {} frames", frames_collected);
-                            }
-                        }
-                        monocle::FgsState::Calibrating => {
-                            info!("Calibrating guide stars...");
-                        }
-                        monocle::FgsState::Tracking { frames_processed } => {
-                            if frames_processed % 100 == 0 && *frames_processed > 0 {
-                                info!("Tracking... processed {} frames", frames_processed);
-                            }
-                        }
-                        monocle::FgsState::Reacquiring { attempts } => {
-                            warn!("Reacquiring lock... attempt {}", attempts);
-                        }
-                        monocle::FgsState::Idle => {
-                            info!("System idle");
-                        }
-                    }
-
-                    if args.save_fits
-                        && !fits_saved
-                        && matches!(prev_state, monocle::FgsState::Calibrating)
-                        && !matches!(state, monocle::FgsState::Calibrating)
-                    {
-                        if let Some(averaged_frame) = fgs.get_averaged_frame() {
-                            info!("Saving averaged acquisition frames to FITS file...");
-                            let mut data = HashMap::new();
-                            data.insert(
-                                "AVERAGED".to_string(),
-                                FitsDataType::Float64(averaged_frame),
-                            );
-
-                            let fits_path = "cam_track_averaged_frame.fits";
-                            match write_typed_fits(&data, fits_path) {
-                                Ok(_) => {
-                                    info!("Averaged frame saved to: {}", fits_path);
-                                    fits_saved = true;
-                                }
-                                Err(e) => {
-                                    warn!("Failed to save FITS file: {}", e);
-                                }
-                            }
-                        }
-                    }
-
-                    prev_state = state.clone();
-                }
-                Err(e) => {
-                    warn!("Frame processing error: {}", e);
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            },
-            Err(e) => {
-                warn!("Camera capture error: {}", e);
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
-    }
-
-    Ok(())
+    run_tracking_stream(&mut camera, &mut fgs, args.max_runtime_secs, start_time)
 }

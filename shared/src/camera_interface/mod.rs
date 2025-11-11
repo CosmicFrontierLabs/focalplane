@@ -9,6 +9,7 @@ pub mod ring_buffer;
 use crate::image_proc::detection::AABB;
 use crate::image_size::PixelShape;
 use ndarray::{Array2, ArrayView2};
+use serde::{Deserialize, Serialize};
 use starfield::Equatorial;
 use std::collections::HashMap;
 use std::error::Error;
@@ -17,7 +18,7 @@ use std::time::Duration;
 
 /// Timestamp structure aligned with V4L2 format
 /// Represents time as seconds and nanoseconds since an epoch
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timestamp {
     /// Seconds component
     pub seconds: u64,

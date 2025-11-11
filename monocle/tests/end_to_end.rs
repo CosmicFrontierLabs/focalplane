@@ -247,6 +247,12 @@ fn test_full_tracking_lifecycle() {
                     expected_width, expected_height, actual_width, actual_height
                 );
             }
+            FgsCallbackEvent::FrameProcessed { frame_number, .. } => {
+                // Just count frame processed events, don't print every one
+                if frame_number % 10 == 0 {
+                    println!("FrameProcessed: frame {}", frame_number);
+                }
+            }
         }
     }
 

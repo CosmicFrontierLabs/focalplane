@@ -129,6 +129,8 @@ pub struct FineGuidanceSystem {
     next_callback_id: Arc<Mutex<CallbackId>>,
     /// Current track ID
     current_track_id: u32,
+    /// Total frames processed
+    frame_counter: usize,
 }
 
 impl FineGuidanceSystem {
@@ -144,6 +146,7 @@ impl FineGuidanceSystem {
             callbacks: Arc::new(Mutex::new(HashMap::new())),
             next_callback_id: Arc::new(Mutex::new(0)),
             current_track_id: 0,
+            frame_counter: 0,
         }
     }
 
@@ -405,6 +408,13 @@ impl FineGuidanceSystem {
     ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), String> {
         use FgsState::*;
 
+        // Capture frame data if this is a ProcessFrame event for FrameProcessed callback
+        let frame_data_for_callback = if let FgsEvent::ProcessFrame(frame, timestamp) = &event {
+            Some((Arc::new(frame.to_owned()), *timestamp))
+        } else {
+            None
+        };
+
         let (new_state, guidance_update, camera_updates) = match (&self.state, event) {
             // From Idle
             (Idle, FgsEvent::StartFgs) => {
@@ -459,6 +469,33 @@ impl FineGuidanceSystem {
         };
 
         self.state = new_state;
+
+        // Emit FrameProcessed callback if this was a frame processing event
+        if let Some((frame_data, timestamp)) = frame_data_for_callback {
+            self.frame_counter += 1;
+
+            let (track_id, position) = if let Some(ref update) = guidance_update {
+                (
+                    Some(self.current_track_id),
+                    Some(callback::PositionEstimate {
+                        x: update.x,
+                        y: update.y,
+                        timestamp,
+                    }),
+                )
+            } else {
+                (None, None)
+            };
+
+            self.emit_event(&callback::FgsCallbackEvent::FrameProcessed {
+                frame_number: self.frame_counter,
+                timestamp,
+                frame_data,
+                track_id,
+                position,
+            });
+        }
+
         Ok((guidance_update, camera_updates))
     }
 

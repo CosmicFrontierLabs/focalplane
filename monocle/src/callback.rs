@@ -1,3 +1,4 @@
+use ndarray::Array2;
 use shared::camera_interface::Timestamp;
 use std::sync::Arc;
 
@@ -38,6 +39,15 @@ pub enum FgsCallbackEvent {
         expected_height: usize,
         actual_width: usize,
         actual_height: usize,
+    },
+    /// Frame processed (fired after tracking work completes)
+    /// frame_data wrapped in Arc for efficient sharing - clone Arc to keep frame alive
+    FrameProcessed {
+        frame_number: usize,
+        timestamp: Timestamp,
+        frame_data: Arc<Array2<u16>>,
+        track_id: Option<u32>,
+        position: Option<PositionEstimate>,
     },
 }
 

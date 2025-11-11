@@ -203,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Frame size mismatch: expected {expected_width}x{expected_height}, got {actual_width}x{actual_height}");
             }
         }
+        FgsCallbackEvent::FrameProcessed { .. } => {}
     });
 
     // Start FGS

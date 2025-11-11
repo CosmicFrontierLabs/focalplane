@@ -123,6 +123,8 @@ impl CameraInterface for PlayerOneCamera {
             .lock()
             .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
 
+        let _ = camera.stop_exposure();
+
         let current_hw_roi = camera.roi();
         if !super::roi::roi_eq(&current_hw_roi, &poa_roi) {
             let roi_set_start = std::time::Instant::now();
@@ -142,6 +144,9 @@ impl CameraInterface for PlayerOneCamera {
             .camera
             .lock()
             .map_err(|_| CameraError::HardwareError("Camera mutex poisoned".to_string()))?;
+
+        let _ = camera.stop_exposure();
+
         camera
             .set_image_size(
                 self.config.size.width as u32,
@@ -264,7 +269,11 @@ impl CameraInterface for PlayerOneCamera {
 
                 callback(&array, &metadata)
             })
-            .map_err(|e| CameraError::CaptureError(format!("Stream failed: {e}")))
+            .map_err(|e| CameraError::CaptureError(format!("Stream failed: {e}")))?;
+
+        camera.stop_exposure().map_err(|e| {
+            CameraError::HardwareError(format!("Failed to stop exposure at end of stream: {e}"))
+        })
     }
 
     fn saturation_value(&self) -> f64 {
