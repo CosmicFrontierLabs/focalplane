@@ -3,11 +3,35 @@ use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::units::{LengthExt, Wavelength};
 use std::time::SystemTime;
 
+fn compute_normalization_factor(fwhm_pixels: f64, target_max_intensity: f64) -> f64 {
+    let reference_wavelength = Wavelength::from_nanometers(550.0);
+    let psf = PixelScaledAiryDisk::with_fwhm(fwhm_pixels, reference_wavelength);
+
+    let test_size = 64;
+    let center = test_size as f64 / 2.0;
+
+    let mut max_pixel_value: f64 = 0.0;
+    for y in 0..test_size {
+        for x in 0..test_size {
+            let pixel_x = x as f64 - center;
+            let pixel_y = y as f64 - center;
+            let pixel_flux = psf.pixel_flux_simpson(pixel_x, pixel_y, 1.0);
+            max_pixel_value = max_pixel_value.max(pixel_flux);
+        }
+    }
+
+    if max_pixel_value > 0.0 {
+        target_max_intensity / max_pixel_value
+    } else {
+        1.0
+    }
+}
+
 pub fn generate_into_buffer(
     buffer: &mut [u8],
     width: u32,
     height: u32,
-    sigma: f64,
+    fwhm_pixels: f64,
     wiggle_radius_pixels: f64,
     max_intensity: f64,
 ) {
@@ -27,8 +51,10 @@ pub fn generate_into_buffer(
     let gaussian_x = center_x + wiggle_radius_pixels * angle.cos();
     let gaussian_y = center_y + wiggle_radius_pixels * angle.sin();
 
+    let normalization_factor = compute_normalization_factor(fwhm_pixels, max_intensity);
+
     let reference_wavelength = Wavelength::from_nanometers(550.0);
-    let psf = PixelScaledAiryDisk::with_fwhm(sigma * 2.355, reference_wavelength);
+    let psf = PixelScaledAiryDisk::with_fwhm(fwhm_pixels, reference_wavelength);
 
     let cutoff_radius = psf.first_zero();
     let x_min = (gaussian_x - cutoff_radius).max(0.0) as u32;
@@ -41,7 +67,7 @@ pub fn generate_into_buffer(
             let pixel_x = x as f64 - gaussian_x;
             let pixel_y = y as f64 - gaussian_y;
 
-            let pixel_flux = psf.pixel_flux_simpson(pixel_x, pixel_y, max_intensity);
+            let pixel_flux = psf.pixel_flux_simpson(pixel_x, pixel_y, normalization_factor);
             let pixel_value = pixel_flux.clamp(0.0, 255.0) as u8;
 
             let offset = ((y * width + x) * 3) as usize;
@@ -55,7 +81,7 @@ pub fn generate_into_buffer(
 pub fn generate(
     width: u32,
     height: u32,
-    sigma: f64,
+    fwhm_pixels: f64,
     wiggle_radius_pixels: f64,
     max_intensity: f64,
 ) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
@@ -64,7 +90,7 @@ pub fn generate(
         &mut buffer,
         width,
         height,
-        sigma,
+        fwhm_pixels,
         wiggle_radius_pixels,
         max_intensity,
     );
@@ -77,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_wiggling_gaussian_pattern_generation() {
-        let img = generate(640, 480, 20.0, 50.0, 255.0);
+        let img = generate(640, 480, 47.0, 50.0, 255.0);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
     }

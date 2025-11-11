@@ -87,10 +87,10 @@ struct Args {
 
     #[arg(
         long,
-        help = "Gaussian sigma (standard deviation in pixels)",
-        default_value = "20"
+        help = "Gaussian FWHM (Full Width Half Maximum in pixels)",
+        default_value = "47"
     )]
-    gaussian_sigma: f64,
+    gaussian_fwhm: f64,
 
     #[arg(long, help = "Wiggle radius in pixels", default_value = "3")]
     wiggle_radius_pixels: f64,
@@ -304,7 +304,7 @@ fn main() -> Result<()> {
         PatternType::WigglingGaussian => {
             println!("Generating wiggling gaussian pattern");
             println!("  Pattern size: {pattern_width}x{pattern_height}");
-            println!("  Gaussian sigma: {}", args.gaussian_sigma);
+            println!("  Gaussian FWHM: {} pixels", args.gaussian_fwhm);
             println!("  Wiggle radius: {} pixels", args.wiggle_radius_pixels);
             println!("  Maximum intensity: {}", args.gaussian_intensity);
             println!("  Rotation period: 10 seconds");
@@ -320,7 +320,7 @@ fn main() -> Result<()> {
                 patterns::wiggling_gaussian::generate(
                     pattern_width,
                     pattern_height,
-                    args.gaussian_sigma,
+                    args.gaussian_fwhm,
                     args.wiggle_radius_pixels,
                     args.gaussian_intensity,
                 ),
@@ -475,7 +475,7 @@ fn main() -> Result<()> {
                         buffer,
                         pattern_width,
                         pattern_height,
-                        args.gaussian_sigma,
+                        args.gaussian_fwhm,
                         args.wiggle_radius_pixels,
                         args.gaussian_intensity,
                     );
