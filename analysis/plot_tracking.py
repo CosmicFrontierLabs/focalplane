@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Plot tracking data from cam_track CSV output."""
 
+import argparse
 import csv
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Plot tracking data from cam_track CSV output')
+parser.add_argument('csv_file', help='Path to tracking CSV file')
+parser.add_argument('--output', '-o', default='tracking_analysis.png', help='Output plot filename (default: tracking_analysis.png)')
+args = parser.parse_args()
+
 # Read CSV data
-with open('cam_track_wiggle_new.csv', 'r') as f:
+with open(args.csv_file, 'r') as f:
     reader = csv.DictReader(f)
     data = list(reader)
 
@@ -123,8 +130,8 @@ axes[2, 1].set_title(f'Timestamp Jitter\nMean: {np.mean(dt)*1000:.2f}ms, Std: {n
 axes[2, 1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('tracking_analysis.png', dpi=150)
-print(f"Saved tracking_analysis.png")
+plt.savefig(args.output, dpi=150)
+print(f"Saved {args.output}")
 plt.show()
 
 # Print statistics
