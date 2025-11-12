@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Calibration Pattern Server</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #00ff00;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-size: 14px;
+        }
+
+        .column {
+            height: 100vh;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .left-panel {
+            width: 25%;
+            background: #111;
+            border-right: 1px solid #00ff00;
+        }
+
+        .center-panel {
+            width: 50%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding-top: 20px;
+        }
+
+        .right-panel {
+            width: 25%;
+            background: #111;
+            border-left: 1px solid #00ff00;
+        }
+
+        h2 {
+            color: #00ff00;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 5px;
+        }
+
+        .control-group {
+            margin: 15px 0;
+            padding: 10px;
+            border: 1px solid #004400;
+            background: #0a0a0a;
+        }
+
+        .control-label {
+            color: #00aa00;
+            display: block;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        select, input[type="number"], input[type="range"] {
+            width: 100%;
+            background: #111;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            vertical-align: middle;
+            cursor: pointer;
+        }
+
+        button {
+            background: #111;
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            margin-top: 10px;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #003300;
+        }
+
+        button:active {
+            background: #005500;
+        }
+
+        .param-controls {
+            display: none;
+        }
+
+        .param-controls.active {
+            display: block;
+        }
+
+        #pattern-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 10px;
+        }
+
+        #pattern-frame {
+            max-width: 100%;
+            max-height: 80vh;
+            border: 2px solid #00ff00;
+            background: #111;
+            display: block;
+        }
+
+        .info-item {
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+
+        .info-label {
+            color: #00aa00;
+        }
+
+        .status {
+            color: #ffff00;
+        }
+
+        .range-value {
+            color: #00ff00;
+            font-size: 0.85em;
+            display: inline-block;
+            min-width: 60px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="column left-panel">
+        <h2>Pattern Selection</h2>
+        <div class="control-group">
+            <label class="control-label">Pattern Type:</label>
+            <select id="pattern-type">
+                <option value="April" selected>AprilTag Array</option>
+                <option value="Check">Checkerboard</option>
+                <option value="Usaf">USAF-1951 Target</option>
+                <option value="Static">Digital Static</option>
+                <option value="Pixel">Center Pixel</option>
+                <option value="CirclingPixel">Circling Pixel</option>
+                <option value="Uniform">Uniform Screen</option>
+                <option value="WigglingGaussian">Wiggling Gaussian</option>
+                <option value="PixelGrid">Pixel Grid</option>
+                <option value="SiemensStar">Siemens Star</option>
+            </select>
+        </div>
+
+        <h2 style="margin-top: 20px;">Pattern Parameters</h2>
+
+        <div id="params-check" class="param-controls control-group">
+            <label class="control-label">
+                Checker Size (px): <span id="val-checker-size" class="range-value">100</span>
+            </label>
+            <input type="range" id="checker-size" min="10" max="500" value="100" step="10">
+        </div>
+
+        <div id="params-static" class="param-controls control-group">
+            <label class="control-label">
+                Pixel Size (px): <span id="val-pixel-size" class="range-value">1</span>
+            </label>
+            <input type="range" id="pixel-size" min="1" max="20" value="1">
+        </div>
+
+        <div id="params-circling" class="param-controls control-group">
+            <label class="control-label">
+                Orbit Count: <span id="val-orbit-count" class="range-value">1</span>
+            </label>
+            <input type="range" id="orbit-count" min="1" max="10" value="1">
+
+            <label class="control-label" style="margin-top: 10px;">
+                Orbit Radius (%): <span id="val-orbit-radius" class="range-value">50</span>
+            </label>
+            <input type="range" id="orbit-radius" min="0" max="100" value="50">
+        </div>
+
+        <div id="params-uniform" class="param-controls control-group">
+            <label class="control-label">
+                Brightness Level: <span id="val-uniform-level" class="range-value">128</span>
+            </label>
+            <input type="range" id="uniform-level" min="0" max="255" value="128">
+        </div>
+
+        <div id="params-gaussian" class="param-controls control-group">
+            <label class="control-label">
+                FWHM (px): <span id="val-gaussian-fwhm" class="range-value">47</span>
+            </label>
+            <input type="range" id="gaussian-fwhm" min="5" max="200" value="47">
+
+            <label class="control-label" style="margin-top: 10px;">
+                Wiggle Radius (px): <span id="val-wiggle-radius" class="range-value">3</span>
+            </label>
+            <input type="range" id="wiggle-radius" min="0" max="20" value="3" step="0.5">
+
+            <label class="control-label" style="margin-top: 10px;">
+                Max Intensity: <span id="val-gaussian-intensity" class="range-value">255</span>
+            </label>
+            <input type="range" id="gaussian-intensity" min="0" max="255" value="255">
+        </div>
+
+        <div id="params-grid" class="param-controls control-group">
+            <label class="control-label">
+                Grid Spacing (px): <span id="val-grid-spacing" class="range-value">50</span>
+            </label>
+            <input type="range" id="grid-spacing" min="10" max="200" value="50">
+        </div>
+
+        <div id="params-siemens" class="param-controls control-group">
+            <label class="control-label">
+                Number of Spokes: <span id="val-siemens-spokes" class="range-value">24</span>
+            </label>
+            <input type="range" id="siemens-spokes" min="4" max="72" value="24" step="4">
+        </div>
+
+        <div class="control-group">
+            <label style="cursor: pointer;">
+                <input type="checkbox" id="invert-colors">
+                <span style="margin-left: 5px;">Invert Colors</span>
+            </label>
+        </div>
+    </div>
+
+    <div class="column center-panel">
+        <div id="pattern-container">
+            <img id="pattern-frame" src="/jpeg" alt="Calibration Pattern">
+        </div>
+    </div>
+
+    <div class="column right-panel">
+        <h2>Pattern Info</h2>
+        <div class="info-item">
+            <span class="info-label">Resolution:</span><br>
+            {width}x{height}
+        </div>
+        <div class="info-item">
+            <span class="info-label">Current Pattern:</span><br>
+            <span id="current-pattern" class="status">AprilTag Array</span>
+        </div>
+
+        <h2 style="margin-top: 30px;">Endpoints</h2>
+        <div class="info-item">
+            <a href="/jpeg" style="color: #00ff00;">JPEG Pattern</a><br>
+            <a href="/config" style="color: #00ff00;">Config (JSON)</a>
+        </div>
+
+        <h2 style="margin-top: 30px;">Info</h2>
+        <div class="info-item" style="font-size: 0.8em; color: #00aa00;">
+            This server generates calibration patterns for display testing and camera calibration.
+            <br><br>
+            Adjust parameters in real-time using the controls on the left, then click "Apply Pattern" to update the display.
+            <br><br>
+            Animated patterns (Static, Circling Pixel, Wiggling Gaussian) will continuously regenerate.
+        </div>
+    </div>
+
+    <script>
+        const patternNames = {
+            'April': 'AprilTag Array',
+            'Check': 'Checkerboard',
+            'Usaf': 'USAF-1951 Target',
+            'Static': 'Digital Static',
+            'Pixel': 'Center Pixel',
+            'CirclingPixel': 'Circling Pixel',
+            'Uniform': 'Uniform Screen',
+            'WigglingGaussian': 'Wiggling Gaussian',
+            'PixelGrid': 'Pixel Grid',
+            'SiemensStar': 'Siemens Star'
+        };
+
+        function showParamsForPattern(patternType) {
+            document.querySelectorAll('.param-controls').forEach(el => {
+                el.classList.remove('active');
+            });
+
+            const paramsMap = {
+                'Check': 'params-check',
+                'Static': 'params-static',
+                'CirclingPixel': 'params-circling',
+                'Uniform': 'params-uniform',
+                'WigglingGaussian': 'params-gaussian',
+                'PixelGrid': 'params-grid',
+                'SiemensStar': 'params-siemens'
+            };
+
+            const paramsId = paramsMap[patternType];
+            if (paramsId) {
+                const elem = document.getElementById(paramsId);
+                if (elem) {
+                    elem.classList.add('active');
+                }
+            }
+        }
+
+        function buildPatternConfig() {
+            const patternType = document.getElementById('pattern-type').value;
+            let config = { type: patternType };
+
+            switch(patternType) {
+                case 'Check':
+                    config.checker_size = parseInt(document.getElementById('checker-size').value);
+                    break;
+                case 'Static':
+                    config.pixel_size = parseInt(document.getElementById('pixel-size').value);
+                    break;
+                case 'CirclingPixel':
+                    config.orbit_count = parseInt(document.getElementById('orbit-count').value);
+                    config.orbit_radius_percent = parseInt(document.getElementById('orbit-radius').value);
+                    break;
+                case 'Uniform':
+                    config.level = parseInt(document.getElementById('uniform-level').value);
+                    break;
+                case 'WigglingGaussian':
+                    config.fwhm = parseFloat(document.getElementById('gaussian-fwhm').value);
+                    config.wiggle_radius = parseFloat(document.getElementById('wiggle-radius').value);
+                    config.intensity = parseFloat(document.getElementById('gaussian-intensity').value);
+                    break;
+                case 'PixelGrid':
+                    config.spacing = parseInt(document.getElementById('grid-spacing').value);
+                    break;
+                case 'SiemensStar':
+                    config.spokes = parseInt(document.getElementById('siemens-spokes').value);
+                    break;
+            }
+
+            return config;
+        }
+
+        function applyPattern() {
+            const pattern = buildPatternConfig();
+            const invert = document.getElementById('invert-colors').checked;
+
+            fetch('/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pattern, invert })
+            })
+            .then(response => {
+                if (response.ok) {
+                    const patternType = document.getElementById('pattern-type').value;
+                    document.getElementById('current-pattern').textContent = patternNames[patternType];
+                } else {
+                    console.error('Failed to update pattern');
+                }
+            })
+            .catch(err => console.error('Error updating pattern:', err));
+        }
+
+        let lastImageUpdateFailed = false;
+
+        function updatePatternImage() {
+            const img = document.getElementById('pattern-frame');
+            const newSrc = '/jpeg?t=' + Date.now();
+
+            img.onerror = function() {
+                lastImageUpdateFailed = true;
+                console.error('Failed to load pattern image, backing off...');
+            };
+
+            img.onload = function() {
+                lastImageUpdateFailed = false;
+            };
+
+            img.src = newSrc;
+        }
+
+        document.getElementById('pattern-type').addEventListener('change', function() {
+            showParamsForPattern(this.value);
+            applyPattern();
+        });
+
+        document.getElementById('invert-colors').addEventListener('change', applyPattern);
+
+        document.getElementById('checker-size').addEventListener('input', function() {
+            document.getElementById('val-checker-size').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('pixel-size').addEventListener('input', function() {
+            document.getElementById('val-pixel-size').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('orbit-count').addEventListener('input', function() {
+            document.getElementById('val-orbit-count').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('orbit-radius').addEventListener('input', function() {
+            document.getElementById('val-orbit-radius').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('uniform-level').addEventListener('input', function() {
+            document.getElementById('val-uniform-level').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('gaussian-fwhm').addEventListener('input', function() {
+            document.getElementById('val-gaussian-fwhm').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('wiggle-radius').addEventListener('input', function() {
+            document.getElementById('val-wiggle-radius').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('gaussian-intensity').addEventListener('input', function() {
+            document.getElementById('val-gaussian-intensity').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('grid-spacing').addEventListener('input', function() {
+            document.getElementById('val-grid-spacing').textContent = this.value;
+            applyPattern();
+        });
+
+        document.getElementById('siemens-spokes').addEventListener('input', function() {
+            document.getElementById('val-siemens-spokes').textContent = this.value;
+            applyPattern();
+        });
+
+        showParamsForPattern('April');
+
+        // Start continuous image polling with backoff on errors
+        setInterval(function() {
+            if (lastImageUpdateFailed) {
+                // Back off to 250ms when errors occur
+                setTimeout(updatePatternImage, 250);
+            } else {
+                updatePatternImage();
+            }
+        }, 100);
+    </script>
+</body>
+</html>

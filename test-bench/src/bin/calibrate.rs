@@ -5,16 +5,7 @@ use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
 use std::path::PathBuf;
 use test_bench::display_patterns as patterns;
-
-trait SdlResultExt<T> {
-    fn sdl_context(self, msg: &str) -> Result<T>;
-}
-
-impl<T> SdlResultExt<T> for std::result::Result<T, String> {
-    fn sdl_context(self, msg: &str) -> Result<T> {
-        self.map_err(|e| anyhow::anyhow!("{msg}: {e}"))
-    }
-}
+use test_bench::display_utils::{get_display_resolution, list_displays, SdlResultExt};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum PatternType {
@@ -115,33 +106,6 @@ struct Args {
     output: Option<PathBuf>,
 }
 
-fn list_displays(video_subsystem: &sdl2::VideoSubsystem) -> Result<()> {
-    let num_displays = video_subsystem
-        .num_video_displays()
-        .sdl_context("Failed to get display count")?;
-    println!("Found {num_displays} display(s):");
-
-    for i in 0..num_displays {
-        let name = video_subsystem
-            .display_name(i)
-            .sdl_context("Failed to get display name")?;
-        let bounds = video_subsystem
-            .display_bounds(i)
-            .sdl_context("Failed to get display bounds")?;
-        let mode = video_subsystem
-            .desktop_display_mode(i)
-            .sdl_context("Failed to get display mode")?;
-
-        println!("\nDisplay {i}:");
-        println!("  Name: {name}");
-        println!("  Position: ({}, {})", bounds.x(), bounds.y());
-        println!("  Size: {}x{}", bounds.width(), bounds.height());
-        println!("  Mode: {}x{} @ {}Hz", mode.w, mode.h, mode.refresh_rate);
-    }
-
-    Ok(())
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -156,13 +120,6 @@ fn main() -> Result<()> {
 
     let display_index = args.display.unwrap_or(0);
 
-    let num_displays = video_subsystem
-        .num_video_displays()
-        .sdl_context("Failed to get display count")?;
-    if display_index >= num_displays as u32 {
-        anyhow::bail!("Display {display_index} not found (have {num_displays} displays)");
-    }
-
     let bounds = video_subsystem
         .display_bounds(display_index as i32)
         .sdl_context("Failed to get display bounds")?;
@@ -170,8 +127,10 @@ fn main() -> Result<()> {
         .desktop_display_mode(display_index as i32)
         .sdl_context("Failed to get display mode")?;
 
-    let pattern_width = args.width.unwrap_or(mode.w as u32);
-    let pattern_height = args.height.unwrap_or(mode.h as u32);
+    let (display_width, display_height) = get_display_resolution(&video_subsystem, display_index)?;
+
+    let pattern_width = args.width.unwrap_or(display_width);
+    let pattern_height = args.height.unwrap_or(display_height);
 
     let (mut img, window_title) = match args.pattern {
         PatternType::Check => {

@@ -12,6 +12,10 @@ name = "calibrate"
 path = "src/bin/calibrate.rs"
 
 [[bin]]
+name = "calibrate_serve"
+path = "src/bin/calibrate_serve.rs"
+
+[[bin]]
 name = "cam_serve"
 path = "src/bin/cam_serve.rs"
 
