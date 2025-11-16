@@ -6,7 +6,7 @@
 
 use simulator::hardware::{
     sensor::models::*,
-    sensor_array::{PositionedSensor, SensorArray, SensorPosition},
+    sensor_array::{PositionedSensor, SensorArray, SensorPosition, SPENCER_ARRAY_PLAN},
 };
 use simulator::units::LengthExt;
 use std::collections::HashMap;
@@ -296,15 +296,41 @@ fn main() {
     let focal_length_mm = 3000.0; // 3 meter focal length
     let field_of_view_deg = 2.0; // 2 degree FOV
 
+    // SPENCER array with JBT .5m telescope
+    let spencer_array = SPENCER_ARRAY_PLAN.clone();
+    let jbt_focal_length_mm = 5987.0; // JBT .5m telescope focal length
+    let jbt_field_of_view_deg = 1.627; // 1.627 degree FOV for 85mm radius
+
     // Generate SVGs for each configuration
     let configs = vec![
-        ("single_sensor", single_array),
-        ("dual_sensors", dual_array),
-        ("quad_array", quad_array),
-        ("mosaic_array", mosaic_array),
+        (
+            "single_sensor",
+            single_array,
+            focal_length_mm,
+            field_of_view_deg,
+        ),
+        (
+            "dual_sensors",
+            dual_array,
+            focal_length_mm,
+            field_of_view_deg,
+        ),
+        ("quad_array", quad_array, focal_length_mm, field_of_view_deg),
+        (
+            "mosaic_array",
+            mosaic_array,
+            focal_length_mm,
+            field_of_view_deg,
+        ),
+        (
+            "spencer_array",
+            spencer_array,
+            jbt_focal_length_mm,
+            jbt_field_of_view_deg,
+        ),
     ];
 
-    for (name, array) in configs {
+    for (name, array, focal_length, fov) in configs {
         println!("Generating {name} configuration...");
         println!("  Sensors: {}", array.sensor_count());
         println!("  Total pixels: {}", array.total_pixel_count());
@@ -319,8 +345,8 @@ fn main() {
 
         let svg = create_focal_plane_svg(
             &array,
-            focal_length_mm,
-            field_of_view_deg,
+            focal_length,
+            fov,
             800, // Output size in pixels
         );
 

@@ -4,7 +4,8 @@
 //! positioned in a focal plane, as commonly used in large astronomical cameras
 //! and survey instruments.
 
-use crate::hardware::sensor::SensorConfig;
+use crate::hardware::sensor::{models::IMX455, SensorConfig};
+use once_cell::sync::Lazy;
 use shared::units::LengthExt;
 
 /// Position of a sensor in the array focal plane.
@@ -163,6 +164,47 @@ impl SensorArray {
         None
     }
 }
+
+pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
+    let x1 = 27.5;
+    let y1 = 20.0;
+
+    let x2 = 58.75;
+    let y2 = -23.75;
+
+    let spencer_y_offset = 50.0;
+
+    SensorArray::new(vec![
+        PositionedSensor {
+            sensor: IMX455.clone(),
+            position: SensorPosition {
+                x_mm: x1,
+                y_mm: y1 + spencer_y_offset,
+            },
+        },
+        PositionedSensor {
+            sensor: IMX455.clone(),
+            position: SensorPosition {
+                x_mm: -x1,
+                y_mm: y1 + spencer_y_offset,
+            },
+        },
+        PositionedSensor {
+            sensor: IMX455.clone(),
+            position: SensorPosition {
+                x_mm: x2,
+                y_mm: y2 + spencer_y_offset,
+            },
+        },
+        PositionedSensor {
+            sensor: IMX455.clone(),
+            position: SensorPosition {
+                x_mm: -x2,
+                y_mm: y2 + spencer_y_offset,
+            },
+        },
+    ])
+});
 
 #[cfg(test)]
 mod tests {
