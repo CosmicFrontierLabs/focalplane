@@ -48,6 +48,7 @@
 //! ```
 
 pub mod dark_current;
+pub mod gyro;
 pub mod read_noise;
 pub mod satellite;
 pub mod sensor;
@@ -55,6 +56,7 @@ pub mod sensor_array;
 pub mod sensor_noise;
 pub mod telescope;
 
+pub use gyro::GyroModel;
 pub use satellite::SatelliteConfig;
 pub use sensor::SensorConfig;
 pub use sensor_array::SensorArray;
