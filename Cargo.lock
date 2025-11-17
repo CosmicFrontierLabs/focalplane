@@ -3868,6 +3868,7 @@ dependencies = [
  "nsv455",
  "playerone-sdk",
  "rand 0.8.5",
+ "rayon",
  "resvg",
  "rust-embed",
  "rustfft",

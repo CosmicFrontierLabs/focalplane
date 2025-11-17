@@ -51,6 +51,7 @@ ndarray = "0.16"
 nsv455 = { path = "../nsv455", optional = true }
 playerone-sdk = { version = "0.2.2", optional = true }
 rand = "0.8"
+rayon = "1.11.0"
 resvg = { version = "0.45.0", features = ["text"] }
 rust-embed = "8.7.2"
 rustfft = "6.4.1"

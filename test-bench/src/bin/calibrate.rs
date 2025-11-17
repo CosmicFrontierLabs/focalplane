@@ -4,6 +4,7 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Rect;
 use std::path::PathBuf;
+use std::time::SystemTime;
 use test_bench::display_patterns as patterns;
 use test_bench::display_utils::{get_display_resolution, list_displays, SdlResultExt};
 
@@ -19,6 +20,7 @@ enum PatternType {
     WigglingGaussian,
     PixelGrid,
     SiemensStar,
+    MotionProfile,
 }
 
 #[derive(Parser, Debug)]
@@ -98,6 +100,22 @@ struct Args {
 
     #[arg(long, help = "Number of spokes in Siemens star", default_value = "24")]
     siemens_spokes: u32,
+
+    #[arg(long, help = "Path to PNG image for motion profile pattern")]
+    image_path: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Path to CSV file with motion profile (t, x, y in seconds, pixels, pixels)"
+    )]
+    motion_csv: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Motion scaling percentage (100 = normal, 50 = half motion, 200 = double motion)",
+        default_value = "100.0"
+    )]
+    motion_scale_percent: f64,
 
     #[arg(short, long, help = "Invert pattern colors (black <-> white)")]
     invert: bool,
@@ -324,6 +342,48 @@ fn main() -> Result<()> {
                 "Siemens Star",
             )
         }
+        PatternType::MotionProfile => {
+            let image_path = args
+                .image_path
+                .as_ref()
+                .context("--image-path required for motion-profile pattern")?;
+            let motion_csv = args
+                .motion_csv
+                .as_ref()
+                .context("--motion-csv required for motion-profile pattern")?;
+
+            println!("Loading motion profile pattern");
+            println!("  Image: {}", image_path.display());
+            println!("  Motion CSV: {}", motion_csv.display());
+
+            let base_img = patterns::motion_profile::load_and_downsample_image(
+                image_path,
+                pattern_width,
+                pattern_height,
+            )?;
+
+            println!(
+                "  Downsampled image size: {}x{}",
+                base_img.width(),
+                base_img.height()
+            );
+            println!("  Pattern size: {pattern_width}x{pattern_height}");
+            println!(
+                "  Display {}: {}x{} at ({}, {})",
+                display_index,
+                mode.w,
+                mode.h,
+                bounds.x(),
+                bounds.y()
+            );
+
+            let mut img = image::RgbImage::new(pattern_width, pattern_height);
+            for pixel in img.pixels_mut() {
+                *pixel = image::Rgb([0, 0, 0]);
+            }
+
+            (img, "Motion Profile")
+        }
     };
 
     if args.invert {
@@ -387,7 +447,10 @@ fn main() -> Result<()> {
 
     let is_animated = matches!(
         args.pattern,
-        PatternType::Static | PatternType::CirclingPixel | PatternType::WigglingGaussian
+        PatternType::Static
+            | PatternType::CirclingPixel
+            | PatternType::WigglingGaussian
+            | PatternType::MotionProfile
     );
     let mut static_buffer = if is_animated {
         Some(vec![0u8; (pattern_width * pattern_height * 3) as usize])
@@ -395,10 +458,29 @@ fn main() -> Result<()> {
         None
     };
 
+    let motion_data = if matches!(args.pattern, PatternType::MotionProfile) {
+        let image_path = args.image_path.as_ref().unwrap();
+        let motion_csv = args.motion_csv.as_ref().unwrap();
+
+        let base_img = image::open(image_path)
+            .with_context(|| format!("Failed to load image: {}", image_path.display()))?
+            .into_rgb8();
+        let motion_profile = patterns::motion_profile::load_motion_profile(motion_csv)?;
+
+        Some((base_img, motion_profile))
+    } else {
+        None
+    };
+
     // TODO: Clean up and clock rendering rate to SDL advertised display refresh rate
     // Currently runs unconstrained which can cause excessive CPU usage and inconsistent timing.
     // Should use mode.refresh_rate to set target frame time and add frame pacing logic.
+
+    let mut frame_count = 0u64;
+    let mut last_fps_report = std::time::Instant::now();
+
     'running: loop {
+        frame_count += 1;
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -439,6 +521,22 @@ fn main() -> Result<()> {
                         args.gaussian_intensity,
                     );
                 }
+                PatternType::MotionProfile => {
+                    if let Some((ref base_img, ref motion_profile)) = motion_data {
+                        let elapsed = SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap();
+                        patterns::motion_profile::generate_into_buffer(
+                            buffer,
+                            pattern_width,
+                            pattern_height,
+                            base_img,
+                            motion_profile,
+                            elapsed,
+                            args.motion_scale_percent / 100.0,
+                        );
+                    }
+                }
                 _ => {}
             }
             texture
@@ -452,6 +550,14 @@ fn main() -> Result<()> {
             .copy(&texture, None, Some(dst_rect))
             .map_err(|e| anyhow::anyhow!("Failed to copy texture: {e}"))?;
         canvas.present();
+
+        let elapsed = last_fps_report.elapsed();
+        if elapsed.as_secs() >= 1 {
+            let fps = frame_count as f64 / elapsed.as_secs_f64();
+            println!("FPS: {fps:.1}");
+            frame_count = 0;
+            last_fps_report = std::time::Instant::now();
+        }
     }
 
     Ok(())
