@@ -11,6 +11,7 @@ pub mod cached_star_catalog;
 pub mod camera_interface;
 pub mod config_storage;
 pub mod dark_frame;
+pub mod frame_writer;
 pub mod image_proc;
 pub mod image_size;
 pub mod range_arg;

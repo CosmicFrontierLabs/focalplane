@@ -46,6 +46,9 @@ usvg = "0.45.0"
 # Units
 uom = "0.37.0"
 serde_json = "1.0.145"
+crossbeam-channel = "0.5.15"
+anyhow = "1.0.100"
+tracing = "0.1.41"
 
 [dev-dependencies]
 approx = "0.5"

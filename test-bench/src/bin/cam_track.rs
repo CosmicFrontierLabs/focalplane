@@ -2,31 +2,21 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossbeam_channel::{bounded, Sender};
-use image::{ImageBuffer, Luma};
 use monocle::{
     callback::FgsCallbackEvent,
     config::{FgsConfig, GuideStarFilters},
     state::FgsEvent,
     FineGuidanceSystem,
 };
-use ndarray::Array2;
 use serde::Serialize;
 use shared::camera_interface::{CameraInterface, Timestamp};
 use shared::config_storage::ConfigStorage;
+use shared::frame_writer::FrameWriterHandle;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use test_bench::camera_init::{initialize_camera, CameraArgs};
 use tracing::{info, warn};
-
-#[derive(Debug, Clone)]
-struct FrameRecord {
-    frame_number: usize,
-    timestamp: Timestamp,
-    frame_data: Array2<u16>,
-    metadata: FrameMetadata,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct FrameMetadata {
@@ -195,32 +185,15 @@ fn run_tracking_stream(
     Ok(())
 }
 
-fn save_frame_record(record: &FrameRecord, export_dir: &PathBuf) -> Result<()> {
-    let base_name = format!("frame_{:06}", record.frame_number);
-
+fn save_frame_metadata(metadata: &FrameMetadata, export_dir: &PathBuf) -> Result<()> {
+    let base_name = format!("frame_{:06}", metadata.frame_number);
     let json_path = export_dir.join(format!("{}.json", base_name));
-    let json_data = serde_json::to_string_pretty(&record.metadata)
-        .context("Failed to serialize frame metadata")?;
+    let json_data =
+        serde_json::to_string_pretty(metadata).context("Failed to serialize frame metadata")?;
+    std::fs::create_dir_all(export_dir)
+        .with_context(|| format!("Failed to create directory {}", export_dir.display()))?;
     std::fs::write(&json_path, json_data)
         .with_context(|| format!("Failed to write JSON to {}", json_path.display()))?;
-
-    let png_path = export_dir.join(format!("{}.png", base_name));
-    let (height, width) = record.frame_data.dim();
-
-    let raw_data: Vec<u16> = record
-        .frame_data
-        .as_slice()
-        .context("Frame data not contiguous in memory")?
-        .to_vec();
-
-    let img_buffer: ImageBuffer<Luma<u16>, Vec<u16>> =
-        ImageBuffer::from_raw(width as u32, height as u32, raw_data)
-            .context("Failed to create image buffer from frame data")?;
-
-    img_buffer
-        .save(&png_path)
-        .with_context(|| format!("Failed to save PNG to {}", png_path.display()))?;
-
     Ok(())
 }
 
@@ -309,7 +282,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let frame_export_sender: Option<Sender<FrameRecord>> =
+    let frame_writer: Option<(Arc<FrameWriterHandle>, PathBuf)> =
         if let Some(ref export_dir) = args.export_frames {
             info!(
                 "Initializing frame export to: {} with {} workers",
@@ -317,34 +290,10 @@ fn main() -> Result<()> {
                 args.export_workers
             );
 
-            std::fs::create_dir_all(export_dir).with_context(|| {
-                format!(
-                    "Failed to create export directory: {}",
-                    export_dir.display()
-                )
-            })?;
+            let writer = FrameWriterHandle::new(args.export_workers, args.export_buffer_size)
+                .context("Failed to create frame writer")?;
 
-            let (sender, receiver) = bounded::<FrameRecord>(args.export_buffer_size);
-
-            for worker_id in 0..args.export_workers {
-                let receiver = receiver.clone();
-                let export_dir = export_dir.clone();
-
-                std::thread::spawn(move || {
-                    info!("Export worker {} started", worker_id);
-                    while let Ok(record) = receiver.recv() {
-                        if let Err(e) = save_frame_record(&record, &export_dir) {
-                            warn!(
-                                "Worker {} failed to save frame {}: {}",
-                                worker_id, record.frame_number, e
-                            );
-                        }
-                    }
-                    info!("Export worker {} shutting down", worker_id);
-                });
-            }
-
-            Some(sender)
+            Some((Arc::new(writer), export_dir.clone()))
         } else {
             None
         };
@@ -357,7 +306,9 @@ fn main() -> Result<()> {
 
     let csv_writer_clone = csv_writer.clone();
     let tracking_state_clone = current_tracking_state.clone();
-    let frame_export_sender_clone = frame_export_sender.clone();
+    let frame_writer_clone = frame_writer
+        .as_ref()
+        .map(|(writer, dir)| (writer.clone(), dir.clone()));
     let _callback_id = fgs.register_callback(move |event| match event {
         FgsCallbackEvent::TrackingStarted {
             track_id,
@@ -431,24 +382,24 @@ fn main() -> Result<()> {
             track_id,
             position,
         } => {
-            if let Some(ref sender) = frame_export_sender_clone {
+            if let Some((ref writer, ref export_dir)) = frame_writer_clone {
                 let (height, width) = frame_data.dim();
-                let record = FrameRecord {
+                let metadata = FrameMetadata {
                     frame_number: *frame_number,
                     timestamp: *timestamp,
-                    frame_data: (**frame_data).clone(),
-                    metadata: FrameMetadata {
-                        frame_number: *frame_number,
-                        timestamp: *timestamp,
-                        track_id: *track_id,
-                        centroid_x: position.as_ref().map(|p| p.x),
-                        centroid_y: position.as_ref().map(|p| p.y),
-                        width,
-                        height,
-                    },
+                    track_id: *track_id,
+                    centroid_x: position.as_ref().map(|p| p.x),
+                    centroid_y: position.as_ref().map(|p| p.y),
+                    width,
+                    height,
                 };
 
-                if let Err(_) = sender.try_send(record) {
+                if let Err(e) = save_frame_metadata(&metadata, export_dir) {
+                    warn!("Failed to save metadata for frame {}: {}", frame_number, e);
+                }
+
+                let png_path = export_dir.join(format!("frame_{:06}.png", frame_number));
+                if !writer.write_frame_nonblocking(frame_data, png_path) {
                     warn!("Frame export queue full, dropping frame {frame_number}");
                 }
             }

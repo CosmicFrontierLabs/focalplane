@@ -4091,7 +4091,9 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "approx",
+ "crossbeam-channel",
  "fitsio",
  "float-cmp",
  "image 0.25.9",
@@ -4116,6 +4118,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tiny-skia",
+ "tracing",
  "uom",
  "url",
  "urlencoding",
