@@ -3,7 +3,11 @@ pub mod calibration_overlay;
 pub mod camera_init;
 pub mod camera_server;
 pub mod display_patterns;
+
+#[cfg(feature = "sdl2")]
 pub mod display_utils;
+
+pub mod gpio;
 
 #[cfg(feature = "playerone")]
 pub mod poa;
