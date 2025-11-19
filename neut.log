@@ -1,0 +1,29 @@
+TSC frequency: 31250000 Hz (31.25 MHz)
+Warmup...
+
+=== Clock Calibration (Instant-based estimation) ===
+Estimated TSC frequency (simple): 30937157.96 Hz (30.94 MHz)
+Estimated TSC frequency (regression): 31249558.41 Hz (31.25 MHz)
+Actual TSC frequency: 31250000 Hz (31.25 MHz)
+Frequency error (simple): 10010.95 ppm
+Frequency error (regression): 14.13 ppm
+Estimated offset: 32464415653215.47 TSC cycles
+TSC time (from offset): 1.006176 seconds
+Monotonic time: 1038851.434619 seconds
+Difference: 1038850.428443 seconds
+
+=== Overhead Comparison ===
+TSC read overhead: 166.882µs (16.69 ns/call)
+Instant::now() overhead: 477.543µs (47.75 ns/call)
+Speedup: 2.9x faster
+
+=== Timestamp Comparison ===
+TSC elapsed: 100219648 ns (100.220 ms)
+Instant elapsed: 100222755 ns (100.223 ms)
+Difference: 3107 ns
+
+=== High-Frequency Sampling ===
+Captured 1000 samples back-to-back:
+  Min interval: 0 cycles (0.00 ns)
+  Max interval: 1 cycles (32.00 ns)
+  Avg interval: 0 cycles (0.00 ns)
