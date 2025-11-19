@@ -2807,6 +2807,7 @@ dependencies = [
  "libc",
  "log",
  "ndarray",
+ "once_cell",
  "prometheus 0.14.0",
  "rust-embed",
  "serde",
