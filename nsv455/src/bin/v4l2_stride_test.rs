@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use nsv455::v4l2_capture::{CameraConfig, V4L2Capture};
+use v4l::buffer::Type;
+use v4l::io::mmap::Stream as MmapStream;
+use v4l::io::traits::CaptureStream;
 use v4l::prelude::*;
 use v4l::video::Capture;
 
@@ -20,14 +22,7 @@ struct Args {
     device: String,
 }
 
-fn enumerate_resolutions(device_path: &str) -> Result<Vec<ResolutionInfo>> {
-    let device = Device::with_path(device_path)?;
-    let mut resolutions = Vec::new();
-
-    let _format = device.format()?;
-
-    // For IMX455, we know the standard resolutions
-    // Since enum_framesizes might not work properly, use known values
+fn enumerate_resolutions(_device_path: &str) -> Result<Vec<ResolutionInfo>> {
     let known_resolutions = vec![
         (128, 128, 133.0),
         (256, 256, 83.0),
@@ -38,35 +33,34 @@ fn enumerate_resolutions(device_path: &str) -> Result<Vec<ResolutionInfo>> {
         (8096, 6324, 3.7),
     ];
 
-    for (width, height, fps) in known_resolutions {
-        resolutions.push(ResolutionInfo { width, height, fps });
-    }
-
-    Ok(resolutions)
+    Ok(known_resolutions
+        .into_iter()
+        .map(|(width, height, fps)| ResolutionInfo { width, height, fps })
+        .collect())
 }
 
 fn test_resolution(device_path: &str, width: u32, height: u32) -> Result<()> {
     println!("\n=== Testing {width}x{height} ===");
 
-    let config = CameraConfig {
-        device_path: device_path.to_string(),
-        width,
-        height,
-        ..Default::default()
-    };
+    let device = Device::with_path(device_path)?;
 
-    let capture = V4L2Capture::new(config)?;
-    let frame_data = capture.capture_single_frame()?;
+    let mut format = device.format()?;
+    format.width = width;
+    format.height = height;
+    format.fourcc = v4l::FourCC::new(b"Y16 ");
+    device.set_format(&format)?;
+
+    let mut stream = MmapStream::new(&device, Type::VideoCapture)?;
+    let (buf, _meta) = stream.next()?;
 
     let expected_pixels = (width * height) as usize;
-    let expected_bytes_no_padding = expected_pixels * 2; // 16-bit per pixel
-    let actual_bytes = frame_data.len();
+    let expected_bytes_no_padding = expected_pixels * 2;
+    let actual_bytes = buf.len();
 
     println!("  Expected pixels: {expected_pixels}");
     println!("  Expected bytes (no padding): {expected_bytes_no_padding}");
     println!("  Actual bytes received: {actual_bytes}");
 
-    // Calculate padding based on 256-pixel alignment
     const ALIGNMENT_PIXELS: usize = 256;
     let padded_width = (width as usize).div_ceil(ALIGNMENT_PIXELS) * ALIGNMENT_PIXELS;
     let expected_padding_pixels = padded_width - width as usize;
@@ -83,7 +77,6 @@ fn test_resolution(device_path: &str, width: u32, height: u32) -> Result<()> {
     println!("  Padding pixels per row: {padding_pixels_per_row}");
     println!("  Width {width} -> padded to {padded_width} (next multiple of {ALIGNMENT_PIXELS})");
 
-    // Verify it matches 256-pixel alignment
     if padding_pixels_per_row == expected_padding_pixels {
         println!("  ✓ PASS: Padding is {padding_pixels_per_row} pixels (rounds to {padded_width})");
     } else {
@@ -92,7 +85,6 @@ fn test_resolution(device_path: &str, width: u32, height: u32) -> Result<()> {
         );
     }
 
-    // Verify the math checks out
     let calculated_total = padded_width * height as usize * 2;
     if calculated_total == actual_bytes {
         println!("  ✓ PASS: Total size matches padded_width * height * 2");
@@ -110,7 +102,6 @@ fn main() -> Result<()> {
     println!("Device: {}", args.device);
     println!("Testing that all resolutions align to 256-pixel boundaries...\n");
 
-    // Get available resolutions
     let resolutions = enumerate_resolutions(&args.device)?;
 
     if resolutions.is_empty() {
@@ -132,7 +123,6 @@ fn main() -> Result<()> {
             }
         }
 
-        // Small delay between tests to avoid overwhelming the device
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 

@@ -1,11 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::Duration;
-
-use crate::v4l2_capture::CaptureSession;
 
 #[derive(Serialize, Deserialize)]
 pub struct ImageData {
@@ -22,19 +17,6 @@ pub fn raw_image_to_base64_json(frame_data: &[u8], width: u32, height: u32) -> I
         data: encoded,
         shape: vec![height as usize, width as usize],
         dtype: "uint16".to_string(),
-    }
-}
-
-#[allow(dead_code)]
-pub async fn acquire_camera_exclusive<'a>(
-    session: &'a Arc<Mutex<CaptureSession<'static>>>,
-    timeout_ms: u64,
-) -> Result<tokio::sync::MutexGuard<'a, CaptureSession<'static>>, String> {
-    match tokio::time::timeout(Duration::from_millis(timeout_ms), session.lock()).await {
-        Ok(guard) => Ok(guard),
-        Err(_) => Err(format!(
-            "Failed to acquire camera lock within {timeout_ms} ms"
-        )),
     }
 }
 

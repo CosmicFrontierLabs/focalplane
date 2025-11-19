@@ -1,5 +1,4 @@
 use crate::camera::neutralino_imx455::{calculate_stride, read_sensor_temperatures};
-use crate::v4l2_capture::{CameraConfig as V4L2Config, V4L2Capture};
 use ndarray::Array2;
 use shared::camera_interface::{
     CameraConfig, CameraError, CameraInterface, CameraResult, FrameMetadata, SensorBitDepth,
@@ -14,14 +13,17 @@ use std::time::Duration;
 use v4l::buffer::Type;
 use v4l::io::mmap::Stream as MmapStream;
 use v4l::io::traits::CaptureStream;
+use v4l::prelude::*;
 use v4l::video::Capture;
 
 pub struct NSV455Camera {
     device_path: String,
-    v4l2_config: V4L2Config,
     config: CameraConfig,
     frame_number: Arc<AtomicU64>,
     roi: Option<AABB>,
+    gain: i32,
+    black_level: i32,
+    framerate: u32,
 }
 
 impl NSV455Camera {
@@ -31,16 +33,6 @@ impl NSV455Camera {
     pub const PIXEL_SIZE_MICRONS: f64 = 3.76;
 
     pub fn new(device_path: String) -> CameraResult<Self> {
-        let v4l2_config = V4L2Config {
-            device_path: device_path.clone(),
-            width: Self::SENSOR_WIDTH,
-            height: Self::SENSOR_HEIGHT,
-            framerate: 23_000_000,
-            gain: 360,
-            exposure: 140,
-            black_level: 4095,
-        };
-
         let config = CameraConfig::new(
             Self::SENSOR_WIDTH as usize,
             Self::SENSOR_HEIGHT as usize,
@@ -50,11 +42,142 @@ impl NSV455Camera {
 
         Ok(Self {
             device_path,
-            v4l2_config,
             config,
             frame_number: Arc::new(AtomicU64::new(0)),
             roi: None,
+            gain: 360,
+            black_level: 0,
+            framerate: 23_000_000,
         })
+    }
+
+    fn open_device(&self) -> CameraResult<Device> {
+        Device::with_path(&self.device_path)
+            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))
+    }
+
+    fn configure_device(&self, device: &mut Device) -> CameraResult<()> {
+        let mut format = device
+            .format()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
+
+        let initial_fourcc_bytes = format.fourcc.repr;
+        let initial_fourcc_str = std::str::from_utf8(&initial_fourcc_bytes).unwrap_or("????");
+
+        tracing::info!(
+            "Initial format: {}x{} {} ({:?})",
+            format.width,
+            format.height,
+            initial_fourcc_str,
+            initial_fourcc_bytes
+        );
+
+        let requested_width = self
+            .roi
+            .as_ref()
+            .map_or(self.config.size.width, |roi| roi.max_col - roi.min_col + 1)
+            as u32;
+        let requested_height = self
+            .roi
+            .as_ref()
+            .map_or(self.config.size.height, |roi| roi.max_row - roi.min_row + 1)
+            as u32;
+
+        format.width = requested_width;
+        format.height = requested_height;
+        format.fourcc = v4l::FourCC::new(b"Y16 ");
+
+        tracing::info!(
+            "Requesting format: {}x{} Y16",
+            requested_width,
+            requested_height
+        );
+
+        device
+            .set_format(&format)
+            .map_err(|e| CameraError::ConfigError(format!("Failed to set format: {e}")))?;
+
+        let actual_format = device
+            .format()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
+        let fourcc_bytes = actual_format.fourcc.repr;
+        let fourcc_str = std::str::from_utf8(&fourcc_bytes).unwrap_or("????");
+
+        let stride = actual_format.stride;
+        let expected_stride = actual_format.width * 2;
+
+        // NOTE: The V4L2 driver reports RG16 (Bayer) format, but the actual data is Y16 (monochrome).
+        // This is a quirk of the NSV455 camera/driver - the format string in the logs will show
+        // RG16 but the pixel data is actually raw 16-bit monochrome. Don't worry about the mismatch.
+        tracing::info!(
+            "Format negotiated: {}x{} {} ({:?}), stride: {} bytes (expected: {} bytes)",
+            actual_format.width,
+            actual_format.height,
+            fourcc_str,
+            fourcc_bytes,
+            stride,
+            expected_stride
+        );
+
+        if stride != expected_stride {
+            tracing::warn!(
+                "Row padding detected: {} bytes per row ({}px × 2 = {} expected, {} padding bytes)",
+                stride,
+                actual_format.width,
+                expected_stride,
+                stride - expected_stride
+            );
+        }
+
+        if actual_format.width != requested_width || actual_format.height != requested_height {
+            tracing::warn!(
+                "Camera did not accept requested resolution. Using {}x{} instead of {}x{}",
+                actual_format.width,
+                actual_format.height,
+                requested_width,
+                requested_height
+            );
+        }
+
+        if let Ok(controls) = device.query_controls() {
+            for control_desc in controls {
+                match control_desc.name.as_str() {
+                    "Gain" | "gain" => {
+                        let ctrl = v4l::Control {
+                            id: control_desc.id,
+                            value: v4l::control::Value::Integer(self.gain as i64),
+                        };
+                        let _ = device.set_control(ctrl);
+                    }
+                    "Exposure" | "exposure" => {
+                        let ctrl = v4l::Control {
+                            id: control_desc.id,
+                            value: v4l::control::Value::Integer(
+                                self.config.exposure.as_micros() as i64
+                            ),
+                        };
+                        let _ = device.set_control(ctrl);
+                    }
+                    "Black Level" | "black_level" => {
+                        let ctrl = v4l::Control {
+                            id: control_desc.id,
+                            value: v4l::control::Value::Integer(self.black_level as i64),
+                        };
+                        let _ = device.set_control(ctrl);
+                    }
+                    "Frame Rate" | "frame_rate" => {
+                        let ctrl = v4l::Control {
+                            id: control_desc.id,
+                            value: v4l::control::Value::Integer(self.framerate as i64),
+                        };
+                        let _ = device.set_control(ctrl);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -70,26 +193,17 @@ impl CameraInterface for NSV455Camera {
             ));
         }
 
-        let roi_width = (roi.max_col - roi.min_col + 1) as u32;
-        let roi_height = (roi.max_row - roi.min_row + 1) as u32;
-
-        self.v4l2_config.width = roi_width;
-        self.v4l2_config.height = roi_height;
         self.roi = Some(roi);
-
         Ok(())
     }
 
     fn clear_roi(&mut self) -> CameraResult<()> {
-        self.v4l2_config.width = self.config.size.width as u32;
-        self.v4l2_config.height = self.config.size.height as u32;
         self.roi = None;
         Ok(())
     }
 
     fn set_exposure(&mut self, exposure: Duration) -> CameraResult<()> {
         self.config.exposure = exposure;
-        self.v4l2_config.exposure = exposure.as_micros() as i32;
         Ok(())
     }
 
@@ -117,17 +231,8 @@ impl CameraInterface for NSV455Camera {
         &mut self,
         callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
     ) -> CameraResult<()> {
-        let capture = V4L2Capture::new(self.v4l2_config.clone()).map_err(|e| {
-            CameraError::HardwareError(format!("Failed to create V4L2 capture: {e}"))
-        })?;
-
-        let mut device = capture
-            .open_device()
-            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
-
-        capture
-            .configure_device(&mut device)
-            .map_err(|e| CameraError::ConfigError(format!("Failed to configure device: {e}")))?;
+        let mut device = self.open_device()?;
+        self.configure_device(&mut device)?;
 
         let actual_format = device
             .format()
@@ -230,11 +335,11 @@ impl CameraInterface for NSV455Camera {
     }
 
     fn get_gain(&self) -> f64 {
-        self.v4l2_config.gain as f64
+        self.gain as f64
     }
 
     fn set_gain(&mut self, gain: f64) -> CameraResult<()> {
-        self.v4l2_config.gain = gain.round() as i32;
+        self.gain = gain.round() as i32;
         Ok(())
     }
 
