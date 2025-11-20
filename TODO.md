@@ -9,6 +9,12 @@
 - [ ] Implement gain control for NSV455 camera
   - Add get_gain() and set_gain() methods to NSV455 CameraInterface implementation
   - Location: nsv455/src/camera/neutralino_imx455.rs (if CameraInterface impl exists)
+- [ ] Unify gain settings across NSV455 and POA cameras
+  - Current: Different gain units/ranges between camera types (NSV455 uses V4L2 controls, POA uses SDK-specific values)
+  - Needed: Define common gain abstraction with consistent units (e.g., linear multiplier or dB)
+  - Location: shared/src/camera_interface/mod.rs (CameraInterface trait)
+  - Why: Allows test code and binaries to use same gain values regardless of camera type
+  - Benefit: Simpler command-line interfaces and consistent behavior across hardware
 - [ ] Refactor Array2<u16> ↔ image conversions into shared module
   - Duplicate conversion code exists in multiple locations (calibration_analysis.rs, display_patterns/apriltag.rs, etc.)
   - Create shared utility functions for bidirectional conversions with proper grayscale handling
