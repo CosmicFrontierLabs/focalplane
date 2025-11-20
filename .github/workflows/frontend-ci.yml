@@ -1,0 +1,70 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: test-bench-frontend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Install Trunk
+      uses: jetli/trunk-action@v0.4.0
+      with:
+        version: 'latest'
+
+    - name: Build Calibrate App
+      run: trunk build --config Trunk-calibrate.toml
+
+    - name: Verify Calibrate Artifacts
+      run: |
+        echo "Listing dist/calibrate:"
+        ls -R dist/calibrate
+        if [ ! -f "dist/calibrate/index.html" ]; then
+          echo "Error: dist/calibrate/index.html not found"
+          exit 1
+        fi
+        if ! ls dist/calibrate/*.wasm 1> /dev/null 2>&1; then
+          echo "Error: No .wasm file found in dist/calibrate"
+          exit 1
+        fi
+        if ! ls dist/calibrate/*.js 1> /dev/null 2>&1; then
+          echo "Error: No .js file found in dist/calibrate"
+          exit 1
+        fi
+
+    - name: Build Camera App
+      run: trunk build --config Trunk-camera.toml
+
+    - name: Verify Camera Artifacts
+      run: |
+        echo "Listing dist/camera:"
+        ls -R dist/camera
+        if [ ! -f "dist/camera/index.html" ]; then
+          echo "Error: dist/camera/index.html not found"
+          exit 1
+        fi
+        if ! ls dist/camera/*.wasm 1> /dev/null 2>&1; then
+          echo "Error: No .wasm file found in dist/camera"
+          exit 1
+        fi
+        if ! ls dist/camera/*.js 1> /dev/null 2>&1; then
+          echo "Error: No .js file found in dist/camera"
+          exit 1
+        fi
