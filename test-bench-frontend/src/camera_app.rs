@@ -1,6 +1,8 @@
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use wasm_bindgen::JsCast;
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 use yew::prelude::*;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -24,6 +26,7 @@ pub struct CameraFrontend {
     image_url: String,
     stats: Option<Stats>,
     show_annotation: bool,
+    log_scale_histogram: bool,
     connection_status: String,
     image_refresh_handle: Option<gloo_timers::callback::Interval>,
     stats_refresh_handle: Option<gloo_timers::callback::Interval>,
@@ -37,6 +40,7 @@ pub enum Msg {
     ImageLoaded(String),
     RefreshStats,
     ToggleAnnotation,
+    ToggleLogScale,
     StatsLoaded(Stats),
     ImageError,
     StatsError,
@@ -63,6 +67,7 @@ impl Component for CameraFrontend {
             image_url: format!("/jpeg?t={}", js_sys::Date::now()),
             stats: None,
             show_annotation: false,
+            log_scale_histogram: false,
             connection_status: "Connecting...".to_string(),
             image_refresh_handle: Some(image_handle),
             stats_refresh_handle: Some(stats_handle),
@@ -127,6 +132,10 @@ impl Component for CameraFrontend {
             }
             Msg::ToggleAnnotation => {
                 self.show_annotation = !self.show_annotation;
+                true
+            }
+            Msg::ToggleLogScale => {
+                self.log_scale_histogram = !self.log_scale_histogram;
                 true
             }
             Msg::ImageError => {
@@ -227,6 +236,17 @@ impl Component for CameraFrontend {
                     { self.view_stats() }
 
                     <h2 style="margin-top: 30px;">{"Histogram"}</h2>
+                    <div class="metadata-item">
+                        <label style="cursor: pointer;">
+                            <input
+                                type="checkbox"
+                                checked={self.log_scale_histogram}
+                                onchange={ctx.link().callback(|_| Msg::ToggleLogScale)}
+                                style="width: 20px; height: 20px; vertical-align: middle;"
+                            />
+                            <span style="margin-left: 5px;">{"Log Scale"}</span>
+                        </label>
+                    </div>
                     <canvas id="histogram-canvas" width="300" height="150" style="width: 100%;"></canvas>
                     <div id="histogram-info" style="font-size: 0.7em; color: #00aa00; margin-top: 5px;"></div>
                 </div>
@@ -238,6 +258,17 @@ impl Component for CameraFrontend {
         self.image_refresh_handle = None;
         self.stats_refresh_handle = None;
     }
+
+    fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
+        if let Some(ref stats) = self.stats {
+            self.render_histogram(
+                &stats.histogram,
+                stats.histogram_mean,
+                stats.histogram_max,
+                self.log_scale_histogram,
+            );
+        }
+    }
 }
 
 impl CameraFrontend {
@@ -247,6 +278,84 @@ impl CameraFrontend {
         } else {
             let exponential_delay = base_delay * 2_u32.pow(failure_count.min(10));
             exponential_delay.min(max_delay)
+        }
+    }
+
+    fn render_histogram(&self, histogram: &[u32], mean: f64, max_bin: u16, log_scale: bool) {
+        let window = match web_sys::window() {
+            Some(w) => w,
+            None => return,
+        };
+        let document = match window.document() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let canvas = match document.get_element_by_id("histogram-canvas") {
+            Some(el) => match el.dyn_into::<HtmlCanvasElement>() {
+                Ok(c) => c,
+                Err(_) => return,
+            },
+            None => return,
+        };
+
+        let ctx = match canvas.get_context("2d") {
+            Ok(Some(ctx)) => match ctx.dyn_into::<CanvasRenderingContext2d>() {
+                Ok(c) => c,
+                Err(_) => return,
+            },
+            _ => return,
+        };
+
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+
+        ctx.set_fill_style_str("#000000");
+        ctx.fill_rect(0.0, 0.0, width, height);
+
+        if histogram.is_empty() {
+            return;
+        }
+
+        let transform_value = |v: f64| -> f64 {
+            if log_scale {
+                if v > 0.0 {
+                    (v + 1.0).ln()
+                } else {
+                    0.0
+                }
+            } else {
+                v
+            }
+        };
+
+        let max_value = histogram
+            .iter()
+            .map(|&v| transform_value(v as f64))
+            .fold(0.0_f64, f64::max);
+
+        if max_value == 0.0 {
+            return;
+        }
+
+        let num_bins = histogram.len();
+        let bar_width = width / num_bins as f64;
+
+        ctx.set_fill_style_str("#00aa00");
+
+        for (i, &count) in histogram.iter().enumerate() {
+            let transformed = transform_value(count as f64);
+            let bar_height = (transformed / max_value) * height;
+            let x = i as f64 * bar_width;
+            let y = height - bar_height;
+            ctx.fill_rect(x, y, bar_width.max(1.0), bar_height);
+        }
+
+        let scale_label = if log_scale { " (log)" } else { "" };
+        if let Some(info_el) = document.get_element_by_id("histogram-info") {
+            info_el.set_inner_html(&format!(
+                "Mean: {mean:.1} | Max bin: {max_bin}{scale_label}"
+            ));
         }
     }
 
