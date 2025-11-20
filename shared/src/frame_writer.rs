@@ -6,12 +6,20 @@
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Sender, TrySendError};
 use fitsio::FitsFile;
-use image::{ImageBuffer, Luma};
+use image::{DynamicImage, ImageBuffer, Luma};
 use ndarray::Array2;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use tracing::{info, warn};
+
+#[derive(Debug, Clone)]
+pub enum ImagePayload {
+    U16(Array2<u16>),
+    U8(Array2<u8>),
+    F64(Array2<f64>),
+    Dynamic(DynamicImage),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameFormat {
@@ -25,7 +33,7 @@ pub struct FrameWriterHandle {
 }
 
 struct FrameWriteTask {
-    frame_data: Array2<u16>,
+    payload: ImagePayload,
     filepath: PathBuf,
     format: FrameFormat,
 }
@@ -41,7 +49,7 @@ impl FrameWriterHandle {
             let handle = std::thread::spawn(move || {
                 info!("Frame writer worker {} started", worker_id);
                 while let Ok(task) = receiver.recv() {
-                    if let Err(e) = save_frame(&task.frame_data, &task.filepath, task.format) {
+                    if let Err(e) = save_frame(&task.payload, &task.filepath, task.format) {
                         warn!(
                             "Worker {} failed to save frame to {}: {}",
                             worker_id,
@@ -78,7 +86,7 @@ impl FrameWriterHandle {
         format: FrameFormat,
     ) -> Result<()> {
         let task = FrameWriteTask {
-            frame_data: frame_data.clone(),
+            payload: ImagePayload::U16(frame_data.clone()),
             filepath: filepath.clone(),
             format,
         };
@@ -104,52 +112,129 @@ impl FrameWriterHandle {
         format: FrameFormat,
     ) -> bool {
         let task = FrameWriteTask {
-            frame_data: frame_data.clone(),
+            payload: ImagePayload::U16(frame_data.clone()),
             filepath,
             format,
         };
 
         self.sender.try_send(task).is_ok()
     }
+    pub fn write_u8_frame(
+        &self,
+        frame_data: &Array2<u8>,
+        filepath: PathBuf,
+        format: FrameFormat,
+    ) -> Result<()> {
+        let task = FrameWriteTask {
+            payload: ImagePayload::U8(frame_data.clone()),
+            filepath,
+            format,
+        };
+        self.send_task(task)
+    }
+
+    pub fn write_f64_frame(
+        &self,
+        frame_data: &Array2<f64>,
+        filepath: PathBuf,
+        format: FrameFormat,
+    ) -> Result<()> {
+        let task = FrameWriteTask {
+            payload: ImagePayload::F64(frame_data.clone()),
+            filepath,
+            format,
+        };
+        self.send_task(task)
+    }
+
+    pub fn write_dynamic_image(
+        &self,
+        image: DynamicImage,
+        filepath: PathBuf,
+        format: FrameFormat,
+    ) -> Result<()> {
+        let task = FrameWriteTask {
+            payload: ImagePayload::Dynamic(image),
+            filepath,
+            format,
+        };
+        self.send_task(task)
+    }
+
+    fn send_task(&self, task: FrameWriteTask) -> Result<()> {
+        match self.sender.try_send(task) {
+            Ok(_) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                anyhow::bail!("Frame writer queue full")
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                anyhow::bail!("Frame writer workers have shut down")
+            }
+        }
+    }
 }
 
-fn save_frame(frame: &Array2<u16>, filepath: &Path, format: FrameFormat) -> Result<()> {
+fn save_frame(payload: &ImagePayload, filepath: &Path, format: FrameFormat) -> Result<()> {
     if let Some(parent) = filepath.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
     match format {
-        FrameFormat::Png => save_as_png(frame, filepath),
-        FrameFormat::Fits => save_as_fits(frame, filepath),
+        FrameFormat::Png => save_as_png(payload, filepath),
+        FrameFormat::Fits => save_as_fits(payload, filepath),
     }
 }
 
-fn save_as_png(frame: &Array2<u16>, filepath: &Path) -> Result<()> {
-    let (height, width) = frame.dim();
-
-    let img_buffer: ImageBuffer<Luma<u16>, Vec<u16>> =
-        ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
-            let val = frame[[y as usize, x as usize]];
-            Luma([val])
-        });
-
-    img_buffer
-        .save(filepath)
-        .with_context(|| format!("Failed to save frame to {}", filepath.display()))?;
-
+fn save_as_png(payload: &ImagePayload, filepath: &Path) -> Result<()> {
+    match payload {
+        ImagePayload::U16(frame) => {
+            let (height, width) = frame.dim();
+            let img_buffer: ImageBuffer<Luma<u16>, Vec<u16>> =
+                ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
+                    let val = frame[[y as usize, x as usize]];
+                    Luma([val])
+                });
+            img_buffer.save(filepath)?;
+        }
+        ImagePayload::U8(frame) => {
+            let (height, width) = frame.dim();
+            let img_buffer: ImageBuffer<Luma<u8>, Vec<u8>> =
+                ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
+                    let val = frame[[y as usize, x as usize]];
+                    Luma([val])
+                });
+            img_buffer.save(filepath)?;
+        }
+        ImagePayload::Dynamic(image) => {
+            image.save(filepath)?;
+        }
+        ImagePayload::F64(_) => {
+            anyhow::bail!("Saving f64 arrays as PNG is not supported directly");
+        }
+    }
     Ok(())
 }
 
-fn save_as_fits(frame: &Array2<u16>, filepath: &Path) -> Result<()> {
-    let (height, width) = frame.dim();
+fn save_as_fits(payload: &ImagePayload, filepath: &Path) -> Result<()> {
+    let (width, height, data_type) = match payload {
+        ImagePayload::U16(frame) => {
+            let (h, w) = frame.dim();
+            (w, h, fitsio::images::ImageType::UnsignedShort)
+        }
+        ImagePayload::F64(frame) => {
+            let (h, w) = frame.dim();
+            (w, h, fitsio::images::ImageType::Double)
+        }
+        _ => anyhow::bail!("Unsupported payload type for FITS"),
+    };
 
     let mut fptr = FitsFile::create(filepath)
         .open()
         .map_err(|e| anyhow::anyhow!("Failed to create FITS file {}: {}", filepath.display(), e))?;
 
     let image_description = fitsio::images::ImageDescription {
-        data_type: fitsio::images::ImageType::UnsignedShort,
+        data_type,
         dimensions: &[width, height],
     };
 
@@ -163,15 +248,17 @@ fn save_as_fits(frame: &Array2<u16>, filepath: &Path) -> Result<()> {
             )
         })?;
 
-    let data: Vec<u16> = frame.iter().cloned().collect();
-
-    hdu.write_image(&mut fptr, &data).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to write FITS image data to {}: {}",
-            filepath.display(),
-            e
-        )
-    })?;
+    match payload {
+        ImagePayload::U16(frame) => {
+            let data: Vec<u16> = frame.iter().cloned().collect();
+            hdu.write_image(&mut fptr, &data)?;
+        }
+        ImagePayload::F64(frame) => {
+            let data: Vec<f64> = frame.iter().cloned().collect();
+            hdu.write_image(&mut fptr, &data)?;
+        }
+        _ => unreachable!(),
+    }
 
     Ok(())
 }
@@ -243,7 +330,7 @@ mod tests {
 
         let frame = Array2::from_shape_fn((8, 8), |(y, x)| ((x + y) * 10) as u16);
 
-        save_frame(&frame, &filepath, FrameFormat::Png).unwrap();
+        save_frame(&ImagePayload::U16(frame), &filepath, FrameFormat::Png).unwrap();
         assert!(filepath.exists());
     }
 
@@ -292,7 +379,7 @@ mod tests {
 
         let frame = Array2::from_shape_fn((16, 16), |(y, x)| ((x + y) * 100) as u16);
 
-        save_frame(&frame, &filepath, FrameFormat::Fits).unwrap();
+        save_frame(&ImagePayload::U16(frame), &filepath, FrameFormat::Fits).unwrap();
         assert!(filepath.exists());
     }
 

@@ -5,7 +5,6 @@
 
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::{RenderingResult, StarInFrame};
-use crate::io::{write_typed_fits, FitsDataType};
 use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::scene::Scene;
 use crate::{
@@ -19,12 +18,13 @@ use shared::algo::{
     icp::{icp_match_objects, Locatable2d},
     MinMaxScan,
 };
+use shared::frame_writer::{FrameFormat, FrameWriterHandle};
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::image_proc::detection::{detect_stars_unified, StarFinder};
 use shared::image_proc::histogram_stretch::sigma_stretch;
 use shared::image_proc::image::array2_to_gray_image;
 use shared::image_proc::{
-    draw_stars_with_x_markers, save_u8_image, stretch_histogram, u16_to_u8_scaled, StarDetection,
+    draw_stars_with_x_markers, stretch_histogram, u16_to_u8_scaled, StarDetection,
 };
 use shared::viz::histogram::{Histogram, HistogramConfig, Scale};
 use starfield::catalogs::{StarCatalog, StarData};
@@ -224,6 +224,7 @@ pub fn run_experiment<T: StarCatalog>(
     params: &ExperimentParams,
     catalog: &T,
     max_fov: f64,
+    frame_writer: &FrameWriterHandle,
 ) -> Vec<ExperimentResult> {
     let experiment_start = Instant::now();
     let output_path = Path::new(&params.common_args.output_dir);
@@ -368,6 +369,7 @@ pub fn run_experiment<T: StarCatalog>(
                         &detected_stars,
                         output_path,
                         &prefix,
+                        frame_writer,
                     );
                 }
 
@@ -527,6 +529,7 @@ pub fn save_image_outputs(
     detected_stars: &[StarDetection],
     output_path: &Path,
     prefix: &str,
+    frame_writer: &FrameWriterHandle,
 ) {
     // Convert u16 image to u8 for saving (normalize by max bit depth value)
     let max_bit_value = (1 << (sensor.bit_depth as u32)) - 1;
@@ -534,7 +537,13 @@ pub fn save_image_outputs(
 
     // Save the raw image
     let regular_path = output_path.join(format!("{prefix}_regular.png"));
-    save_u8_image(&u8_image, &regular_path).expect("Failed to save image");
+    if let Err(e) = frame_writer.write_u8_frame(&u8_image, regular_path.clone(), FrameFormat::Png) {
+        warn!(
+            "Failed to async save image {}: {}",
+            regular_path.display(),
+            e
+        );
+    }
 
     // Create and save histogram stretched version
     let stretched_image = stretch_histogram(render_result.quantized_image.view(), 0.0, 50.0);
@@ -544,7 +553,16 @@ pub fn save_image_outputs(
     let normed = sigma_stretch(&img_flt, 5.0, Some(5));
     let u8_stretched = normed.mapv(|x| (x * 255.0).round() as u8);
     let stretched_path = output_path.join(format!("{prefix}_stretched.png"));
-    save_u8_image(&u8_stretched, &stretched_path).expect("Failed to save stretched image");
+
+    if let Err(e) =
+        frame_writer.write_u8_frame(&u8_stretched, stretched_path.clone(), FrameFormat::Png)
+    {
+        warn!(
+            "Failed to async save stretched image {}: {}",
+            stretched_path.display(),
+            e
+        );
+    }
 
     // Use light blue (135, 206, 250) for X markers
     let vis_image = array2_to_gray_image(&u8_image);
@@ -565,28 +583,44 @@ pub fn save_image_outputs(
     );
 
     let overlay_path = output_path.join(format!("{prefix}_overlay.png"));
-    x_markers_image
-        .save(&overlay_path)
-        .expect("Failed to save image with X markers");
 
-    // Export FITS files for both regular image and electron image
-    let mut fits_data = HashMap::new();
+    if let Err(e) =
+        frame_writer.write_dynamic_image(x_markers_image, overlay_path.clone(), FrameFormat::Png)
+    {
+        warn!(
+            "Failed to async save overlay image {}: {}",
+            overlay_path.display(),
+            e
+        );
+    }
 
-    // Keep u16 image in native format (no upcasting)
-    fits_data.insert(
-        "IMAGE".to_string(),
-        FitsDataType::UInt16(render_result.quantized_image.clone()),
-    );
+    // Export FITS files
+    // Split into two files for async writing
+    let raw_fits_path = output_path.join(format!("{prefix}_data_raw.fits"));
+    let electron_fits_path = output_path.join(format!("{prefix}_data_electron.fits"));
 
-    // Add electron image as f64
-    fits_data.insert(
-        "ELECTRON_IMAGE".to_string(),
-        FitsDataType::Float64(render_result.mean_electron_image()),
-    );
-
-    // Save FITS file with both datasets
-    let fits_path = output_path.join(format!("{prefix}_data.fits"));
-    write_typed_fits(&fits_data, &fits_path).expect("Failed to save FITS file");
+    if let Err(e) = frame_writer.write_frame(
+        &render_result.quantized_image,
+        raw_fits_path.clone(),
+        FrameFormat::Fits,
+    ) {
+        warn!(
+            "Failed to async save raw FITS {}: {}",
+            raw_fits_path.display(),
+            e
+        );
+    }
+    if let Err(e) = frame_writer.write_f64_frame(
+        &render_result.mean_electron_image(),
+        electron_fits_path.clone(),
+        FrameFormat::Fits,
+    ) {
+        warn!(
+            "Failed to async save electron FITS {}: {}",
+            electron_fits_path.display(),
+            e
+        );
+    }
 }
 
 /// Display debug statistics including electron counts, noise, match distances and histogram

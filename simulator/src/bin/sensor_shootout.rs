@@ -14,6 +14,7 @@ use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::info;
 use rayon::prelude::*;
+use shared::frame_writer::FrameWriterHandle;
 use shared::image_proc::detection::StarFinder;
 use shared::range_arg::RangeArg;
 use simulator::hardware::sensor::models as sensor_models;
@@ -278,6 +279,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         aperture_m: base_telescope.aperture.as_meters(),
     };
 
+    // Initialize frame writer if saving images
+    let num_workers = num_cpus::get().max(2);
+    let buffer_size = num_workers * 4;
+    info!("Initializing frame writer with {num_workers} workers");
+    let frame_writer =
+        FrameWriterHandle::new(num_workers, buffer_size).expect("Failed to create frame writer");
+
     // Build all experiment parameters upfront
     info!("Setting up experiments...");
     let mut all_experiments = Vec::new();
@@ -347,7 +355,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let experiment_results: Vec<Vec<ExperimentResult>> = if args.serial {
         all_experiments
             .iter()
-            .map(|params| run_experiment(params, &catalog, max_fov))
+            .map(|params| run_experiment(params, &catalog, max_fov, &frame_writer))
             .inspect(|_| {
                 pb.inc(1);
             })
@@ -355,7 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         all_experiments
             .par_iter()
-            .map(|params| run_experiment(params, &catalog, max_fov))
+            .map(|params| run_experiment(params, &catalog, max_fov, &frame_writer))
             .inspect(|_| {
                 pb.inc(1);
             })
@@ -367,6 +375,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         experiment_results.into_iter().flatten().collect();
 
     pb.finish_with_message("Experiments complete!");
+
+    info!("Waiting for frame writer to finish...");
+    frame_writer.wait_for_completion();
 
     // Process results
     info!("Processing results...");
