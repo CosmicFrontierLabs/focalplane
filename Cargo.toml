@@ -10,6 +10,7 @@ members = [
     "nsv455",
     "exolambda",
     "exail",
+    "proto-control",
 ]
 resolver = "2"
 
