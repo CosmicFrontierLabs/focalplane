@@ -1,0 +1,12 @@
+[package]
+name = "exail"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Exail Asterix NS Gyro protocol parsing"
+license.workspace = true
+
+[dependencies]
+bitflags = "2.10.0"
+bytemuck = { version = "1.24.0", features = ["derive"] }
+thiserror = "1.0"

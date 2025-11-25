@@ -9,6 +9,7 @@ members = [
     "test-bench-frontend",
     "nsv455",
     "exolambda",
+    "exail",
 ]
 resolver = "2"
 
