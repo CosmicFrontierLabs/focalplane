@@ -4,6 +4,7 @@
 //! All config is stored in ~/.cf_config/ by default.
 
 use crate::bad_pixel_map::BadPixelMap;
+use crate::optical_alignment::OpticalAlignment;
 use std::path::{Path, PathBuf};
 
 /// Configuration storage manager for camera calibration data.
@@ -128,6 +129,55 @@ impl ConfigStorage {
         std::fs::remove_file(path)?;
         Ok(true)
     }
+
+    // =========================================================================
+    // Optical Alignment
+    // =========================================================================
+
+    /// Get the optical alignment file path
+    fn optical_alignment_path(&self) -> PathBuf {
+        self.root_path.join("optical_alignment.json")
+    }
+
+    /// Get the optical alignment calibration.
+    ///
+    /// Returns None if no calibration exists.
+    /// Returns Some(Err) if the file exists but cannot be loaded.
+    pub fn get_optical_alignment(&self) -> Option<Result<OpticalAlignment, std::io::Error>> {
+        let path = self.optical_alignment_path();
+
+        if !path.exists() {
+            return None;
+        }
+
+        Some(OpticalAlignment::load_from_file(&path))
+    }
+
+    /// Save the optical alignment calibration.
+    ///
+    /// Creates the config directory if it doesn't exist.
+    /// Returns the path where the calibration was saved.
+    pub fn save_optical_alignment(&self, alignment: &OpticalAlignment) -> std::io::Result<PathBuf> {
+        std::fs::create_dir_all(&self.root_path)?;
+
+        let path = self.optical_alignment_path();
+        alignment.save_to_file(&path)?;
+        Ok(path)
+    }
+
+    /// Delete the optical alignment calibration.
+    ///
+    /// Returns Ok(true) if the file was deleted, Ok(false) if it didn't exist.
+    pub fn delete_optical_alignment(&self) -> std::io::Result<bool> {
+        let path = self.optical_alignment_path();
+
+        if !path.exists() {
+            return Ok(false);
+        }
+
+        std::fs::remove_file(path)?;
+        Ok(true)
+    }
 }
 
 impl Default for ConfigStorage {
@@ -237,6 +287,55 @@ mod tests {
         let deleted_again = storage
             .delete_bad_pixel_map("TestSensor", "TESTDEL")
             .unwrap();
+        assert!(!deleted_again);
+
+        std::fs::remove_dir_all(storage.root_path()).ok();
+    }
+
+    #[test]
+    fn test_save_and_load_optical_alignment() {
+        let storage = create_test_storage();
+
+        let alignment = OpticalAlignment::new(1.0, 0.1, -0.1, 1.0, 100.0, 200.0, 500);
+
+        let path = storage.save_optical_alignment(&alignment).unwrap();
+        assert!(path.exists());
+
+        let loaded = storage
+            .get_optical_alignment()
+            .expect("Alignment should exist")
+            .expect("Alignment should load successfully");
+
+        assert!((loaded.a - 1.0).abs() < 1e-10);
+        assert!((loaded.b - 0.1).abs() < 1e-10);
+        assert!((loaded.tx - 100.0).abs() < 1e-10);
+        assert_eq!(loaded.num_points, 500);
+
+        std::fs::remove_dir_all(storage.root_path()).ok();
+    }
+
+    #[test]
+    fn test_get_nonexistent_optical_alignment() {
+        let storage = create_test_storage();
+        let result = storage.get_optical_alignment();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_delete_optical_alignment() {
+        let storage = create_test_storage();
+
+        let alignment = OpticalAlignment::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 100);
+        storage.save_optical_alignment(&alignment).unwrap();
+
+        assert!(storage.get_optical_alignment().is_some());
+
+        let deleted = storage.delete_optical_alignment().unwrap();
+        assert!(deleted);
+
+        assert!(storage.get_optical_alignment().is_none());
+
+        let deleted_again = storage.delete_optical_alignment().unwrap();
         assert!(!deleted_again);
 
         std::fs::remove_dir_all(storage.root_path()).ok();
