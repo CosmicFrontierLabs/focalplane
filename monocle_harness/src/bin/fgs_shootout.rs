@@ -308,6 +308,7 @@ fn run_single_experiment(
         max_reacquisition_attempts: 5,
         centroid_radius_multiplier: fgs_params.centroid_radius_multiplier,
         fwhm: pix_fwhm,
+        snr_dropout_threshold: 3.0,
     };
 
     // Create FGS

@@ -44,6 +44,7 @@ fn test_basic_setup() {
         max_reacquisition_attempts: 5,
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
+        snr_dropout_threshold: 3.0,
     };
 
     let _camera = create_jbt_hwk_camera();

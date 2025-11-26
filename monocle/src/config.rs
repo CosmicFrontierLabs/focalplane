@@ -39,6 +39,8 @@ pub struct FgsConfig {
     pub centroid_radius_multiplier: f64,
     /// FWHM measure in pixels
     pub fwhm: f64,
+    /// Minimum SNR for tracking - tracking stops if SNR drops below this threshold
+    pub snr_dropout_threshold: f64,
 }
 
 impl FgsConfig {

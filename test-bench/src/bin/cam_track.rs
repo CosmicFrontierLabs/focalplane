@@ -11,7 +11,7 @@ use monocle::{
 use serde::Serialize;
 use shared::camera_interface::{CameraInterface, Timestamp};
 use shared::config_storage::ConfigStorage;
-use shared::frame_writer::FrameWriterHandle;
+use shared::frame_writer::{FrameFormat, FrameWriterHandle};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,6 +46,13 @@ struct Args {
 
     #[arg(long, default_value = "10.0")]
     snr_min: f64,
+
+    #[arg(
+        long,
+        default_value = "3.0",
+        help = "SNR threshold below which tracking is lost"
+    )]
+    snr_dropout_threshold: f64,
 
     #[arg(
         short = 'e',
@@ -265,6 +272,7 @@ fn main() -> Result<()> {
         max_reacquisition_attempts: 5,
         centroid_radius_multiplier: 3.0,
         fwhm: 7.0,
+        snr_dropout_threshold: args.snr_dropout_threshold,
     };
 
     let csv_writer = if let Some(ref csv_path) = args.csv_output {
@@ -399,7 +407,7 @@ fn main() -> Result<()> {
                 }
 
                 let png_path = export_dir.join(format!("frame_{:06}.png", frame_number));
-                if !writer.write_frame_nonblocking(frame_data, png_path) {
+                if !writer.write_frame_nonblocking(frame_data, png_path, FrameFormat::Png) {
                     warn!("Frame export queue full, dropping frame {frame_number}");
                 }
             }

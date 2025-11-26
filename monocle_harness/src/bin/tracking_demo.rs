@@ -134,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_reacquisition_attempts: 3,
         centroid_radius_multiplier: args.centroid_multiplier,
         fwhm: 3.0,
+        snr_dropout_threshold: 3.0,
     };
 
     // Update config with camera's saturation value (95% of max to be conservative)

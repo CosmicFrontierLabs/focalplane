@@ -6,6 +6,7 @@
 use ndarray::{Array2, ArrayView2};
 use shared::camera_interface::{CameraInterface, Timestamp};
 use shared::image_proc::detection::StarDetection;
+use shared::image_proc::source_snr::calculate_snr_at_position;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -288,7 +289,27 @@ impl FineGuidanceSystem {
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
     ) -> Result<StateTransitionResult, String> {
-        let update_opt = self.track(frame, timestamp)?;
+        let update_result = self.track(frame, timestamp);
+
+        // Check for SNR dropout - triggers transition to Reacquiring
+        if let Err(ref e) = update_result {
+            if e.starts_with("SNR_DROPOUT:") {
+                log::warn!("SNR dropped below threshold, entering Reacquiring: {e}");
+
+                // Emit tracking lost event
+                self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak, timestamp);
+
+                // Clear guide star so reacquisition can find a new one
+                self.guide_star = None;
+
+                return Ok((
+                    FgsState::Reacquiring { attempts: 0 },
+                    (None, vec![CameraSettingsUpdate::ClearROI]),
+                ));
+            }
+        }
+
+        let update_opt = update_result?;
 
         // Only process if we got a valid update
         if let Some(update) = update_opt {
@@ -655,6 +676,26 @@ impl FineGuidanceSystem {
         // Compute centroid within the masked region
         let centroid_result = compute_centroid_from_mask(&roi_f64.view(), &mask.view());
 
+        // Compute SNR to check if star is still trackable
+        let aperture = guide_star.diameter / 2.0;
+        let snr = calculate_snr_at_position(
+            centroid_result.x,
+            centroid_result.y,
+            &roi_f64.view(),
+            aperture,
+            aperture * 2.0,
+            aperture * 3.0,
+        )
+        .map_err(|e| format!("Failed to calculate SNR during tracking: {e}"))?;
+
+        // Check if SNR dropped below threshold - return specific error for state machine handling
+        if snr < self.config.snr_dropout_threshold {
+            return Err(format!(
+                "SNR_DROPOUT: {:.2} < {:.2}",
+                snr, self.config.snr_dropout_threshold
+            ));
+        }
+
         // Convert centroid position back to full frame coordinates
         let new_x = roi_min_col as f64 + centroid_result.x;
         let new_y = roi_min_row as f64 + centroid_result.y;
@@ -702,6 +743,7 @@ mod tests {
             max_reacquisition_attempts: 5,
             centroid_radius_multiplier: 5.0,
             fwhm: 3.0,
+            snr_dropout_threshold: 3.0,
         }
     }
 

@@ -23,6 +23,90 @@ use super::aperture_photometry::collect_aperture_pixels;
 use super::detection::StarDetection;
 use crate::algo::stats::median;
 
+/// Calculate signal-to-noise ratio at a specific position using aperture photometry.
+///
+/// This is the core SNR calculation function that takes coordinates directly.
+/// Use this when you have position coordinates but no `StarDetection` struct.
+///
+/// # Arguments
+///
+/// * `x` - X coordinate (column) of the source centroid
+/// * `y` - Y coordinate (row) of the source centroid
+/// * `image` - The image array as f64 pixel values
+/// * `aperture_radius` - Radius in pixels for the measurement aperture
+/// * `background_inner_radius` - Inner radius of background annulus in pixels
+/// * `background_outer_radius` - Outer radius of background annulus in pixels
+///
+/// # Returns
+///
+/// Result containing the signal-to-noise ratio as a positive f64 value.
+///
+/// # Errors
+///
+/// Returns an error string if:
+/// - Aperture contains no pixels
+/// - Background annulus contains fewer than 10 pixels
+/// - Noise estimate is zero or negative (indicates no variation in background)
+pub fn calculate_snr_at_position(
+    x: f64,
+    y: f64,
+    image: &ArrayView2<f64>,
+    aperture_radius: f64,
+    background_inner_radius: f64,
+    background_outer_radius: f64,
+) -> Result<f64, String> {
+    let (aperture_pixels, background_pixels) = collect_aperture_pixels(
+        image,
+        x,
+        y,
+        aperture_radius,
+        background_inner_radius,
+        background_outer_radius,
+    );
+
+    if aperture_pixels.is_empty() {
+        return Err(format!(
+            "Aperture contains no pixels at position ({x:.1}, {y:.1}) with radius {aperture_radius:.1}"
+        ));
+    }
+
+    if background_pixels.len() < 10 {
+        return Err(format!(
+            "Insufficient background pixels ({}) at position ({x:.1}, {y:.1}), need at least 10",
+            background_pixels.len()
+        ));
+    }
+
+    // Estimate local background level using median of background annulus pixels
+    let background_median = median(&background_pixels)
+        .map_err(|e| format!("Failed to compute background median: {e}"))?;
+
+    // Calculate signal: total flux in aperture minus background contribution
+    let aperture_sum: f64 = aperture_pixels.iter().sum();
+    let background_contribution = background_median * aperture_pixels.len() as f64;
+    let signal = aperture_sum - background_contribution;
+
+    // Calculate noise using Median Absolute Deviation (MAD) for robustness
+    let deviations: Vec<f64> = background_pixels
+        .iter()
+        .map(|&val| (val - background_median).abs())
+        .collect();
+
+    let mad = median(&deviations).map_err(|e| format!("Failed to compute MAD: {e}"))?;
+
+    // Convert MAD to RMS noise estimate (σ ≈ 1.4826 × MAD for Gaussian noise)
+    let noise_rms = 1.4826 * mad;
+
+    if noise_rms <= 0.0 {
+        log::warn!(
+            "Zero or negative noise estimate (MAD={mad:.3}, RMS={noise_rms:.3}) at position ({x:.1}, {y:.1}), returning f64::MAX"
+        );
+        return Ok(f64::MAX);
+    }
+
+    Ok(signal / noise_rms)
+}
+
 /// Calculate signal-to-noise ratio for a detected source using aperture photometry.
 ///
 /// This function performs aperture photometry to estimate the SNR of a point source.
@@ -66,66 +150,14 @@ pub fn calculate_snr(
     background_inner_radius: f64,
     background_outer_radius: f64,
 ) -> Result<f64, String> {
-    let (aperture_pixels, background_pixels) = collect_aperture_pixels(
-        image,
+    calculate_snr_at_position(
         detection.x,
         detection.y,
+        image,
         aperture_radius,
         background_inner_radius,
         background_outer_radius,
-    );
-
-    if aperture_pixels.is_empty() {
-        return Err(format!(
-            "Aperture contains no pixels at position ({:.1}, {:.1}) with radius {:.1}",
-            detection.x, detection.y, aperture_radius
-        ));
-    }
-
-    if background_pixels.len() < 10 {
-        return Err(format!(
-            "Insufficient background pixels ({}) at position ({:.1}, {:.1}), need at least 10",
-            background_pixels.len(),
-            detection.x,
-            detection.y
-        ));
-    }
-
-    // Estimate local background level using median of background annulus pixels
-    let background_median = median(&background_pixels)
-        .map_err(|e| format!("Failed to compute background median: {e}"))?;
-
-    // Calculate signal: total flux in aperture minus background contribution
-    // - aperture_sum: total flux from all pixels in the aperture (source + background)
-    // - background_contribution: expected background flux (median × number of aperture pixels)
-    // - signal: net flux from the source alone after background subtraction
-    let aperture_sum: f64 = aperture_pixels.iter().sum();
-    let background_contribution = background_median * aperture_pixels.len() as f64;
-    let signal = aperture_sum - background_contribution;
-
-    // Calculate noise using Median Absolute Deviation (MAD) for robustness
-    // MAD is less sensitive to outliers than standard deviation
-    let deviations: Vec<f64> = background_pixels
-        .iter()
-        .map(|&val| (val - background_median).abs())
-        .collect();
-
-    let mad = median(&deviations).map_err(|e| format!("Failed to compute MAD: {e}"))?;
-
-    // Convert MAD to RMS noise estimate
-    // For Gaussian noise: σ ≈ 1.4826 × MAD
-    // This constant is 1 / Φ⁻¹(3/4) where Φ⁻¹ is the inverse normal CDF
-    let noise_rms = 1.4826 * mad;
-
-    if noise_rms <= 0.0 {
-        log::warn!(
-            "Zero or negative noise estimate (MAD={:.3}, RMS={:.3}) at position ({:.1}, {:.1}), returning f64::MAX",
-            mad, noise_rms, detection.x, detection.y
-        );
-        return Ok(f64::MAX);
-    }
-
-    Ok(signal / noise_rms)
+    )
 }
 
 /// Filter a detection by minimum SNR threshold.
