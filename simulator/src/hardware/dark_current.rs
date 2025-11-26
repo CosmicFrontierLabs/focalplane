@@ -47,14 +47,6 @@ impl DarkCurrentEstimator {
     /// # Arguments
     /// * `reference_dark_current` - Dark current in electrons/pixel/second at reference temperature
     /// * `reference_temperature` - Reference temperature
-    ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::dark_current::DarkCurrentEstimator;
-    /// use simulator::units::{Temperature, TemperatureExt};
-    ///
-    /// let estimator = DarkCurrentEstimator::from_reference_point(0.1, Temperature::from_celsius(20.0));
-    /// ```
     pub fn from_reference_point(
         reference_dark_current: f64,
         reference_temperature: Temperature,
@@ -88,20 +80,8 @@ impl DarkCurrentEstimator {
     /// # Arguments
     /// * `temp1` - First reference temperature
     /// * `dark_current1` - Dark current at first temperature (e⁻/pixel/second)
-    /// * `temp2` - Second reference temperature  
+    /// * `temp2` - Second reference temperature
     /// * `dark_current2` - Dark current at second temperature (e⁻/pixel/second)
-    ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::dark_current::DarkCurrentEstimator;
-    /// use simulator::units::{Temperature, TemperatureExt};
-    ///
-    /// // Create from two measured points
-    /// let estimator = DarkCurrentEstimator::from_two_points(
-    ///     Temperature::from_celsius(-10.0), 0.01,  // 0.01 e⁻/px/s at -10°C
-    ///     Temperature::from_celsius(20.0), 0.5     // 0.5 e⁻/px/s at 20°C
-    /// );
-    /// ```
     pub fn from_two_points(
         temp1: Temperature,
         dark_current1: f64,
@@ -148,15 +128,6 @@ impl DarkCurrentEstimator {
     /// # Arguments
     /// * `temperatures` - Temperature values in degrees Celsius (must be sorted ascending)
     /// * `dark_currents` - Dark current values in electrons/pixel/second
-    ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::dark_current::DarkCurrentEstimator;
-    ///
-    /// let temps = vec![-40.0, -20.0, 0.0, 20.0, 40.0];
-    /// let dark_currents = vec![0.001, 0.01, 0.1, 1.0, 10.0];
-    /// let estimator = DarkCurrentEstimator::from_curve(temps, dark_currents);
-    /// ```
     pub fn from_curve(temperatures: Vec<f64>, dark_currents: Vec<f64>) -> Self {
         let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
@@ -177,16 +148,6 @@ impl DarkCurrentEstimator {
     /// # Returns
     /// * `Ok(f64)` - Estimated dark current in electrons/pixel/second at target temperature
     /// * `Err(InterpError)` - If interpolation fails (e.g., out of bounds)
-    ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::dark_current::DarkCurrentEstimator;
-    /// use simulator::units::{Temperature, TemperatureExt};
-    ///
-    /// let estimator = DarkCurrentEstimator::from_reference_point(0.1, Temperature::from_celsius(20.0));
-    /// let temp = Temperature::from_celsius(28.0);
-    /// let dark_current = estimator.estimate_at_temperature(temp).expect("Temperature out of range");
-    /// ```
     pub fn estimate_at_temperature(&self, temperature: Temperature) -> Result<f64, InterpError> {
         // Interpolate in log space to preserve exponential nature
         let target_temp_c = temperature.as_celsius();
@@ -200,16 +161,6 @@ impl DarkCurrentEstimator {
     /// Returns the number of degrees Celsius required for dark current to double.
     /// This is a characteristic property of the sensor that helps understand
     /// its thermal behavior.
-    ///
-    /// # Example
-    /// ```
-    /// use simulator::hardware::dark_current::DarkCurrentEstimator;
-    /// use simulator::units::{Temperature, TemperatureExt};
-    ///
-    /// let estimator = DarkCurrentEstimator::from_reference_point(0.1, Temperature::from_celsius(20.0));
-    /// let doubling_temp = estimator.calculate_doubling_temperature();
-    /// println!("Dark current doubles every {:.1}°C", doubling_temp);
-    /// ```
     pub fn calculate_doubling_temperature(&self) -> f64 {
         // Pick two reference temperatures well within our range
         let temp1 = 0.0;

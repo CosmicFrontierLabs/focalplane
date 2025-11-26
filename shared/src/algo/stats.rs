@@ -89,21 +89,6 @@ pub fn ks_critical_value(n: usize, alpha: f64) -> f64 {
 ///
 /// * `Ok(median)` - The median value
 /// * `Err(message)` - If no valid values remain after filtering NaN
-///
-/// # Examples
-///
-/// ```
-/// use shared::algo::stats::median;
-///
-/// let values = vec![1.0, 3.0, 2.0, 5.0, 4.0];
-/// assert_eq!(median(&values).unwrap(), 3.0);
-///
-/// let with_nan = vec![1.0, f64::NAN, 3.0, 2.0];
-/// assert_eq!(median(&with_nan).unwrap(), 2.0);
-///
-/// let with_inf = vec![1.0, 2.0, f64::INFINITY, 3.0];
-/// assert_eq!(median(&with_inf).unwrap(), 2.5);
-/// ```
 pub fn median(values: &[f64]) -> Result<f64, String> {
     let mut valid_values: Vec<f64> = values.iter().filter(|v| !v.is_nan()).copied().collect();
 

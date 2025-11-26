@@ -233,15 +233,6 @@ pub fn spectrum_to_rgb_values(spectrum: &impl Spectrum) -> (f64, f64, f64) {
 ///
 /// # Returns
 /// RGBColor with components scaled to 0-255
-///
-/// # Examples
-/// ```
-/// use simulator::photometry::color::rgb_values_to_color;
-///
-/// let white = rgb_values_to_color(1.0, 1.0, 1.0);
-/// let red = rgb_values_to_color(1.0, 0.0, 0.0);
-/// let dim_blue = rgb_values_to_color(0.0, 0.0, 0.5);
-/// ```
 pub fn rgb_values_to_color(r: f64, g: f64, b: f64) -> RGBColor {
     RGBColor(
         (r * 255.0).min(255.0).round() as u8,

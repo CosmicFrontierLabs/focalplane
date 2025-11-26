@@ -24,28 +24,6 @@
 //! - Temperature-dependent dark current scaling
 //! - Photon noise and read noise contributions
 //! - Optical throughput and vignetting effects
-//!
-//! # Usage Examples
-//!
-//! ```rust
-//! use simulator::hardware::{SatelliteConfig, TelescopeConfig, SensorConfig};
-//! use simulator::hardware::telescope::models::IDEAL_50CM;
-//! use simulator::hardware::sensor::models::GSENSE6510BSI;
-//! use simulator::units::{LengthExt, Temperature, TemperatureExt};
-//!
-//! // Create a satellite configuration
-//! let satellite = SatelliteConfig::new(
-//!     IDEAL_50CM.clone(),
-//!     GSENSE6510BSI.clone(),
-//!     Temperature::from_celsius(-10.0),  // Temperature in °C
-//! );
-//!
-//! // Calculate field of view
-//! let fov_degrees = simulator::star_math::field_diameter(
-//!     &satellite.telescope,
-//!     &satellite.sensor
-//! );
-//! ```
 
 pub mod dark_current;
 pub mod gyro;

@@ -28,23 +28,6 @@ use ndarray::ArrayView2;
 /// A tuple of `(aperture_pixels, background_pixels)` where:
 /// - `aperture_pixels` contains all pixel values within the aperture radius
 /// - `background_pixels` contains all pixel values in the background annulus
-///
-/// # Example
-///
-/// ```no_run
-/// use ndarray::Array2;
-/// use shared::image_proc::aperture_photometry::collect_aperture_pixels;
-///
-/// let image = Array2::<f64>::zeros((100, 100));
-/// let (aperture_pixels, background_pixels) = collect_aperture_pixels(
-///     &image.view(),
-///     50.0,  // x_center
-///     50.0,  // y_center
-///     3.0,   // aperture_radius
-///     6.0,   // background_inner_radius
-///     9.0,   // background_outer_radius
-/// );
-/// ```
 pub fn collect_aperture_pixels(
     image: &ArrayView2<f64>,
     x_center: f64,

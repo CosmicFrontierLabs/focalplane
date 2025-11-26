@@ -79,30 +79,6 @@
 //! Survey different sky regions including ecliptic pole, anti-solar, morning sky,
 //! and high latitude areas for zodiacal light brightness and scale factor analysis.
 //!
-//! ## Detector Noise Modeling
-//! ```ignore
-//! use simulator::photometry::zodiacal::{ZodiacalLight, SolarAngularCoordinates};
-//! use simulator::hardware::SatelliteConfig;
-//! use std::time::Duration;
-//!
-//! # // Create minimal satellite config for example
-//! # let telescope = simulator::hardware::TelescopeConfig::from_f_d(1.4, 0.2);
-//! # let sensor = simulator::hardware::SensorConfig::from_pixel_size(1024, 1024, 13e-6);
-//! # let satellite = SatelliteConfig::new(telescope, sensor, -40.0, 550.0);
-//! let zodi_model = ZodiacalLight::new();
-//! let coords = SolarAngularCoordinates::new(120.0, 45.0).unwrap();
-//! let exposure = Duration::from_secs(300); // 5-minute exposure
-//!
-//! // Generate zodiacal background image
-//! let background_image = zodi_model.generate_zodiacal_background(
-//!     &satellite, &exposure, &coords
-//! );
-//!
-//! // Calculate mean background level
-//! let mean_background = background_image.mean().unwrap();
-//! println!("Mean zodiacal background: {:.1} photoelectrons/pixel", mean_background);
-//! ```
-//!
 //! # Coordinate System and Conventions
 //!
 //! ## Solar Angular Coordinates

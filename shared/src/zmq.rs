@@ -21,15 +21,6 @@ pub enum ZmqError {
 ///
 /// Thread-safe: can be shared across threads via `Arc<TypedZmqPublisher<T>>`.
 /// The internal mutex ensures safe concurrent access.
-///
-/// # Example
-/// ```ignore
-/// let ctx = zmq::Context::new();
-/// let socket = ctx.socket(zmq::PUB).unwrap();
-/// socket.bind("tcp://*:5555").unwrap();
-/// let publisher = TypedZmqPublisher::<MyMessage>::new(socket);
-/// publisher.send(&MyMessage { data: 42 })?;
-/// ```
 pub struct TypedZmqPublisher<T> {
     socket: Mutex<zmq::Socket>,
     _marker: PhantomData<fn() -> T>,
@@ -65,19 +56,6 @@ unsafe impl<T> Sync for TypedZmqPublisher<T> {}
 ///
 /// NOT thread-safe by design - use from a single thread.
 /// For multi-threaded use, wrap in your own synchronization.
-///
-/// # Example
-/// ```ignore
-/// let ctx = zmq::Context::new();
-/// let socket = ctx.socket(zmq::SUB).unwrap();
-/// socket.connect("tcp://localhost:5555").unwrap();
-/// socket.set_subscribe(b"").unwrap();
-/// socket.set_rcvtimeo(0).unwrap(); // Non-blocking
-/// let subscriber = TypedZmqSubscriber::<MyMessage>::new(socket);
-/// for msg in subscriber.drain() {
-///     println!("Received: {:?}", msg);
-/// }
-/// ```
 pub struct TypedZmqSubscriber<T> {
     socket: zmq::Socket,
     _marker: PhantomData<fn() -> T>,

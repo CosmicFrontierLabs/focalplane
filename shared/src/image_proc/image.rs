@@ -34,16 +34,6 @@ use ndarray::Array2;
 /// # Returns
 /// New Array2<u16> with inverted pixel values
 ///
-/// # Examples
-/// ```
-/// use ndarray::Array2;
-/// use shared::image_proc::image::invert_monochrome;
-///
-/// let frame = Array2::from_elem((2, 2), 100u16);
-/// let inverted = invert_monochrome(&frame, 8);
-/// assert_eq!(inverted[[0, 0]], 155); // 255 - 100
-/// ```
-///
 /// # Performance
 /// - Time: O(width × height) - single pass through all pixels
 /// - Space: O(width × height) - creates new array
@@ -71,18 +61,6 @@ pub fn invert_monochrome(frame: &Array2<u16>, bit_depth: u8) -> Array2<u16> {
 ///
 /// # Returns
 /// GrayImage with pixel values scaled to 0-255 range
-///
-/// # Examples
-/// ```
-/// use ndarray::Array2;
-/// use shared::image_proc::image::u16_to_gray_image;
-///
-/// let frame = Array2::from_elem((2, 2), 1000u16);
-/// let img = u16_to_gray_image(&frame);
-/// assert_eq!(img.width(), 2);
-/// assert_eq!(img.height(), 2);
-/// ```
-///
 pub fn u16_to_gray_image(frame: &Array2<u16>) -> GrayImage {
     let (height, width) = frame.dim();
     let max_val = *frame.iter().max().unwrap_or(&1) as f32;

@@ -54,6 +54,20 @@ if git diff --cached --name-only | grep -q '\.rs$'; then
         exit 1
     fi
     echo "✅ Clippy checks passed."
+
+    # Check that there are no doctests (we use proper unit tests instead)
+    echo "Checking for doctests (should be 0)..."
+    doctest_output=$(cargo test --doc 2>&1)
+    # Count lines that show non-zero test runs like "running 5 tests"
+    doctest_count=$(echo "$doctest_output" | grep -E '^running [1-9][0-9]* tests?$' | wc -l)
+    if [ "$doctest_count" -gt 0 ]; then
+        echo "❌ Found doctests! We don't use doctests in this codebase."
+        echo "$doctest_output" | grep -E '^running [1-9][0-9]* tests?$'
+        echo ""
+        echo "Please convert doctests to proper unit tests in #[cfg(test)] modules."
+        exit 1
+    fi
+    echo "✅ No doctests found."
 fi
 
 exit 0
@@ -68,5 +82,6 @@ echo "The pre-commit hook will:"
 echo "  - Check code formatting with 'cargo fmt'"
 echo "  - Run 'cargo check --locked --all-targets'"
 echo "  - Run clippy linting with warnings as errors"
+echo "  - Verify no doctests exist (use unit tests instead)"
 echo ""
 echo "To bypass the hook (not recommended), use: git commit --no-verify"

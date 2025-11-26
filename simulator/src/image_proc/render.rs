@@ -128,18 +128,6 @@ impl RenderingResult {
 /// - Consistent star positions across exposure series
 /// - Minimal memory overhead (one base image)
 /// - Enables Monte Carlo analysis with fixed star fields
-///
-/// # Usage Pattern
-/// ```ignore
-/// // Create renderer once
-/// let renderer = Renderer::from_catalog(&stars, &center, satellite_config);
-///
-/// // Render many exposures efficiently
-/// for exposure_time in exposure_times {
-///     let image = renderer.render(&exposure_time, &zodiacal_coords);
-///     // Process image...
-/// }
-/// ```
 #[derive(Clone)]
 pub struct Renderer {
     /// Satellite configuration (telescope + sensor + environment)
@@ -436,32 +424,6 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 ///
 /// # Returns
 /// * `Array2<f64>` - A new 2D array representing the image with stars
-///
-/// # Examples
-/// ```
-/// use ndarray::Array2;
-/// use simulator::image_proc::render::{add_stars_to_image, StarInFrame};
-/// use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
-/// use shared::image_proc::airy::PixelScaledAiryDisk;
-/// use shared::units::{Area, AreaExt, LengthExt, Wavelength};
-/// use starfield::catalogs::StarData;
-/// use starfield::Equatorial;
-/// use std::time::Duration;
-///
-/// let star_data = StarData {
-///     id: 0,
-///     magnitude: 10.0,
-///     position: Equatorial::from_degrees(0.0, 0.0),
-///     b_v: None,
-/// };
-/// let disk = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
-/// let source_flux = SourceFlux {
-///     photons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
-///     electrons: SpotFlux { disk: disk.clone(), flux: 1000.0 },
-/// };
-/// let stars = vec![StarInFrame { x: 50.0, y: 50.0, spot: source_flux, star: star_data }];
-/// let image = add_stars_to_image(100, 100, &stars, &Duration::from_secs(1), Area::from_square_centimeters(1.0));
-/// ```
 pub fn add_stars_to_image(
     width: usize,
     height: usize,

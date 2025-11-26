@@ -145,13 +145,6 @@ impl RangeArg {
     /// # Errors
     /// - Returns error if step is zero or negative when stop > start
     /// - Returns error if step is positive when stop < start
-    ///
-    /// # Example
-    /// ```
-    /// use shared::range_arg::RangeArg;
-    /// let range = RangeArg(0.0, 10.0, 2.0);
-    /// assert_eq!(range.to_vec().unwrap(), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
-    /// ```
     pub fn to_vec(&self) -> Result<Vec<f64>, String> {
         let (start, stop, step) = (self.0, self.1, self.2);
 

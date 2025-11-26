@@ -48,79 +48,6 @@
 //! Create scene from star catalog with satellite configuration, telescope,
 //! sensor, and zodiacal coordinates for rendering realistic astronomical images.
 //!
-//! ## Time Series Simulation
-//! ```ignore
-//! // NOTE: This doctest is ignored because it's computationally expensive - renders 5 different exposures
-//! use simulator::Scene;
-//! use simulator::photometry::zodiacal::SolarAngularCoordinates;
-//! use std::time::Duration;
-//!
-//! # use simulator::hardware::{telescope::models::IDEAL_50CM, sensor::models::GSENSE6510BSI};
-//! # let satellite_config = SatelliteConfig::new(IDEAL_50CM.clone(), GSENSE6510BSI.clone(), -10.0, 550.0);
-//! # let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-//! # let scene = Scene::from_catalog(satellite_config, vec![], Equatorial::from_degrees(0.0, 0.0), Duration::from_secs(1), zodiacal_coords);
-//! // Create efficient renderer for multiple exposures
-//! let renderer = scene.create_renderer();
-//! let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-//!
-//! // Generate time series with different exposure times
-//! let exposure_times = [1.0, 5.0, 10.0, 30.0, 60.0]; // seconds
-//! let mut images = Vec::new();
-//!
-//! for &exp_time in &exposure_times {
-//!     let duration = Duration::from_secs_f64(exp_time);
-//!     let image = renderer.render(&duration, &zodiacal_coords);
-//!     images.push(image);
-//!     
-//!     println!("Exposure {:.0}s: {} total electrons",
-//!              exp_time, image.quantized_image.sum());
-//! }
-//! ```
-//!
-//! ## Survey Simulation
-//! ```ignore
-//! // NOTE: This doctest is ignored because it's computationally expensive - renders multiple scenes
-//! use simulator::Scene;
-//! use simulator::hardware::SatelliteConfig;
-//! use simulator::photometry::zodiacal::SolarAngularCoordinates;
-//! use starfield::{Equatorial, catalogs::load_catalog};
-//! use std::time::Duration;
-//!
-//! # let satellite_config = SatelliteConfig::default();
-//! # let catalog_stars = vec![];
-//! // Simulate multi-pointing survey
-//! let pointings = [
-//!     Equatorial::from_degrees(0.0, 0.0),     // Equatorial field
-//!     Equatorial::from_degrees(90.0, 30.0),   // Spring field
-//!     Equatorial::from_degrees(180.0, -30.0), // Summer field
-//!     Equatorial::from_degrees(270.0, 60.0),  // Autumn field
-//! ];
-//!
-//! let mut survey_results = Vec::new();
-//!
-//! for (i, pointing) in pointings.iter().enumerate() {
-//!     // Calculate zodiacal light for field position
-//!     let zodiacal_coords = SolarAngularCoordinates::new(
-//!         90.0 + i as f64 * 30.0, // Varying elongation
-//!         30.0, // Fixed latitude
-//!     ).unwrap();
-//!     
-//!     let scene = Scene::from_catalog(
-//!         satellite_config.clone(),
-//!         catalog_stars.clone(),
-//!         *pointing,
-//!         Duration::from_secs(300), // 5-minute exposures
-//!         zodiacal_coords,
-//!     );
-//!     
-//!     let result = scene.render();
-//!     survey_results.push((pointing, result));
-//!     
-//!     println!("Field {}: {} stars",
-//!              i + 1, scene.stars.len());
-//! }
-//! ```
-//!
 //! # Astronomical Accuracy
 //!
 //! ## Photometric Precision
@@ -407,17 +334,6 @@ impl Scene {
     /// - **Cached base image**: 1-second star field pre-rendered
     /// - **Fast exposure scaling**: O(1) linear scaling per exposure
     /// - **Fresh noise generation**: Maintains statistical independence
-    ///
-    /// # Example
-    /// ```ignore
-    /// let renderer = scene.create_renderer();
-    ///
-    /// // Generate multiple exposures efficiently
-    /// for exposure_sec in [1.0, 5.0, 10.0, 30.0] {
-    ///     let duration = Duration::from_secs_f64(exposure_sec);
-    ///     let image = renderer.render(&duration, &zodiacal_coords);
-    /// }
-    /// ```
     pub fn create_renderer(&self) -> Renderer {
         Renderer::from_stars(&self.stars, self.satellite_config.clone())
     }

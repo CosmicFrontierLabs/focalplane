@@ -25,55 +25,6 @@
 //! - **Sensor physics**: Quantum efficiency, read noise, dark current, and shot noise
 //! - **Astronomical backgrounds**: Zodiacal light and scattered light contributions
 //!
-//! # Quick Start Example
-//!
-//! ```rust,ignore
-//! // NOTE: This doctest is ignored due to API changes in detection module
-//! use simulator::{
-//!     Scene,
-//!     hardware::{SatelliteConfig, telescope::models::IDEAL_50CM, sensor::models::GSENSE6510BSI},
-//!     image_proc::{detect_stars_unified, StarFinder},
-//!     photometry::zodical::SolarAngularCoordinates
-//! };
-//! use starfield::{Equatorial, catalogs::tycho};
-//! use std::time::Duration;
-//!
-//! // 1. Create satellite configuration
-//! let satellite_config = SatelliteConfig::new(
-//!     IDEAL_50CM.clone(),
-//!     GSENSE6510BSI.clone(),
-//!     -10.0,  // Sensor temperature
-//!     550.0   // Orbit altitude
-//! );
-//!
-//! // 2. Load star catalog
-//! let catalog_stars = tycho::load_from_sample(1000).unwrap();
-//!
-//! // 3. Create scene with pointing and exposure
-//! let zodiacal_coords = SolarAngularCoordinates::zodiacal_minimum();
-//! let scene = Scene::from_catalog(
-//!     satellite_config,
-//!     catalog_stars,
-//!     Equatorial::from_degrees(180.0, -30.0), // Pointing
-//!     Duration::from_secs(30), // 30-second exposure
-//!     zodiacal_coords,
-//! );
-//!
-//! // 4. Render the scene
-//! let result = scene.render();
-//!
-//! // 5. Detect stars  
-//! let detections = detect_stars_unified(
-//!     result.quantized_image.view(),
-//!     StarFinder::Dao,  // DAO photometry algorithm
-//!     2.5,              // PSF size
-//!     10.0,             // Background RMS  
-//!     5.0               // Detection threshold
-//! ).expect("Star detection failed");
-//!
-//! println!("Detected {} stars in simulated image", detections.len());
-//! ```
-//!
 //! # Module Organization
 //!
 //! ## Algorithms (`algo`)

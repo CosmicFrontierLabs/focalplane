@@ -280,32 +280,6 @@ impl QuantumEfficiency {
     ///
     /// # Returns
     /// Result containing the product QuantumEfficiency curve
-    ///
-    /// # Examples
-    /// ```rust
-    /// use simulator::photometry::{QuantumEfficiency, Band};
-    /// use simulator::units::{LengthExt, Wavelength};
-    ///
-    /// // Create a detector QE curve
-    /// let detector_wavelengths = vec![300.0, 400.0, 700.0, 900.0];
-    /// let detector_efficiencies = vec![0.0, 0.8, 0.6, 0.0];
-    /// let detector = QuantumEfficiency::from_table(
-    ///     detector_wavelengths,
-    ///     detector_efficiencies
-    /// ).unwrap();
-    ///
-    /// // Create a filter transmission curve
-    /// let filter_band = Band::from_nm_bounds(500.0, 600.0);
-    /// let filter = QuantumEfficiency::from_notch(&filter_band, 0.9).unwrap();
-    ///
-    /// // Compute combined response
-    /// let combined = QuantumEfficiency::product(&detector, &filter).unwrap();
-    ///
-    /// // Check results
-    /// assert_eq!(combined.at(Wavelength::from_nanometers(450.0)), 0.0);  // Outside filter band
-    /// assert!(combined.at(Wavelength::from_nanometers(550.0)) > 0.0);    // Within both ranges
-    /// assert_eq!(combined.at(Wavelength::from_nanometers(650.0)), 0.0);  // Outside filter band
-    /// ```
     pub fn product(
         qe1: &QuantumEfficiency,
         qe2: &QuantumEfficiency,
