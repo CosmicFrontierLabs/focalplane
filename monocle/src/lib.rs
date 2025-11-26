@@ -291,19 +291,19 @@ impl FineGuidanceSystem {
     ) -> Result<StateTransitionResult, String> {
         let update_result = self.track(frame, timestamp);
 
-        // Check for SNR dropout - triggers transition to Reacquiring
+        // Check for SNR dropout - triggers transition back to Acquiring (full-frame)
         if let Err(ref e) = update_result {
             if e.starts_with("SNR_DROPOUT:") {
-                log::warn!("SNR dropped below threshold, entering Reacquiring: {e}");
+                log::warn!("SNR dropped below threshold, restarting acquisition: {e}");
 
                 // Emit tracking lost event
                 self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak, timestamp);
-
-                // Clear guide star so reacquisition can find a new one
-                self.guide_star = None;
+                self.clear_acquisition_state();
 
                 return Ok((
-                    FgsState::Reacquiring { attempts: 0 },
+                    FgsState::Acquiring {
+                        frames_collected: 0,
+                    },
                     (None, vec![CameraSettingsUpdate::ClearROI]),
                 ));
             }
@@ -324,13 +324,16 @@ impl FineGuidanceSystem {
                     (Some(update), vec![]),
                 ))
             } else {
-                log::warn!("Lost all guide stars, entering Reacquiring");
+                log::warn!("Lost all guide stars, restarting acquisition");
 
                 // Emit tracking lost event
                 self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak, timestamp);
+                self.clear_acquisition_state();
 
                 Ok((
-                    FgsState::Reacquiring { attempts: 0 },
+                    FgsState::Acquiring {
+                        frames_collected: 0,
+                    },
                     (None, vec![CameraSettingsUpdate::ClearROI]),
                 ))
             }
@@ -416,6 +419,14 @@ impl FineGuidanceSystem {
                 reason,
             });
         }
+    }
+
+    /// Clear guide star and calibration data for fresh acquisition
+    fn clear_acquisition_state(&mut self) {
+        self.guide_star = None;
+        self.accumulated_frame = None;
+        self.frames_accumulated = 0;
+        self.detected_stars.clear();
     }
 
     /// Process an event and potentially transition states
