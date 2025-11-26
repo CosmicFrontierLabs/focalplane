@@ -55,6 +55,7 @@ image = "0.25"
 imageproc = "0.25"
 libc = "0.2.177"
 monocle = { version = "0.1.0", path = "../monocle" }
+nalgebra = "0.34.1"
 ndarray = "0.16"
 nsv455 = { path = "../nsv455", optional = true }
 playerone-sdk = { version = "0.2.2", optional = true }
