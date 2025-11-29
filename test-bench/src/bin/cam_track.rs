@@ -143,6 +143,8 @@ fn run_tracking_stream(
         let pending_settings_clone = pending_settings.clone();
         let should_exit = Arc::new(Mutex::new(false));
         let should_exit_clone = should_exit.clone();
+        let should_restart_fgs = Arc::new(Mutex::new(false));
+        let should_restart_fgs_clone = should_restart_fgs.clone();
 
         let stream_result = camera.stream(&mut |frame, metadata| {
             if let Some(max_secs) = max_runtime_secs {
@@ -161,6 +163,13 @@ fn run_tracking_stream(
                             settings.len()
                         );
                         *pending_settings_clone.lock().unwrap() = settings;
+                        return false;
+                    }
+
+                    // Check if FGS is idle (reacquisition failed) and trigger restart
+                    if matches!(fgs.state(), monocle::FgsState::Idle) {
+                        info!("FGS went idle, will restart acquisition");
+                        *should_restart_fgs_clone.lock().unwrap() = true;
                         return false;
                     }
 
@@ -186,13 +195,24 @@ fn run_tracking_stream(
                     info!("Applying {} camera settings...", settings.len());
                     monocle::apply_camera_settings(camera, settings);
                     info!("Settings applied, restarting stream");
+                } else if *should_restart_fgs.lock().unwrap() {
+                    info!("Restarting FGS acquisition...");
+                    match fgs.process_event(FgsEvent::StartFgs) {
+                        Ok((_, new_settings)) => {
+                            monocle::apply_camera_settings(camera, new_settings);
+                            info!("FGS restarted, continuing stream");
+                        }
+                        Err(e) => {
+                            warn!("Failed to restart FGS: {}, retrying...", e);
+                        }
+                    }
                 } else {
-                    info!("Stream completed");
-                    break;
+                    info!("Stream completed unexpectedly, restarting...");
                 }
             }
             Err(e) => {
-                return Err(anyhow::anyhow!("Camera stream failed: {e}"));
+                warn!("Camera stream error: {}, restarting...", e);
+                std::thread::sleep(Duration::from_secs(1));
             }
         }
     }
