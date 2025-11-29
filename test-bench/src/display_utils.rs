@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 /// OLED display resolution for autodetection
-pub const OLED_WIDTH: u32 = 2048;
-pub const OLED_HEIGHT: u32 = 2048;
+pub const OLED_WIDTH: u32 = 2560;
+pub const OLED_HEIGHT: u32 = 2560;
 
 pub trait SdlResultExt<T> {
     fn sdl_context(self, msg: &str) -> Result<T>;
@@ -14,7 +14,7 @@ impl<T> SdlResultExt<T> for std::result::Result<T, String> {
     }
 }
 
-/// Find the OLED display by looking for 2048x2048 resolution.
+/// Find the OLED display by looking for 2560x2560 resolution.
 /// Returns the display index if found, None otherwise.
 pub fn find_oled_display(video_subsystem: &sdl2::VideoSubsystem) -> Result<Option<u32>> {
     let num_displays = video_subsystem
