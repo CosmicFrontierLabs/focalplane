@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 
 use exail::{verify_checksum, FullGyroData, GyroData, TemperatureSensor};
+use log::{error, info, warn};
 
 const MSG_SIZE: usize = 66;
 const SYNC_PATTERN: [u8; 2] = [0x87, 0x15];
@@ -13,13 +14,66 @@ enum Record {
     Skipped(Vec<u8>),
 }
 
+/// Pending skip event waiting for next valid timetag
+struct PendingSkip {
+    offset: usize,
+    bytes: Vec<u8>,
+    good_records_since_last_skip: usize,
+    last_valid_timetag: Option<u16>,
+}
+
 /// Search forward from `start` for the sync pattern 0x87 0x15
 fn find_sync(data: &[u8], start: usize) -> Option<usize> {
     (start..data.len().saturating_sub(1))
         .find(|&i| data[i] == SYNC_PATTERN[0] && data[i + 1] == SYNC_PATTERN[1])
 }
 
+/// Log skipped bytes with offset, timetags, and count of good records
+fn log_skipped(skip: &PendingSkip, next_valid_timetag: Option<u16>, segment_number: usize) {
+    let offset = skip.offset;
+    let end_offset = offset + skip.bytes.len();
+    let hex: String = skip
+        .bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let last_time_str = skip
+        .last_valid_timetag
+        .map(|t| format!("{t:>10}"))
+        .unwrap_or_else(|| format!("{:>10}", "none"));
+    let next_time_str = next_valid_timetag
+        .map(|t| format!("{t:>10}"))
+        .unwrap_or_else(|| format!("{:>10}", "none"));
+
+    let delta_str = match (skip.last_valid_timetag, next_valid_timetag) {
+        (Some(last), Some(next)) => {
+            let delta = next as i32 - last as i32;
+            format!("{delta:>12}")
+        }
+        _ => format!("{:>12}", "n/a"),
+    };
+
+    warn!(
+        "Corrupted segment {:>3}: skipped {:>3} bytes at offset {:>12} (0x{:>8x}) - {:>12} (0x{:>8x}) after {:>7} good records, timetag {} -> {} (delta {}): {}",
+        segment_number,
+        skip.bytes.len(),
+        offset,
+        offset,
+        end_offset,
+        end_offset,
+        skip.good_records_since_last_skip,
+        last_time_str,
+        next_time_str,
+        delta_str,
+        hex
+    );
+}
+
 fn main() {
+    env_logger::init();
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!("Usage: {} <dump_file> <output_csv>", args[0]);
@@ -33,16 +87,27 @@ fn main() {
     let mut data = Vec::new();
     file.read_to_end(&mut data).expect("Failed to read file");
 
-    println!("Read {} bytes from {}", data.len(), path);
+    info!("Read {} bytes from {}", data.len(), path);
 
     let mut records: Vec<Record> = Vec::new();
 
     // Find first sync and collect any leading bytes as skipped
     let Some(first_sync) = find_sync(&data, 0) else {
-        eprintln!("No sync pattern found in file");
+        error!("No sync pattern found in file");
         std::process::exit(1);
     };
+    let mut good_records_since_last_skip = 0usize;
+    let mut last_valid_timetag: Option<u16> = None;
+    let mut pending_skip: Option<PendingSkip> = None;
+    let mut corrupted_segment_number = 0usize;
+
     if first_sync > 0 {
+        pending_skip = Some(PendingSkip {
+            offset: 0,
+            bytes: data[0..first_sync].to_vec(),
+            good_records_since_last_skip,
+            last_valid_timetag,
+        });
         records.push(Record::Skipped(data[0..first_sync].to_vec()));
     }
     let mut pos = first_sync;
@@ -51,26 +116,64 @@ fn main() {
         let msg_data = &data[pos..pos + MSG_SIZE];
 
         if !verify_checksum(msg_data) {
+            // If there's already a pending skip, log it now with no next timetag (back-to-back skips)
+            if let Some(prev_skip) = pending_skip.take() {
+                log_skipped(&prev_skip, None, corrupted_segment_number);
+                corrupted_segment_number += 1;
+            }
+
             // Search forward for next sync pattern
             let search_start = pos + 1;
             if let Some(next_sync) = find_sync(&data, search_start) {
+                pending_skip = Some(PendingSkip {
+                    offset: pos,
+                    bytes: data[pos..next_sync].to_vec(),
+                    good_records_since_last_skip,
+                    last_valid_timetag,
+                });
                 records.push(Record::Skipped(data[pos..next_sync].to_vec()));
+                good_records_since_last_skip = 0;
                 pos = next_sync;
                 continue;
             } else {
-                // No more syncs, collect remaining as skipped
+                // No more syncs, collect remaining as skipped - log immediately with no next timetag
+                let skip = PendingSkip {
+                    offset: pos,
+                    bytes: data[pos..].to_vec(),
+                    good_records_since_last_skip,
+                    last_valid_timetag,
+                };
+                log_skipped(&skip, None, corrupted_segment_number);
+                corrupted_segment_number += 1;
                 records.push(Record::Skipped(data[pos..].to_vec()));
                 break;
             }
         }
 
         let msg: FullGyroData = *bytemuck::from_bytes(msg_data);
+        let (current_timetag, _timebase) = msg.gyro_time.as_gyro_time_tag_and_base();
+
+        // If there's a pending skip, log it now that we have the next valid timetag
+        if let Some(skip) = pending_skip.take() {
+            log_skipped(&skip, Some(current_timetag), corrupted_segment_number);
+            corrupted_segment_number += 1;
+        }
+
         records.push(Record::Data(msg));
+        last_valid_timetag = Some(current_timetag);
+        good_records_since_last_skip += 1;
         pos += MSG_SIZE;
     }
 
     // Collect trailing bytes if any
     if pos < data.len() {
+        let skip = PendingSkip {
+            offset: pos,
+            bytes: data[pos..].to_vec(),
+            good_records_since_last_skip,
+            last_valid_timetag,
+        };
+        log_skipped(&skip, None, corrupted_segment_number);
         records.push(Record::Skipped(data[pos..].to_vec()));
     }
 
@@ -91,7 +194,7 @@ fn main() {
         })
         .sum();
 
-    println!(
+    info!(
         "Parsed {data_count} data records, {skip_count} skip records ({skip_bytes} bytes skipped)"
     );
 
@@ -189,5 +292,5 @@ fn main() {
         }
     }
 
-    println!("Wrote {output_path}");
+    info!("Wrote {output_path}");
 }
