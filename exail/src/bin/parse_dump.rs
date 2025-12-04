@@ -203,7 +203,7 @@ fn main() {
     let mut out = BufWriter::new(file);
 
     // Header - temperature fields in Celsius, angles in arcseconds
-    writeln!(out, "type,start_word,message_id,gyro_time,raw_ang_x_arcsec,raw_ang_y_arcsec,raw_ang_z_arcsec,fil_ang_x_arcsec,fil_ang_y_arcsec,fil_ang_z_arcsec,so_in_cur,cur_com,pow_meas_x,pow_meas_y,pow_meas_z,vpi_x,vpi_y,vpi_z,ramp_x,ramp_y,ramp_z,board_temp_c,sia_fil_temp_c,org_fil_temp_c,inter_temp_c,health_status,checksum,skipped_hex").unwrap();
+    writeln!(out, "type,start_word,message_id,time_tag,time_base,raw_ang_x_arcsec,raw_ang_y_arcsec,raw_ang_z_arcsec,fil_ang_x_arcsec,fil_ang_y_arcsec,fil_ang_z_arcsec,so_in_cur,cur_com,pow_meas_x,pow_meas_y,pow_meas_z,vpi_x,vpi_y,vpi_z,ramp_x,ramp_y,ramp_z,board_temp_c,sia_fil_temp_c,org_fil_temp_c,inter_temp_c,health_status,checksum,skipped_hex").unwrap();
 
     for record in &records {
         match record {
@@ -211,7 +211,7 @@ fn main() {
                 // Copy all packed fields to locals
                 let start_word = { msg.start_word };
                 let message_id = msg.message_id();
-                let gyro_time = { msg.gyro_time }.as_time_tag();
+                let (time_tag, time_base) = { msg.gyro_time }.as_gyro_time_tag_and_base();
                 let so_in_cur = { msg.so_in_cur };
                 let cur_com = { msg.cur_com };
                 let pow_meas_x = { msg.pow_meas_x };
@@ -278,7 +278,7 @@ fn main() {
 
                 writeln!(
                     out,
-                    "data,{start_word},{message_id},{gyro_time},{raw_ang_x_arcsec},{raw_ang_y_arcsec},{raw_ang_z_arcsec},{fil_ang_x_arcsec},{fil_ang_y_arcsec},{fil_ang_z_arcsec},{so_in_cur},{cur_com},{pow_meas_x},{pow_meas_y},{pow_meas_z},{vpi_x},{vpi_y},{vpi_z},{ramp_x},{ramp_y},{ramp_z},{board_temp_c},{sia_fil_temp_c},{org_fil_temp_c},{inter_temp_c},{health_status},{checksum},",
+                    "data,{start_word},{message_id},{time_tag},{time_base},{raw_ang_x_arcsec},{raw_ang_y_arcsec},{raw_ang_z_arcsec},{fil_ang_x_arcsec},{fil_ang_y_arcsec},{fil_ang_z_arcsec},{so_in_cur},{cur_com},{pow_meas_x},{pow_meas_y},{pow_meas_z},{vpi_x},{vpi_y},{vpi_z},{ramp_x},{ramp_y},{ramp_z},{board_temp_c},{sia_fil_temp_c},{org_fil_temp_c},{inter_temp_c},{health_status},{checksum},",
                 ).unwrap();
             }
             Record::Skipped(bytes) => {
@@ -287,7 +287,7 @@ fn main() {
                     .map(|b| format!("{b:02x}"))
                     .collect::<Vec<_>>()
                     .join(" ");
-                writeln!(out, "skipped,,,,,,,,,,,,,,,,,,,,,,,,,,,{hex}").unwrap();
+                writeln!(out, "skipped,,,,,,,,,,,,,,,,,,,,,,,,,,,,{hex}").unwrap();
             }
         }
     }
