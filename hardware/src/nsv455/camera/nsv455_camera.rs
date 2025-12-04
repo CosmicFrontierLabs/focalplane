@@ -1,6 +1,6 @@
-use crate::camera::controls::{ControlMap, ControlType};
-use crate::camera::neutralino_imx455::read_sensor_temperatures;
-use crate::camera::roi_constraints::RoiConstraints;
+use super::controls::{ControlMap, ControlType};
+use super::neutralino_imx455::read_sensor_temperatures;
+use super::roi_constraints::RoiConstraints;
 use ndarray::Array2;
 use once_cell::sync::OnceCell;
 use shared::camera_interface::{
@@ -45,6 +45,8 @@ impl NSV455Camera {
             Self::SENSOR_HEIGHT as usize,
             Duration::from_millis(100),
             SensorBitDepth::Bits16,
+            26_000.0,  // Max well depth in electrons (IMX455)
+            1.0 / 0.4, // Conversion gain (DN/e-) ~2.5
         );
 
         let device = Device::with_path(&device_path)
@@ -397,7 +399,7 @@ impl CameraInterface for NSV455Camera {
     }
 
     fn saturation_value(&self) -> f64 {
-        65535.0
+        self.config.get_saturation()
     }
 
     fn name(&self) -> &str {

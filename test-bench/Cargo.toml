@@ -57,8 +57,7 @@ libc = "0.2.177"
 monocle = { version = "0.1.0", path = "../monocle" }
 nalgebra = "0.34.1"
 ndarray = "0.16"
-nsv455 = { path = "../nsv455", optional = true }
-playerone-sdk = { version = "0.2.2", optional = true }
+hardware = { version = "0.1.0", path = "../hardware", optional = true }
 rand = "0.8"
 rayon = "1.11.0"
 resvg = { version = "0.45.0", features = ["text"] }
@@ -86,6 +85,6 @@ tokio-test = "0.4"
 
 [features]
 default = []
-playerone = ["playerone-sdk"]
-nsv455 = ["dep:nsv455"]
+playerone = ["dep:hardware"]
+nsv455 = ["dep:hardware"]
 sdl2 = ["dep:sdl2"]

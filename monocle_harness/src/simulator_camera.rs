@@ -70,6 +70,8 @@ impl SimulatorCamera {
             Duration::from_millis(100),
             SensorBitDepth::from_u8(sensor.bit_depth)
                 .expect("Unsupported bit depth from simulator sensor config"),
+            sensor.max_well_depth_e,
+            sensor.dn_per_electron,
         );
 
         // Calculate FOV for cache size
@@ -325,7 +327,7 @@ impl CameraInterface for SimulatorCamera {
     }
 
     fn saturation_value(&self) -> f64 {
-        self.satellite.sensor.saturating_reading()
+        self.config.get_saturation()
     }
 
     fn name(&self) -> &str {

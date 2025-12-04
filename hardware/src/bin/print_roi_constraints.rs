@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use nsv455::camera::nsv455_camera::NSV455Camera;
+use hardware::nsv455::camera::nsv455_camera::NSV455Camera;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

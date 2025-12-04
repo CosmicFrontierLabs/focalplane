@@ -65,11 +65,14 @@ impl PlayerOneCamera {
             .set_image_format(ImageFormat::RAW16)
             .map_err(|e| CameraError::ConfigError(format!("Failed to set RAW16 format: {e}")))?;
 
-        let config = CameraConfig {
-            size: PixelShape::with_width_height(max_width, max_height),
-            exposure: Duration::from_millis(100),
-            bit_depth: SensorBitDepth::Bits16,
-        };
+        let config = CameraConfig::new(
+            max_width,
+            max_height,
+            Duration::from_millis(100),
+            SensorBitDepth::Bits16,
+            51_000.0, // Max well depth in electrons (IMX571)
+            1.0,      // DN per electron (gain dependent, nominal value)
+        );
 
         Ok(Self {
             camera: Arc::new(Mutex::new(camera)),

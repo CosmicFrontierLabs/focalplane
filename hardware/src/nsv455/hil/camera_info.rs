@@ -3,7 +3,7 @@ use std::os::unix::io::AsRawFd;
 use v4l::prelude::*;
 use v4l::video::Capture;
 
-use crate::camera::v4l2_utils::query_menu_item;
+use crate::nsv455::camera::v4l2_utils::query_menu_item;
 
 pub fn show_camera_info(device_path: &str) -> anyhow::Result<()> {
     let device = Device::with_path(device_path)?;

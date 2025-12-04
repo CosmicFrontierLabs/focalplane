@@ -77,7 +77,7 @@ pub fn initialize_camera(args: &CameraArgs) -> anyhow::Result<Box<dyn CameraInte
                 "Initializing NSV455 camera at {} (fixed IMX455 geometry: 9568x6380, 3.76μm)",
                 args.device_path
             );
-            use nsv455::camera::nsv455_camera::NSV455Camera;
+            use hardware::nsv455::camera::nsv455_camera::NSV455Camera;
             let camera = NSV455Camera::from_device(args.device_path.clone())
                 .map_err(|e| anyhow::anyhow!("Failed to initialize NSV455 camera: {e}"))?;
             Ok(Box::new(camera))

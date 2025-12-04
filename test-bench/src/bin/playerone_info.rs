@@ -1,5 +1,5 @@
 use clap::Parser;
-use playerone_sdk::Camera;
+use hardware::playerone_sdk::Camera;
 use tracing::{info, Level};
 
 #[derive(Parser, Debug)]

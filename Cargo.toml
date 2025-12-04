@@ -7,7 +7,6 @@ members = [
     "shared",
     "test-bench",
     "test-bench-frontend",
-    "nsv455",
     "exolambda",
     "exail",
     "proto-control",

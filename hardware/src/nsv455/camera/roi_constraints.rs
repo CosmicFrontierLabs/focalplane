@@ -1,4 +1,4 @@
-use crate::camera::controls::{ControlMap, ControlType};
+use super::controls::{ControlMap, ControlType};
 use shared::camera_interface::{CameraError, CameraResult};
 use v4l::prelude::*;
 use v4l::video::Capture;

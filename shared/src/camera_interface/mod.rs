@@ -205,34 +205,43 @@ pub struct CameraConfig {
     pub exposure: Duration,
     /// ADC bit depth
     pub bit_depth: SensorBitDepth,
+    /// Full well capacity in electrons
+    pub max_well_depth_e: f64,
+    /// Conversion gain in DN per electron
+    pub dn_per_electron: f64,
 }
 
 impl CameraConfig {
     /// Create a new CameraConfig
-    pub fn new(width: usize, height: usize, exposure: Duration, bit_depth: SensorBitDepth) -> Self {
+    pub fn new(
+        width: usize,
+        height: usize,
+        exposure: Duration,
+        bit_depth: SensorBitDepth,
+        max_well_depth_e: f64,
+        dn_per_electron: f64,
+    ) -> Self {
         Self {
             size: PixelShape::with_width_height(width, height),
             exposure,
             bit_depth,
+            max_well_depth_e,
+            dn_per_electron,
         }
     }
 
-    /// Get saturation value in DN (Digital Numbers) based on bit depth
+    /// Get saturation value in DN (Digital Numbers)
     ///
-    /// Returns a simple estimate of sensor saturation based on ADC bit depth.
-    /// This returns (2^bit_depth - 1), which is the maximum ADC value.
-    ///
-    /// # Note
-    /// This is a simplified placeholder calculation. For more accurate saturation
-    /// values, implementations should account for max well depth and conversion gain
-    /// (DN per electron), as real sensors may saturate below the ADC maximum due to
-    /// well capacity limits. See `simulator::hardware::sensor::SensorConfig::saturating_reading()`
-    /// for a physics-based implementation.
+    /// Returns the pixel value at which the sensor saturates. This is the minimum of:
+    /// 1. The maximum ADC value (2^bit_depth - 1)
+    /// 2. The full well capacity converted to DN (max_well_depth_e * dn_per_electron)
     ///
     /// # Returns
-    /// Maximum digital number value for the given bit depth
+    /// Maximum digital number value before saturation
     pub fn get_saturation(&self) -> f64 {
-        self.bit_depth.max_value() as f64
+        let adc_max = self.bit_depth.max_value() as f64;
+        let well_max = self.max_well_depth_e * self.dn_per_electron;
+        adc_max.min(well_max)
     }
 }
 
@@ -621,24 +630,39 @@ mod tests {
 
     #[test]
     fn test_camera_config_saturation() {
-        // Test 8-bit depth
-        let config_8bit =
-            CameraConfig::new(640, 480, Duration::from_millis(100), SensorBitDepth::Bits8);
+        // Test 8-bit depth, ADC limited
+        let config_8bit = CameraConfig::new(
+            640,
+            480,
+            Duration::from_millis(100),
+            SensorBitDepth::Bits8,
+            100_000.0, // Large well depth
+            1.0,
+        );
         assert_eq!(config_8bit.get_saturation(), 255.0);
 
-        // Test 10-bit depth
-        let config_10bit =
-            CameraConfig::new(640, 480, Duration::from_millis(100), SensorBitDepth::Bits10);
-        assert_eq!(config_10bit.get_saturation(), 1023.0);
+        // Test 16-bit depth, well limited
+        // 10,000e- * 2.0 DN/e- = 20,000 DN < 65535
+        let config_well_limited = CameraConfig::new(
+            640,
+            480,
+            Duration::from_millis(100),
+            SensorBitDepth::Bits16,
+            10_000.0,
+            2.0,
+        );
+        assert_eq!(config_well_limited.get_saturation(), 20_000.0);
 
-        // Test 12-bit depth
-        let config_12bit =
-            CameraConfig::new(640, 480, Duration::from_millis(100), SensorBitDepth::Bits12);
-        assert_eq!(config_12bit.get_saturation(), 4095.0);
-
-        // Test 16-bit depth
-        let config_16bit =
-            CameraConfig::new(640, 480, Duration::from_millis(100), SensorBitDepth::Bits16);
-        assert_eq!(config_16bit.get_saturation(), 65535.0);
+        // Test 16-bit depth, ADC limited
+        // 100,000e- * 1.0 DN/e- = 100,000 DN > 65535
+        let config_adc_limited = CameraConfig::new(
+            640,
+            480,
+            Duration::from_millis(100),
+            SensorBitDepth::Bits16,
+            100_000.0,
+            1.0,
+        );
+        assert_eq!(config_adc_limited.get_saturation(), 65535.0);
     }
 }

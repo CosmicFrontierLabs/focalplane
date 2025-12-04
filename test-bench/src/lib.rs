@@ -10,7 +10,7 @@ pub mod display_utils;
 pub mod gpio;
 
 #[cfg(feature = "playerone")]
-pub mod poa;
+pub use hardware::poa;
 
 #[cfg(test)]
 mod tests {
