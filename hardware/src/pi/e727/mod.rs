@@ -351,6 +351,24 @@ impl E727 {
         Ok(result)
     }
 
+    // ==================== Voltage Control ====================
+
+    /// Get the current output voltage for an axis.
+    ///
+    /// Uses the `VOL?` command to read the piezo output voltage in volts.
+    pub fn get_voltage(&mut self, axis: Axis) -> GcsResult<f64> {
+        let response = self.device.query(&format!("VOL? {axis}"))?;
+        GcsDevice::parse_single_value(&response)
+    }
+
+    /// Set the output voltage for an axis (open-loop mode).
+    ///
+    /// Uses the `SVA` command to set the piezo output voltage.
+    /// The servo must be disabled for this to take effect.
+    pub fn set_voltage(&mut self, axis: Axis, voltage: f64) -> GcsResult<()> {
+        self.device.command(&format!("SVA {axis} {voltage}"))
+    }
+
     // ==================== Motion Status ====================
 
     /// Check if an axis is on target (motion complete).

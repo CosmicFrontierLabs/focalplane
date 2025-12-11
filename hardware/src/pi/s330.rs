@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 use super::e727::{Axis, SpaParam, E727};
-use super::gcs::{GcsDevice, GcsResult, DEFAULT_PORT};
+use super::gcs::{GcsResult, DEFAULT_PORT};
 
 /// PI S-330 Fast Steering Mirror driver.
 ///
@@ -143,10 +143,9 @@ impl S330 {
         Ok(())
     }
 
-    /// Get the current voltage for an axis via VOL? command.
+    /// Get the current voltage for an axis.
     fn get_axis_voltage(&mut self, axis: Axis) -> GcsResult<f64> {
-        let response = self.e727.device_mut().query(&format!("VOL? {axis}"))?;
-        GcsDevice::parse_single_value(&response)
+        self.e727.get_voltage(axis)
     }
 
     /// Get a reference to the underlying E727 controller.
@@ -231,11 +230,13 @@ impl S330 {
 
         // a. Disable servo mode for axes 1 and 2
         info!("Disabling servos on axes 1 and 2...");
-        self.e727.device_mut().command("SVO 1 0 2 0")?;
+        self.e727.set_servo(Axis::Axis1, false)?;
+        self.e727.set_servo(Axis::Axis2, false)?;
 
         // b. Set piezo output voltage to 0V for axes 1 and 2
         info!("Setting piezo voltage to 0V on axes 1 and 2...");
-        self.e727.device_mut().command("SVA 1 0 2 0")?;
+        self.e727.set_voltage(Axis::Axis1, 0.0)?;
+        self.e727.set_voltage(Axis::Axis2, 0.0)?;
 
         // c. Wait for piezo output voltages to reach 0V (timeout 5 seconds)
         info!("Waiting for piezo voltages to settle...");
@@ -248,16 +249,10 @@ impl S330 {
                 break;
             }
 
-            let response = self.e727.device_mut().query("VOL? 1 2")?;
-            let voltages_zero = response.lines().all(|line| {
-                line.split('=')
-                    .nth(1)
-                    .and_then(|v| v.trim().parse::<f64>().ok())
-                    .map(|v| v.abs() < 0.1)
-                    .unwrap_or(false)
-            });
+            let v1 = self.e727.get_voltage(Axis::Axis1)?;
+            let v2 = self.e727.get_voltage(Axis::Axis2)?;
 
-            if voltages_zero {
+            if v1.abs() < 0.1 && v2.abs() < 0.1 {
                 info!("Piezo voltages at 0V");
                 break;
             }
@@ -267,7 +262,7 @@ impl S330 {
 
         // d. Set fixed voltage to 0V for axis 3
         info!("Setting axis 3 voltage to 0V...");
-        self.e727.device_mut().command("SVA 3 0")?;
+        self.e727.set_voltage(Axis::Axis3, 0.0)?;
 
         info!("S-330 shutdown sequence complete");
         Ok(())
