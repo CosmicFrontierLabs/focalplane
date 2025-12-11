@@ -34,13 +34,13 @@ usage() {
     echo "Usage: $0 --package PACKAGE [OPTIONS]"
     echo ""
     echo "Required:"
-    echo "  --package PKG        Package to deploy (flight-software, orin-dev)"
+    echo "  --package PKG        Package to deploy (test-bench, hardware)"
     echo ""
     echo "Options:"
     echo "  --binary BIN         Specific binary to deploy (deploys all if not specified)"
     echo "  --skip-build         Skip the build step"
     echo "  --keep-remote        Keep remote directory after deployment"
-    echo "  --run CMD            Command to run remotely (e.g., './playerone_info --detailed')"
+    echo "  --run CMD            Command to run remotely (e.g., './orin_monitor')"
     echo "  -h, --help           Show this help"
     exit 0
 }

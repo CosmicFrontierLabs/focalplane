@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Generic ARM64 cross-compilation build script for Jetson Orin
 # Usage: ./build-arm64.sh <package-name> [binary-name]
-# Example: ./build-arm64.sh flight-software flight_monitor
-# Example: ./build-arm64.sh orin-dev playerone_info
+# Example: ./build-arm64.sh test-bench orin_monitor
+# Example: ./build-arm64.sh hardware
 
 PACKAGE_NAME=${1:-}
 BINARY_NAME=${2:-}
@@ -14,8 +14,8 @@ if [ -z "$PACKAGE_NAME" ]; then
     echo "Usage: $0 <package-name> [binary-name]"
     echo ""
     echo "Available packages:"
-    echo "  flight-software"
-    echo "  orin-dev"
+    echo "  test-bench"
+    echo "  hardware"
     exit 1
 fi
 

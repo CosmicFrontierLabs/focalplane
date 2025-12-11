@@ -17,8 +17,8 @@ The project is organized as a Rust workspace with multiple packages:
 - **monocle**: Modular Orientation, Navigation & Optical Control Logic Engine - implements Fine Guidance System (FGS) tracking algorithms and attitude determination
 - **monocle_harness**: Test harness and benchmarking tools for monocle tracking algorithms
 
-### Flight Hardware
-- **flight-software**: Production monitoring system for NVIDIA Jetson Orin flight computers with Prometheus/Grafana integration for power, thermal, and system telemetry
+### Hardware Drivers
+- **hardware**: Hardware drivers for test bench equipment and flight hardware (Jetson Orin, cameras, gyros, PI stages)
 
 ### Test Infrastructure
 - **test-bench**: AprilTag detection and calibration test bench
@@ -91,20 +91,17 @@ cargo run --bin tracking_demo --motion chaotic --duration 30 --verbose
 cargo run --bin fgs_shootout --package monocle_harness
 ```
 
-### Flight Hardware (Jetson Orin)
+### Orin Monitoring (Test Infrastructure)
 
 ```bash
-# Run flight monitor locally
-cargo run --bin flight_monitor --package flight-software
-
-# Or use Docker stack with Prometheus/Grafana
-cd flight-software && docker-compose up -d
-
-# PlayerOne camera tools (poa_cameras package)
-cargo run --bin playerone_info --package poa_cameras
+# Run Orin monitoring server with Prometheus metrics
+cargo run --bin orin_monitor --package test-bench
 
 # Deploy to Orin
-scripts/deploy-to-orin.sh --package flight-software --binary flight_monitor
+scripts/deploy-to-orin.sh --package test-bench --binary orin_monitor
+
+# PlayerOne camera tools
+cargo run --bin playerone_info --package test-bench --features playerone
 ```
 
 ## Logging

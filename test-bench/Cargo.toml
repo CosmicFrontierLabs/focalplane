@@ -40,6 +40,10 @@ required-features = ["playerone"]
 name = "led_latency_test"
 path = "src/bin/led_latency_test.rs"
 
+[[bin]]
+name = "orin_monitor"
+path = "src/bin/orin_monitor.rs"
+
 [dependencies]
 anyhow = "1.0"
 apriltag = "0.4.0"
@@ -57,7 +61,8 @@ libc = "0.2.177"
 monocle = { version = "0.1.0", path = "../monocle" }
 nalgebra = "0.34.1"
 ndarray = "0.16"
-hardware = { version = "0.1.0", path = "../hardware", optional = true }
+hardware = { version = "0.1.0", path = "../hardware" }
+prometheus = "0.14"
 rand = "0.8"
 rayon = "1.11.0"
 resvg = { version = "0.45.0", features = ["text"] }
@@ -85,6 +90,6 @@ tokio-test = "0.4"
 
 [features]
 default = []
-playerone = ["dep:hardware"]
-nsv455 = ["dep:hardware"]
+playerone = []
+nsv455 = []
 sdl2 = ["dep:sdl2"]

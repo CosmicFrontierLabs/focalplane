@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "simulator",
-    "flight-software",
     "monocle",
     "monocle_harness",
     "shared",

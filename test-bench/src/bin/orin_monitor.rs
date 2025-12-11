@@ -1,14 +1,13 @@
-use flight_software::{MonitoringError, MonitoringServer};
+use hardware::orin::MonitoringError;
+use test_bench::orin_monitoring::MonitoringServer;
 use tracing::{error, info, Level};
 
 #[tokio::main]
 async fn main() -> Result<(), MonitoringError> {
-    // Initialize logging
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     info!("Starting Jetson Orin flight computer monitoring service");
 
-    // Create and start the monitoring server
     let server = MonitoringServer::new()?;
 
     let bind_address = std::env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -21,7 +20,6 @@ async fn main() -> Result<(), MonitoringError> {
     info!("  Bind address: {}", bind_address);
     info!("  Port: {}", port);
 
-    // Start the server (this will run indefinitely)
     if let Err(e) = server.serve(&bind_address, port).await {
         error!("Server failed to start: {}", e);
         return Err(e);

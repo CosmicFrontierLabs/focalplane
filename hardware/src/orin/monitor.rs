@@ -1,4 +1,4 @@
-use crate::errors::MonitoringError;
+use super::errors::MonitoringError;
 use glob::glob;
 use serde::{Deserialize, Serialize};
 use std::fs;

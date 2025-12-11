@@ -8,6 +8,7 @@ pub mod display_patterns;
 pub mod display_utils;
 
 pub mod gpio;
+pub mod orin_monitoring;
 
 #[cfg(feature = "playerone")]
 pub use hardware::poa;
