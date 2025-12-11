@@ -13,6 +13,15 @@ use tracing::info;
 use super::e727::{Axis, SpaParam, E727};
 use super::gcs::{GcsResult, DEFAULT_PORT};
 
+/// Polling interval when waiting for voltage changes.
+const VOLTAGE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Timeout for axis 3 bias voltage to reach target.
+const BIAS_VOLTAGE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Timeout for piezo voltages to reach 0V during shutdown.
+const SHUTDOWN_VOLTAGE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// PI S-330 Fast Steering Mirror driver.
 ///
 /// Wraps an E727 controller with S-330-specific initialization and cleanup.
@@ -102,11 +111,10 @@ impl S330 {
             info!("Setting axis 3 bias voltage to 100V (currently {axis3_voltage:.1}V)...");
             self.e727.device_mut().command("SVA 3 100")?;
 
-            // Poll until voltage reaches 100V (timeout 2 seconds)
+            // Poll until voltage reaches 100V
             let start = Instant::now();
-            let timeout = Duration::from_secs(2);
             loop {
-                if start.elapsed() > timeout {
+                if start.elapsed() > BIAS_VOLTAGE_TIMEOUT {
                     tracing::warn!("Timeout waiting for axis 3 voltage to reach 100V");
                     break;
                 }
@@ -117,7 +125,7 @@ impl S330 {
                     break;
                 }
 
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(VOLTAGE_POLL_INTERVAL);
             }
         } else {
             info!("Axis 3 bias voltage OK ({axis3_voltage:.1}V)");
@@ -238,13 +246,12 @@ impl S330 {
         self.e727.set_voltage(Axis::Axis1, 0.0)?;
         self.e727.set_voltage(Axis::Axis2, 0.0)?;
 
-        // c. Wait for piezo output voltages to reach 0V (timeout 5 seconds)
+        // c. Wait for piezo output voltages to reach 0V
         info!("Waiting for piezo voltages to settle...");
         let start = Instant::now();
-        let timeout = Duration::from_secs(5);
 
         loop {
-            if start.elapsed() > timeout {
+            if start.elapsed() > SHUTDOWN_VOLTAGE_TIMEOUT {
                 tracing::warn!("Timeout waiting for piezo voltages to reach 0V, continuing...");
                 break;
             }
@@ -257,7 +264,7 @@ impl S330 {
                 break;
             }
 
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(VOLTAGE_POLL_INTERVAL);
         }
 
         // d. Set fixed voltage to 0V for axis 3

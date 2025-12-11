@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use hardware::pi::{Axis, GcsDevice, PiErrorCode, SpaParam, E727, S330};
+use hardware::pi::{Axis, GcsDevice, PiErrorCode, SpaParam, E727, RECORDER_SAMPLE_RATE_HZ, S330};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use strum::IntoEnumIterator;
@@ -668,8 +668,7 @@ fn cmd_resonance(ip: &str, axis: &str, step: f64, rate: u32, output: &str) -> Re
         position_data.len()
     );
 
-    let base_rate_hz = 50000.0;
-    let sample_period_us = (rate as f64) / base_rate_hz * 1e6;
+    let sample_period_us = (rate as f64) / RECORDER_SAMPLE_RATE_HZ * 1e6;
 
     info!("Writing to {}...", output);
     let mut file = std::fs::File::create(output)?;

@@ -65,6 +65,12 @@ use tracing::{debug, info};
 
 use super::gcs::{GcsDevice, GcsError, GcsResult, DEFAULT_PORT};
 
+/// Data recorder sample rate in Hz (50 kHz).
+pub const RECORDER_SAMPLE_RATE_HZ: f64 = 50_000.0;
+
+/// Polling interval for autozero completion.
+const AUTOZERO_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+
 /// High-level driver for the PI E-727 digital piezo controller.
 ///
 /// Provides convenient methods for fast steering mirror control including
@@ -631,7 +637,7 @@ impl E727 {
                         return Err(err);
                     }
                 }
-                std::thread::sleep(Duration::from_millis(1000));
+                std::thread::sleep(AUTOZERO_POLL_INTERVAL);
             }
 
             info!("Axis {axis} autozeroed");
