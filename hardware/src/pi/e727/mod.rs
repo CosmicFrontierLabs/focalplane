@@ -205,6 +205,35 @@ impl E727 {
 
     // ==================== Motion Commands ====================
 
+    /// Build GCS axis arguments string from optional per-axis values.
+    ///
+    /// Returns None if all values are None, otherwise returns a string like "1 100.5 2 200.3".
+    fn build_axis_args(
+        axis1: Option<f64>,
+        axis2: Option<f64>,
+        axis3: Option<f64>,
+        axis4: Option<f64>,
+    ) -> Option<String> {
+        let mut args = Vec::new();
+        if let Some(v) = axis1 {
+            args.push(format!("1 {v}"));
+        }
+        if let Some(v) = axis2 {
+            args.push(format!("2 {v}"));
+        }
+        if let Some(v) = axis3 {
+            args.push(format!("3 {v}"));
+        }
+        if let Some(v) = axis4 {
+            args.push(format!("4 {v}"));
+        }
+        if args.is_empty() {
+            None
+        } else {
+            Some(args.join(" "))
+        }
+    }
+
     /// Move axes to absolute positions.
     ///
     /// The servo must be enabled on each axis before motion commands will work.
@@ -229,23 +258,10 @@ impl E727 {
         axis3: Option<f64>,
         axis4: Option<f64>,
     ) -> GcsResult<()> {
-        let mut args = Vec::new();
-        if let Some(pos) = axis1 {
-            args.push(format!("1 {pos}"));
+        match Self::build_axis_args(axis1, axis2, axis3, axis4) {
+            Some(args) => self.device.command(&format!("MOV {args}")),
+            None => Ok(()),
         }
-        if let Some(pos) = axis2 {
-            args.push(format!("2 {pos}"));
-        }
-        if let Some(pos) = axis3 {
-            args.push(format!("3 {pos}"));
-        }
-        if let Some(pos) = axis4 {
-            args.push(format!("4 {pos}"));
-        }
-        if args.is_empty() {
-            return Ok(());
-        }
-        self.device.command(&format!("MOV {}", args.join(" ")))
     }
 
     /// Move axes by relative distances.
@@ -263,23 +279,10 @@ impl E727 {
         axis3: Option<f64>,
         axis4: Option<f64>,
     ) -> GcsResult<()> {
-        let mut args = Vec::new();
-        if let Some(dist) = axis1 {
-            args.push(format!("1 {dist}"));
+        match Self::build_axis_args(axis1, axis2, axis3, axis4) {
+            Some(args) => self.device.command(&format!("MVR {args}")),
+            None => Ok(()),
         }
-        if let Some(dist) = axis2 {
-            args.push(format!("2 {dist}"));
-        }
-        if let Some(dist) = axis3 {
-            args.push(format!("3 {dist}"));
-        }
-        if let Some(dist) = axis4 {
-            args.push(format!("4 {dist}"));
-        }
-        if args.is_empty() {
-            return Ok(());
-        }
-        self.device.command(&format!("MVR {}", args.join(" ")))
     }
 
     /// Fast move without error checking.
@@ -298,23 +301,10 @@ impl E727 {
         axis3: Option<f64>,
         axis4: Option<f64>,
     ) -> GcsResult<()> {
-        let mut args = Vec::new();
-        if let Some(pos) = axis1 {
-            args.push(format!("1 {pos}"));
+        match Self::build_axis_args(axis1, axis2, axis3, axis4) {
+            Some(args) => self.device.send(&format!("MOV {args}")),
+            None => Ok(()),
         }
-        if let Some(pos) = axis2 {
-            args.push(format!("2 {pos}"));
-        }
-        if let Some(pos) = axis3 {
-            args.push(format!("3 {pos}"));
-        }
-        if let Some(pos) = axis4 {
-            args.push(format!("4 {pos}"));
-        }
-        if args.is_empty() {
-            return Ok(());
-        }
-        self.device.send(&format!("MOV {}", args.join(" ")))
     }
 
     // ==================== Servo Control ====================
