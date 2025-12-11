@@ -154,9 +154,9 @@ mod tests {
     #[test]
     fn test_decode_empty() {
         let input = [0x01, 0x00];
-        let mut output = [0u8; 0];
+        let mut output: [u8; 0] = [];
         decode(&input, &mut output).unwrap();
-        assert_eq!(output, []);
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::cobs;
+use super::cobs;
 
 const CRC_ALGO: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
 const SEQUENCE_MASK: u8 = 0b11111;
