@@ -24,6 +24,10 @@ name = "print_roi_constraints"
 path = "src/bin/print_roi_constraints.rs"
 
 [[bin]]
+name = "mock_gyro"
+path = "src/bin/mock_gyro.rs"
+
+[[bin]]
 name = "parse_dump"
 path = "src/exail/bin/parse_dump.rs"
 
@@ -42,6 +46,7 @@ glob = "0.3"
 gpiod = "0.3.0"
 image = "0.25.9"
 libc = "0.2.178"
+libftd2xx = "0.33.1"
 log = "0.4.29"
 sysinfo = "0.32"
 ndarray = { version = "0.16", features = ["rayon"] }
