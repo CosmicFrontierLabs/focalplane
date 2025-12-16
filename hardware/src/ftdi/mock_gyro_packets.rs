@@ -124,7 +124,7 @@ pub fn build_raw_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exail::{verify_checksum, GyroData};
+    use crate::exail::{verify_checksum_bytes, GyroData};
 
     #[test]
     fn test_build_full_packet_size() {
@@ -138,7 +138,7 @@ mod tests {
     fn test_build_full_packet_checksum_valid() {
         let packet = build_full_packet(0x12, false, 12345, 100, 200, 300);
         let bytes = bytes_of(&packet);
-        assert!(verify_checksum(bytes));
+        assert!(verify_checksum_bytes(bytes));
     }
 
     #[test]
@@ -209,7 +209,7 @@ mod tests {
     fn test_build_raw_packet_checksum_valid() {
         let packet = build_raw_packet(0x12, false, 12345, 100, 200, 300);
         let bytes = bytes_of(&packet);
-        assert!(verify_checksum(bytes));
+        assert!(verify_checksum_bytes(bytes));
     }
 
     #[test]
