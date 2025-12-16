@@ -28,6 +28,8 @@ ORIN_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
 ORIN_TAILSCALE_NAME="orin-nano"
 NEUT_HOST="cosmicfrontiers@orin-416.tail944341.ts.net"
 NEUT_DEVICE_NAME="neutralino"
+TEST_BENCH_HOST="meawoppl@cfl-test-bench.tail944341.ts.net"
+TEST_BENCH_DEVICE_NAME="cfl-test-bench"
 
 # Apt dependencies management
 # The semaphore file caches apt package verification to speed up repeated builds.
@@ -51,7 +53,7 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 usage() {
-    echo "Usage: $0 --package PACKAGE [--orin|--neut] [OPTIONS]"
+    echo "Usage: $0 --package PACKAGE [--orin|--neut|--test-bench] [OPTIONS]"
     echo ""
     echo "Required:"
     echo "  --package PKG        Package to build (e.g., test-bench)"
@@ -59,6 +61,7 @@ usage() {
     echo "Device Selection (one required):"
     echo "  --orin               Build on Jetson Orin Nano (${ORIN_HOST})"
     echo "  --neut               Build on Neutralino computer (${NEUT_HOST})"
+    echo "  --test-bench         Build on CFL test bench (${TEST_BENCH_HOST})"
     echo ""
     echo "Options:"
     echo "  --binary BIN         Specific binary to build (e.g., camera_server)"
@@ -72,6 +75,7 @@ usage() {
     echo "Examples:"
     echo "  $0 --package test-bench --orin --binary cam_track"
     echo "  $0 --package test-bench --neut --binary cam_serve_nsv --run './target/release/cam_serve_nsv'"
+    echo "  $0 --package test-bench --test-bench --binary cam_track"
     exit 0
 }
 
@@ -87,6 +91,12 @@ while [[ $# -gt 0 ]]; do
             DEVICE_TYPE="neut"
             REMOTE_HOST="$NEUT_HOST"
             TAILSCALE_DEVICE_NAME="$NEUT_DEVICE_NAME"
+            shift
+            ;;
+        --test-bench)
+            DEVICE_TYPE="test-bench"
+            REMOTE_HOST="$TEST_BENCH_HOST"
+            TAILSCALE_DEVICE_NAME="$TEST_BENCH_DEVICE_NAME"
             shift
             ;;
         --package)
@@ -122,7 +132,7 @@ if [ -z "$PACKAGE_NAME" ]; then
 fi
 
 if [ -z "$DEVICE_TYPE" ]; then
-    print_error "Device type is required. Use --orin or --neut"
+    print_error "Device type is required. Use --orin, --neut, or --test-bench"
     usage
 fi
 
@@ -145,8 +155,8 @@ PROJECT_NAME="$(basename "$PROJECT_ROOT")"
 print_info "Building $PACKAGE_NAME on ${DEVICE_TYPE} at $REMOTE_HOST"
 print_info "Remote build directory: ~/$REMOTE_BUILD_DIR/$PROJECT_NAME"
 
-# Step 0: Check Tailscale connectivity (only for Orin)
-if [ "$DEVICE_TYPE" = "orin" ]; then
+# Step 0: Check Tailscale connectivity (for Tailscale-connected devices)
+if [ "$DEVICE_TYPE" = "orin" ] || [ "$DEVICE_TYPE" = "test-bench" ]; then
     print_info "Checking Tailscale connectivity..."
     if ! command -v tailscale &> /dev/null; then
         print_error "Tailscale is not installed on this machine"
