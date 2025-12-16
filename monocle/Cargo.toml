@@ -16,9 +16,13 @@ ndarray = "0.16"
 
 # Internal dependencies
 shared = { path = "../shared" }
+nalgebra = "0.34.1"
 
 [dev-dependencies]
 env_logger = "0.11"
 approx = "0.5"
 rand = "0.8"
 rand_chacha = "0.3"
+
+[build-dependencies]
+cc = "1.2.49"

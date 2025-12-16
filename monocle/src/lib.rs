@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod callback;
 pub mod config;
+pub mod controllers;
 pub mod filters;
 pub mod selection;
 pub mod state;
