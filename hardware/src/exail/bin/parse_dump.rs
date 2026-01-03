@@ -6,7 +6,11 @@ use hardware::exail::{verify_checksum_bytes, FullGyroData, GyroData, Temperature
 use log::{error, info, warn};
 
 const MSG_SIZE: usize = 66;
-const SYNC_PATTERN: [u8; 2] = [0x87, 0x15];
+
+/// External sync pattern (0x87 0x15)
+const SYNC_EXTERNAL: [u8; 2] = [0x87, 0x15];
+/// Internal sync pattern (0x87 0x16)
+const SYNC_INTERNAL: [u8; 2] = [0x87, 0x16];
 
 /// Parsed record - either valid data or skipped bytes
 enum Record {
@@ -22,10 +26,18 @@ struct PendingSkip {
     last_valid_timetag: Option<u16>,
 }
 
-/// Search forward from `start` for the sync pattern 0x87 0x15
+/// Check if bytes at position match either sync pattern (external 0x87 0x15 or internal 0x87 0x16)
+fn is_sync(data: &[u8], i: usize) -> bool {
+    if i + 1 >= data.len() {
+        return false;
+    }
+    (data[i] == SYNC_EXTERNAL[0] && data[i + 1] == SYNC_EXTERNAL[1])
+        || (data[i] == SYNC_INTERNAL[0] && data[i + 1] == SYNC_INTERNAL[1])
+}
+
+/// Search forward from `start` for either sync pattern (0x87 0x15 or 0x87 0x16)
 fn find_sync(data: &[u8], start: usize) -> Option<usize> {
-    (start..data.len().saturating_sub(1))
-        .find(|&i| data[i] == SYNC_PATTERN[0] && data[i + 1] == SYNC_PATTERN[1])
+    (start..data.len().saturating_sub(1)).find(|&i| is_sync(data, i))
 }
 
 /// Log skipped bytes with offset, timetags, and count of good records
