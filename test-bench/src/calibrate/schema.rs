@@ -27,6 +27,12 @@ pub enum ControlSpec {
         label: String,
         default: bool,
     },
+    Text {
+        id: String,
+        label: String,
+        default: String,
+        placeholder: String,
+    },
 }
 
 /// Pattern specification for the frontend UI.
@@ -175,6 +181,16 @@ pub fn get_pattern_schemas() -> SchemaResponse {
                     default: 24,
                 }],
             },
+            PatternSpec {
+                id: "RemoteControlled".into(),
+                name: "Remote Controlled (ZMQ)".into(),
+                controls: vec![ControlSpec::Text {
+                    id: "zmq_endpoint".into(),
+                    label: "ZMQ Endpoint".into(),
+                    default: "tcp://localhost:5556".into(),
+                    placeholder: "tcp://host:port".into(),
+                }],
+            },
         ],
         global_controls: vec![ControlSpec::Bool {
             id: "invert".into(),
@@ -185,9 +201,14 @@ pub fn get_pattern_schemas() -> SchemaResponse {
 }
 
 /// Convert pattern ID and values from web request to PatternConfig.
+///
+/// Note: RemoteControlled pattern is handled specially in calibrate_serve
+/// since it needs the shared remote state.
+#[allow(unused_variables)]
 pub fn parse_pattern_request(
     pattern_id: &str,
     values: &serde_json::Map<String, serde_json::Value>,
+    display_size: Option<(u32, u32)>,
 ) -> Result<PatternConfig, String> {
     let get_i64 = |key: &str, default: i64| -> i64 {
         values.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
@@ -224,6 +245,10 @@ pub fn parse_pattern_request(
         "SiemensStar" => Ok(PatternConfig::SiemensStar {
             spokes: get_i64("spokes", 24) as u32,
         }),
+        // RemoteControlled is handled specially in calibrate_serve
+        "RemoteControlled" => Err(
+            "RemoteControlled pattern should be handled by calibrate_serve directly".to_string(),
+        ),
         _ => Err(format!("Unknown pattern_id: {pattern_id}")),
     }
 }
@@ -259,6 +284,7 @@ pub fn pattern_to_dynamic(config: &PatternConfig) -> (String, serde_json::Value)
         ),
         PatternConfig::PixelGrid { spacing } => ("PixelGrid".into(), json!({"spacing": spacing})),
         PatternConfig::SiemensStar { spokes } => ("SiemensStar".into(), json!({"spokes": spokes})),
+        PatternConfig::RemoteControlled { .. } => ("RemoteControlled".into(), json!({})),
         // Advanced patterns aren't exposed via web API
         _ => ("Unknown".into(), serde_json::json!({})),
     }

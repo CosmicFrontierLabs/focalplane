@@ -15,6 +15,7 @@ pub mod frame_writer;
 pub mod image_proc;
 pub mod image_size;
 pub mod optical_alignment;
+pub mod pattern_command;
 pub mod range_arg;
 pub mod star_projector;
 pub mod test_util;

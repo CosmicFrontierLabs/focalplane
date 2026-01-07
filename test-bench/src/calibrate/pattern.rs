@@ -59,6 +59,11 @@ pub enum PatternConfig {
         runner: Arc<Mutex<patterns::optical_calibration::CalibrationRunner>>,
         pattern_size: shared::image_size::PixelShape,
     },
+    #[serde(skip)]
+    RemoteControlled {
+        state: Arc<Mutex<patterns::remote_controlled::RemotePatternState>>,
+        pattern_size: shared::image_size::PixelShape,
+    },
 }
 
 impl std::fmt::Debug for PatternConfig {
@@ -114,6 +119,10 @@ impl std::fmt::Debug for PatternConfig {
                 .debug_struct("OpticalCalibration")
                 .field("pattern_size", pattern_size)
                 .finish_non_exhaustive(),
+            Self::RemoteControlled { pattern_size, .. } => f
+                .debug_struct("RemoteControlled")
+                .field("pattern_size", pattern_size)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -135,6 +144,7 @@ impl PatternConfig {
                 | Self::MotionProfile { .. }
                 | Self::GyroWalk { .. }
                 | Self::OpticalCalibration { .. }
+                | Self::RemoteControlled { .. }
         )
     }
 
@@ -154,6 +164,7 @@ impl PatternConfig {
             Self::MotionProfile { .. } => "Motion Profile",
             Self::GyroWalk { .. } => "Gyro Walk",
             Self::OpticalCalibration { .. } => "Optical Calibration",
+            Self::RemoteControlled { .. } => "Remote Controlled",
         }
     }
 
@@ -201,7 +212,8 @@ impl PatternConfig {
             // Advanced patterns start with black - animation fills them in
             Self::MotionProfile { .. }
             | Self::GyroWalk { .. }
-            | Self::OpticalCalibration { .. } => {
+            | Self::OpticalCalibration { .. }
+            | Self::RemoteControlled { .. } => {
                 Ok(ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0])))
             }
         }
@@ -283,6 +295,12 @@ impl PatternConfig {
                 pattern_size,
             } => {
                 patterns::optical_calibration::generate_into_buffer(buffer, *pattern_size, runner);
+            }
+            Self::RemoteControlled {
+                state,
+                pattern_size,
+            } => {
+                patterns::remote_controlled::generate_into_buffer(buffer, *pattern_size, state);
             }
             // Non-animated patterns don't use buffer generation
             _ => {}

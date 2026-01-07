@@ -7,6 +7,7 @@ pub mod motion_profile;
 pub mod optical_calibration;
 pub mod pixel;
 pub mod pixel_grid;
+pub mod remote_controlled;
 pub mod shared;
 pub mod siemens_star;
 pub mod static_noise;

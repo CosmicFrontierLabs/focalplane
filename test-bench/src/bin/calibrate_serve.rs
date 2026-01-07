@@ -11,11 +11,12 @@ use clap::Parser;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use test_bench::calibrate::{
     get_pattern_schemas, parse_pattern_request, pattern_to_dynamic, run_display, DisplayConfig,
     DynamicPattern, PatternConfig, SchemaResponse,
 };
+use test_bench::display_patterns::remote_controlled::RemotePatternState;
 use test_bench::display_utils::{
     get_display_resolution, list_displays, resolve_display_index, wait_for_oled_display,
 };
@@ -52,6 +53,13 @@ struct Args {
         help = "Seconds of inactivity before screen goes black (OLED burn-in protection)"
     )]
     idle_timeout: u64,
+
+    #[arg(
+        long,
+        default_value = "tcp://*:5556",
+        help = "ZMQ REP bind address for receiving pattern commands"
+    )]
+    zmq_bind: String,
 }
 
 struct AppState {
@@ -62,6 +70,8 @@ struct AppState {
     pattern_start_time: Arc<RwLock<std::time::Instant>>,
     display_update_tx: Option<mpsc::Sender<()>>,
     idle_timeout: std::time::Duration,
+    /// Shared remote pattern state for ZMQ-commanded patterns
+    remote_state: Arc<Mutex<RemotePatternState>>,
 }
 
 async fn pattern_page(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -159,7 +169,24 @@ async fn update_pattern_config(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DynamicPatternRequest>,
 ) -> Response {
-    match parse_pattern_request(&req.pattern_id, &req.values) {
+    // Special handling for RemoteControlled - use shared state
+    let pattern_result = if req.pattern_id == "RemoteControlled" {
+        Ok(PatternConfig::RemoteControlled {
+            state: state.remote_state.clone(),
+            pattern_size: shared::image_size::PixelShape {
+                width: state.width as usize,
+                height: state.height as usize,
+            },
+        })
+    } else {
+        parse_pattern_request(
+            &req.pattern_id,
+            &req.values,
+            Some((state.width, state.height)),
+        )
+    };
+
+    match pattern_result {
         Ok(pattern) => {
             *state.pattern.write().await = pattern;
 
@@ -274,6 +301,66 @@ fn main() -> Result<()> {
 
     let (display_update_tx, display_update_rx) = mpsc::channel::<()>();
 
+    // Create shared remote pattern state
+    let remote_state = Arc::new(Mutex::new(RemotePatternState::new()));
+
+    // Bind ZMQ REP socket for receiving pattern commands
+    let zmq_bind = args.zmq_bind.clone();
+    let remote_state_zmq = remote_state.clone();
+    let display_update_tx_zmq = display_update_tx.clone();
+
+    std::thread::spawn(move || {
+        let ctx = zmq::Context::new();
+        let socket = match ctx.socket(zmq::REP) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Failed to create ZMQ REP socket: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) = socket.bind(&zmq_bind) {
+            tracing::error!("Failed to bind ZMQ REP socket to {}: {e}", zmq_bind);
+            return;
+        }
+
+        tracing::info!("ZMQ REP socket listening on {}", zmq_bind);
+
+        loop {
+            // Receive command
+            let msg = match socket.recv_string(0) {
+                Ok(Ok(s)) => s,
+                Ok(Err(_)) => {
+                    tracing::warn!("Received non-UTF8 ZMQ message");
+                    let _ = socket.send("error: invalid UTF-8", 0);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!("ZMQ recv error: {e}");
+                    break;
+                }
+            };
+
+            // Parse command
+            match serde_json::from_str::<shared::pattern_command::PatternCommand>(&msg) {
+                Ok(cmd) => {
+                    tracing::debug!("Received pattern command: {:?}", cmd);
+                    remote_state_zmq.lock().unwrap().set_command(cmd);
+
+                    // Notify display to update
+                    let _ = display_update_tx_zmq.send(());
+
+                    // Send acknowledgment
+                    let _ = socket.send("ok", 0);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse pattern command: {e}");
+                    let _ = socket.send(&format!("error: {e}"), 0);
+                }
+            }
+        }
+    });
+
     let state = Arc::new(AppState {
         pattern: Arc::new(RwLock::new(PatternConfig::default())),
         width,
@@ -282,6 +369,7 @@ fn main() -> Result<()> {
         pattern_start_time: Arc::new(RwLock::new(std::time::Instant::now())),
         display_update_tx: Some(display_update_tx),
         idle_timeout: std::time::Duration::from_secs(args.idle_timeout),
+        remote_state,
     });
 
     let state_clone = state.clone();

@@ -16,7 +16,7 @@ Desktop-driven optical calibration system that remotely controls the OLED displa
 │  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │  │
 │  │   │ Pattern     │    │ Tracking    │    │ Calibration Engine  │  │  │
 │  │   │ Commander   │    │ Listener    │    │                     │  │  │
-│  │   │ (ZMQ PUB)   │    │ (ZMQ SUB)   │    │ - Point collection  │  │  │
+│  │   │ (ZMQ REQ)   │    │ (ZMQ SUB)   │    │ - Point collection  │  │  │
 │  │   └──────┬──────┘    └──────┬──────┘    │ - Transform est.    │  │  │
 │  │          │                  │           │ - Coverage calc     │  │  │
 │  │          │                  │           │ - Defocus mapping   │  │  │
@@ -36,7 +36,7 @@ Desktop-driven optical calibration system that remotely controls the OLED displa
 │  └──────────┼───────────────────────────────────────────────────────┘  │
 │             │                                                           │
 └─────────────┼───────────────────────────────────────────────────────────┘
-              │ PatternCommand (ZMQ)
+              │ PatternCommand (ZMQ REQ/REP)
               ▼
 ┌─────────────────────────┐
 │      TEST-BENCH-PI      │
@@ -44,14 +44,14 @@ Desktop-driven optical calibration system that remotely controls the OLED displa
 │  ┌───────────────────┐  │
 │  │  calibrate_serve  │  │
 │  │                   │  │
-│  │  ZMQ SUB ◄────────┼──┼─── PatternCommand
-│  │                   │  │
+│  │  ZMQ REP ◄────────┼──┼─── PatternCommand (replies "ok")
+│  │  (tcp://*:5556)   │  │
 │  │  ┌─────────────┐  │  │
 │  │  │RemoteCtrl'd │  │  │
-│  │  │Pattern (NEW)│  │  │
+│  │  │   Pattern   │  │  │
 │  │  └─────────────┘  │  │
 │  │                   │  │
-│  │  HTTP API (existing)  │
+│  │  HTTP API (/config)  │
 │  └───────────────────┘  │
 │           │             │
 │        OLED 2560x2560   │
@@ -76,15 +76,17 @@ Desktop-driven optical calibration system that remotely controls the OLED displa
 
 ## Components
 
-### Track 1: Shared Message Types (shared crate)
+### Track 1: Shared Message Types (shared crate) ✅ COMPLETED
 
 **Files**: `shared/src/pattern_command.rs`
 
-**Dependencies**: None (can start immediately)
+**Dependencies**: None
 
+**Implementation**:
 ```rust
 /// Commands sent from desktop to control OLED pattern display
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(tag = "type")]
 pub enum PatternCommand {
     /// Display a single Gaussian spot
     Spot {
@@ -102,69 +104,80 @@ pub enum PatternCommand {
     /// Uniform gray level
     Uniform { level: u8 },
     /// Clear to black
+    #[default]
     Clear,
 }
 
-/// Response from calibrate_serve acknowledging command
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatternAck {
-    pub command_id: u64,
-    pub timestamp_us: u64,
-}
+// Helper functions included:
+// - PatternCommand::centered_spot(width, height, fwhm, intensity)
+// - PatternCommand::centered_grid(width, height, grid_size, spacing, fwhm, intensity)
 ```
 
-**Deliverable**: Message types in shared crate with serialization tests
+**Acknowledgment**: Simple string response `"ok"` or `"error: <message>"`
+
+**Deliverable**: ✅ Message types in shared crate with serialization tests
 
 ---
 
-### Track 2: Remote-Controlled Pattern (test-bench crate)
+### Track 2: Remote-Controlled Pattern (test-bench crate) ✅ COMPLETED
 
 **Files**:
 - `test-bench/src/display_patterns/remote_controlled.rs`
-- `test-bench/src/calibrate/pattern.rs` (add variant)
-- `test-bench/src/bin/calibrate_serve.rs` (add ZMQ listener)
+- `test-bench/src/calibrate/pattern.rs` (PatternConfig::RemoteControlled variant)
+- `test-bench/src/calibrate/schema.rs` (web UI schema + Text control type)
+- `test-bench/src/bin/calibrate_serve.rs` (ZMQ REP handler)
 
 **Dependencies**: Track 1 (PatternCommand types)
 
-**New Pattern Variant**:
+**Architecture**: Uses ZMQ REQ/REP pattern for reliable command delivery:
+- calibrate_serve **binds** REP socket at startup (always listening)
+- Desktop **connects** with REQ socket, sends command, waits for ack
+- Commands update shared state regardless of active pattern
+
+**PatternConfig Variant**:
 ```rust
-// In PatternConfig enum
 #[serde(skip)]
 RemoteControlled {
-    command_receiver: Arc<Mutex<RemotePatternState>>,
-    display_size: PixelShape,
+    state: Arc<Mutex<RemotePatternState>>,
+    pattern_size: PixelShape,
 }
 ```
 
-**RemotePatternState**:
+**RemotePatternState** (simplified, no ZMQ polling):
 ```rust
 pub struct RemotePatternState {
-    subscriber: TypedZmqSubscriber<PatternCommand>,
     current_command: PatternCommand,
     last_update: Instant,
+    cached_norm_factor: f64,
+    cached_fwhm: f64,
 }
 
 impl RemotePatternState {
-    pub fn poll(&mut self) {
-        // Drain ZMQ, keep latest command
-        for cmd in self.subscriber.drain() {
-            self.current_command = cmd;
-            self.last_update = Instant::now();
-        }
+    pub fn set_command(&mut self, cmd: PatternCommand) {
+        self.current_command = cmd;
+        self.last_update = Instant::now();
     }
-
-    pub fn current(&self) -> &PatternCommand {
-        &self.current_command
-    }
+    pub fn current(&self) -> &PatternCommand { &self.current_command }
 }
 ```
 
 **calibrate_serve changes**:
-- Add `--pattern-zmq-sub` argument for command endpoint
-- When RemoteControlled pattern active, poll for commands each frame
-- Render based on current command
+- `--zmq-bind` argument (default: `tcp://*:5556`)
+- ZMQ REP handler thread spawned at startup
+- Shared `RemotePatternState` updated on command receipt
+- Pattern selectable via HTTP POST `/config` with `{"pattern_id": "RemoteControlled", "values": {}}`
 
-**Deliverable**: calibrate_serve can display spots at positions commanded via ZMQ
+**Usage**:
+```python
+import zmq
+ctx = zmq.Context()
+sock = ctx.socket(zmq.REQ)
+sock.connect('tcp://test-bench-pi.tail944341.ts.net:5556')
+sock.send_json({'type': 'Spot', 'x': 1280, 'y': 1280, 'fwhm': 5.0, 'intensity': 1.0})
+print(sock.recv_string())  # "ok"
+```
+
+**Deliverable**: ✅ calibrate_serve displays spots at positions commanded via ZMQ REQ/REP
 
 ---
 
@@ -371,14 +384,14 @@ pub struct DefocusPoint {
 
 ## Parallel Development Tracks
 
-| Track | Component | Dependencies | Estimated Size |
-|-------|-----------|--------------|----------------|
-| 1 | PatternCommand types | None | ~50 lines |
-| 2 | RemoteControlled pattern | Track 1 | ~200 lines |
-| 3 | Extended TrackingMessage | None | ~50 lines |
-| 4 | CalibrationController core | Track 1, 2 | ~400 lines |
-| 5 | egui Visualization | Track 4 | ~300 lines |
-| 6 | Result types (Coverage, Defocus) | None | ~150 lines |
+| Track | Component | Dependencies | Status |
+|-------|-----------|--------------|--------|
+| 1 | PatternCommand types | None | ✅ Complete |
+| 2 | RemoteControlled pattern + ZMQ REP | Track 1 | ✅ Complete |
+| 3 | Extended TrackingMessage | None | Pending |
+| 4 | CalibrationController core | Track 1, 2 | Ready to start |
+| 5 | egui Visualization | Track 4 | Pending |
+| 6 | Result types (Coverage, Defocus) | None | Pending |
 
 **Parallelization**:
 - Tracks 1, 3, 6 can all start immediately (no dependencies)
@@ -400,23 +413,66 @@ Timeline:
 
 ### ZMQ Endpoints
 
-| Endpoint | Direction | Message Type | Port (suggested) |
-|----------|-----------|--------------|------------------|
-| Pattern commands | Desktop → Pi | PatternCommand | tcp://*:5556 |
-| Tracking updates | Orin → Desktop | TrackingMessage | tcp://*:5555 |
+| Endpoint | Pattern | Direction | Message Type | Port |
+|----------|---------|-----------|--------------|------|
+| Pattern commands | REQ/REP | Desktop (REQ) → Pi (REP) | PatternCommand JSON | tcp://*:5556 |
+| Tracking updates | PUB/SUB | Orin (PUB) → Desktop (SUB) | TrackingMessage | tcp://*:5555 |
+
+**REQ/REP Benefits**:
+- Desktop knows when command was received (waits for "ok" reply)
+- No missed commands (unlike PUB/SUB which can drop if subscriber not ready)
+- Simple error handling ("error: ..." replies)
 
 ### Message Flow
 
-1. Desktop publishes `PatternCommand::Spot { x, y, fwhm, intensity }`
-2. Pi receives, renders spot on OLED
-3. Camera sees spot, cam_track detects it
-4. cam_track publishes `TrackingMessage { x, y, fwhm_x, fwhm_y, ... }`
-5. Desktop receives, accumulates measurements
-6. After N measurements, Desktop averages and stores correspondence
-7. Desktop advances to next spot position
-8. After all positions, Desktop computes `OpticalAlignment`
-9. Desktop computes `SensorCoverage` from alignment
-10. Desktop optionally runs defocus scan using measured FWHM values
+1. Desktop sends `PatternCommand::Spot { x, y, fwhm, intensity }` via REQ socket
+2. Pi receives on REP socket, updates shared state, replies `"ok"`
+3. Desktop receives `"ok"`, knows spot will be rendered
+4. Camera sees spot, cam_track detects it
+5. cam_track publishes `TrackingMessage { x, y, fwhm_x, fwhm_y, ... }`
+6. Desktop receives via SUB, accumulates measurements
+7. After N measurements, Desktop averages and stores correspondence
+8. Desktop advances to next spot position
+9. After all positions, Desktop computes `OpticalAlignment`
+10. Desktop computes `SensorCoverage` from alignment
+11. Desktop optionally runs defocus scan using measured FWHM values
+
+## Deployment
+
+### Building and Deploying to test-bench-pi
+
+```bash
+# Build and deploy calibrate_serve to Pi
+./scripts/build-remote.sh --package test-bench --binary calibrate_serve --features sdl2 --test-bench-pi
+```
+
+### Managing the systemd Service
+
+calibrate_serve runs as a systemd service on test-bench-pi:
+
+```bash
+# View logs (use this, not manual nohup!)
+sudo journalctl -u calibrate-serve -f
+
+# Restart service (picks up new binary after deploy)
+sudo systemctl restart calibrate-serve
+
+# Check status
+sudo systemctl status calibrate-serve
+
+# Stop service
+sudo systemctl stop calibrate-serve
+```
+
+**Important**: Always use the systemd service, not manual `nohup` commands. The service:
+- Starts automatically on boot
+- Uses `--wait-for-oled` to detect the OLED display
+- Logs to journald (accessible via `journalctl`)
+- Restarts on failure
+
+Service file location: `/etc/systemd/system/calibrate-serve.service`
+
+---
 
 ## Testing Strategy
 
@@ -426,7 +482,7 @@ Timeline:
 - DefocusMap statistics
 
 ### Integration Tests
-- ZMQ pub/sub with PatternCommand
+- ZMQ REQ/REP with PatternCommand
 - RemoteControlled pattern renders correct spots
 - Full loop with simulated tracking (like existing optical_calibration tests)
 
