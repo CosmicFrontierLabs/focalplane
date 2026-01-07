@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::time::Duration;
 
 /// OLED display resolution for autodetection
 pub const OLED_WIDTH: u32 = 2560;
@@ -101,4 +102,48 @@ pub fn get_display_resolution(
         .sdl_context("Failed to get display mode")?;
 
     Ok((mode.w as u32, mode.h as u32))
+}
+
+/// Wait for the 2560x2560 OLED display to become available.
+/// Re-initializes SDL on each poll to detect newly connected displays.
+/// Returns the SDL context and video subsystem once the OLED is found.
+pub fn wait_for_oled_display(
+    poll_interval: Duration,
+) -> Result<(sdl2::Sdl, sdl2::VideoSubsystem, u32)> {
+    println!(
+        "Waiting for OLED display ({}x{}) to become available...",
+        OLED_WIDTH, OLED_HEIGHT
+    );
+
+    loop {
+        // Initialize SDL fresh each time to detect new displays
+        let sdl_context = sdl2::init().sdl_context("SDL init failed")?;
+        let video_subsystem = sdl_context
+            .video()
+            .sdl_context("Video subsystem init failed")?;
+
+        match find_oled_display(&video_subsystem)? {
+            Some(oled_idx) => {
+                println!(
+                    "OLED display detected at index {oled_idx} ({}x{})",
+                    OLED_WIDTH, OLED_HEIGHT
+                );
+                return Ok((sdl_context, video_subsystem, oled_idx));
+            }
+            None => {
+                let num_displays = video_subsystem
+                    .num_video_displays()
+                    .sdl_context("Failed to get display count")?;
+                println!(
+                    "OLED not found ({} display(s) available), retrying in {}s...",
+                    num_displays,
+                    poll_interval.as_secs()
+                );
+                // Drop SDL context before sleeping to release resources
+                drop(video_subsystem);
+                drop(sdl_context);
+                std::thread::sleep(poll_interval);
+            }
+        }
+    }
 }

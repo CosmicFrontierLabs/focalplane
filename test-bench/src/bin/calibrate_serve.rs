@@ -14,7 +14,9 @@ use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::sync::Arc;
 use test_bench::display_patterns as patterns;
-use test_bench::display_utils::{get_display_resolution, list_displays, resolve_display_index};
+use test_bench::display_utils::{
+    get_display_resolution, list_displays, resolve_display_index, wait_for_oled_display,
+};
 use tokio::sync::RwLock;
 
 #[derive(Parser, Debug)]
@@ -31,6 +33,23 @@ struct Args {
 
     #[arg(short, long, help = "List available displays and exit")]
     list: bool,
+
+    #[arg(long, help = "Poll until 2560x2560 OLED display is detected")]
+    wait_for_oled: bool,
+
+    #[arg(
+        long,
+        default_value = "5",
+        help = "Seconds between OLED detection attempts"
+    )]
+    poll_interval: u64,
+
+    #[arg(
+        long,
+        default_value = "300",
+        help = "Seconds of inactivity before screen goes black (OLED burn-in protection)"
+    )]
+    idle_timeout: u64,
 }
 
 // ============================================================================
@@ -259,6 +278,7 @@ struct AppState {
     invert: Arc<RwLock<bool>>,
     pattern_start_time: Arc<RwLock<std::time::Instant>>,
     display_update_tx: Option<mpsc::Sender<()>>,
+    idle_timeout: std::time::Duration,
 }
 
 fn generate_pattern(
@@ -332,7 +352,7 @@ async fn pattern_page(State(state): State<Arc<AppState>>) -> Html<String> {
 
 async fn jpeg_pattern_endpoint(State(state): State<Arc<AppState>>) -> Response {
     let elapsed = state.pattern_start_time.read().await.elapsed();
-    let pattern_config = if elapsed > std::time::Duration::from_secs(600) {
+    let pattern_config = if elapsed > state.idle_timeout {
         PatternConfig::Uniform { level: 0 }
     } else {
         state.pattern.read().await.clone()
@@ -579,7 +599,7 @@ fn run_sdl_display(
         let invert = *state.invert.blocking_read();
         let elapsed = state.pattern_start_time.blocking_read().elapsed();
 
-        let pattern_config = if elapsed > std::time::Duration::from_secs(600) {
+        let pattern_config = if elapsed > state.idle_timeout {
             PatternConfig::Uniform { level: 0 }
         } else {
             pattern
@@ -732,16 +752,24 @@ fn main() -> Result<()> {
 
     check_frontend_files()?;
 
-    let sdl_context = sdl2::init().map_err(|e| anyhow::anyhow!("SDL init failed: {e}"))?;
-    let video_subsystem = sdl_context
-        .video()
-        .map_err(|e| anyhow::anyhow!("Video subsystem init failed: {e}"))?;
+    // Either wait for OLED or initialize SDL normally
+    let (sdl_context, video_subsystem, display_index) = if args.wait_for_oled {
+        let poll_interval = std::time::Duration::from_secs(args.poll_interval);
+        wait_for_oled_display(poll_interval)?
+    } else {
+        let sdl_context = sdl2::init().map_err(|e| anyhow::anyhow!("SDL init failed: {e}"))?;
+        let video_subsystem = sdl_context
+            .video()
+            .map_err(|e| anyhow::anyhow!("Video subsystem init failed: {e}"))?;
 
-    if args.list {
-        return list_displays(&video_subsystem);
-    }
+        if args.list {
+            return list_displays(&video_subsystem);
+        }
 
-    let display_index = resolve_display_index(&video_subsystem, args.display)?;
+        let display_index = resolve_display_index(&video_subsystem, args.display)?;
+        (sdl_context, video_subsystem, display_index)
+    };
+
     let (width, height) = get_display_resolution(&video_subsystem, display_index)?;
 
     tracing::info!("Using display {display_index}: {}x{}", width, height);
@@ -755,6 +783,7 @@ fn main() -> Result<()> {
         invert: Arc::new(RwLock::new(false)),
         pattern_start_time: Arc::new(RwLock::new(std::time::Instant::now())),
         display_update_tx: Some(display_update_tx),
+        idle_timeout: std::time::Duration::from_secs(args.idle_timeout),
     });
 
     let state_clone = state.clone();

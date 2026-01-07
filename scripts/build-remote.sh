@@ -39,7 +39,7 @@ TEST_BENCH_PI_DEVICE_NAME="test-bench-pi"
 #   1. Increment APT_DEPS_VERSION
 #   2. Add the check_package call in the apt checks section
 # The script will detect the version change and recheck all packages on the next run.
-APT_DEPS_VERSION=2
+APT_DEPS_VERSION=3
 APT_SEMAPHORE_FILE=".meter-sim-apt-deps-installed"
 
 # Colors
@@ -249,6 +249,8 @@ else
     check_package "libclang-dev" || print_warning "libclang-dev not found"
     check_package "clang" || print_warning "clang not found"
     check_package "libapriltag-dev" || print_warning "libapriltag-dev not found"
+    check_package "libsdl2-dev" || print_warning "libsdl2-dev not found"
+    check_package "libsdl2-image-dev" || print_warning "libsdl2-image-dev not found"
 
     if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
         print_warning "Missing packages: ${MISSING_PACKAGES[*]}"
