@@ -77,13 +77,6 @@
   - Needed: Verify actual efficiency value for 470mm aperture, 3450mm focal length telescope
   - Why: Accurate light transmission affects photometric calculations
 
-### Simulator - Photometry
-- [ ] Convert quantum efficiency internal storage to f64
-  - Location: `simulator/src/photometry/quantum_efficiency.rs`
-  - Current: Using lower precision storage
-  - Needed: Change internal representation to f64 for better precision
-  - Why: Photometric accuracy requires high precision in QE curves
-
 ### Simulator - Noise Modeling
 - [ ] Add zodiacal background contribution to noise calculation
   - Location: `simulator/src/bin/sensor_noise_renderer.rs`

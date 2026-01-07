@@ -96,8 +96,6 @@ pub struct QuantumEfficiency {
     efficiencies: Vec<f64>,
 }
 
-// See TODO.md: Simulator - Photometry
-
 impl QuantumEfficiency {
     /// Create quantum efficiency model for a rectangular passband (notch filter).
     ///
