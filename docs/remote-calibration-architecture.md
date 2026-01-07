@@ -7,71 +7,40 @@ Desktop-driven optical calibration system that remotely controls the OLED displa
 ## System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              DESKTOP                                    │
-│                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                  calibration_controller (NEW)                     │  │
-│  │                                                                   │  │
-│  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │  │
-│  │   │ Pattern     │    │ Tracking    │    │ Calibration Engine  │  │  │
-│  │   │ Commander   │    │ Listener    │    │                     │  │  │
-│  │   │ (ZMQ REQ)   │    │ (ZMQ SUB)   │    │ - Point collection  │  │  │
-│  │   └──────┬──────┘    └──────┬──────┘    │ - Transform est.    │  │  │
-│  │          │                  │           │ - Coverage calc     │  │  │
-│  │          │                  │           │ - Defocus mapping   │  │  │
-│  │          │                  │           └──────────┬──────────┘  │  │
-│  │          │                  │                      │             │  │
-│  │          │                  └──────────────────────┤             │  │
-│  │          │                                         │             │  │
-│  │          │              ┌──────────────────────────┴──────────┐  │  │
-│  │          │              │        egui Visualization           │  │  │
-│  │          │              │                                     │  │  │
-│  │          │              │  - Live spot overlay                │  │  │
-│  │          │              │  - Transform parameters             │  │  │
-│  │          │              │  - Sensor coverage polygon          │  │  │
-│  │          │              │  - Defocus heatmap                  │  │  │
-│  │          │              │  - Residual error plot              │  │  │
-│  │          │              └─────────────────────────────────────┘  │  │
-│  └──────────┼───────────────────────────────────────────────────────┘  │
-│             │                                                           │
-└─────────────┼───────────────────────────────────────────────────────────┘
-              │ PatternCommand (ZMQ REQ/REP)
-              ▼
-┌─────────────────────────┐
-│      TEST-BENCH-PI      │
-│                         │
-│  ┌───────────────────┐  │
-│  │  calibrate_serve  │  │
-│  │                   │  │
-│  │  ZMQ REP ◄────────┼──┼─── PatternCommand (replies "ok")
-│  │  (tcp://*:5556)   │  │
-│  │  ┌─────────────┐  │  │
-│  │  │RemoteCtrl'd │  │  │
-│  │  │   Pattern   │  │  │
-│  │  └─────────────┘  │  │
-│  │                   │  │
-│  │  HTTP API (/config)  │
-│  └───────────────────┘  │
-│           │             │
-│        OLED 2560x2560   │
-└───────────┬─────────────┘
-            │ (optical path)
-            ▼
-┌─────────────────────────┐
-│         ORIN            │
-│                         │
-│  ┌───────────────────┐  │
-│  │    cam_track      │  │
-│  │                   │  │
-│  │  ZMQ PUB ─────────┼──┼───► TrackingMessage
-│  │                   │  │
-│  │  (future: add     │  │
-│  │   FWHM to msg)    │  │
-│  └───────────────────┘  │
-│           ▲             │
-│        Camera           │
-└─────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                                       DESKTOP                                 │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │                        calibration_controller (NEW)                     │  │
+│  │                                                                         │  │
+│  │  ┌─────────────┐    ┌──────────────────────────────┐   ┌─────────────┐  │  │
+│  │  │ Pattern     │    │     Calibration Engine       │   │ Tracking    │  │  │
+│  │  │ Commander   │    │  - Point collection          │   │ Listener    │  │  │
+│  │  │ (ZMQ REQ)   │    │  - Transform estimation      │   │ (ZMQ SUB)   │  │  │
+│  │  └──────┬──────┘    │  - Coverage calculation      │   └──────┬──────┘  │  │
+│  │         │           │  - Defocus mapping           │          │         │  │
+│  │         │           └──────────────────────────────┘          │         │  │
+│  └─────────┼─────────────────────────────────────────────────────┼─────────┘  │
+│            │                                                     │            │
+│            │ PatternCommand                      TrackingMessage │            │
+│            │ (REQ/REP)                           (PUB/SUB)       │            │
+└────────────┼─────────────────────────────────────────────────────┼────────────┘
+             │                                                     │
+             │                                                     │
+             ▼                                                     ▼
+┌────────────────────────┐                             ┌────────────────────────┐
+│     TEST-BENCH-PI      │                             │         NSV-211        │
+│                        │                             │                        │
+│  ┌──────────────────┐  │                             │  ┌──────────────────┐  │
+│  │  calibrate_serve │  │                             │  │    cam_track     │  │
+│  │                  │  │                             │  │                  │  │
+│  │  ZMQ REP         │  │                             │  │  ZMQ PUB         │  │
+│  │  tcp://*:5556    │  │                             │  │  tcp://*:5555    │  |
+│  └──────────────────┘  │                             │  └──────────────────┘  |
+│            ▼           │        (optical path)       │          ▲             |
+│    OLED 2560x2560 ─────┼─────────────────────────────┼───────►Camera          |
+│                        │                             │                        │
+└────────────────────────┘                             └────────────────────────┘
 ```
 
 ## Components
@@ -181,36 +150,18 @@ print(sock.recv_string())  # "ok"
 
 ---
 
-### Track 3: Extended Tracking Message (optional, for defocus)
+### Track 3: Extended Tracking Message ✅ COMPLETED
 
 **Files**:
-- `shared/src/tracking_message.rs`
-- `test-bench/src/bin/cam_track.rs`
+- `shared/src/image_proc/centroid.rs` - `SpotShape` struct definition
+- `shared/src/tracking_message.rs` - `TrackingMessage` with SpotShape
+- `monocle/src/lib.rs` - `GuideStar`, `GuidanceUpdate` integration
 
-**Dependencies**: None (can start immediately)
+**Dependencies**: None
 
-**Extended TrackingMessage**:
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrackingMessage {
-    pub track_id: u32,
-    pub x: f64,
-    pub y: f64,
-    pub timestamp: Timestamp,
+**Summary**: TrackingMessage now includes a `SpotShape` struct with flux, second moments (m_xx, m_yy, m_xy), aspect ratio, and diameter. This provides full shape characterization for defocus mapping and radiometric calibration.
 
-    // NEW: spot shape for defocus mapping
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fwhm_x: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fwhm_y: Option<f64>,
-}
-```
-
-**cam_track changes**:
-- Extract spot FWHM from FGS or centroiding algorithm
-- Populate fwhm_x/fwhm_y in TrackingMessage
-
-**Deliverable**: TrackingMessage includes measured spot size
+**Deliverable**: ✅ TrackingMessage includes spot shape with moments and diameter
 
 ---
 
@@ -388,7 +339,7 @@ pub struct DefocusPoint {
 |-------|-----------|--------------|--------|
 | 1 | PatternCommand types | None | ✅ Complete |
 | 2 | RemoteControlled pattern + ZMQ REP | Track 1 | ✅ Complete |
-| 3 | Extended TrackingMessage | None | Pending |
+| 3 | Extended TrackingMessage (SpotShape) | None | ✅ Complete |
 | 4 | CalibrationController core | Track 1, 2 | Ready to start |
 | 5 | egui Visualization | Track 4 | Pending |
 | 6 | Result types (Coverage, Defocus) | None | Pending |
@@ -429,7 +380,7 @@ Timeline:
 2. Pi receives on REP socket, updates shared state, replies `"ok"`
 3. Desktop receives `"ok"`, knows spot will be rendered
 4. Camera sees spot, cam_track detects it
-5. cam_track publishes `TrackingMessage { x, y, fwhm_x, fwhm_y, ... }`
+5. cam_track publishes `TrackingMessage { x, y, shape: SpotShape { flux, diameter, ... } }`
 6. Desktop receives via SUB, accumulates measurements
 7. After N measurements, Desktop averages and stores correspondence
 8. Desktop advances to next spot position
