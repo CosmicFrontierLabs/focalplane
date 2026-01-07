@@ -42,7 +42,7 @@ void CF_LOS_FB_function(double *U_X, double *U_Y, const int PC_onoff_flag,
 
   //    begin = clock();
 
-  int i = 0, j = 0, k = 0; /* local variable */
+  int i = 0, j = 0;
 
   static double x_fb_x_k[N_pc_fb_x] = {0.0, 0.0, 0.0, 0.0,
                                        0.0}; /* feedback states */
