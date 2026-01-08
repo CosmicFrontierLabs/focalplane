@@ -40,17 +40,33 @@ impl NSV455Camera {
     pub const PIXEL_SIZE_MICRONS: f64 = 3.76;
 
     pub fn from_device(device_path: String) -> CameraResult<Self> {
+        let device = Device::with_path(&device_path)
+            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
+
+        // Query the actual format from the device to get real dimensions
+        let format = device
+            .format()
+            .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
+
+        let actual_width = format.width as usize;
+        let actual_height = format.height as usize;
+
+        tracing::info!(
+            "NSV455 device reports format: {}x{} (expected IMX455: {}x{})",
+            actual_width,
+            actual_height,
+            Self::SENSOR_WIDTH,
+            Self::SENSOR_HEIGHT
+        );
+
         let config = CameraConfig::new(
-            Self::SENSOR_WIDTH as usize,
-            Self::SENSOR_HEIGHT as usize,
+            actual_width,
+            actual_height,
             Duration::from_millis(100),
             SensorBitDepth::Bits16,
             26_000.0,  // Max well depth in electrons (IMX455)
             1.0 / 0.4, // Conversion gain (DN/e-) ~2.5
         );
-
-        let device = Device::with_path(&device_path)
-            .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
 
         let control_map = ControlMap::from_device(&device)?;
         let roi_constraints = RoiConstraints::from_device(&device, &control_map)?;
@@ -75,7 +91,7 @@ impl NSV455Camera {
             .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))
     }
 
-    fn configure_device(&self, device: &mut Device) -> CameraResult<()> {
+    fn configure_device(&mut self, device: &mut Device) -> CameraResult<()> {
         let control_map = self
             .control_map
             .get()
@@ -162,6 +178,12 @@ impl NSV455Camera {
                 requested_height
             );
         }
+
+        // Update stored dimensions to match actual negotiated format
+        self.config.size = PixelShape::with_width_height(
+            actual_format.width as usize,
+            actual_format.height as usize,
+        );
 
         control_map.set_control(device, ControlType::Gain, self.gain as i64)?;
 

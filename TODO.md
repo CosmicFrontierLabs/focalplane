@@ -24,6 +24,12 @@
   - Current: Takes x, y, fwhm_pixels, normalization_factor as separate arguments
   - Needed: Accept SpotParams struct to reduce argument count and improve type safety
   - Why: SpotParams already bundles these values, passing struct is cleaner
+- [ ] Create shared clap args for exposure time that return Duration
+  - Current: Multiple binaries have their own exposure_ms: f64 args with manual Duration conversion
+  - Needed: Create a reusable clap arg struct (like CameraArgs) for exposure settings
+  - Location: Could go in test-bench/src/camera_init.rs or shared/src/cli_args.rs
+  - Why: DRY - reduce duplicate arg definitions and Duration conversion code
+  - Benefit: Consistent CLI interface for exposure across all camera binaries
 - [ ] Get proper NSV455 camera serial number from Neutralino
   - Location: `hardware/src/nsv455/camera/nsv455_camera.rs` (get_serial method)
   - Current: Hardcoded to "NSV455_UNKNOWN" with warning
@@ -131,6 +137,24 @@
   - Benefit: Single source of truth for spot shape data
 
 ## Code Quality & Clarity Improvements
+
+### CLI Documentation
+- [ ] **Add comprehensive documentation to all clap CLI arguments**
+  - Pattern: Search for clap args missing `long_help` attribute
+  - Search command: `grep -r "#\[arg(" --include="*.rs" | grep -v "long_help"`
+  - Example of well-documented arg: `test-bench/src/bin/dark_frame_analysis.rs` (all args have `help` + `long_help`)
+  - Action: For each CLI binary, add `long_help` to all args explaining:
+    - What the option does in detail
+    - Valid ranges or constraints
+    - Interaction with other options
+    - Example usage if non-obvious
+  - Why: `--help` is the primary interface for users discovering CLI tools
+  - Binaries to check:
+    - `test-bench/src/bin/cam_track.rs`
+    - `test-bench/src/bin/cam_serve.rs`
+    - `test-bench/src/bin/calibration_analysis.rs`
+    - `simulator/src/bin/sensor_shootout.rs`
+    - `simulator/src/bin/sensor_floor_est.rs`
 
 ### Documentation Patterns
 - [ ] **Ensure all public functions have documentation**

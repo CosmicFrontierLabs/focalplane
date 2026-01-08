@@ -29,12 +29,12 @@ required-features = ["playerone"]
 [[bin]]
 name = "cam_track"
 path = "src/bin/cam_track.rs"
-required-features = ["playerone"]
+# Note: Requires either "playerone" or "nsv455" feature for camera support
 
 [[bin]]
 name = "dark_frame_analysis"
 path = "src/bin/dark_frame_analysis.rs"
-required-features = ["playerone"]
+# Note: Supports mock camera by default, or real cameras with playerone/nsv455 features
 
 [[bin]]
 name = "led_latency_test"
@@ -95,6 +95,7 @@ tokio-test = "0.4"
 [features]
 default = []
 linux-bins = []
-playerone = ["hardware/playerone"]
-nsv455 = []
+supported-camera = []
+playerone = ["hardware/playerone", "supported-camera"]
+nsv455 = ["supported-camera"]
 sdl2 = ["dep:sdl2"]

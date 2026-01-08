@@ -3,18 +3,16 @@
 //! Captures multiple dark frames (zero-light exposures) and analyzes them to characterize
 //! sensor noise properties including read noise, hot pixels, and variance outliers.
 //!
-//! Supports both real PlayerOne cameras and mock cameras for testing.
+//! Supports multiple camera types via feature flags:
+//! - Mock camera: Always available (for testing)
+//! - PlayerOne cameras: Requires "playerone" feature
+//! - NSV455 cameras: Requires "nsv455" feature
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ndarray::Array2;
-use rand::{Rng, SeedableRng};
 use shared::{
-    bad_pixel_map::BadPixelMap,
-    camera_interface::{mock::MockCameraInterface, CameraInterface, SensorBitDepth},
-    config_storage::ConfigStorage,
+    bad_pixel_map::BadPixelMap, camera_interface::CameraInterface, config_storage::ConfigStorage,
     dark_frame::DarkFrameAnalysis,
-    image_size::PixelShape,
 };
 use simulator::io::fits::{write_typed_fits, FitsDataType};
 use std::{
@@ -23,31 +21,37 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use test_bench::poa::camera::PlayerOneCamera;
+use test_bench::camera_init::{initialize_camera, CameraArgs};
 use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
 #[command(
     author,
     version,
-    about = "Dark frame analysis tool for sensor characterization"
+    about = "Analyze dark frames to characterize sensor noise and detect bad pixels",
+    long_about = "Dark frame analysis tool for camera sensor characterization.\n\n\
+        This tool captures multiple dark frames (exposures with no light) and performs \
+        statistical analysis to identify:\n\n  \
+        - Hot pixels: Pixels with abnormally high dark current\n  \
+        - Dead pixels: Pixels that show no response (zero variance)\n  \
+        - Stuck pixels: Pixels locked at a fixed value\n\n\
+        The analysis outputs a bad pixel map that can be used by other tools to mask \
+        defective pixels during image processing. Results are saved to the config store \
+        (~/.cf_config/bad_pixel_maps/) by default for use by other applications."
 )]
 struct Args {
-    #[arg(short = 'i', long, help = "Camera ID (for PlayerOne cameras)")]
-    camera_id: Option<i32>,
-
-    #[arg(
-        long,
-        help = "Use mock camera with random noise (for testing)",
-        conflicts_with = "camera_id"
-    )]
-    mock: bool,
+    #[command(flatten)]
+    camera: CameraArgs,
 
     #[arg(
         short = 'n',
         long,
         default_value = "50",
-        help = "Number of dark frames to capture"
+        help = "Number of dark frames to capture for analysis",
+        long_help = "Number of dark frames to capture for statistical analysis. More frames \
+            provide better noise characterization but take longer to acquire. A minimum of \
+            10 frames is recommended for reliable statistics; 50+ frames are ideal for \
+            production calibration."
     )]
     num_frames: usize,
 
@@ -55,42 +59,76 @@ struct Args {
         short = 'o',
         long,
         default_value = "./dark_analysis",
-        help = "Output directory for analysis results"
+        help = "Directory for analysis output files",
+        long_help = "Output directory for analysis results including:\n  \
+            - SENSOR_REPORT.md: Human-readable analysis summary\n  \
+            - anomaly_visualization.png: Color-coded bad pixel map image\n  \
+            - Mean/variance FITS files (if --save-maps is enabled)\n\n\
+            The directory will be created if it does not exist."
     )]
     output_dir: PathBuf,
 
     #[arg(
         long,
         default_value = "5.0",
-        help = "Sigma threshold for hot pixel detection"
+        help = "Sigma threshold for hot pixel detection",
+        long_help = "Statistical threshold (in standard deviations) above which a pixel's \
+            dark current is considered anomalously high. Lower values detect more hot pixels \
+            but may produce false positives. Typical range: 3.0-7.0 sigma."
     )]
     hot_pixel_threshold: f64,
 
     #[arg(
         long,
         default_value = "0.1",
-        help = "Variance threshold below which pixels are considered dead"
+        help = "Variance threshold for dead pixel detection",
+        long_help = "Pixels with temporal variance below this threshold are flagged as dead \
+            or stuck. Dead pixels show no response to photons; stuck pixels are locked at a \
+            constant ADU value. The threshold should be set based on expected read noise."
     )]
     dead_pixel_threshold: f64,
 
     #[arg(
+        short = 'e',
         long,
-        help = "Override camera exposure time (milliseconds)",
+        help = "Override camera exposure time in milliseconds",
+        long_help = "Set a specific exposure time for dark frame capture. If not specified, \
+            uses the camera's default exposure setting. Longer exposures reveal more thermal \
+            noise (dark current) while shorter exposures primarily measure read noise.",
         value_name = "MS"
     )]
     exposure_ms: Option<f64>,
 
     #[arg(
+        short = 'g',
         long,
-        help = "Save mean and variance maps as FITS files (requires fitsio)"
+        help = "Camera gain/ISO setting",
+        long_help = "Analog gain setting for the camera sensor. Higher gain amplifies both \
+            signal and noise, potentially revealing more hot pixels. Use the same gain \
+            setting you plan to use for actual observations."
+    )]
+    gain: Option<f64>,
+
+    #[arg(
+        long,
+        help = "Save mean and variance maps as FITS files",
+        long_help = "Export the computed mean and variance maps as FITS files in the output \
+            directory. These files can be used for detailed inspection of sensor behavior \
+            or imported into other analysis tools. Requires the fitsio feature."
     )]
     save_maps: bool,
 
     #[arg(
         long,
-        help = "Save bad pixel map to config store (~/.cf_config/bad_pixel_maps/)"
+        default_value = "true",
+        help = "Save bad pixel map to system config store",
+        long_help = "Save the bad pixel map to the system configuration directory at \
+            ~/.cf_config/bad_pixel_maps/. This allows other applications to automatically \
+            load and apply the bad pixel map for this specific camera. The map is stored \
+            using the camera model and serial number as identifiers. Use --no-save-to-config \
+            to disable this behavior."
     )]
-    save_to_config_store: bool,
+    save_to_config: bool,
 }
 
 fn main() -> Result<()> {
@@ -104,104 +142,44 @@ fn main() -> Result<()> {
     fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("Failed to create output directory: {:?}", args.output_dir))?;
 
-    if args.mock {
-        info!("Using mock camera for testing");
-        let camera = create_mock_camera(args.exposure_ms);
-        run_analysis(camera, &args)?;
-    } else {
-        let camera_id = args
-            .camera_id
-            .context("Must specify --camera-id or --mock")?;
-        info!("Initializing PlayerOne camera with ID {}", camera_id);
-        let mut camera = PlayerOneCamera::new(camera_id)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize camera: {e}"))?;
+    let mut camera = initialize_camera(&args.camera)?;
 
-        if let Some(exposure_ms) = args.exposure_ms {
-            let exposure = Duration::from_micros((exposure_ms * 1000.0) as u64);
-            camera
-                .set_exposure(exposure)
-                .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
-            info!("Set exposure to {:.2} ms", exposure_ms);
-        }
-
-        run_analysis(camera, &args)?;
+    // Apply exposure override if specified
+    if let Some(exposure_ms) = args.exposure_ms {
+        let exposure = Duration::from_micros((exposure_ms * 1000.0) as u64);
+        camera
+            .set_exposure(exposure)
+            .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
+        info!("Set exposure to {:.2} ms", exposure_ms);
     }
+
+    // Apply gain override if specified
+    if let Some(gain) = args.gain {
+        camera
+            .set_gain(gain)
+            .map_err(|e| anyhow::anyhow!("Failed to set gain: {e}"))?;
+        info!("Set gain to {}", gain);
+    }
+
+    run_analysis(camera.as_mut(), &args)?;
 
     Ok(())
 }
 
-fn create_mock_camera(exposure_ms: Option<f64>) -> MockCameraInterface {
-    use shared::image_proc::noise::generate::simple_normal_array;
-
-    let width = 1280;
-    let height = 960;
-    let bit_depth = SensorBitDepth::Bits12;
-
-    let bias = 100.0;
-    let read_noise = 5.0;
-    let seed = 42;
-
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-
-    let hot_pixel_data: Vec<((usize, usize), u16)> = (0..10)
-        .map(|_| {
-            let location = (rng.gen_range(0..width), rng.gen_range(0..height));
-            let stuck_value = (bias + rng.gen_range(50.0..100.0)) as u16;
-            (location, stuck_value)
-        })
-        .collect();
-
-    let dead_pixel_locations: Vec<(usize, usize)> = (0..5)
-        .map(|_| (rng.gen_range(0..width), rng.gen_range(0..height)))
-        .collect();
-
-    let mut camera = MockCameraInterface::with_generator(
-        PixelShape::with_width_height(width, height),
-        bit_depth,
-        move |params| {
-            let noise = simple_normal_array(
-                (params.height, params.width),
-                0.0,
-                read_noise,
-                params.frame_number,
-            );
-
-            let mut frame_u16 = Array2::from_shape_fn((params.height, params.width), |(y, x)| {
-                let value = bias + noise[[y, x]];
-                value.clamp(0.0, 4095.0) as u16
-            });
-
-            for &((x, y), stuck_value) in &hot_pixel_data {
-                frame_u16[[y, x]] = stuck_value;
-            }
-
-            for &(x, y) in &dead_pixel_locations {
-                frame_u16[[y, x]] = 0;
-            }
-
-            frame_u16
-        },
-    )
-    .with_saturation(4095.0);
-
-    if let Some(ms) = exposure_ms {
-        let exposure = Duration::from_micros((ms * 1000.0) as u64);
-        camera.set_exposure(exposure).unwrap();
-    }
-
-    camera
-}
-
-fn run_analysis<C: CameraInterface>(mut camera: C, args: &Args) -> Result<()> {
+fn run_analysis(camera: &mut dyn CameraInterface, args: &Args) -> Result<()> {
     let geometry = camera.geometry();
     let exposure = camera.get_exposure();
     let bit_depth = camera.get_bit_depth();
-    info!("Sensor: {}x{} pixels", geometry.width, geometry.height);
+    let camera_name = camera.name().to_string();
+    let camera_serial = camera.get_serial();
+
+    info!("Camera: {} (serial: {})", camera_name, camera_serial);
+    info!("Sensor: {}x{} pixels", geometry.width(), geometry.height());
     info!("Exposure: {:?}", exposure);
     info!("Bit depth: {} bits", bit_depth);
     info!("Saturation value: {:.0}", camera.saturation_value());
 
-    let mut analysis = DarkFrameAnalysis::new(geometry.width, geometry.height);
+    let mut analysis = DarkFrameAnalysis::new(geometry.width(), geometry.height());
 
     info!("\nCapturing {} dark frames...", args.num_frames);
     info!("(Ensure lens cap is on or camera is in complete darkness)");
@@ -265,32 +243,23 @@ fn run_analysis<C: CameraInterface>(mut camera: C, args: &Args) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let mut bad_pixel_map =
-        BadPixelMap::new(camera.name().to_string(), camera.get_serial(), timestamp);
+    let mut bad_pixel_map = BadPixelMap::new(camera_name.clone(), camera_serial.clone(), timestamp);
 
     for ((x, y), _anomaly) in &report.anomalies {
         bad_pixel_map.add_pixel(*x, *y);
     }
 
-    let bad_pixel_path = args
-        .output_dir
-        .join(format!("bad-pixels-{}.json", camera.get_serial()));
-    bad_pixel_map
-        .save_to_file(&bad_pixel_path)
-        .with_context(|| format!("Failed to save bad pixel map to {bad_pixel_path:?}"))?;
-    info!(
-        "Bad pixel map saved to: {:?} ({} pixels)",
-        bad_pixel_path,
-        bad_pixel_map.num_bad_pixels()
-    );
-
-    if args.save_to_config_store {
+    if args.save_to_config {
         let config_store =
             ConfigStorage::new().with_context(|| "Failed to initialize config storage")?;
         let saved_path = config_store
             .save_bad_pixel_map(&bad_pixel_map)
             .with_context(|| "Failed to save bad pixel map to config store")?;
-        info!("Bad pixel map also saved to config store: {:?}", saved_path);
+        info!(
+            "Bad pixel map saved to config store: {:?} ({} pixels)",
+            saved_path,
+            bad_pixel_map.num_bad_pixels()
+        );
     }
 
     if args.save_maps {
@@ -310,12 +279,9 @@ fn print_report(report: &shared::dark_frame::DarkFrameReport) {
     info!("\nSensor Information:");
     info!(
         "  Dimensions: {}x{}",
-        report.sensor_width, report.sensor_height
+        report.sensor_size.width, report.sensor_size.height
     );
-    info!(
-        "  Total pixels: {}",
-        report.sensor_width * report.sensor_height
-    );
+    info!("  Total pixels: {}", report.sensor_size.pixel_count());
     info!("  Frames analyzed: {}", report.num_frames);
 
     info!("\nGlobal Statistics:");
