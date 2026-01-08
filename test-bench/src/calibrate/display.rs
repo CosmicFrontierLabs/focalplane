@@ -1,9 +1,40 @@
 use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgb};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock as AsyncRwLock;
 
 use super::pattern::PatternConfig;
+
+/// OLED burn-in protection watchdog.
+///
+/// Tracks activity and triggers screen blanking after idle timeout.
+/// Thread-safe: can be used from both async handlers and sync threads.
+#[derive(Clone)]
+pub struct OledSafetyWatchdog {
+    last_activity: Arc<RwLock<Instant>>,
+    timeout: Duration,
+}
+
+impl OledSafetyWatchdog {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            last_activity: Arc::new(RwLock::new(Instant::now())),
+            timeout,
+        }
+    }
+
+    /// Reset the watchdog timer (call on any display activity)
+    pub fn reset(&self) {
+        *self.last_activity.write().unwrap() = Instant::now();
+    }
+
+    /// Check if display should be blanked due to inactivity
+    pub fn is_timed_out(&self) -> bool {
+        self.last_activity.read().unwrap().elapsed() > self.timeout
+    }
+}
 
 /// Trait for providing patterns to the display runner.
 pub trait PatternSource: Send {
@@ -26,26 +57,23 @@ pub trait PatternSource: Send {
 
 /// Dynamic pattern source for web server - pattern can change via API.
 pub struct DynamicPattern {
-    pattern: std::sync::Arc<tokio::sync::RwLock<PatternConfig>>,
-    invert: std::sync::Arc<tokio::sync::RwLock<bool>>,
-    pattern_start_time: std::sync::Arc<tokio::sync::RwLock<Instant>>,
-    idle_timeout: Duration,
+    pattern: Arc<AsyncRwLock<PatternConfig>>,
+    invert: Arc<AsyncRwLock<bool>>,
+    watchdog: OledSafetyWatchdog,
     update_rx: Receiver<()>,
 }
 
 impl DynamicPattern {
     pub fn new(
-        pattern: std::sync::Arc<tokio::sync::RwLock<PatternConfig>>,
-        invert: std::sync::Arc<tokio::sync::RwLock<bool>>,
-        pattern_start_time: std::sync::Arc<tokio::sync::RwLock<Instant>>,
-        idle_timeout: Duration,
+        pattern: Arc<AsyncRwLock<PatternConfig>>,
+        invert: Arc<AsyncRwLock<bool>>,
+        watchdog: OledSafetyWatchdog,
         update_rx: Receiver<()>,
     ) -> Self {
         Self {
             pattern,
             invert,
-            pattern_start_time,
-            idle_timeout,
+            watchdog,
             update_rx,
         }
     }
@@ -59,8 +87,7 @@ impl PatternSource for DynamicPattern {
     }
 
     fn should_blank(&self) -> bool {
-        let elapsed = self.pattern_start_time.blocking_read().elapsed();
-        elapsed > self.idle_timeout
+        self.watchdog.is_timed_out()
     }
 
     fn update_receiver(&mut self) -> Option<&mut Receiver<()>> {

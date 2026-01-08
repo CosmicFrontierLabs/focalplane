@@ -3,6 +3,13 @@
 ## Future Improvements
 
 ### Test Bench
+- [ ] Move duplicated types to test-bench-shared crate
+  - `DisplayInfo` - Display system information (width, height, pixel_pitch_um, name)
+  - `ControlSpec` - Pattern control specification enum (IntRange, FloatRange, Bool)
+  - `PatternSpec` - Pattern specification with controls and defaults
+  - `SchemaResponse` - Full schema response with all patterns
+  - These are currently in both test-bench/src/calibrate/schema.rs and test-bench-frontend/src/calibrate_app.rs
+  - Moving to test-bench-shared ensures type consistency and catches serialization mismatches at compile time
 - [ ] Add NSV455 camera support to camera_server
   - Create NSV455 CameraInterface implementation
   - Update camera_server to support NSV455 alongside PlayerOne cameras

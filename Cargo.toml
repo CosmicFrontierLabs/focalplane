@@ -7,7 +7,7 @@ members = [
     "test-bench",
     "test-bench-frontend",
     "proto-control",
-    "hardware",
+    "hardware", "test-bench-shared",
 ]
 resolver = "2"
 

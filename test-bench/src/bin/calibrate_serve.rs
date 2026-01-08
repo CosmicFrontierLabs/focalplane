@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use test_bench::calibrate::{
     get_pattern_schemas, parse_pattern_request, pattern_to_dynamic, run_display, DisplayConfig,
-    DynamicPattern, PatternConfig, SchemaResponse,
+    DynamicPattern, OledSafetyWatchdog, PatternConfig, SchemaResponse,
 };
 use test_bench::display_patterns::remote_controlled::RemotePatternState;
 use test_bench::display_utils::{
@@ -50,7 +50,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "300",
+        default_value = "600",
         help = "Seconds of inactivity before screen goes black (OLED burn-in protection)"
     )]
     idle_timeout: u64,
@@ -68,9 +68,8 @@ struct AppState {
     width: u32,
     height: u32,
     invert: Arc<RwLock<bool>>,
-    pattern_start_time: Arc<RwLock<std::time::Instant>>,
+    watchdog: OledSafetyWatchdog,
     display_update_tx: Option<mpsc::Sender<()>>,
-    idle_timeout: std::time::Duration,
     /// Shared remote pattern state for ZMQ-commanded patterns
     remote_state: Arc<Mutex<RemotePatternState>>,
     /// Display name from SDL
@@ -102,8 +101,7 @@ async fn pattern_page(State(state): State<Arc<AppState>>) -> Html<String> {
 }
 
 async fn jpeg_pattern_endpoint(State(state): State<Arc<AppState>>) -> Response {
-    let elapsed = state.pattern_start_time.read().await.elapsed();
-    let pattern_config = if elapsed > state.idle_timeout {
+    let pattern_config = if state.watchdog.is_timed_out() {
         PatternConfig::Uniform { level: 0 }
     } else {
         state.pattern.read().await.clone()
@@ -200,22 +198,19 @@ async fn get_display_info(
     })
 }
 
-async fn get_pattern_config(State(state): State<Arc<AppState>>) -> Response {
+async fn get_pattern_config(
+    State(state): State<Arc<AppState>>,
+) -> Json<test_bench_shared::PatternConfigResponse> {
     let pattern_config = state.pattern.read().await.clone();
     let invert = *state.invert.read().await;
 
     let (pattern_id, values) = pattern_to_dynamic(&pattern_config);
 
-    let json = serde_json::json!({
-        "pattern_id": pattern_id,
-        "values": values,
-        "invert": invert,
-    });
-
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_string(&json).unwrap()))
-        .unwrap()
+    Json(test_bench_shared::PatternConfigResponse {
+        pattern_id,
+        values,
+        invert,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,7 +249,7 @@ async fn update_pattern_config(
                 *state.invert.write().await = invert;
             }
 
-            *state.pattern_start_time.write().await = std::time::Instant::now();
+            state.watchdog.reset();
 
             if let Some(ref tx) = state.display_update_tx {
                 let _ = tx.send(());
@@ -371,10 +366,14 @@ fn main() -> Result<()> {
     // Create shared remote pattern state
     let remote_state = Arc::new(Mutex::new(RemotePatternState::new()));
 
+    // Create watchdog for OLED burn-in protection
+    let watchdog = OledSafetyWatchdog::new(std::time::Duration::from_secs(args.idle_timeout));
+
     // Bind ZMQ REP socket for receiving pattern commands
     let zmq_bind = args.zmq_bind.clone();
     let remote_state_zmq = remote_state.clone();
     let display_update_tx_zmq = display_update_tx.clone();
+    let watchdog_zmq = watchdog.clone();
 
     std::thread::spawn(move || {
         let ctx = zmq::Context::new();
@@ -414,6 +413,9 @@ fn main() -> Result<()> {
                     tracing::debug!("Received pattern command: {:?}", cmd);
                     remote_state_zmq.lock().unwrap().set_command(cmd);
 
+                    // Reset idle timeout so ZMQ commands keep display active
+                    watchdog_zmq.reset();
+
                     // Notify display to update
                     let _ = display_update_tx_zmq.send(());
 
@@ -433,9 +435,8 @@ fn main() -> Result<()> {
         width,
         height,
         invert: Arc::new(RwLock::new(false)),
-        pattern_start_time: Arc::new(RwLock::new(std::time::Instant::now())),
+        watchdog: watchdog.clone(),
         display_update_tx: Some(display_update_tx),
-        idle_timeout: std::time::Duration::from_secs(args.idle_timeout),
         remote_state,
         display_name,
         display_index,
@@ -450,8 +451,7 @@ fn main() -> Result<()> {
     let dynamic_source = DynamicPattern::new(
         state.pattern.clone(),
         state.invert.clone(),
-        state.pattern_start_time.clone(),
-        state.idle_timeout,
+        state.watchdog.clone(),
         display_update_rx,
     );
 

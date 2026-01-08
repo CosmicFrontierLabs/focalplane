@@ -17,6 +17,9 @@ pub struct DisplayInfo {
     pub name: String,
 }
 
+// Re-export shared type for config polling
+pub use test_bench_shared::PatternConfigResponse;
+
 // ============================================================================
 // Schema Types - Match backend definitions
 // ============================================================================
@@ -124,6 +127,7 @@ pub struct CalibrateFrontend {
     image_url: String,
     image_refresh_handle: Option<gloo_timers::callback::Timeout>,
     config_debounce_handle: Option<gloo_timers::callback::Timeout>,
+    config_poll_handle: Option<gloo_timers::callback::Interval>,
     image_failure_count: u32,
     loading_schema: bool,
 }
@@ -141,6 +145,8 @@ pub enum Msg {
     ImageLoaded,
     ImageError,
     ScheduleNextRefresh,
+    PollConfig,
+    ConfigPolled(PatternConfigResponse),
 }
 
 impl Component for CalibrateFrontend {
@@ -185,6 +191,12 @@ impl Component for CalibrateFrontend {
             }
         });
 
+        // Poll config every second to sync with server state (e.g., timeout blanking)
+        let link = ctx.link().clone();
+        let config_poll_handle = gloo_timers::callback::Interval::new(1000, move || {
+            link.send_message(Msg::PollConfig);
+        });
+
         Self {
             schema: None,
             display_info: None,
@@ -194,6 +206,7 @@ impl Component for CalibrateFrontend {
             image_url: format!("/jpeg?t={}", js_sys::Date::now()),
             image_refresh_handle: None,
             config_debounce_handle: None,
+            config_poll_handle: Some(config_poll_handle),
             image_failure_count: 0,
             loading_schema: true,
         }
@@ -288,6 +301,55 @@ impl Component for CalibrateFrontend {
                     }));
                 false
             }
+            Msg::PollConfig => {
+                let link = ctx.link().clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(response) = Request::get("/config").send().await {
+                        if let Ok(config) = response.json::<PatternConfigResponse>().await {
+                            link.send_message(Msg::ConfigPolled(config));
+                        }
+                    }
+                });
+                false
+            }
+            Msg::ConfigPolled(config) => {
+                let mut changed = false;
+
+                // Update pattern if changed
+                if self.selected_pattern_id != config.pattern_id {
+                    self.selected_pattern_id = config.pattern_id;
+                    changed = true;
+                }
+
+                // Update invert if changed
+                if self.invert != config.invert {
+                    self.invert = config.invert;
+                    changed = true;
+                }
+
+                // Update control values from server
+                if let Some(values_map) = config.values.as_object() {
+                    for (key, value) in values_map {
+                        let new_value = match value {
+                            serde_json::Value::Number(n) => n
+                                .as_i64()
+                                .map(ControlValue::Int)
+                                .or_else(|| n.as_f64().map(ControlValue::Float)),
+                            serde_json::Value::Bool(b) => Some(ControlValue::Bool(*b)),
+                            _ => None,
+                        };
+
+                        if let Some(new_val) = new_value {
+                            if self.control_values.get(key) != Some(&new_val) {
+                                self.control_values.insert(key.clone(), new_val);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                changed
+            }
         }
     }
 
@@ -365,6 +427,7 @@ impl Component for CalibrateFrontend {
 
     fn destroy(&mut self, _ctx: &Context<Self>) {
         self.image_refresh_handle = None;
+        self.config_poll_handle = None;
     }
 }
 

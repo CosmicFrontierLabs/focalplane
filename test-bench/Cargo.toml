@@ -79,6 +79,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 usvg = "0.45.0"
 zmq = "0.10.0"
+test-bench-shared = { version = "0.1.0", path = "../test-bench-shared" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpiod = "0.3.0"
