@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use super::pattern::PatternConfig;
 
 /// Trait for providing patterns to the display runner.
-/// Implemented differently for CLI (fixed pattern) and web server (dynamic pattern).
 pub trait PatternSource: Send {
     /// Get the current pattern and invert state.
     fn current(&self) -> (PatternConfig, bool);
@@ -16,31 +15,13 @@ pub trait PatternSource: Send {
         false
     }
 
-    /// Get a receiver for update notifications (None for fixed patterns).
+    /// Get a receiver for update notifications.
     fn update_receiver(&mut self) -> Option<&mut Receiver<()>> {
         None
     }
 
     /// Called when pattern rendering completes (for stats/logging).
     fn on_rendered(&self) {}
-}
-
-/// Fixed pattern source for CLI - pattern doesn't change.
-pub struct FixedPattern {
-    pattern: PatternConfig,
-    invert: bool,
-}
-
-impl FixedPattern {
-    pub fn new(pattern: PatternConfig, invert: bool) -> Self {
-        Self { pattern, invert }
-    }
-}
-
-impl PatternSource for FixedPattern {
-    fn current(&self) -> (PatternConfig, bool) {
-        (self.pattern.clone(), self.invert)
-    }
 }
 
 /// Dynamic pattern source for web server - pattern can change via API.

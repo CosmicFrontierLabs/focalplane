@@ -8,11 +8,6 @@ repository.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "calibrate"
-path = "src/bin/calibrate.rs"
-required-features = ["sdl2"]
-
-[[bin]]
 name = "calibrate_serve"
 path = "src/bin/calibrate_serve.rs"
 required-features = ["sdl2"]

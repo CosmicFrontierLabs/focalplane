@@ -4,14 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 use crate::display_patterns as patterns;
-use patterns::motion_profile::MotionPoint;
 
 /// Unified pattern configuration for all calibration patterns.
-/// Used by both CLI (calibrate) and web server (calibrate_serve).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PatternConfig {
-    // Basic patterns (available in both CLI and web)
     April,
     Check {
         checker_size: u32,
@@ -38,26 +35,6 @@ pub enum PatternConfig {
     },
     SiemensStar {
         spokes: u32,
-    },
-
-    // Advanced patterns (CLI only - require external resources)
-    // These are skipped in serde because they contain non-serializable state
-    #[serde(skip)]
-    MotionProfile {
-        base_image: image::RgbImage,
-        motion_profile: Vec<MotionPoint>,
-        motion_scale: f64,
-    },
-    #[serde(skip)]
-    GyroWalk {
-        base_image: image::RgbImage,
-        gyro_state: Arc<Mutex<patterns::gyro_walk::GyroWalkState>>,
-        frame_rate_hz: f64,
-    },
-    #[serde(skip)]
-    OpticalCalibration {
-        runner: Arc<Mutex<patterns::optical_calibration::CalibrationRunner>>,
-        pattern_size: shared::image_size::PixelShape,
     },
     #[serde(skip)]
     RemoteControlled {
@@ -107,18 +84,6 @@ impl std::fmt::Debug for PatternConfig {
                 .debug_struct("SiemensStar")
                 .field("spokes", spokes)
                 .finish(),
-            Self::MotionProfile { motion_scale, .. } => f
-                .debug_struct("MotionProfile")
-                .field("motion_scale", motion_scale)
-                .finish_non_exhaustive(),
-            Self::GyroWalk { frame_rate_hz, .. } => f
-                .debug_struct("GyroWalk")
-                .field("frame_rate_hz", frame_rate_hz)
-                .finish_non_exhaustive(),
-            Self::OpticalCalibration { pattern_size, .. } => f
-                .debug_struct("OpticalCalibration")
-                .field("pattern_size", pattern_size)
-                .finish_non_exhaustive(),
             Self::RemoteControlled { pattern_size, .. } => f
                 .debug_struct("RemoteControlled")
                 .field("pattern_size", pattern_size)
@@ -141,9 +106,6 @@ impl PatternConfig {
             Self::Static { .. }
                 | Self::CirclingPixel { .. }
                 | Self::WigglingGaussian { .. }
-                | Self::MotionProfile { .. }
-                | Self::GyroWalk { .. }
-                | Self::OpticalCalibration { .. }
                 | Self::RemoteControlled { .. }
         )
     }
@@ -161,9 +123,6 @@ impl PatternConfig {
             Self::WigglingGaussian { .. } => "Wiggling Gaussian",
             Self::PixelGrid { .. } => "Pixel Grid",
             Self::SiemensStar { .. } => "Siemens Star",
-            Self::MotionProfile { .. } => "Motion Profile",
-            Self::GyroWalk { .. } => "Gyro Walk",
-            Self::OpticalCalibration { .. } => "Optical Calibration",
             Self::RemoteControlled { .. } => "Remote Controlled",
         }
     }
@@ -209,11 +168,8 @@ impl PatternConfig {
             Self::SiemensStar { spokes } => {
                 Ok(patterns::siemens_star::generate(width, height, *spokes))
             }
-            // Advanced patterns start with black - animation fills them in
-            Self::MotionProfile { .. }
-            | Self::GyroWalk { .. }
-            | Self::OpticalCalibration { .. }
-            | Self::RemoteControlled { .. } => {
+            // Animated patterns start with black - animation fills them in
+            Self::RemoteControlled { .. } => {
                 Ok(ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0])))
             }
         }
@@ -221,8 +177,6 @@ impl PatternConfig {
 
     /// Generate the pattern directly into a buffer (for animated patterns).
     pub fn generate_into_buffer(&self, buffer: &mut [u8], width: u32, height: u32) {
-        use std::time::SystemTime;
-
         match self {
             Self::Static { pixel_size } => {
                 patterns::static_noise::generate_into_buffer(buffer, width, height, *pixel_size);
@@ -252,49 +206,6 @@ impl PatternConfig {
                     *wiggle_radius,
                     *intensity,
                 );
-            }
-            Self::MotionProfile {
-                base_image,
-                motion_profile,
-                motion_scale,
-            } => {
-                let elapsed = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
-                patterns::motion_profile::generate_into_buffer(
-                    buffer,
-                    width,
-                    height,
-                    base_image,
-                    motion_profile,
-                    elapsed,
-                    *motion_scale,
-                );
-            }
-            Self::GyroWalk {
-                base_image,
-                gyro_state,
-                frame_rate_hz,
-            } => {
-                let elapsed = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
-                let frame_interval = std::time::Duration::from_secs_f64(1.0 / frame_rate_hz);
-                patterns::gyro_walk::generate_into_buffer(
-                    buffer,
-                    width,
-                    height,
-                    base_image,
-                    gyro_state,
-                    elapsed,
-                    frame_interval,
-                );
-            }
-            Self::OpticalCalibration {
-                runner,
-                pattern_size,
-            } => {
-                patterns::optical_calibration::generate_into_buffer(buffer, *pattern_size, runner);
             }
             Self::RemoteControlled {
                 state,
