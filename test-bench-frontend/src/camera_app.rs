@@ -1,19 +1,9 @@
 use gloo_net::http::Request;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 use yew::prelude::*;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Stats {
-    pub total_frames: u64,
-    pub avg_fps: f32,
-    pub temperatures: HashMap<String, f64>,
-    pub histogram: Vec<u32>,
-    pub histogram_mean: f64,
-    pub histogram_max: u16,
-}
+pub use test_bench_shared::CameraStats;
 
 #[derive(Properties, PartialEq)]
 pub struct CameraFrontendProps {
@@ -24,7 +14,7 @@ pub struct CameraFrontendProps {
 
 pub struct CameraFrontend {
     image_url: String,
-    stats: Option<Stats>,
+    stats: Option<CameraStats>,
     show_annotation: bool,
     log_scale_histogram: bool,
     connection_status: String,
@@ -44,7 +34,7 @@ pub enum Msg {
     RefreshStats,
     ToggleAnnotation,
     ToggleLogScale,
-    StatsLoaded(Stats),
+    StatsLoaded(CameraStats),
     ImageError,
     StatsError,
     ResetImageInterval,
@@ -120,7 +110,7 @@ impl Component for CameraFrontend {
                 wasm_bindgen_futures::spawn_local(async move {
                     match Request::get("/stats").send().await {
                         Ok(response) => {
-                            if let Ok(stats) = response.json::<Stats>().await {
+                            if let Ok(stats) = response.json::<CameraStats>().await {
                                 link.send_message(Msg::StatsLoaded(stats));
                             } else {
                                 link.send_message(Msg::StatsError);

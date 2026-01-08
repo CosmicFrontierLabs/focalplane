@@ -1,80 +1,16 @@
 use gloo_net::http::Request;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 
-// ============================================================================
-// Display Info - Match backend shared::system_info::DisplayInfo
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DisplayInfo {
-    pub width: u32,
-    pub height: u32,
-    #[serde(default)]
-    pub pixel_pitch_um: Option<f64>,
-    pub name: String,
-}
-
-// Re-export shared type for config polling
-pub use test_bench_shared::PatternConfigResponse;
+// Re-export shared types
+pub use test_bench_shared::{
+    ControlSpec, DisplayInfo, PatternConfigResponse, PatternSpec, SchemaResponse,
+};
 
 // ============================================================================
-// Schema Types - Match backend definitions
+// Local helper types and extensions for shared types
 // ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type")]
-pub enum ControlSpec {
-    IntRange {
-        id: String,
-        label: String,
-        min: i64,
-        max: i64,
-        step: i64,
-        default: i64,
-    },
-    FloatRange {
-        id: String,
-        label: String,
-        min: f64,
-        max: f64,
-        step: f64,
-        default: f64,
-    },
-    Bool {
-        id: String,
-        label: String,
-        default: bool,
-    },
-    Text {
-        id: String,
-        label: String,
-        default: String,
-        placeholder: String,
-    },
-}
-
-impl ControlSpec {
-    fn id(&self) -> &str {
-        match self {
-            ControlSpec::IntRange { id, .. } => id,
-            ControlSpec::FloatRange { id, .. } => id,
-            ControlSpec::Bool { id, .. } => id,
-            ControlSpec::Text { id, .. } => id,
-        }
-    }
-
-    fn default_value(&self) -> ControlValue {
-        match self {
-            ControlSpec::IntRange { default, .. } => ControlValue::Int(*default),
-            ControlSpec::FloatRange { default, .. } => ControlValue::Float(*default),
-            ControlSpec::Bool { default, .. } => ControlValue::Bool(*default),
-            ControlSpec::Text { default, .. } => ControlValue::Text(default.clone()),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlValue {
@@ -95,17 +31,30 @@ impl ControlValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PatternSpec {
-    pub id: String,
-    pub name: String,
-    pub controls: Vec<ControlSpec>,
+/// Extension trait for ControlSpec to add frontend-specific helper methods.
+trait ControlSpecExt {
+    fn id(&self) -> &str;
+    fn default_value(&self) -> ControlValue;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SchemaResponse {
-    pub patterns: Vec<PatternSpec>,
-    pub global_controls: Vec<ControlSpec>,
+impl ControlSpecExt for ControlSpec {
+    fn id(&self) -> &str {
+        match self {
+            ControlSpec::IntRange { id, .. } => id,
+            ControlSpec::FloatRange { id, .. } => id,
+            ControlSpec::Bool { id, .. } => id,
+            ControlSpec::Text { id, .. } => id,
+        }
+    }
+
+    fn default_value(&self) -> ControlValue {
+        match self {
+            ControlSpec::IntRange { default, .. } => ControlValue::Int(*default),
+            ControlSpec::FloatRange { default, .. } => ControlValue::Float(*default),
+            ControlSpec::Bool { default, .. } => ControlValue::Bool(*default),
+            ControlSpec::Text { default, .. } => ControlValue::Text(default.clone()),
+        }
+    }
 }
 
 // ============================================================================

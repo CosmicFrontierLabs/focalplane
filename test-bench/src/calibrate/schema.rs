@@ -1,54 +1,7 @@
-use serde::{Deserialize, Serialize};
-
 use super::pattern::PatternConfig;
 
-/// Control specification for the frontend UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ControlSpec {
-    IntRange {
-        id: String,
-        label: String,
-        min: i64,
-        max: i64,
-        step: i64,
-        default: i64,
-    },
-    FloatRange {
-        id: String,
-        label: String,
-        min: f64,
-        max: f64,
-        step: f64,
-        default: f64,
-    },
-    Bool {
-        id: String,
-        label: String,
-        default: bool,
-    },
-    Text {
-        id: String,
-        label: String,
-        default: String,
-        placeholder: String,
-    },
-}
-
-/// Pattern specification for the frontend UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatternSpec {
-    pub id: String,
-    pub name: String,
-    pub controls: Vec<ControlSpec>,
-}
-
-/// Schema response containing all patterns and global controls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SchemaResponse {
-    pub patterns: Vec<PatternSpec>,
-    pub global_controls: Vec<ControlSpec>,
-}
+// Re-export shared types
+pub use test_bench_shared::{ControlSpec, PatternSpec, SchemaResponse};
 
 /// Generate the schema for all web-accessible patterns.
 pub fn get_pattern_schemas() -> SchemaResponse {

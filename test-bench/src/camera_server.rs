@@ -259,18 +259,18 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels_8bit);
 
-    let json = serde_json::json!({
-        "width": width,
-        "height": height,
-        "timestamp_sec": metadata.timestamp.seconds,
-        "timestamp_nanos": metadata.timestamp.nanos,
-        "temperatures": metadata.temperatures,
-        "exposure_us": metadata.exposure.as_micros(),
-        "frame_number": metadata.frame_number,
-        "image_base64": encoded,
-    });
+    let response = test_bench_shared::RawFrameResponse {
+        width,
+        height,
+        timestamp_sec: metadata.timestamp.seconds,
+        timestamp_nanos: metadata.timestamp.nanos,
+        temperatures: metadata.temperatures.clone(),
+        exposure_us: metadata.exposure.as_micros(),
+        frame_number: metadata.frame_number,
+        image_base64: encoded,
+    };
 
-    let json = serde_json::to_string(&json).unwrap();
+    let json = serde_json::to_string(&response).unwrap();
 
     Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
@@ -312,24 +312,24 @@ async fn stats_endpoint<C: CameraInterface + 'static>(
         stats.total_pipeline_ms.iter().sum::<f32>() / stats.total_pipeline_ms.len() as f32
     };
 
-    let json = serde_json::json!({
-        "total_frames": stats.total_frames,
-        "avg_fps": avg_fps,
-        "temperatures": stats.last_temperatures,
-        "histogram": stats.histogram,
-        "histogram_mean": stats.histogram_mean,
-        "histogram_max": stats.histogram_max,
-        "timing": {
-            "avg_capture_ms": avg_capture_ms,
-            "avg_analysis_ms": avg_analysis_ms,
-            "avg_render_ms": avg_render_ms,
-            "avg_total_pipeline_ms": avg_total_pipeline_ms,
-            "capture_samples": stats.capture_timing_ms.len(),
-            "analysis_samples": stats.analysis_timing_ms.len(),
-        }
-    });
+    let response = test_bench_shared::CameraStats {
+        total_frames: stats.total_frames,
+        avg_fps,
+        temperatures: stats.last_temperatures.clone(),
+        histogram: stats.histogram.clone(),
+        histogram_mean: stats.histogram_mean,
+        histogram_max: stats.histogram_max,
+        timing: Some(test_bench_shared::CameraTimingStats {
+            avg_capture_ms,
+            avg_analysis_ms,
+            avg_render_ms,
+            avg_total_pipeline_ms,
+            capture_samples: stats.capture_timing_ms.len(),
+            analysis_samples: stats.analysis_timing_ms.len(),
+        }),
+    };
 
-    let json = serde_json::to_string(&json).unwrap();
+    let json = serde_json::to_string(&response).unwrap();
 
     Response::builder()
         .header(header::CONTENT_TYPE, "application/json")

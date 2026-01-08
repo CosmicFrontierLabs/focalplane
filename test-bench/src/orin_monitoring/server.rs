@@ -95,14 +95,15 @@ async fn metrics_handler(State(metrics): State<Arc<PrometheusMetrics>>) -> Respo
 }
 
 async fn health_handler() -> Response {
-    let health_info = serde_json::json!({
-        "status": "healthy",
-        "service": "jetson-orin-monitoring",
-        "timestamp": std::time::SystemTime::now()
+    let health_info = test_bench_shared::HealthInfo {
+        status: "healthy".to_string(),
+        service: "jetson-orin-monitoring".to_string(),
+        timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs()
-    });
+            .as_secs(),
+    };
 
-    (StatusCode::OK, health_info.to_string()).into_response()
+    let json = serde_json::to_string(&health_info).unwrap();
+    (StatusCode::OK, json).into_response()
 }
