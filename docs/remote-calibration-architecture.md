@@ -333,6 +333,135 @@ pub struct DefocusPoint {
 
 ---
 
+### Track 7: System Info Auto-Discovery (no new endpoints)
+
+**Problem**: calibration_controller currently requires manual `--sensor-width`, `--sensor-height`, `--display-width`, `--display-height` flags. These should be auto-discovered from existing services.
+
+**Approach**: Piggyback on existing interfaces - no new ZMQ endpoints needed.
+
+**Files**:
+- `shared/src/system_info.rs` (new) - Message types
+- `test-bench/src/bin/calibrate_serve.rs` - Add HTTP `/info` endpoint
+- `shared/src/tracking_message.rs` - Add optional SensorInfo to TrackingMessage
+
+**Dependencies**: None
+
+---
+
+#### Display Info via HTTP (calibrate_serve)
+
+calibrate_serve already has an HTTP server. Add a simple `/info` endpoint:
+
+```rust
+/// Display system information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    pub width: u32,
+    pub height: u32,
+    /// Pixel pitch in microns
+    pub pixel_pitch_um: f64,
+    pub name: String,
+}
+
+// Add route in calibrate_serve HTTP server:
+// GET /info -> DisplayInfo JSON
+async fn get_display_info(State(state): State<AppState>) -> Json<DisplayInfo> {
+    Json(DisplayInfo {
+        width: state.display_width,
+        height: state.display_height,
+        pixel_pitch_um: state.pixel_pitch_um,
+        name: "OLED".to_string(),
+    })
+}
+```
+
+**Usage**:
+```bash
+curl http://test-bench-pi:8080/info
+# {"width":2560,"height":2560,"pixel_pitch_um":9.6,"name":"OLED"}
+```
+
+---
+
+#### Sensor Info via TrackingMessage (cam_track)
+
+Extend TrackingMessage to include optional sensor metadata. The first message (or periodic messages) include this info:
+
+```rust
+/// Sensor system information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SensorInfo {
+    pub width: u32,
+    pub height: u32,
+    /// Pixel pitch in microns
+    pub pixel_pitch_um: f64,
+    pub name: String,
+}
+
+/// Extended tracking message with optional sensor info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackingMessage {
+    pub track_id: u32,
+    pub x: f64,
+    pub y: f64,
+    pub timestamp: Timestamp,
+    pub shape: SpotShape,
+    /// Sensor info - included on first message and periodically thereafter
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sensor_info: Option<SensorInfo>,
+}
+```
+
+**cam_track behavior**:
+- Include `sensor_info` on the first TrackingMessage after startup
+- Include it again every N messages (e.g., every 100) for late joiners
+- Skip it on most messages to save bandwidth
+
+```rust
+// In cam_track publish loop:
+let include_info = frame_count == 0 || frame_count % 100 == 0;
+let msg = TrackingMessage {
+    track_id,
+    x, y,
+    timestamp,
+    shape,
+    sensor_info: if include_info {
+        Some(SensorInfo {
+            width: sensor_width,
+            height: sensor_height,
+            pixel_pitch_um: camera.pixel_pitch_um(),
+            name: camera_name.clone(),
+        })
+    } else {
+        None
+    },
+};
+```
+
+**calibration_controller behavior**:
+- On startup, wait for first TrackingMessage with `sensor_info`
+- Cache the sensor dimensions
+- Use cached values for visualization
+
+---
+
+**CLI changes to calibration_controller**:
+```bash
+# Display info fetched via HTTP (existing server, new endpoint)
+--display-info-url http://test-bench-pi.tail944341.ts.net:8080/info
+
+# Sensor info auto-discovered from TrackingMessage stream
+# (no new endpoint needed)
+
+# Manual overrides still available if needed
+--display-width 2560  # optional override
+--sensor-width 9576   # optional override
+```
+
+**Deliverable**: calibration_controller auto-discovers dimensions without new ZMQ endpoints
+
+---
+
 ## Parallel Development Tracks
 
 | Track | Component | Dependencies | Status |
@@ -340,9 +469,10 @@ pub struct DefocusPoint {
 | 1 | PatternCommand types | None | ✅ Complete |
 | 2 | RemoteControlled pattern + ZMQ REP | Track 1 | ✅ Complete |
 | 3 | Extended TrackingMessage (SpotShape) | None | ✅ Complete |
-| 4 | CalibrationController core | Track 1, 2 | Ready to start |
+| 4 | CalibrationController core | Track 1, 2 | ✅ Complete |
 | 5 | egui Visualization | Track 4 | Pending |
 | 6 | Result types (Coverage, Defocus) | None | Pending |
+| 7 | System Info Endpoints | None | Pending |
 
 **Parallelization**:
 - Tracks 1, 3, 6 can all start immediately (no dependencies)
@@ -367,7 +497,14 @@ Timeline:
 | Endpoint | Pattern | Direction | Message Type | Port |
 |----------|---------|-----------|--------------|------|
 | Pattern commands | REQ/REP | Desktop (REQ) → Pi (REP) | PatternCommand JSON | tcp://*:5556 |
-| Tracking updates | PUB/SUB | Orin (PUB) → Desktop (SUB) | TrackingMessage | tcp://*:5555 |
+| Tracking updates | PUB/SUB | Orin (PUB) → Desktop (SUB) | TrackingMessage JSON | tcp://*:5555 |
+
+### HTTP Endpoints
+
+| Service | Endpoint | Method | Response |
+|---------|----------|--------|----------|
+| calibrate_serve | `/info` | GET | DisplayInfo JSON |
+| calibrate_serve | `/config` | POST | Pattern configuration |
 
 **REQ/REP Benefits**:
 - Desktop knows when command was received (waits for "ok" reply)
