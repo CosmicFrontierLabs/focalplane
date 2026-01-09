@@ -113,6 +113,9 @@ pub fn run_display<P: PatternSource>(
         .video()
         .map_err(|e| anyhow::anyhow!("Video subsystem init failed: {e}"))?;
 
+    // Hide the mouse cursor so it doesn't appear over the calibration pattern
+    sdl_context.mouse().show_cursor(false);
+
     let display_bounds = video_subsystem
         .display_bounds(config.display_index as i32)
         .map_err(|e| anyhow::anyhow!("Failed to get display bounds: {e}"))?;
