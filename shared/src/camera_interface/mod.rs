@@ -370,6 +370,19 @@ pub trait CameraInterface: Send + Sync {
     /// * `Err(CameraError)` with details if the ROI size is invalid
     fn check_roi_size(&self, size: PixelShape) -> CameraResult<()>;
 
+    /// Get ROI offset alignment requirements
+    ///
+    /// Returns the step size (in pixels) that ROI offsets must be aligned to.
+    /// The ROI horizontal and vertical offsets must be multiples of these values.
+    ///
+    /// # Returns
+    /// * `(h_alignment, v_alignment)` - Horizontal and vertical alignment steps.
+    ///   Returns (1, 1) if no alignment is required.
+    fn get_roi_offset_alignment(&self) -> (usize, usize) {
+        // Default: no alignment required
+        (1, 1)
+    }
+
     /// Stream frames continuously with a callback
     ///
     /// This method replaces the start/stop continuous capture pattern with a

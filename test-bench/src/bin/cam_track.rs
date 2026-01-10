@@ -200,13 +200,23 @@ fn run_tracking_stream(
                 let settings = pending_settings.lock().unwrap().clone();
                 if !settings.is_empty() {
                     info!("Applying {} camera settings...", settings.len());
-                    monocle::apply_camera_settings(camera, settings);
+                    if let Err(errors) = monocle::apply_camera_settings(camera, settings) {
+                        for err in errors {
+                            warn!("Camera settings error: {}", err);
+                        }
+                    }
                     info!("Settings applied, restarting stream");
                 } else if *should_restart_fgs.lock().unwrap() {
                     info!("Restarting FGS acquisition...");
                     match fgs.process_event(FgsEvent::StartFgs) {
                         Ok((_, new_settings)) => {
-                            monocle::apply_camera_settings(camera, new_settings);
+                            if let Err(errors) =
+                                monocle::apply_camera_settings(camera, new_settings)
+                            {
+                                for err in errors {
+                                    warn!("Camera settings error: {}", err);
+                                }
+                            }
                             info!("FGS restarted, continuing stream");
                         }
                         Err(e) => {
@@ -291,6 +301,7 @@ fn main() -> Result<()> {
         bad_pixel_map.num_bad_pixels()
     );
 
+    let (roi_h_alignment, roi_v_alignment) = camera.get_roi_offset_alignment();
     let config = FgsConfig {
         acquisition_frames: args.acquisition_frames,
         filters: GuideStarFilters {
@@ -309,6 +320,8 @@ fn main() -> Result<()> {
         centroid_radius_multiplier: 3.0,
         fwhm: args.fwhm,
         snr_dropout_threshold: args.snr_dropout_threshold,
+        roi_h_alignment,
+        roi_v_alignment,
     };
 
     let csv_writer = if let Some(ref csv_path) = args.csv_output {
@@ -481,7 +494,11 @@ fn main() -> Result<()> {
     let (_update, settings) = fgs
         .process_event(FgsEvent::StartFgs)
         .map_err(|e| anyhow::anyhow!("Failed to start FGS: {e}"))?;
-    monocle::apply_camera_settings(&mut camera, settings);
+    if let Err(errors) = monocle::apply_camera_settings(&mut camera, settings) {
+        for err in errors {
+            warn!("Camera settings error: {}", err);
+        }
+    }
 
     let start_time = Instant::now();
     if let Some(max_secs) = args.max_runtime_secs {

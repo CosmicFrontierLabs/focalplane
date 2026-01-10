@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use shared::bad_pixel_map::BadPixelMap;
+use shared::image_proc::detection::aabb::AABB;
 
 /// Guide star filtering criteria
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,9 +42,79 @@ pub struct FgsConfig {
     pub fwhm: f64,
     /// Minimum SNR for tracking - tracking stops if SNR drops below this threshold
     pub snr_dropout_threshold: f64,
+    /// Horizontal ROI offset alignment step in pixels (1 = no alignment required)
+    #[serde(default = "default_alignment")]
+    pub roi_h_alignment: usize,
+    /// Vertical ROI offset alignment step in pixels (1 = no alignment required)
+    #[serde(default = "default_alignment")]
+    pub roi_v_alignment: usize,
+}
+
+fn default_alignment() -> usize {
+    1
 }
 
 impl FgsConfig {
+    /// Compute an aligned ROI bounding box centered as close as possible to the given position.
+    ///
+    /// The ROI offset is snapped to alignment boundaries (roi_h_alignment, roi_v_alignment)
+    /// while keeping the star as centered as possible within the ROI.
+    ///
+    /// # Arguments
+    /// * `center_x` - Ideal horizontal center position (column)
+    /// * `center_y` - Ideal vertical center position (row)
+    /// * `image_width` - Image width for boundary checking
+    /// * `image_height` - Image height for boundary checking
+    ///
+    /// # Returns
+    /// An AABB with aligned offsets, or None if the ROI would exceed image bounds
+    pub fn compute_aligned_roi(
+        &self,
+        center_x: f64,
+        center_y: f64,
+        image_width: usize,
+        image_height: usize,
+    ) -> Option<AABB> {
+        let roi_half = self.roi_size / 2;
+
+        // Compute ideal (unaligned) top-left corner
+        let ideal_min_col = (center_x.round() as usize).saturating_sub(roi_half);
+        let ideal_min_row = (center_y.round() as usize).saturating_sub(roi_half);
+
+        // Snap to alignment boundaries (round down to nearest aligned position)
+        let aligned_min_col = (ideal_min_col / self.roi_h_alignment) * self.roi_h_alignment;
+        let aligned_min_row = (ideal_min_row / self.roi_v_alignment) * self.roi_v_alignment;
+
+        // Compute max corners
+        let max_col = aligned_min_col + self.roi_size - 1;
+        let max_row = aligned_min_row + self.roi_size - 1;
+
+        // Boundary check
+        if max_col >= image_width || max_row >= image_height {
+            log::warn!(
+                "Aligned ROI ({aligned_min_col}, {aligned_min_row}) to ({max_col}, {max_row}) exceeds image bounds {image_width}x{image_height}"
+            );
+            return None;
+        }
+
+        log::debug!(
+            "ROI alignment: ideal center ({:.1}, {:.1}) -> aligned offset ({}, {}), star offset in ROI: ({:.1}, {:.1})",
+            center_x,
+            center_y,
+            aligned_min_col,
+            aligned_min_row,
+            center_x - aligned_min_col as f64,
+            center_y - aligned_min_row as f64
+        );
+
+        Some(AABB::from_coords(
+            aligned_min_row,
+            aligned_min_col,
+            max_row,
+            max_col,
+        ))
+    }
+
     /// Validate configuration parameters
     ///
     /// Checks that configuration values are internally consistent, particularly

@@ -35,6 +35,8 @@ fn test_star_detection_on_correct_cycle() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -119,6 +121,8 @@ fn test_position_accuracy() {
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -221,6 +225,8 @@ fn test_moving_star_tracking() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);

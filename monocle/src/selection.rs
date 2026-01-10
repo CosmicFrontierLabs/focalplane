@@ -1,5 +1,4 @@
 use ndarray::ArrayView2;
-use shared::image_proc::detection::aabb::AABB;
 use shared::image_proc::detection::{detect_stars, StarDetection};
 use shared::image_proc::noise::quantify::estimate_noise_level;
 
@@ -257,6 +256,8 @@ pub fn detect_and_select_guides(
         stats.log("Final candidates (sorted by flux)");
     }
 
+    let (image_height, image_width) = averaged_frame.dim();
+
     let guide_star = candidates.into_iter().next().and_then(|star| {
         let aperture = star.diameter / 2.0;
         let snr = filters::calculate_snr(
@@ -272,30 +273,24 @@ pub fn detect_and_select_guides(
         })
         .ok()?;
 
-        // Edge filter guarantees minimum_edge_distance > roi_size/2,
-        // so ROI will never extend beyond image boundaries
-        let roi_half = config.roi_size / 2;
-        let min_row = (star.y.round() as usize).saturating_sub(roi_half);
-        let min_col = (star.x.round() as usize).saturating_sub(roi_half);
-        let max_row = min_row + config.roi_size - 1;
-        let max_col = min_col + config.roi_size - 1;
-
-        let (image_height, image_width) = averaged_frame.dim();
-        debug_assert!(
-            max_row < image_height,
-            "ROI extends beyond image height: {max_row} >= {image_height}"
-        );
-        debug_assert!(
-            max_col < image_width,
-            "ROI extends beyond image width: {max_col} >= {image_width}"
-        );
+        // Compute aligned ROI centered on star position
+        let roi = config
+            .compute_aligned_roi(star.x, star.y, image_width, image_height)
+            .or_else(|| {
+                log::warn!(
+                    "Could not compute aligned ROI for star at ({:.1}, {:.1})",
+                    star.x,
+                    star.y
+                );
+                None
+            })?;
 
         Some(GuideStar {
             id: 0,
             x: star.x,
             y: star.y,
             snr,
-            roi: AABB::from_coords(min_row, min_col, max_row, max_col),
+            roi,
             shape: star.to_shape(),
         })
     });

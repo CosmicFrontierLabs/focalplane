@@ -117,6 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let radians_per_pixel = satellite_config.plate_scale_per_pixel().as_radians();
 
     // Create FGS with configuration and camera
+    // Get ROI alignment from camera (SimulatorCamera uses default 1,1)
+    let (roi_h_alignment, roi_v_alignment) = camera.get_roi_offset_alignment();
+
     let mut config = FgsConfig {
         acquisition_frames: args.acquisition_frames,
         filters: monocle::config::GuideStarFilters {
@@ -135,6 +138,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         centroid_radius_multiplier: args.centroid_multiplier,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment,
+        roi_v_alignment,
     };
 
     // Update config with camera's saturation value (95% of max to be conservative)
@@ -210,7 +215,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start FGS
     println!("\nStarting FGS...");
     let (_update, settings) = fgs.process_event(FgsEvent::StartFgs)?;
-    monocle::apply_camera_settings(&mut camera, settings);
+    monocle::apply_camera_settings(&mut camera, settings)
+        .map_err(|e| format!("Failed to apply camera settings: {e:?}"))?;
 
     // Acquisition phase
     println!("Acquisition phase ({} frames)...", args.acquisition_frames);
@@ -219,7 +225,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .capture_frame()
             .map_err(|e| format!("Camera capture failed: {e}"))?;
         let (_update, settings) = fgs.process_frame(frame.view(), metadata.timestamp)?;
-        monocle::apply_camera_settings(&mut camera, settings);
+        monocle::apply_camera_settings(&mut camera, settings)
+            .map_err(|e| format!("Failed to apply camera settings: {e:?}"))?;
         if args.verbose {
             println!("  Frame {}/{} captured", i + 1, args.acquisition_frames);
         }
@@ -231,7 +238,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .capture_frame()
         .map_err(|e| format!("Camera capture failed: {e}"))?;
     let (_update, settings) = fgs.process_frame(frame.view(), metadata.timestamp)?;
-    monocle::apply_camera_settings(&mut camera, settings);
+    monocle::apply_camera_settings(&mut camera, settings)
+        .map_err(|e| format!("Failed to apply camera settings: {e:?}"))?;
 
     // Check if we're tracking
     if !matches!(fgs.state(), FgsState::Tracking { .. }) {
@@ -261,7 +269,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (update_opt, settings) = fgs
             .process_frame(frame.view(), metadata.timestamp)
             .unwrap_or_else(|e| panic!("Frame {frame_num}: Failed to process frame: {e}"));
-        monocle::apply_camera_settings(&mut camera, settings);
+        monocle::apply_camera_settings(&mut camera, settings).unwrap_or_else(|e| {
+            panic!("Frame {frame_num}: Failed to apply camera settings: {e:?}")
+        });
         let update = update_opt.unwrap_or_else(|| {
             panic!("Frame {frame_num}: Should have guidance update during tracking")
         });
@@ -325,7 +335,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Stop FGS
     let (_update, settings) = fgs.process_event(FgsEvent::StopFgs)?;
-    monocle::apply_camera_settings(&mut camera, settings);
+    monocle::apply_camera_settings(&mut camera, settings)
+        .map_err(|e| format!("Failed to apply camera settings: {e:?}"))?;
     println!("FGS stopped successfully");
 
     Ok(())

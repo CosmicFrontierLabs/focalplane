@@ -35,6 +35,8 @@ fn test_single_stationary_star() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -118,6 +120,8 @@ fn test_guidance_update_timestamp_correlation() {
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     // Create synthetic star

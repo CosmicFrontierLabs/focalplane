@@ -245,6 +245,11 @@ impl CameraInterface for NSV455Camera {
         Ok(())
     }
 
+    fn get_roi_offset_alignment(&self) -> (usize, usize) {
+        let constraints = self.get_roi_constraints();
+        (constraints.h_offset.step, constraints.v_offset.step)
+    }
+
     fn set_roi(&mut self, roi: AABB) -> CameraResult<()> {
         let constraints = self.get_roi_constraints();
         let width = roi.max_col - roi.min_col + 1;

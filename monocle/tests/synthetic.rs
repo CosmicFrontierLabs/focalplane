@@ -35,6 +35,8 @@ fn test_fgs_with_synthetic_frames() {
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -116,6 +118,8 @@ fn test_fgs_acquisition_to_tracking_transition() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -211,6 +215,8 @@ fn test_fgs_with_moving_stars() {
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -290,6 +296,8 @@ fn test_fgs_loses_tracking_with_large_motion() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);

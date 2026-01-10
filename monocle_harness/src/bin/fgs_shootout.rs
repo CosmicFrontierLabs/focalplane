@@ -290,6 +290,9 @@ fn run_single_experiment(
         .expect("Failed to capture initial frame");
     let rendered_stars = camera.get_last_rendered_stars().to_vec();
 
+    // Get ROI alignment from camera (SimulatorCamera uses default 1,1)
+    let (roi_h_alignment, roi_v_alignment) = camera.get_roi_offset_alignment();
+
     // Create FGS config with computed FWHM and camera saturation value
     let fgs_config = FgsConfig {
         acquisition_frames: fgs_params.acquisition_frames,
@@ -309,6 +312,8 @@ fn run_single_experiment(
         centroid_radius_multiplier: fgs_params.centroid_radius_multiplier,
         fwhm: pix_fwhm,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment,
+        roi_v_alignment,
     };
 
     // Create FGS

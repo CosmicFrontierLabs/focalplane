@@ -45,6 +45,8 @@ fn test_basic_setup() {
         centroid_radius_multiplier: 5.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let _camera = create_jbt_hwk_camera();

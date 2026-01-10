@@ -44,6 +44,8 @@ fn test_full_tracking_lifecycle() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -282,6 +284,8 @@ fn test_tracking_loss_and_recovery() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);
@@ -377,6 +381,8 @@ fn test_image_sequence_processing() {
         centroid_radius_multiplier: 3.0,
         fwhm: 3.0,
         snr_dropout_threshold: 3.0,
+        roi_h_alignment: 1,
+        roi_v_alignment: 1,
     };
 
     let mut fgs = FineGuidanceSystem::new(config);

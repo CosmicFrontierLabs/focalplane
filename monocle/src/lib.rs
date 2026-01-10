@@ -47,28 +47,45 @@ type StateTransitionResult = (
 /// Apply camera settings updates to a camera
 ///
 /// Helper function to apply a list of camera settings updates returned by the FGS.
-/// Logs warnings if any setting fails to apply but continues with remaining settings.
+/// Applies camera settings updates. Returns Ok(()) if all settings applied successfully,
+/// or Err with list of error messages if any failed.
 ///
 /// # Arguments
 /// * `camera` - The camera to apply settings to
 /// * `updates` - List of settings updates to apply
+///
+/// # Returns
+/// * `Ok(())` - All settings applied successfully
+/// * `Err(Vec<String>)` - One or more settings failed, with error messages
 pub fn apply_camera_settings<C: CameraInterface>(
     camera: &mut C,
     updates: Vec<CameraSettingsUpdate>,
-) {
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
     for setting in updates {
         match setting {
             CameraSettingsUpdate::SetROI(roi) => {
                 if let Err(e) = camera.set_roi(roi) {
-                    log::warn!("Failed to set camera ROI: {e}");
+                    let msg = format!("Failed to set camera ROI: {e}");
+                    log::error!("{msg}");
+                    errors.push(msg);
                 }
             }
             CameraSettingsUpdate::ClearROI => {
                 if let Err(e) = camera.clear_roi() {
-                    log::warn!("Failed to clear camera ROI: {e}");
+                    let msg = format!("Failed to clear camera ROI: {e}");
+                    log::error!("{msg}");
+                    errors.push(msg);
                 }
             }
         }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 
@@ -777,6 +794,8 @@ mod tests {
             centroid_radius_multiplier: 5.0,
             fwhm: 3.0,
             snr_dropout_threshold: 3.0,
+            roi_h_alignment: 1,
+            roi_v_alignment: 1,
         }
     }
 
