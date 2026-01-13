@@ -413,6 +413,9 @@ async fn stats_endpoint<C: CameraInterface + 'static>(
             capture_samples: stats.capture_timing_ms.len(),
             analysis_samples: stats.analysis_timing_ms.len(),
         }),
+        device_name: state.camera_name.clone(),
+        width: state.camera_geometry.width() as u32,
+        height: state.camera_geometry.height() as u32,
     };
 
     let json = serde_json::to_string(&response).unwrap();

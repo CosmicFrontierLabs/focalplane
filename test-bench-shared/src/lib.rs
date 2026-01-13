@@ -110,6 +110,12 @@ pub struct CameraStats {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<CameraTimingStats>,
+    /// Camera device name
+    pub device_name: String,
+    /// Camera resolution width in pixels
+    pub width: u32,
+    /// Camera resolution height in pixels
+    pub height: u32,
 }
 
 /// Raw frame response from camera_server /raw endpoint.

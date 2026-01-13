@@ -474,11 +474,17 @@ impl Component for FgsFrontend {
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">{"Device:"}</span><br/>
-                        {&props.device}
+                        {self.stats.as_ref()
+                            .map(|s| s.device_name.as_str())
+                            .unwrap_or(&props.device)}
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">{"Resolution:"}</span><br/>
-                        {format!("{}x{}", props.width, props.height)}
+                        {if let Some(stats) = &self.stats {
+                            format!("{}x{}", stats.width, stats.height)
+                        } else {
+                            format!("{}x{}", props.width, props.height)
+                        }}
                     </div>
 
                     <h2 style="margin-top: 30px;">{"Display Options"}</h2>
