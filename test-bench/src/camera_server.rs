@@ -434,10 +434,10 @@ async fn camera_status_page<C: CameraInterface + 'static>(
         r#"<!DOCTYPE html>
 <html>
 <head>
-    <title>Camera Monitor</title>
+    <title>FGS Monitor</title>
     <link rel="stylesheet" href="/static/shared-styles.css" />
     <script type="module">
-        import init from '/static/camera_wasm.js';
+        import init from '/static/fgs_wasm.js';
         init();
     </script>
 </head>
