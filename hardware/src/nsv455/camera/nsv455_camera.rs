@@ -43,25 +43,32 @@ impl NSV455Camera {
         let device = Device::with_path(&device_path)
             .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
 
-        // Query the actual format from the device to get real dimensions
+        // Query the current format from the device
         let format = device
             .format()
             .map_err(|e| CameraError::HardwareError(format!("Failed to get format: {e}")))?;
 
-        let actual_width = format.width as usize;
-        let actual_height = format.height as usize;
-
         tracing::info!(
             "NSV455 device reports format: {}x{} (expected IMX455: {}x{})",
-            actual_width,
-            actual_height,
+            format.width,
+            format.height,
             Self::SENSOR_WIDTH,
             Self::SENSOR_HEIGHT
         );
 
+        // Always initialize at full frame dimensions, regardless of device's current state
+        // This ensures we don't get stuck in ROI mode from a previous session
+        let mut full_frame_format = format;
+        full_frame_format.width = Self::SENSOR_WIDTH;
+        full_frame_format.height = Self::SENSOR_HEIGHT;
+
+        if let Err(e) = device.set_format(&full_frame_format) {
+            tracing::warn!("Could not reset to full frame on init: {e}");
+        }
+
         let config = CameraConfig::new(
-            actual_width,
-            actual_height,
+            Self::SENSOR_WIDTH as usize,
+            Self::SENSOR_HEIGHT as usize,
             Duration::from_millis(100),
             SensorBitDepth::Bits16,
             26_000.0,  // Max well depth in electrons (IMX455)
