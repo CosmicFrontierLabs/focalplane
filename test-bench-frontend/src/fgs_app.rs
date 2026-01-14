@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
@@ -12,8 +14,49 @@ pub use test_bench_shared::{
     ExportSettings, ExportStatus, TrackingEnableRequest, TrackingSettings, TrackingStatus,
 };
 
-/// Maximum SNR history entries (at ~10Hz polling = ~10 seconds)
-const SNR_HISTORY_MAX: usize = 100;
+/// Maximum history entries for sparkline plots (at ~10Hz polling = ~10 seconds)
+const HISTORY_MAX: usize = 100;
+
+/// Rolling history buffer for tracking data visualization.
+#[derive(Default, Clone, PartialEq)]
+pub struct TrackingHistory {
+    x: VecDeque<f64>,
+    y: VecDeque<f64>,
+    snr: VecDeque<f64>,
+}
+
+impl TrackingHistory {
+    fn new() -> Self {
+        Self {
+            x: VecDeque::with_capacity(HISTORY_MAX),
+            y: VecDeque::with_capacity(HISTORY_MAX),
+            snr: VecDeque::with_capacity(HISTORY_MAX),
+        }
+    }
+
+    fn push(&mut self, x: f64, y: f64, snr: f64) {
+        if self.x.len() >= HISTORY_MAX {
+            self.x.pop_front();
+            self.y.pop_front();
+            self.snr.pop_front();
+        }
+        self.x.push_back(x);
+        self.y.push_back(y);
+        self.snr.push_back(snr);
+    }
+
+    pub fn x_slice(&self) -> &VecDeque<f64> {
+        &self.x
+    }
+
+    pub fn y_slice(&self) -> &VecDeque<f64> {
+        &self.y
+    }
+
+    pub fn snr_slice(&self) -> &VecDeque<f64> {
+        &self.snr
+    }
+}
 
 #[derive(Properties, PartialEq)]
 pub struct FgsFrontendProps {
@@ -44,8 +87,8 @@ pub struct FgsFrontend {
     tracking_settings: Option<TrackingSettings>,
     tracking_settings_pending: bool,
     show_tracking_settings: bool,
-    // SNR history for plotting
-    snr_history: std::collections::VecDeque<f64>,
+    // Position and SNR history for plotting
+    tracking_history: TrackingHistory,
     // Export state
     export_status: Option<ExportStatus>,
     export_settings_pending: bool,
@@ -131,7 +174,7 @@ impl Component for FgsFrontend {
             tracking_settings: None,
             tracking_settings_pending: false,
             show_tracking_settings: false,
-            snr_history: std::collections::VecDeque::with_capacity(SNR_HISTORY_MAX),
+            tracking_history: TrackingHistory::new(),
             export_status: None,
             export_settings_pending: false,
             show_export_settings: false,
@@ -290,12 +333,9 @@ impl Component for FgsFrontend {
             }
             Msg::TrackingStatusLoaded(status) => {
                 self.tracking_available = true;
-                // Update SNR history if we have a position
+                // Update position and SNR history if we have a position
                 if let Some(ref pos) = status.position {
-                    if self.snr_history.len() >= SNR_HISTORY_MAX {
-                        self.snr_history.pop_front();
-                    }
-                    self.snr_history.push_back(pos.snr);
+                    self.tracking_history.push(pos.x, pos.y, pos.snr);
                 }
                 self.tracking_status = Some(status);
                 true
@@ -518,7 +558,7 @@ impl Component for FgsFrontend {
                         status={self.tracking_status.clone()}
                         toggle_pending={self.tracking_toggle_pending}
                         on_toggle_tracking={ctx.link().callback(|_| Msg::ToggleTracking)}
-                        snr_history={self.snr_history.iter().cloned().collect::<Vec<_>>()}
+                        history={self.tracking_history.clone()}
                         show_settings={self.show_tracking_settings}
                         settings={self.tracking_settings.clone()}
                         settings_pending={self.tracking_settings_pending}

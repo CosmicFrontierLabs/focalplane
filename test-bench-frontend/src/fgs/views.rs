@@ -1,12 +1,88 @@
+use std::collections::VecDeque;
+
 use test_bench_shared::{
     CameraStats, ExportStatus, TrackingSettings, TrackingState, TrackingStatus,
 };
 use yew::prelude::*;
 
+use crate::fgs_app::TrackingHistory;
+
 use super::components::{
     ApplyButton, Checkbox, ErrorMessage, SettingsButton, SettingsPanel, Slider, SmallCheckbox,
     StatusCount, TextInput,
 };
+
+/// Configuration for a sparkline plot.
+struct SparklineConfig {
+    label: &'static str,
+    color: &'static str,
+    reference_line: Option<(f64, &'static str)>,
+}
+
+/// Render a sparkline SVG for the given data points.
+fn render_sparkline(data: &VecDeque<f64>, config: SparklineConfig) -> Html {
+    if data.is_empty() {
+        return html! {};
+    }
+
+    let width = 200.0;
+    let height = 40.0;
+    let padding = 2.0;
+
+    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = (max_val - min_val).max(0.001);
+
+    let points: Vec<String> = data
+        .iter()
+        .enumerate()
+        .map(|(i, &val)| {
+            let x = padding + (i as f64 / data.len().max(1) as f64) * (width - 2.0 * padding);
+            let y = height - padding - ((val - min_val) / range) * (height - 2.0 * padding);
+            format!("{x:.1},{y:.1}")
+        })
+        .collect();
+
+    let path_d = if points.len() > 1 {
+        format!("M {} L {}", points[0], points[1..].join(" L "))
+    } else {
+        format!("M {} L {}", points[0], points[0])
+    };
+
+    let reference_line_html = if let Some((ref_val, ref_color)) = config.reference_line {
+        if max_val >= ref_val && min_val <= ref_val {
+            let y = height - padding - ((ref_val - min_val) / range) * (height - 2.0 * padding);
+            html! {
+                <line
+                    x1={padding.to_string()}
+                    y1={y.to_string()}
+                    x2={(width - padding).to_string()}
+                    y2={y.to_string()}
+                    stroke={ref_color}
+                    stroke-width="1"
+                    stroke-dasharray="3,3"
+                />
+            }
+        } else {
+            html! {}
+        }
+    } else {
+        html! {}
+    };
+
+    html! {
+        <div class="metadata-item" style="margin-top: 5px;">
+            <span class="metadata-label">{config.label}</span>
+            <svg width={width.to_string()} height={height.to_string()} style="background: #111; border: 1px solid #333;">
+                { reference_line_html }
+                <path d={path_d} fill="none" stroke={config.color} stroke-width="1.5"/>
+            </svg>
+            <div style="font-size: 0.7em; color: #666;">
+                {format!("Range: {:.2} - {:.2}", min_val, max_val)}
+            </div>
+        </div>
+    }
+}
 
 /// Props for stats view.
 #[derive(Properties, PartialEq)]
@@ -332,8 +408,8 @@ pub struct TrackingViewProps {
     pub status: Option<TrackingStatus>,
     pub toggle_pending: bool,
     pub on_toggle_tracking: Callback<()>,
-    // SNR history for plotting
-    pub snr_history: Vec<f64>,
+    /// Position and SNR history for plotting
+    pub history: TrackingHistory,
     // Tracking settings
     pub show_settings: bool,
     pub settings: Option<TrackingSettings>,
@@ -421,76 +497,33 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                 .map(|p| format!("{:.1}", p.snr))
                 .unwrap_or_else(|| "N/A".to_string());
 
-            // Render SNR sparkline plot
-            let snr_plot = if !props.snr_history.is_empty() {
-                let width = 200.0;
-                let height = 40.0;
-                let padding = 2.0;
+            // Render sparkline plots using extracted function
+            let x_plot = render_sparkline(
+                props.history.x_slice(),
+                SparklineConfig {
+                    label: "X Position:",
+                    color: "#00aaff",
+                    reference_line: None,
+                },
+            );
 
-                // Find min/max for scaling (with some bounds)
-                let min_snr = props
-                    .snr_history
-                    .iter()
-                    .cloned()
-                    .fold(f64::INFINITY, f64::min)
-                    .max(0.0);
-                let max_snr = props
-                    .snr_history
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, f64::max)
-                    .max(min_snr + 1.0);
-                let range = (max_snr - min_snr).max(1.0);
+            let y_plot = render_sparkline(
+                props.history.y_slice(),
+                SparklineConfig {
+                    label: "Y Position:",
+                    color: "#ffaa00",
+                    reference_line: None,
+                },
+            );
 
-                // Build SVG path
-                let points: Vec<String> = props
-                    .snr_history
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &snr)| {
-                        let x = padding
-                            + (i as f64 / props.snr_history.len().max(1) as f64)
-                                * (width - 2.0 * padding);
-                        let y =
-                            height - padding - ((snr - min_snr) / range) * (height - 2.0 * padding);
-                        format!("{x:.1},{y:.1}")
-                    })
-                    .collect();
-
-                let path_d = if points.len() > 1 {
-                    format!("M {} L {}", points[0], points[1..].join(" L "))
-                } else if points.len() == 1 {
-                    format!("M {} L {}", points[0], points[0])
-                } else {
-                    String::new()
-                };
-
-                html! {
-                    <div class="metadata-item" style="margin-top: 10px;">
-                        <span class="metadata-label">{"SNR History:"}</span>
-                        <svg width={width.to_string()} height={height.to_string()} style="background: #111; border: 1px solid #333;">
-                            // Reference line at SNR=3 (dropout threshold)
-                            if max_snr >= 3.0 && min_snr <= 3.0 {
-                                <line
-                                    x1={padding.to_string()}
-                                    y1={(height - padding - ((3.0 - min_snr) / range) * (height - 2.0 * padding)).to_string()}
-                                    x2={(width - padding).to_string()}
-                                    y2={(height - padding - ((3.0 - min_snr) / range) * (height - 2.0 * padding)).to_string()}
-                                    stroke="#ff0000"
-                                    stroke-width="1"
-                                    stroke-dasharray="3,3"
-                                />
-                            }
-                            <path d={path_d} fill="none" stroke="#00ff00" stroke-width="1.5"/>
-                        </svg>
-                        <div style="font-size: 0.7em; color: #666;">
-                            {format!("Range: {:.1} - {:.1}", min_snr, max_snr)}
-                        </div>
-                    </div>
-                }
-            } else {
-                html! {}
-            };
+            let snr_plot = render_sparkline(
+                props.history.snr_slice(),
+                SparklineConfig {
+                    label: "SNR:",
+                    color: "#00ff00",
+                    reference_line: Some((3.0, "#ff0000")),
+                },
+            );
 
             html! {
                 <>
@@ -507,6 +540,8 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                         <span class="metadata-label">{"SNR:"}</span>
                         <span style="color: #00ff00;">{snr_text}</span>
                     </div>
+                    { x_plot }
+                    { y_plot }
                     { snr_plot }
                     <div class="metadata-item">
                         <span class="metadata-label">{"Frames:"}</span>

@@ -52,8 +52,9 @@ IMPORTANT: Always run `cargo fmt` before committing any code changes!
 
 ## Code Style Guidelines
 - **Comments**: Avoid comments that reference pre-change conditions (e.g., "Changed from X", "Previously Y"). Comments should describe current state only.
-- **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups. 
+- **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups.
   - Avoid using wildcard imports like `use crate::*` - always be explicit.
+  - Import types to avoid fully qualified paths (e.g., `use std::collections::VecDeque;` instead of `std::collections::VecDeque` inline).
   - Example format: `use crate::utils::{self, helpers, types::TypeName};`
 - **Formatting**: Follow rustfmt with 100 char line limit. Use trailing commas in multi-line structures.
 - **Types**: Strong typing with descriptive names. Use f64 for astronomical calculations.
