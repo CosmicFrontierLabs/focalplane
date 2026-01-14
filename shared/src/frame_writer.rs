@@ -6,12 +6,14 @@
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Sender, TrySendError};
 use fitsio::FitsFile;
-use image::{DynamicImage, ImageBuffer, Luma};
+use image::DynamicImage;
 use ndarray::Array2;
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use tracing::{info, warn};
+
+use crate::image_proc::{array2_to_gray16_image, array2_to_gray_image};
 
 #[derive(Debug, Clone)]
 pub enum ImagePayload {
@@ -189,21 +191,11 @@ fn save_frame(payload: &ImagePayload, filepath: &Path, format: FrameFormat) -> R
 fn save_as_png(payload: &ImagePayload, filepath: &Path) -> Result<()> {
     match payload {
         ImagePayload::U16(frame) => {
-            let (height, width) = frame.dim();
-            let img_buffer: ImageBuffer<Luma<u16>, Vec<u16>> =
-                ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
-                    let val = frame[[y as usize, x as usize]];
-                    Luma([val])
-                });
+            let img_buffer = array2_to_gray16_image(frame);
             img_buffer.save(filepath)?;
         }
         ImagePayload::U8(frame) => {
-            let (height, width) = frame.dim();
-            let img_buffer: ImageBuffer<Luma<u8>, Vec<u8>> =
-                ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
-                    let val = frame[[y as usize, x as usize]];
-                    Luma([val])
-                });
+            let img_buffer = array2_to_gray_image(frame);
             img_buffer.save(filepath)?;
         }
         ImagePayload::Dynamic(image) => {

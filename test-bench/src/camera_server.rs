@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use shared::bad_pixel_map::BadPixelMap;
 use shared::camera_interface::{CameraInterface, FrameMetadata, SensorGeometry};
 use shared::frame_writer::{FrameFormat, FrameWriterHandle};
+use shared::image_proc::u16_to_gray_image;
 use shared::tracking_message::TrackingMessage;
 use shared::zmq::TypedZmqPublisher;
 use std::net::SocketAddr;
@@ -248,16 +249,6 @@ fn compute_mean_u16(frame: &Array2<u16>) -> f64 {
     }
 }
 
-fn process_raw_to_pixels(frame: &Array2<u16>) -> Vec<u8> {
-    let max_val = *frame.iter().max().unwrap_or(&1) as f32;
-    let scale = if max_val > 0.0 { 255.0 / max_val } else { 1.0 };
-
-    frame
-        .iter()
-        .map(|&val| ((val as f32) * scale) as u8)
-        .collect()
-}
-
 async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
 ) -> Response {
@@ -276,26 +267,13 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
         }
     };
 
-    let pixels_8bit = process_raw_to_pixels(&frame);
-
     let mut stats = state.stats.lock().await;
     stats.histogram = compute_histogram_u16(&frame);
     stats.histogram_mean = compute_mean_u16(&frame);
     stats.histogram_max = *frame.iter().max().unwrap_or(&0);
     drop(stats);
 
-    let height = frame.nrows() as u32;
-    let width = frame.ncols() as u32;
-
-    let img = match ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, pixels_8bit) {
-        Some(img) => img,
-        None => {
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("Failed to create image buffer"))
-                .unwrap()
-        }
-    };
+    let img = u16_to_gray_image(&frame);
 
     let mut jpeg_bytes = Vec::new();
     if let Err(e) = img.write_to(
@@ -332,7 +310,7 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
         }
     };
 
-    let pixels_8bit = process_raw_to_pixels(&frame);
+    let img = u16_to_gray_image(&frame);
 
     let mut stats = state.stats.lock().await;
     stats.histogram = compute_histogram_u16(&frame);
@@ -343,7 +321,7 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
     let height = frame.nrows();
     let width = frame.ncols();
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&pixels_8bit);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(img.as_raw());
 
     let response = test_bench_shared::RawFrameResponse {
         width,

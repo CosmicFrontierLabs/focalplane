@@ -21,6 +21,9 @@
 use image::{GrayImage, ImageBuffer, Luma};
 use ndarray::Array2;
 
+/// 16-bit grayscale image type alias for convenience.
+pub type Gray16Image = ImageBuffer<Luma<u16>, Vec<u16>>;
+
 /// Invert a monochrome image given its bit depth.
 ///
 /// Performs pixel value inversion by subtracting each pixel from the maximum
@@ -119,6 +122,72 @@ pub fn array2_to_gray_image(arr: &Array2<u8>) -> GrayImage {
     img
 }
 
+/// Convert ndarray `Array2<u16>` to 16-bit grayscale image without scaling.
+///
+/// Performs direct conversion preserving raw sensor values. No scaling or
+/// normalization is applied - pixel values are transferred exactly.
+///
+/// # Coordinate Mapping
+/// - Array index [row, col] → Image pixel (col, row)
+/// - Array dimensions (height, width) → Image dimensions (width, height)
+///
+/// # Arguments
+/// * `arr` - Reference to 2D array with u16 pixel values (raw sensor data)
+///
+/// # Returns
+/// Gray16Image with identical pixel data suitable for saving as 16-bit PNG
+///
+pub fn array2_to_gray16_image(arr: &Array2<u16>) -> Gray16Image {
+    let (height, width) = arr.dim();
+    ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
+        Luma([arr[[y as usize, x as usize]]])
+    })
+}
+
+/// Convert GrayImage back to ndarray `Array2<u8>`.
+///
+/// Reverses the conversion from `array2_to_gray_image`, extracting pixel data
+/// from an image buffer back into a 2D array format for scientific processing.
+///
+/// # Coordinate Mapping
+/// - Image pixel (x, y) → Array index [y, x]
+/// - Image dimensions (width, height) → Array dimensions (height, width)
+///
+/// # Arguments
+/// * `img` - Reference to 8-bit grayscale image
+///
+/// # Returns
+/// Array2<u8> with identical pixel data
+///
+pub fn gray_image_to_array2(img: &GrayImage) -> Array2<u8> {
+    let (width, height) = img.dimensions();
+    Array2::from_shape_fn((height as usize, width as usize), |(y, x)| {
+        img.get_pixel(x as u32, y as u32).0[0]
+    })
+}
+
+/// Convert 16-bit grayscale image back to ndarray `Array2<u16>`.
+///
+/// Reverses the conversion from `array2_to_gray16_image`, extracting raw
+/// pixel data back into array format for scientific analysis.
+///
+/// # Coordinate Mapping
+/// - Image pixel (x, y) → Array index [y, x]
+/// - Image dimensions (width, height) → Array dimensions (height, width)
+///
+/// # Arguments
+/// * `img` - Reference to 16-bit grayscale image
+///
+/// # Returns
+/// Array2<u16> with identical pixel data
+///
+pub fn gray16_image_to_array2(img: &Gray16Image) -> Array2<u16> {
+    let (width, height) = img.dimensions();
+    Array2::from_shape_fn((height as usize, width as usize), |(y, x)| {
+        img.get_pixel(x as u32, y as u32).0[0]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +260,51 @@ mod tests {
         let inverted = invert_monochrome(&frame, 8);
         assert_eq!(inverted[[0, 0]], 0);
         assert_eq!(inverted[[1, 1]], 0);
+    }
+
+    #[test]
+    fn test_array2_to_gray16_image_roundtrip() {
+        let arr = Array2::from_shape_fn((3, 4), |(y, x)| (y * 4 + x) as u16 * 100);
+        let img = array2_to_gray16_image(&arr);
+        let back = gray16_image_to_array2(&img);
+
+        assert_eq!(arr.dim(), back.dim());
+        for y in 0..3 {
+            for x in 0..4 {
+                assert_eq!(arr[[y, x]], back[[y, x]]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_array2_to_gray_image_roundtrip() {
+        let arr = Array2::from_shape_fn((3, 4), |(y, x)| ((y * 4 + x) * 20) as u8);
+        let img = array2_to_gray_image(&arr);
+        let back = gray_image_to_array2(&img);
+
+        assert_eq!(arr.dim(), back.dim());
+        for y in 0..3 {
+            for x in 0..4 {
+                assert_eq!(arr[[y, x]], back[[y, x]]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_gray16_image_dimensions() {
+        let arr = Array2::from_elem((100, 200), 1000u16);
+        let img = array2_to_gray16_image(&arr);
+
+        assert_eq!(img.width(), 200);
+        assert_eq!(img.height(), 100);
+    }
+
+    #[test]
+    fn test_gray_image_dimensions() {
+        let arr = Array2::from_elem((50, 75), 128u8);
+        let img = array2_to_gray_image(&arr);
+
+        assert_eq!(img.width(), 75);
+        assert_eq!(img.height(), 50);
     }
 }

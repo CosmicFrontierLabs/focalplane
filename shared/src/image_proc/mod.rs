@@ -60,6 +60,10 @@ pub use detection::{
     union_aabbs, StarDetection, StarFinder, AABB,
 };
 pub use histogram_stretch::stretch_histogram;
+pub use image::{
+    array2_to_gray16_image, array2_to_gray_image, gray16_image_to_array2, gray_image_to_array2,
+    u16_to_gray_image, Gray16Image,
+};
 pub use io::{save_u8_image, u16_to_u8_auto_scale, u16_to_u8_scaled};
 pub use noise::generate_noise_with_precomputed_params;
 pub use overlay::{
