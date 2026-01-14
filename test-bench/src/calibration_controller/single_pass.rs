@@ -6,9 +6,7 @@
 use std::time::{Duration, Instant};
 
 use shared::optical_alignment::{estimate_affine_transform, PointCorrespondence};
-use shared::pattern_command::PatternCommand;
 
-use super::communication::send_pattern_command;
 use super::init::{initialize, CalibrationContext};
 use super::types::CalibrationPoint;
 use super::Args;
@@ -23,7 +21,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize connections and discover sensor
     let CalibrationContext {
-        pattern_socket,
+        pattern_client,
         tracking_collector,
         positions,
         ..
@@ -49,14 +47,8 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             display_y
         );
 
-        // Send spot command
-        let cmd = PatternCommand::Spot {
-            x: *display_x,
-            y: *display_y,
-            fwhm: args.spot_fwhm,
-            intensity: args.spot_intensity,
-        };
-        send_pattern_command(&pattern_socket, &cmd)?;
+        // Send spot command via REST
+        pattern_client.spot(*display_x, *display_y, args.spot_fwhm, args.spot_intensity)?;
 
         // Wait for settle
         std::thread::sleep(settle_duration);
@@ -123,7 +115,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // Clear display
     println!();
     println!("Clearing display...");
-    send_pattern_command(&pattern_socket, &PatternCommand::Clear)?;
+    pattern_client.clear()?;
 
     // Convert to correspondences for affine estimation
     let correspondences: Vec<PointCorrespondence> = calibration_points

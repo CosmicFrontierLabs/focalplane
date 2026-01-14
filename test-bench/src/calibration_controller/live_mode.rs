@@ -13,9 +13,7 @@ use crossterm::{
 };
 use ratatui::Terminal;
 use shared::optical_alignment::{estimate_affine_transform, OpticalAlignment, PointCorrespondence};
-use shared::pattern_command::PatternCommand;
 
-use super::communication::send_pattern_command;
 use super::init::{initialize, CalibrationContext};
 use super::render_tui::ui;
 use super::types::{App, CalibrationPoint, Measurement, MeasurementBuffer};
@@ -50,12 +48,11 @@ pub fn sleep_with_quit_check(duration: Duration) -> bool {
 pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize connections and discover sensor
     let CalibrationContext {
-        pattern_socket,
+        pattern_client,
         tracking_collector,
         sensor_width,
         sensor_height,
         positions,
-        ..
     } = initialize(args, false)?;
 
     let total_positions = positions.len();
@@ -110,21 +107,16 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 let display_x = buffer.display_x;
                 let display_y = buffer.display_y;
 
-                // Send spot command
-                let cmd = PatternCommand::Spot {
-                    x: display_x,
-                    y: display_y,
-                    fwhm: args.spot_fwhm,
-                    intensity: args.spot_intensity,
-                };
-
                 app.log(format!(
                     "Spot [{row},{col}] → display ({display_x:.0}, {display_y:.0})"
                 ));
 
-                if send_pattern_command(&pattern_socket, &cmd).is_err() {
-                    app.log(format!("  ✗ ZMQ send failed for [{row},{col}]"));
-                    // Check quit on error too
+                // Send spot command via REST
+                if pattern_client
+                    .spot(display_x, display_y, args.spot_fwhm, args.spot_intensity)
+                    .is_err()
+                {
+                    app.log(format!("  ✗ HTTP send failed for [{row},{col}]"));
                     if check_quit() {
                         return Ok(());
                     }

@@ -1,7 +1,7 @@
 //! Calibration controller module for remote optical calibration.
 //!
 //! This module provides tools for driving optical calibration by:
-//! - Commanding display patterns via ZMQ
+//! - Commanding display patterns via REST API
 //! - Collecting tracking feedback from the FGS
 //! - Estimating display-to-sensor affine transforms
 //!
@@ -31,17 +31,13 @@ use clap::Parser;
     about = "Drives optical calibration by commanding display patterns and collecting tracking feedback"
 )]
 pub struct Args {
-    /// ZMQ endpoint to send pattern commands (REQ socket connects here)
-    #[arg(long, default_value = "tcp://test-bench-pi.tail944341.ts.net:5556")]
-    pub pattern_endpoint: String,
+    /// HTTP endpoint for calibrate_serve pattern API
+    #[arg(long, default_value = "http://test-bench-pi.tail944341.ts.net:3001")]
+    pub http_endpoint: String,
 
     /// ZMQ endpoint to receive tracking messages (SUB socket connects here)
     #[arg(long, default_value = "tcp://orin-416.tail944341.ts.net:5555")]
     pub tracking_endpoint: String,
-
-    /// HTTP endpoint for calibrate_serve pattern API
-    #[arg(long, default_value = "http://test-bench-pi.tail944341.ts.net:3001")]
-    pub http_endpoint: String,
 
     /// Grid size (NxN points)
     #[arg(long, default_value = "5")]

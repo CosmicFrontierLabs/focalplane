@@ -1,21 +1,20 @@
 //! Shared initialization logic for calibration modes.
 //!
-//! Sets up ZMQ connections, tracking collector, and discovers sensor info.
+//! Sets up pattern client, tracking collector, and discovers sensor info.
 
 use std::time::Duration;
 
+use shared::pattern_client::PatternClient;
 use shared::tracking_collector::TrackingCollector;
 
-use super::communication::{discover_sensor_info, enable_remote_controlled_mode};
+use super::communication::discover_sensor_info;
 use super::grid::generate_centered_grid;
 use super::Args;
 
 /// Initialized resources for calibration.
 pub struct CalibrationContext {
-    /// ZMQ context (keep alive for socket lifetime)
-    pub zmq_ctx: zmq::Context,
-    /// ZMQ REQ socket for pattern commands
-    pub pattern_socket: zmq::Socket,
+    /// HTTP client for pattern commands
+    pub pattern_client: PatternClient,
     /// Tracking message collector
     pub tracking_collector: TrackingCollector,
     /// Detected or default sensor width
@@ -34,7 +33,7 @@ pub fn initialize(
     verbose: bool,
 ) -> Result<CalibrationContext, Box<dyn std::error::Error>> {
     if verbose {
-        println!("Pattern endpoint: {}", args.pattern_endpoint);
+        println!("HTTP endpoint: {}", args.http_endpoint);
         println!("Tracking endpoint: {}", args.tracking_endpoint);
         println!(
             "Grid: {}x{} with {:.0}px spacing",
@@ -44,16 +43,8 @@ pub fn initialize(
         println!();
     }
 
-    // Create ZMQ REQ socket for pattern commands with timeout
-    let zmq_ctx = zmq::Context::new();
-    let pattern_socket = zmq_ctx.socket(zmq::REQ)?;
-    pattern_socket.set_sndtimeo(2000)?; // 2 second send timeout
-    pattern_socket.set_rcvtimeo(2000)?; // 2 second receive timeout
-
-    if verbose {
-        println!("Connecting to pattern endpoint...");
-    }
-    pattern_socket.connect(&args.pattern_endpoint)?;
+    // Create pattern client
+    let pattern_client = PatternClient::new(&args.http_endpoint);
 
     // Create tracking collector
     if verbose {
@@ -61,7 +52,7 @@ pub fn initialize(
     }
     let tracking_collector = TrackingCollector::connect(&args.tracking_endpoint)?;
 
-    // Allow ZMQ connections to establish
+    // Allow ZMQ tracking connection to establish
     std::thread::sleep(Duration::from_millis(500));
 
     // Enable RemoteControlled mode on the display server
@@ -70,7 +61,8 @@ pub fn initialize(
     } else {
         eprintln!("Enabling RemoteControlled mode...");
     }
-    enable_remote_controlled_mode(&args.http_endpoint)
+    pattern_client
+        .enable_remote_mode()
         .map_err(|e| format!("Failed to enable RemoteControlled mode: {e}"))?;
     if verbose {
         println!("RemoteControlled mode enabled");
@@ -123,8 +115,7 @@ pub fn initialize(
     }
 
     Ok(CalibrationContext {
-        zmq_ctx,
-        pattern_socket,
+        pattern_client,
         tracking_collector,
         sensor_width,
         sensor_height,

@@ -269,6 +269,69 @@ async fn update_pattern_config(
     }
 }
 
+/// Handle pattern commands via REST API.
+///
+/// This endpoint accepts PatternCommand JSON and updates the RemoteControlled pattern state.
+/// The display must be in RemoteControlled mode for these commands to have visible effect.
+async fn post_pattern_command(
+    State(state): State<Arc<AppState>>,
+    Json(cmd): Json<shared::pattern_command::PatternCommand>,
+) -> Response {
+    use shared::pattern_command::PatternCommand;
+
+    // Log the command
+    match &cmd {
+        PatternCommand::Spot {
+            x,
+            y,
+            fwhm,
+            intensity,
+        } => {
+            tracing::info!("REST Spot: ({x:.0}, {y:.0}) fwhm={fwhm:.1} int={intensity:.2}");
+        }
+        PatternCommand::SpotGrid {
+            positions,
+            fwhm,
+            intensity,
+        } => {
+            tracing::info!(
+                "REST SpotGrid: {} spots, fwhm={fwhm:.1} int={intensity:.2}",
+                positions.len()
+            );
+        }
+        PatternCommand::Uniform { level } => {
+            tracing::info!("REST Uniform: level={level}");
+        }
+        PatternCommand::Clear => {
+            tracing::info!("REST Clear");
+        }
+    }
+
+    // Update the remote pattern state
+    state.remote_state.lock().unwrap().set_command(cmd);
+
+    // Reset idle timeout
+    state.watchdog.reset();
+
+    // Notify display to update
+    if let Some(ref tx) = state.display_update_tx {
+        let _ = tx.send(());
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from("ok"))
+        .unwrap()
+}
+
+/// Get current pattern command state.
+async fn get_pattern_command(
+    State(state): State<Arc<AppState>>,
+) -> Json<shared::pattern_command::PatternCommand> {
+    let cmd = state.remote_state.lock().unwrap().current().clone();
+    Json(cmd)
+}
+
 #[tokio::main]
 async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -> Result<()> {
     use axum::routing::get_service;
@@ -281,6 +344,8 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
         .route("/jpeg", get(jpeg_pattern_endpoint))
         .route("/config", get(get_pattern_config))
         .route("/config", axum::routing::post(update_pattern_config))
+        .route("/pattern", get(get_pattern_command))
+        .route("/pattern", axum::routing::post(post_pattern_command))
         .nest_service(
             "/static",
             get_service(ServeDir::new("test-bench-frontend/dist/calibrate")),

@@ -103,6 +103,7 @@ The hooks are versioned in the repo, so changes take effect immediately without 
 - Always check `git status` before committing to ensure no unwanted files are staged
 - **When pushing a new branch to remote, ALWAYS provide both the PR creation URL and diff URL** - Makes it easy to review changes immediately
 - **When sharing links to changes, prefer PR URLs over commit URLs** - PRs show full context, discussion, and CI status
+- **After pushing work to a branch, ALWAYS share the GitHub PR link and ask for review** - Makes it easy for user to review and approve changes
 
 ## Acronyms
 - HIL: Hardware In the Loop - Testing real hardware components with simulated environments
