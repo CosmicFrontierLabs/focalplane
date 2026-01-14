@@ -538,7 +538,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">{"SNR:"}</span>
-                        <span style="color: #00ff00;">{snr_text}</span>
+                        <span>{snr_text}</span>
                     </div>
                     { x_plot }
                     { y_plot }
