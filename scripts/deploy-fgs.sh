@@ -42,7 +42,7 @@ usage() {
     echo ""
     echo "Environment Variables:"
     echo "  ORIN_HOST     Override Orin Nano host (default: meawoppl@orin-nano.tail944341.ts.net)"
-    echo "  NEUT_HOST     Override Neutralino host (default: cosmicfrontiers@orin-416.tail944341.ts.net)"
+    echo "  NEUT_HOST     Override Neutralino host (default: cosmicfrontiers@orin-005.tail944341.ts.net)"
     exit 0
 }
 
@@ -50,7 +50,7 @@ usage() {
 configure_target() {
     case $1 in
         neut|neutralino)
-            REMOTE_HOST="${NEUT_HOST:-cosmicfrontiers@orin-416.tail944341.ts.net}"
+            REMOTE_HOST="${NEUT_HOST:-cosmicfrontiers@orin-005.tail944341.ts.net}"
             BUILD_TARGET="--neut"
             CAMERA_TYPE="nsv"
             CAMERA_DESC="NSV455"

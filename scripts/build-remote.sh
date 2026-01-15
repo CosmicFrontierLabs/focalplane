@@ -26,7 +26,7 @@ RUN_COMMAND=""
 # Host presets
 ORIN_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
 ORIN_TAILSCALE_NAME="orin-nano"
-NEUT_HOST="cosmicfrontiers@orin-416.tail944341.ts.net"
+NEUT_HOST="cosmicfrontiers@orin-005.tail944341.ts.net"
 NEUT_DEVICE_NAME="neutralino"
 TEST_BENCH_HOST="meawoppl@cfl-test-bench.tail944341.ts.net"
 TEST_BENCH_DEVICE_NAME="cfl-test-bench"

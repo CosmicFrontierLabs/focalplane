@@ -36,7 +36,7 @@ pub struct Args {
     pub http_endpoint: String,
 
     /// ZMQ endpoint to receive tracking messages (SUB socket connects here)
-    #[arg(long, default_value = "tcp://orin-416.tail944341.ts.net:5555")]
+    #[arg(long, default_value = "tcp://orin-005.tail944341.ts.net:5555")]
     pub tracking_endpoint: String,
 
     /// Grid size (NxN points)

@@ -38,7 +38,7 @@ fn get_hostname() -> Result<String> {
 /// Detects GPIO configuration based on hostname.
 ///
 /// Auto-detects GPIO configuration for known devices:
-/// - `orin-416` (Neutralino/NSV): Direct line 127
+/// - `orin-005` (Neutralino/NSV): Direct line 127
 /// - `ubuntu` (Orin Nano/POA): BOARD pin 33
 ///
 /// # Returns
@@ -49,12 +49,12 @@ pub fn detect_gpio_config() -> Result<GpioConfig> {
     let hostname = get_hostname()?;
 
     match hostname.as_str() {
-        "orin-416" => Ok(GpioConfig::DirectLine(127)),
+        "orin-005" => Ok(GpioConfig::DirectLine(127)),
         "ubuntu" => Ok(GpioConfig::BoardPin(33)),
         _ => {
             anyhow::bail!(
                 "Unknown device hostname '{hostname}'. Please specify GPIO configuration explicitly.\n\
-                Known hostnames: 'orin-416' (Neutralino/NSV), 'ubuntu' (Orin Nano/POA)"
+                Known hostnames: 'orin-005' (Neutralino/NSV), 'ubuntu' (Orin Nano/POA)"
             )
         }
     }
