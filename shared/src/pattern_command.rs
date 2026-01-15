@@ -5,6 +5,40 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Generate a centered grid of spot positions.
+///
+/// Creates a grid of `grid_size × grid_size` positions centered on the display,
+/// with each position separated by `grid_spacing` pixels.
+///
+/// # Arguments
+/// * `grid_size` - Number of points per row/column (e.g., 5 for 5×5 grid)
+/// * `grid_spacing` - Distance in pixels between adjacent grid points
+/// * `display_width` - Display width in pixels
+/// * `display_height` - Display height in pixels
+///
+/// # Returns
+/// Vector of (x, y) positions in display coordinates, ordered row by row.
+pub fn generate_centered_grid(
+    grid_size: usize,
+    grid_spacing: f64,
+    display_width: u32,
+    display_height: u32,
+) -> Vec<(f64, f64)> {
+    let center_x = display_width as f64 / 2.0;
+    let center_y = display_height as f64 / 2.0;
+    let half_extent = (grid_size - 1) as f64 / 2.0;
+
+    let mut positions = Vec::with_capacity(grid_size * grid_size);
+    for row in 0..grid_size {
+        for col in 0..grid_size {
+            let offset_x = (col as f64 - half_extent) * grid_spacing;
+            let offset_y = (row as f64 - half_extent) * grid_spacing;
+            positions.push((center_x + offset_x, center_y + offset_y));
+        }
+    }
+    positions
+}
+
 /// Commands sent from desktop to control OLED pattern display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -67,19 +101,7 @@ impl PatternCommand {
         fwhm: f64,
         intensity: f64,
     ) -> Self {
-        let center_x = width as f64 / 2.0;
-        let center_y = height as f64 / 2.0;
-        let half_extent = (grid_size - 1) as f64 / 2.0;
-
-        let mut positions = Vec::with_capacity(grid_size * grid_size);
-        for row in 0..grid_size {
-            for col in 0..grid_size {
-                let offset_x = (col as f64 - half_extent) * spacing;
-                let offset_y = (row as f64 - half_extent) * spacing;
-                positions.push((center_x + offset_x, center_y + offset_y));
-            }
-        }
-
+        let positions = generate_centered_grid(grid_size, spacing, width, height);
         Self::SpotGrid {
             positions,
             fwhm,

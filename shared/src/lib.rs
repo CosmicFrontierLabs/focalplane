@@ -17,6 +17,7 @@ pub mod image_size;
 pub mod optical_alignment;
 pub mod pattern_client;
 pub mod pattern_command;
+pub use pattern_command::generate_centered_grid;
 pub mod range_arg;
 pub mod star_projector;
 pub mod system_info;
