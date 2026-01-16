@@ -6,9 +6,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use hardware::pi::S330;
 use shared::config_storage::ConfigStorage;
+use std::sync::Arc;
 use test_bench::camera_init::{initialize_camera, CameraArgs};
-use test_bench::camera_server::{CommonServerArgs, TrackingConfig};
+use test_bench::camera_server::{CommonServerArgs, FsmSharedState, TrackingConfig};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -21,7 +23,8 @@ use tracing::info;
         - Web UI for camera control and image viewing\n  \
         - Real-time image streaming to browser\n  \
         - FGS tracking when enabled via the web interface\n  \
-        - Optional ZMQ publishing of tracking updates\n\n\
+        - Optional ZMQ publishing of tracking updates\n  \
+        - Optional FSM (Fast Steering Mirror) control via web UI\n\n\
         Prerequisites:\n  \
         - Run dark_frame_analysis to generate bad pixel map (recommended)\n  \
         - Build frontends: ./scripts/build-yew-frontends.sh\n\n\
@@ -109,6 +112,17 @@ struct Args {
         value_name = "ADDR"
     )]
     zmq_pub: Option<String>,
+
+    #[arg(
+        long,
+        help = "PI E-727 FSM controller IP address (enables FSM control)",
+        long_help = "IP address of the PI E-727 piezo controller for the S-330 Fast Steering \
+            Mirror. When specified, the web UI will include X/Y position sliders for manual \
+            FSM control. The FSM is initialized with autozero and servo enable on startup.\n\n\
+            Example: --fsm-ip 192.168.15.210",
+        value_name = "IP"
+    )]
+    fsm_ip: Option<String>,
 }
 
 fn check_frontend_files() -> Result<()> {
@@ -199,6 +213,57 @@ async fn main() -> anyhow::Result<()> {
         zmq_pub: args.zmq_pub,
     };
 
+    // Initialize FSM if IP address provided
+    let fsm_state = if let Some(ref fsm_ip) = args.fsm_ip {
+        info!("Connecting to FSM at {}...", fsm_ip);
+        match S330::connect_ip(fsm_ip) {
+            Ok(mut fsm) => {
+                info!("FSM connected, getting travel ranges...");
+                match fsm.get_travel_ranges() {
+                    Ok((x_range, y_range)) => {
+                        info!(
+                            "FSM travel ranges: X=[{:.1}, {:.1}], Y=[{:.1}, {:.1}] µrad",
+                            x_range.0, x_range.1, y_range.0, y_range.1
+                        );
+                        let (x, y) = fsm.get_position().unwrap_or((0.0, 0.0));
+                        Some(Arc::new(FsmSharedState {
+                            fsm: std::sync::Mutex::new(fsm),
+                            x_urad: std::sync::atomic::AtomicU64::new(x.to_bits()),
+                            y_urad: std::sync::atomic::AtomicU64::new(y.to_bits()),
+                            x_range,
+                            y_range,
+                            last_error: tokio::sync::RwLock::new(None),
+                        }))
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get FSM travel ranges: {}, FSM disabled", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to connect to FSM at {}: {}, FSM disabled",
+                    fsm_ip,
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if fsm_state.is_some() {
+        info!("FSM control enabled");
+    }
+
     info!("Starting unified camera server with tracking support...");
-    test_bench::camera_server::run_server_with_tracking(camera, args.server, tracking_config).await
+    test_bench::camera_server::run_server_with_tracking(
+        camera,
+        args.server,
+        tracking_config,
+        fsm_state,
+    )
+    .await
 }

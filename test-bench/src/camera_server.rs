@@ -8,6 +8,7 @@ use axum::{
     Json, Router,
 };
 use base64::Engine;
+use hardware::pi::S330;
 use image::{DynamicImage, ImageBuffer, Luma};
 use monocle::config::{FgsConfig, GuideStarFilters};
 use monocle::state::FgsEvent;
@@ -147,6 +148,44 @@ impl Default for TrackingConfig {
     }
 }
 
+/// Shared FSM (Fast Steering Mirror) state for web control.
+pub struct FsmSharedState {
+    /// The S-330 FSM controller (wrapped in Mutex for thread-safe access)
+    pub fsm: std::sync::Mutex<S330>,
+    /// Current X position in microradians
+    pub x_urad: std::sync::atomic::AtomicU64,
+    /// Current Y position in microradians
+    pub y_urad: std::sync::atomic::AtomicU64,
+    /// Travel range for X axis (min, max)
+    pub x_range: (f64, f64),
+    /// Travel range for Y axis (min, max)
+    pub y_range: (f64, f64),
+    /// Last error message (if any)
+    pub last_error: RwLock<Option<String>>,
+}
+
+impl FsmSharedState {
+    /// Get current X position as f64
+    pub fn get_x(&self) -> f64 {
+        f64::from_bits(self.x_urad.load(Ordering::SeqCst))
+    }
+
+    /// Get current Y position as f64
+    pub fn get_y(&self) -> f64 {
+        f64::from_bits(self.y_urad.load(Ordering::SeqCst))
+    }
+
+    /// Set current X position
+    pub fn set_x(&self, x: f64) {
+        self.x_urad.store(x.to_bits(), Ordering::SeqCst);
+    }
+
+    /// Set current Y position
+    pub fn set_y(&self, y: f64) {
+        self.y_urad.store(y.to_bits(), Ordering::SeqCst);
+    }
+}
+
 pub struct AppState<C: CameraInterface> {
     pub camera: Arc<Mutex<C>>,
     pub stats: Arc<Mutex<FrameStats>>,
@@ -163,6 +202,8 @@ pub struct AppState<C: CameraInterface> {
     pub tracking: Option<Arc<TrackingSharedState>>,
     /// Tracking configuration (None if tracking not available)
     pub tracking_config: Option<TrackingConfig>,
+    /// FSM control state (None if FSM not configured)
+    pub fsm: Option<Arc<FsmSharedState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -915,6 +956,99 @@ async fn export_settings_post_endpoint<C: CameraInterface + 'static>(
     }
 }
 
+// ==================== FSM Endpoints ====================
+
+async fn fsm_status_endpoint<C: CameraInterface + 'static>(
+    State(state): State<Arc<AppState<C>>>,
+) -> Response {
+    match &state.fsm {
+        Some(fsm_state) => {
+            let last_error = fsm_state.last_error.read().await.clone();
+            let status = test_bench_shared::FsmStatus {
+                connected: true,
+                x_urad: fsm_state.get_x(),
+                y_urad: fsm_state.get_y(),
+                x_min: fsm_state.x_range.0,
+                x_max: fsm_state.x_range.1,
+                y_min: fsm_state.y_range.0,
+                y_max: fsm_state.y_range.1,
+                last_error,
+            };
+            let json = serde_json::to_string(&status).unwrap();
+            Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("FSM not available"))
+            .unwrap(),
+    }
+}
+
+async fn fsm_move_endpoint<C: CameraInterface + 'static>(
+    State(state): State<Arc<AppState<C>>>,
+    Json(request): Json<test_bench_shared::FsmMoveRequest>,
+) -> Response {
+    match &state.fsm {
+        Some(fsm_state) => {
+            // Clamp positions to valid range
+            let x = request
+                .x_urad
+                .clamp(fsm_state.x_range.0, fsm_state.x_range.1);
+            let y = request
+                .y_urad
+                .clamp(fsm_state.y_range.0, fsm_state.y_range.1);
+
+            // Move FSM (blocking operation on std::sync::Mutex)
+            let result = {
+                let mut fsm = fsm_state.fsm.lock().unwrap();
+                fsm.move_to(x, y)
+            };
+
+            match result {
+                Ok(()) => {
+                    // Update cached position
+                    fsm_state.set_x(x);
+                    fsm_state.set_y(y);
+                    *fsm_state.last_error.write().await = None;
+
+                    let status = test_bench_shared::FsmStatus {
+                        connected: true,
+                        x_urad: x,
+                        y_urad: y,
+                        x_min: fsm_state.x_range.0,
+                        x_max: fsm_state.x_range.1,
+                        y_min: fsm_state.y_range.0,
+                        y_max: fsm_state.y_range.1,
+                        last_error: None,
+                    };
+                    let json = serde_json::to_string(&status).unwrap();
+                    Response::builder()
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(json))
+                        .unwrap()
+                }
+                Err(e) => {
+                    let error_msg = format!("FSM move failed: {e}");
+                    tracing::error!("{}", error_msg);
+                    *fsm_state.last_error.write().await = Some(error_msg.clone());
+
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from(error_msg))
+                        .unwrap()
+                }
+            }
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("FSM not available"))
+            .unwrap(),
+    }
+}
+
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {
     use axum::routing::get_service;
     use tower_http::services::ServeDir;
@@ -942,6 +1076,8 @@ pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> R
             "/tracking/export",
             get(export_status_endpoint::<C>).post(export_settings_post_endpoint::<C>),
         )
+        .route("/fsm/status", get(fsm_status_endpoint::<C>))
+        .route("/fsm/move", post(fsm_move_endpoint::<C>))
         .nest_service(
             "/static",
             get_service(ServeDir::new("test-bench-frontend/dist/fgs")),
@@ -993,6 +1129,7 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         camera_geometry,
         tracking: None,
         tracking_config: None,
+        fsm: None,
     });
 
     info!("Starting background capture loop...");
@@ -1211,6 +1348,7 @@ pub async fn run_server_with_tracking<C: CameraInterface + Send + 'static>(
     mut camera: C,
     args: CommonServerArgs,
     tracking_config: TrackingConfig,
+    fsm: Option<Arc<FsmSharedState>>,
 ) -> anyhow::Result<()> {
     use tracing::info;
 
@@ -1263,6 +1401,7 @@ pub async fn run_server_with_tracking<C: CameraInterface + Send + 'static>(
         camera_geometry,
         tracking: Some(tracking_state),
         tracking_config: Some(tracking_config),
+        fsm,
     });
 
     info!("Starting background capture loop with tracking support...");

@@ -159,6 +159,7 @@ For building directly on target ARM devices:
 
 ## Acronyms
 - HIL: Hardware In the Loop - Testing real hardware components with simulated environments
+- NSV: Neutralino Space Ventures - Camera/hardware platform using NSV455 sensor
 
 ## Commonly Worked Files
 ### sensor_shootout.rs (simulator/src/bin/sensor_shootout.rs)

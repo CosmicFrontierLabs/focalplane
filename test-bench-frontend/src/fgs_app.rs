@@ -5,12 +5,13 @@ use yew::prelude::*;
 use crate::fgs::{
     api::{calculate_backoff_delay, check_url_ok, fetch_json_with_status, post_json},
     histogram::render_histogram,
-    views::{StatsView, TrackingView, ZoomView},
+    views::{FsmView, StatsView, TrackingView, ZoomView},
 };
 
 pub use test_bench_shared::CameraStats;
 pub use test_bench_shared::{
-    ExportSettings, ExportStatus, TrackingEnableRequest, TrackingSettings, TrackingStatus,
+    ExportSettings, ExportStatus, FsmMoveRequest, FsmStatus, TrackingEnableRequest,
+    TrackingSettings, TrackingStatus,
 };
 
 /// Maximum history entries for sparkline plots (at ~10Hz polling = ~10 seconds)
@@ -93,6 +94,11 @@ pub struct FgsFrontend {
     export_status: Option<ExportStatus>,
     export_settings_pending: bool,
     show_export_settings: bool,
+    // FSM state
+    fsm_status: Option<FsmStatus>,
+    fsm_move_pending: bool,
+    fsm_target_x: f64,
+    fsm_target_y: f64,
 }
 
 pub enum Msg {
@@ -132,6 +138,13 @@ pub enum Msg {
     SaveExportSettings,
     ExportSettingsSaved(ExportSettings),
     ExportSettingsSaveFailed,
+    // FSM messages
+    FsmStatusLoaded(FsmStatus),
+    FsmNotAvailable,
+    UpdateFsmTarget(String, f64),
+    MoveFsm,
+    FsmMoveComplete(FsmStatus),
+    FsmMoveFailed,
 }
 
 impl Component for FgsFrontend {
@@ -178,6 +191,10 @@ impl Component for FgsFrontend {
             export_status: None,
             export_settings_pending: false,
             show_export_settings: false,
+            fsm_status: None,
+            fsm_move_pending: false,
+            fsm_target_x: 0.0,
+            fsm_target_y: 0.0,
         }
     }
 
@@ -327,6 +344,18 @@ impl Component for FgsFrontend {
                         fetch_json_with_status::<ExportStatus>("/tracking/export").await;
                     if let Some(status) = result {
                         link3.send_message(Msg::ExportStatusLoaded(status));
+                    }
+                });
+
+                // Also fetch FSM status
+                let link4 = ctx.link().clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let (status_code, result) =
+                        fetch_json_with_status::<FsmStatus>("/fsm/status").await;
+                    if status_code == 404 {
+                        link4.send_message(Msg::FsmNotAvailable);
+                    } else if let Some(status) = result {
+                        link4.send_message(Msg::FsmStatusLoaded(status));
                     }
                 });
                 false
@@ -487,6 +516,56 @@ impl Component for FgsFrontend {
                 self.export_settings_pending = false;
                 true
             }
+            Msg::FsmStatusLoaded(status) => {
+                // Initialize target positions if this is first time getting status
+                if self.fsm_status.is_none() {
+                    self.fsm_target_x = status.x_urad;
+                    self.fsm_target_y = status.y_urad;
+                }
+                self.fsm_status = Some(status);
+                true
+            }
+            Msg::FsmNotAvailable => {
+                self.fsm_status = None;
+                false
+            }
+            Msg::UpdateFsmTarget(axis, value) => {
+                match axis.as_str() {
+                    "x" => self.fsm_target_x = value,
+                    "y" => self.fsm_target_y = value,
+                    _ => {}
+                }
+                true
+            }
+            Msg::MoveFsm => {
+                if self.fsm_move_pending {
+                    return false;
+                }
+                self.fsm_move_pending = true;
+
+                let request = FsmMoveRequest {
+                    x_urad: self.fsm_target_x,
+                    y_urad: self.fsm_target_y,
+                };
+
+                let link = ctx.link().clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match post_json::<_, FsmStatus>("/fsm/move", &request).await {
+                        Some(status) => link.send_message(Msg::FsmMoveComplete(status)),
+                        None => link.send_message(Msg::FsmMoveFailed),
+                    }
+                });
+                true
+            }
+            Msg::FsmMoveComplete(status) => {
+                self.fsm_move_pending = false;
+                self.fsm_status = Some(status);
+                true
+            }
+            Msg::FsmMoveFailed => {
+                self.fsm_move_pending = false;
+                true
+            }
         }
     }
 
@@ -572,6 +651,15 @@ impl Component for FgsFrontend {
                         on_update_export_string={ctx.link().callback(|(field, val)| Msg::UpdateExportSetting(field, val))}
                         on_toggle_export_bool={ctx.link().callback(Msg::ToggleExportBool)}
                         on_save_export={ctx.link().callback(|_| Msg::SaveExportSettings)}
+                    />
+
+                    <FsmView
+                        status={self.fsm_status.clone()}
+                        target_x={self.fsm_target_x}
+                        target_y={self.fsm_target_y}
+                        move_pending={self.fsm_move_pending}
+                        on_update_target={ctx.link().callback(|(axis, val)| Msg::UpdateFsmTarget(axis, val))}
+                        on_move={ctx.link().callback(|_| Msg::MoveFsm)}
                     />
 
                     <h2 style="margin-top: 30px;">{"Endpoints"}</h2>

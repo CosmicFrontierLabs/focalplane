@@ -30,7 +30,8 @@ usage() {
     echo "Deploy fgs_server to remote ARM targets."
     echo ""
     echo "Targets:"
-    echo "  neut          Neutralino (NSV455 camera)"
+    echo "  neut          Neutralino (NSV455 camera on orin-005)"
+    echo "  nsv           NSV (NSV455 camera on orin-416)"
     echo "  orin          Orin Nano (PlayerOne camera)"
     echo ""
     echo "Modes:"
@@ -43,6 +44,7 @@ usage() {
     echo "Environment Variables:"
     echo "  ORIN_HOST     Override Orin Nano host (default: meawoppl@orin-nano.tail944341.ts.net)"
     echo "  NEUT_HOST     Override Neutralino host (default: cosmicfrontiers@orin-005.tail944341.ts.net)"
+    echo "  NSV_HOST      Override NSV host (default: cosmicfrontiers@orin-416.tail944341.ts.net)"
     exit 0
 }
 
@@ -57,6 +59,14 @@ configure_target() {
             REMOTE_USER="cosmicfrontiers"
             FRIENDLY_NAME="neutralino"
             ;;
+        nsv)
+            REMOTE_HOST="${NSV_HOST:-cosmicfrontiers@orin-416.tail944341.ts.net}"
+            BUILD_TARGET="--nsv"
+            CAMERA_TYPE="nsv"
+            CAMERA_DESC="NSV455"
+            REMOTE_USER="cosmicfrontiers"
+            FRIENDLY_NAME="nsv"
+            ;;
         orin|orin-nano)
             REMOTE_HOST="${ORIN_HOST:-meawoppl@orin-nano.tail944341.ts.net}"
             BUILD_TARGET="--orin"
@@ -67,7 +77,7 @@ configure_target() {
             ;;
         *)
             print_error "Unknown target: $1"
-            echo "Valid targets: neut, orin"
+            echo "Valid targets: neut, nsv, orin"
             exit 1
             ;;
     esac
@@ -86,7 +96,7 @@ SETUP_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        neut|neutralino|orin|orin-nano)
+        neut|neutralino|nsv|orin|orin-nano)
             if [[ -z "$TARGET" ]]; then
                 TARGET="$1"
             else
