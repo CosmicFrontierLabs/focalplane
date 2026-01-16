@@ -8,8 +8,8 @@ use yew::prelude::*;
 use crate::fgs_app::TrackingHistory;
 
 use super::components::{
-    ApplyButton, Checkbox, ErrorMessage, SettingsButton, SettingsPanel, Slider, SmallCheckbox,
-    StatusCount, TextInput,
+    ApplyButton, Checkbox, ErrorMessage, Select, SelectOption, SettingsButton, SettingsPanel,
+    Slider, SmallCheckbox, StatusCount, TextInput,
 };
 
 /// Configuration for a sparkline plot.
@@ -235,6 +235,44 @@ pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
         })
     };
 
+    let make_select_callback = |field: &'static str, on_update: Callback<(String, f64)>| {
+        Callback::from(move |val: usize| {
+            on_update.emit((field.to_string(), val as f64));
+        })
+    };
+
+    // NSV455 camera supported ROI sizes (square regions)
+    let roi_options = vec![
+        SelectOption {
+            value: 128,
+            label: "128×128".to_string(),
+        },
+        SelectOption {
+            value: 256,
+            label: "256×256".to_string(),
+        },
+        SelectOption {
+            value: 512,
+            label: "512×512".to_string(),
+        },
+        SelectOption {
+            value: 1024,
+            label: "1024×1024".to_string(),
+        },
+        SelectOption {
+            value: 2048,
+            label: "2048×2048".to_string(),
+        },
+        SelectOption {
+            value: 4096,
+            label: "4096×4096".to_string(),
+        },
+        SelectOption {
+            value: 8096,
+            label: "8096×6324 (Full)".to_string(),
+        },
+    ];
+
     html! {
         <>
             <SettingsButton
@@ -253,14 +291,11 @@ pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
                     decimals={0}
                     onchange={make_slider_callback("acquisition_frames", props.on_update.clone())}
                 />
-                <Slider
-                    label="ROI Size (px)"
-                    value={settings.roi_size as f64}
-                    min={32.0}
-                    max={256.0}
-                    step={8.0}
-                    decimals={0}
-                    onchange={make_slider_callback("roi_size", props.on_update.clone())}
+                <Select
+                    label="ROI Size"
+                    value={settings.roi_size}
+                    options={roi_options}
+                    onchange={make_select_callback("roi_size", props.on_update.clone())}
                 />
                 <Slider
                     label="Detection σ"

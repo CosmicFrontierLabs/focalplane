@@ -242,3 +242,54 @@ pub fn error_message(props: &ErrorMessageProps) -> Html {
         None => html! {},
     }
 }
+
+/// A single option for the Select component.
+#[derive(Clone, PartialEq)]
+pub struct SelectOption {
+    pub value: usize,
+    pub label: String,
+}
+
+/// Select dropdown for discrete value selection.
+#[derive(Properties, PartialEq)]
+pub struct SelectProps {
+    pub label: AttrValue,
+    pub value: usize,
+    pub options: Vec<SelectOption>,
+    pub onchange: Callback<usize>,
+}
+
+#[function_component(Select)]
+pub fn select(props: &SelectProps) -> Html {
+    let onchange = props.onchange.clone();
+    let onchange_handler = Callback::from(move |e: Event| {
+        let select: web_sys::HtmlSelectElement = e.target_unchecked_into();
+        if let Ok(val) = select.value().parse::<usize>() {
+            onchange.emit(val);
+        }
+    });
+
+    let options_html: Html = props
+        .options
+        .iter()
+        .map(|opt| {
+            html! {
+                <option value={opt.value.to_string()} selected={opt.value == props.value}>
+                    {&opt.label}
+                </option>
+            }
+        })
+        .collect();
+
+    html! {
+        <div class="metadata-item" style="margin-top: 5px;">
+            <span style="font-size: 0.8em;">{&props.label}</span><br/>
+            <select
+                onchange={onchange_handler}
+                style="width: 100%; background: #111; color: #00ff00; border: 1px solid #333; padding: 3px; font-family: 'Courier New', monospace; font-size: 0.8em;"
+            >
+                { options_html }
+            </select>
+        </div>
+    }
+}

@@ -31,6 +31,7 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlCanvasElement",
     "HtmlImageElement",
+    "HtmlSelectElement",
     "CanvasRenderingContext2d",
     "ImageData",
     "MouseEvent",
