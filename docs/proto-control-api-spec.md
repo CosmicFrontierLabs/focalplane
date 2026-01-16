@@ -1,10 +1,13 @@
-# Proto-Control
+# Proto-Control API Specification
 
 Line-of-Sight Control Interface for the meter-sim spacecraft pointing control system.
 
+> **Note**: These types are now located in `monocle_harness::proto_control`.
+> Use `use monocle_harness::{Timestamp, GyroReadout, FgsReadout, FsmCommand, StateEstimator};`
+
 ## Overview
 
-This crate defines the protocol and data structures for the line-of-sight (LOS)
+This module defines the protocol and data structures for the line-of-sight (LOS)
 control algorithm to interface with the spacecraft simulation system. The
 `StateEstimator` trait provides the interface for state estimation and control logic.
 

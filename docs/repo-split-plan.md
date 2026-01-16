@@ -4,7 +4,7 @@ This document outlines a potential strategy for splitting the meter-sim monorepo
 
 ## Current Architecture
 
-The workspace contains 9 crates with the following dependency structure:
+The workspace contains 8 crates with the following dependency structure:
 
 ```
                     ┌─────────────────────────────────────────────────────┐
@@ -33,8 +33,7 @@ The workspace contains 9 crates with the following dependency structure:
               └──────────┘    └───────────────────┘   └───────────┘
 
 Additional:
-- monocle_harness: bridges simulator + monocle for testing
-- proto-control: standalone protocol definitions (~100 LOC, zero deps)
+- monocle_harness: bridges simulator + monocle for testing, includes protocol definitions (proto_control module)
 ```
 
 ---
@@ -165,7 +164,7 @@ hardware/
 
 **Publishability**: Low - This is the application layer, not a library.
 
-### Domain 5: Protocol (`proto-control`)
+### Domain 5: Protocol Types (now in `monocle_harness::proto_control`)
 **What it is**: Message types and coordinate definitions.
 
 **Contains**:
@@ -173,11 +172,11 @@ hardware/
 - Gyro data structures
 - FSM command types
 - FGS message types
-- Coordinate systems
+- StateEstimator trait
 
-**Dependencies**: ZERO internal deps
+**Dependencies**: ZERO external deps (pure Rust types)
 
-**Publishability**: High - Could be extracted immediately as `meter-proto`.
+**Location**: Merged into `monocle_harness` as the `proto_control` module. Re-exported at crate root for convenience.
 
 ---
 
@@ -313,23 +312,18 @@ pub mod pi;
 
 **Outcome**: Can build for specific hardware targets, smaller binaries.
 
-### Phase 3: Extract `proto-control` (Easy Win)
+### Phase 3: ~~Extract `proto-control`~~ (COMPLETED)
 
-**Current state**: Already zero internal dependencies, ~100 LOC.
+**Status**: Merged into `monocle_harness::proto_control` module.
 
-**Step 3.1**: Publish to crates.io as `meter-proto`:
-```bash
-cd proto-control
-cargo publish
+The protocol types are now available via:
+```rust
+use monocle_harness::{Timestamp, GyroReadout, FgsReadout, FsmCommand, StateEstimator};
+// or
+use monocle_harness::proto_control::*;
 ```
 
-**Step 3.2**: Update workspace to use published version:
-```toml
-# Remove from workspace members, add to dependencies
-meter-proto = "0.1"
-```
-
-**Outcome**: First published crate, validates publishing workflow.
+**Outcome**: Simplified workspace, protocol types co-located with harness.
 
 ### Phase 4: Extract Math Primitives (Medium Risk)
 
@@ -406,9 +400,9 @@ pub struct TrackingResult { ... }
 
 These can be done today with minimal risk:
 
-1. **Feature-gate ZMQ in `shared`** - Only test-bench uses it
+1. ~~**Feature-gate ZMQ in `shared`**~~ ✅ Done (PR #580)
 2. **Feature-gate NSV455 in `hardware`** - Not needed for simulation
-3. **Extract `proto-control`** - Zero deps, immediate extraction candidate
+3. ~~**Extract `proto-control`**~~ ✅ Merged into `monocle_harness`
 4. **Document public API** for `monocle` - Prepare for publication
 
 ---

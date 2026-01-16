@@ -1,4 +1,75 @@
-#![doc = include_str!("../README.md")]
+//! Protocol definitions and control interfaces for external integrators.
+//!
+//! Line-of-Sight Control Interface for the meter-sim spacecraft pointing control system.
+//!
+//! # Overview
+//!
+//! This module defines the protocol and data structures for the line-of-sight (LOS)
+//! control algorithm to interface with the spacecraft simulation system. The
+//! [`StateEstimator`] trait provides the interface for state estimation and control logic.
+//!
+//! # Architecture
+//!
+//! ## Control Loop Timing
+//!
+//! - [`GyroTick`] - 500Hz tick counter synchronized with gyroscope measurements
+//! - [`Timestamp`] - Microseconds (u64) for sensor timing precision
+//!
+//! ## Sensor Inputs
+//!
+//! | Struct | Description | Rate |
+//! |--------|-------------|------|
+//! | [`GyroReadout`] | 3-axis integrated angles (radians) from Exail gyroscope | Every gyro tick (500Hz) |
+//! | [`FgsReadout`] | Fine Guidance System 2D angular position with variance (arcseconds) | Lower rate (camera-based) |
+//! | [`FsmReadout`] | Fast Steering Mirror voltage feedback (vx/vy volts) | Every gyro tick |
+//!
+//! ## Control Output
+//!
+//! - [`FsmCommand`] - Voltage commands to drive the Fast Steering Mirror (vx/vy volts)
+//!
+//! ## State Container
+//!
+//! - [`EstimatorState`] - Packages one complete control cycle: gyro tick, all sensor
+//!   readings, and the computed FSM command output
+//!
+//! # The StateEstimator Trait
+//!
+//! This is the interface for the LOS control algorithm:
+//!
+//! ```text
+//! f: (state_history, gyro, fsm_readout, fgs_readout?) → FsmCommand
+//! ```
+//!
+//! Key design points:
+//!
+//! - Receives FIFO history of previous outputs (oldest → newest)
+//! - FGS readout is optional (camera rate slower than 500Hz control loop)
+//! - Caller handles FSM command execution timing and LOS updates to payload computer
+//!
+//! # System Context
+//!
+//! The system implements classic sensor fusion for spacecraft fine pointing:
+//!
+//! 1. **High-rate gyro measurement** - Exail gyroscope provides integrated angles at 500Hz
+//! 2. **Periodic FGS corrections** - Camera-based Fine Guidance System provides absolute reference
+//! 3. **FSM actuation** - Fast Steering Mirror commands for fine pointing stabilization
+//!
+//! ```text
+//! +-------------+     +-----------------+     +-------------+
+//! | Exail Gyro  |---->|                 |---->|     FSM     |
+//! |   (500Hz)   |     |  StateEstimator |     |  (actuator) |
+//! +-------------+     |                 |     +-------------+
+//!                     |  (LOS control   |
+//! +-------------+     |   algorithm)    |     +-------------+
+//! |     FGS     |---->|                 |---->|   Payload   |
+//! |  (camera)   |     +-----------------+     |  Computer   |
+//! +-------------+           ^                 | (LOS update)|
+//!                           |                 +-------------+
+//!                     +-----+-----+
+//!                     |   state   |
+//!                     |  history  |
+//!                     +-----------+
+//! ```
 
 /// Timestamp in microseconds since the initialization of the control loop.
 ///
@@ -290,4 +361,86 @@ pub trait StateEstimator {
         fsm_readout: &FsmReadout,
         fgs_readout: Option<&FgsReadout>,
     ) -> FsmCommand;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_timestamp_roundtrip() {
+        let ts = Timestamp::from_micros(12345678);
+        assert_eq!(ts.as_micros(), 12345678);
+    }
+
+    #[test]
+    fn test_gyro_readout_conversions() {
+        let gyro = GyroReadout::new(0.001, 0.002, 0.003, Timestamp::from_micros(1000));
+        let arr = gyro.as_array();
+        assert_eq!(arr, [0.001, 0.002, 0.003]);
+
+        let arcsec = gyro.to_arcseconds();
+        // 1 radian ≈ 206264.8 arcseconds
+        assert!((arcsec[0] - 206.26480624709636).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_fgs_readout_conversions() {
+        let fgs = FgsReadout::new(1.0, 2.0, 0.01, 0.04, Timestamp::from_micros(1000));
+        let radians = fgs.to_radians();
+        // 1 arcsec ≈ 4.848e-6 radians
+        assert!((radians[0] - 4.84813681109536e-6).abs() < 1e-12);
+
+        let std = fgs.std_dev();
+        assert!((std[0] - 0.1).abs() < 1e-10);
+        assert!((std[1] - 0.2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fsm_types() {
+        let readout = FsmReadout::new(1.5, 2.5, Timestamp::from_micros(1000));
+        assert_eq!(readout.vx, 1.5);
+        assert_eq!(readout.vy, 2.5);
+
+        let cmd = FsmCommand::new(3.0, 4.0);
+        assert_eq!(cmd.vx, 3.0);
+        assert_eq!(cmd.vy, 4.0);
+    }
+
+    #[test]
+    fn test_estimator_state() {
+        let gyro = GyroReadout::new(0.0, 0.0, 0.0, Timestamp::from_micros(1000));
+        let fsm_readout = FsmReadout::new(0.0, 0.0, Timestamp::from_micros(1000));
+        let fsm_cmd = FsmCommand::new(0.0, 0.0);
+
+        let state = EstimatorState::new(GyroTick(1), gyro, fsm_readout, None, fsm_cmd);
+        assert_eq!(state.gyro_tick, GyroTick(1));
+        assert!(state.fgs_readout.is_none());
+    }
+
+    /// Dummy estimator for testing the trait
+    struct ZeroEstimator;
+
+    impl StateEstimator for ZeroEstimator {
+        fn estimate(
+            &self,
+            _state_history: &[EstimatorState],
+            _gyro_readout: &GyroReadout,
+            _fsm_readout: &FsmReadout,
+            _fgs_readout: Option<&FgsReadout>,
+        ) -> FsmCommand {
+            FsmCommand::new(0.0, 0.0)
+        }
+    }
+
+    #[test]
+    fn test_state_estimator_trait() {
+        let estimator = ZeroEstimator;
+        let gyro = GyroReadout::new(0.0, 0.0, 0.0, Timestamp::from_micros(1000));
+        let fsm = FsmReadout::new(0.0, 0.0, Timestamp::from_micros(1000));
+
+        let cmd = estimator.estimate(&[], &gyro, &fsm, None);
+        assert_eq!(cmd.vx, 0.0);
+        assert_eq!(cmd.vy, 0.0);
+    }
 }

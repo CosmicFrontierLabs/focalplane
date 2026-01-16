@@ -3,9 +3,16 @@
 //! This module provides test harnesses and simulation infrastructure
 //! for the monocle fine guidance system. It bridges the simulator
 //! and monocle modules for testing and demonstration purposes.
+//!
+//! # Protocol Control Types
+//!
+//! The `proto_control` module contains protocol definitions and control
+//! interfaces for external integrators, including types for timestamps,
+//! gyro/FGS/FSM readouts, and the `StateEstimator` trait.
 
 pub mod helpers;
 pub mod motion_profiles;
+pub mod proto_control;
 pub mod simulator_camera;
 pub mod tracking_plots;
 
@@ -15,5 +22,9 @@ pub use helpers::{
     create_simple_test_catalog, create_single_star_catalog,
 };
 pub use motion_profiles::TestMotions;
+pub use proto_control::{
+    EstimatorState, FgsReadout, FsmCommand, FsmReadout, GyroReadout, GyroTick, StateEstimator,
+    Timestamp,
+};
 pub use simulator_camera::SimulatorCamera;
 pub use tracking_plots::{TrackingDataPoint, TrackingPlotConfig, TrackingPlotter};
