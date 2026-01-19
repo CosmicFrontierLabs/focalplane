@@ -1,17 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# Deploy calibrate_serve to test-bench-pi
+# Deploy calibrate_serve to cfl-test-bench
 #
 # Usage:
-#   ./deploy-calibrate-pi.sh           # Update: build, sync, restart service
-#   ./deploy-calibrate-pi.sh --setup   # Full setup: build, sync, install service, enable on boot
+#   ./deploy-calibrate-test-bench.sh           # Update: build, sync, restart service
+#   ./deploy-calibrate-test-bench.sh --setup   # Full setup: build, sync, install service, enable on boot
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Configuration
-REMOTE_HOST="meawoppl@test-bench-pi.tail944341.ts.net"
+REMOTE_HOST="meawoppl@cfl-test-bench.tail944341.ts.net"
 REMOTE_BUILD_DIR="rust-builds/meter-sim"
 SERVICE_NAME="calibrate-serve"
 SETUP_MODE=false
@@ -31,7 +31,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Deploy calibrate_serve to test-bench-pi."
+    echo "Deploy calibrate_serve to cfl-test-bench."
     echo ""
     echo "Modes:"
     echo "  (default)     Update: build, sync frontend, restart service"
@@ -58,9 +58,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Step 1: Build calibrate_serve on the Pi
-print_info "Building calibrate_serve on test-bench-pi..."
-"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary calibrate_serve --test-bench-pi --features sdl2
+# Step 1: Build calibrate_serve on cfl-test-bench
+print_info "Building calibrate_serve on cfl-test-bench..."
+"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary calibrate_serve --test-bench --features sdl2
 
 # Step 2: Build frontend locally (requires trunk)
 print_info "Building frontend WASM files locally..."
@@ -71,8 +71,8 @@ fi
 
 "$SCRIPT_DIR/build-yew-frontends.sh"
 
-# Step 3: Sync frontend files to Pi
-print_info "Syncing frontend files to Pi..."
+# Step 3: Sync frontend files to test-bench
+print_info "Syncing frontend files to cfl-test-bench..."
 rsync -avz \
     "$PROJECT_ROOT/test-bench-frontend/dist/calibrate/" \
     "$REMOTE_HOST:~/$REMOTE_BUILD_DIR/test-bench-frontend/dist/calibrate/"
@@ -82,6 +82,7 @@ if [ "$SETUP_MODE" = true ]; then
     # Full setup: install systemd service
     print_info "Installing systemd service..."
 
+    # cfl-test-bench uses X11 on the RTX 4060 (card1 HDMI-A-1 at 2560x2560)
     SERVICE_FILE=$(cat <<'EOF'
 [Unit]
 Description=Calibration Pattern Server
@@ -92,9 +93,8 @@ Wants=graphical.target
 Type=simple
 User=meawoppl
 WorkingDirectory=/home/meawoppl/rust-builds/meter-sim
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=SDL_VIDEODRIVER=wayland
+Environment=DISPLAY=:0
+Environment=SDL_VIDEODRIVER=x11
 Environment=RUST_LOG=info
 ExecStart=/home/meawoppl/rust-builds/meter-sim/target/release/calibrate_serve --wait-for-oled
 Restart=on-failure
@@ -105,7 +105,7 @@ WantedBy=graphical.target
 EOF
 )
 
-    # Write service file to Pi
+    # Write service file to test-bench
     echo "$SERVICE_FILE" | ssh "$REMOTE_HOST" "cat > /tmp/${SERVICE_NAME}.service"
 
     # Install service (requires sudo - user will be prompted)
@@ -126,22 +126,6 @@ EOF
     # Persist iptables rules
     ssh "$REMOTE_HOST" "sudo netfilter-persistent save" 2>/dev/null || true
     print_success "Port 80 redirect configured (port 80 -> 3001)"
-
-    # Set up HDMI 4K mode for high pixel clock (needed for 2560x2560@60Hz OLED)
-    print_info "Checking HDMI 4K configuration..."
-    HDMI_CONFIG_NEEDED=false
-    if ! ssh "$REMOTE_HOST" "grep -q 'hdmi_enable_4kp60=1' /boot/firmware/config.txt"; then
-        HDMI_CONFIG_NEEDED=true
-        print_info "Adding hdmi_enable_4kp60=1 to /boot/firmware/config.txt..."
-        ssh "$REMOTE_HOST" "echo 'hdmi_enable_4kp60=1' | sudo tee -a /boot/firmware/config.txt > /dev/null"
-    fi
-
-    if [ "$HDMI_CONFIG_NEEDED" = true ]; then
-        print_warning "HDMI configuration changed - REBOOT REQUIRED for changes to take effect"
-        print_info "Run: ssh $REMOTE_HOST 'sudo reboot'"
-    else
-        print_success "HDMI 4K configuration already present"
-    fi
 fi
 
 # Step 4: Restart the service
@@ -160,7 +144,7 @@ print_success "Deployment complete!"
 if [ "$SETUP_MODE" = true ]; then
     print_info "The calibrate_serve binary will now start automatically on boot"
     print_info "OLED wait mode enabled: will poll until 2560x2560 display is detected"
-    print_info "Port 80 redirect enabled: access via http://test-bench-pi/"
+    print_info "Port 80 redirect enabled: access via http://cfl-test-bench/"
 fi
 print_info ""
 print_info "Useful commands:"

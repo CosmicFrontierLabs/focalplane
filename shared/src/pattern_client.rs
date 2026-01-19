@@ -8,7 +8,7 @@ use crate::system_info::DisplayInfo;
 /// Client for controlling OLED display patterns via REST API.
 ///
 /// Usage:
-///   let client = PatternClient::new("http://test-bench-pi:3001");
+///   let client = PatternClient::new("http://cfl-test-bench:3001");
 ///   client.enable_remote_mode()?;
 ///   client.spot(1280.0, 1280.0, 5.0, 1.0)?;
 ///   client.clear()?;
@@ -20,7 +20,7 @@ impl PatternClient {
     /// Create a new pattern client.
     ///
     /// # Arguments
-    /// * `base_url` - Base URL of calibrate_serve (e.g., "http://test-bench-pi:3001")
+    /// * `base_url` - Base URL of calibrate_serve (e.g., "http://cfl-test-bench:3001")
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),

@@ -11,8 +11,7 @@ set -euo pipefail
 #   * Auto-enables 'nsv455' feature flag
 # - NSV (--nsv): NSV455 camera (V4L2-based) on orin-416
 #   * Auto-enables 'nsv455' feature flag
-# - Test Bench (--test-bench): CFL test bench x86 machine
-# - Test Bench Pi (--test-bench-pi): Raspberry Pi with OLED display for HIL testing
+# - Test Bench (--test-bench): CFL test bench ARM64 machine with OLED display
 
 # Configuration
 REMOTE_HOST=""
@@ -34,8 +33,6 @@ NSV_HOST="cosmicfrontiers@orin-416.tail944341.ts.net"
 NSV_DEVICE_NAME="nsv"
 TEST_BENCH_HOST="meawoppl@cfl-test-bench.tail944341.ts.net"
 TEST_BENCH_DEVICE_NAME="cfl-test-bench"
-TEST_BENCH_PI_HOST="meawoppl@test-bench-pi.tail944341.ts.net"
-TEST_BENCH_PI_DEVICE_NAME="test-bench-pi"
 
 # Apt dependencies management
 # The semaphore file caches apt package verification to speed up repeated builds.
@@ -59,7 +56,7 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 usage() {
-    echo "Usage: $0 --package PACKAGE [--orin|--neut|--nsv|--test-bench|--test-bench-pi] [OPTIONS]"
+    echo "Usage: $0 --package PACKAGE [--orin|--neut|--nsv|--test-bench] [OPTIONS]"
     echo ""
     echo "Required:"
     echo "  --package PKG        Package to build (e.g., test-bench)"
@@ -69,7 +66,6 @@ usage() {
     echo "  --neut               Build on Neutralino (${NEUT_HOST})"
     echo "  --nsv                Build on NSV computer (${NSV_HOST})"
     echo "  --test-bench         Build on CFL test bench (${TEST_BENCH_HOST})"
-    echo "  --test-bench-pi      Build on test bench Raspberry Pi (${TEST_BENCH_PI_HOST})"
     echo ""
     echo "Options:"
     echo "  --binary BIN         Specific binary to build (e.g., camera_server)"
@@ -83,7 +79,7 @@ usage() {
     echo "Examples:"
     echo "  $0 --package test-bench --orin --binary cam_track"
     echo "  $0 --package test-bench --nsv --binary cam_serve_nsv --run './target/release/cam_serve_nsv'"
-    echo "  $0 --package test-bench --test-bench --binary cam_track"
+    echo "  $0 --package test-bench --test-bench --binary calibrate_serve --features sdl2"
     exit 0
 }
 
@@ -111,12 +107,6 @@ while [[ $# -gt 0 ]]; do
             DEVICE_TYPE="test-bench"
             REMOTE_HOST="$TEST_BENCH_HOST"
             TAILSCALE_DEVICE_NAME="$TEST_BENCH_DEVICE_NAME"
-            shift
-            ;;
-        --test-bench-pi)
-            DEVICE_TYPE="test-bench-pi"
-            REMOTE_HOST="$TEST_BENCH_PI_HOST"
-            TAILSCALE_DEVICE_NAME="$TEST_BENCH_PI_DEVICE_NAME"
             shift
             ;;
         --package)
@@ -152,7 +142,7 @@ if [ -z "$PACKAGE_NAME" ]; then
 fi
 
 if [ -z "$DEVICE_TYPE" ]; then
-    print_error "Device type is required. Use --orin, --neut, --nsv, --test-bench, or --test-bench-pi"
+    print_error "Device type is required. Use --orin, --neut, --nsv, or --test-bench"
     usage
 fi
 
@@ -179,7 +169,7 @@ print_info "Building $PACKAGE_NAME on ${DEVICE_TYPE} at $REMOTE_HOST"
 print_info "Remote build directory: ~/$REMOTE_BUILD_DIR/$PROJECT_NAME"
 
 # Step 0: Check Tailscale connectivity (for Tailscale-connected devices)
-if [ "$DEVICE_TYPE" = "orin" ] || [ "$DEVICE_TYPE" = "neut" ] || [ "$DEVICE_TYPE" = "nsv" ] || [ "$DEVICE_TYPE" = "test-bench" ] || [ "$DEVICE_TYPE" = "test-bench-pi" ]; then
+if [ "$DEVICE_TYPE" = "orin" ] || [ "$DEVICE_TYPE" = "neut" ] || [ "$DEVICE_TYPE" = "nsv" ] || [ "$DEVICE_TYPE" = "test-bench" ]; then
     print_info "Checking Tailscale connectivity..."
     if ! command -v tailscale &> /dev/null; then
         print_error "Tailscale is not installed on this machine"

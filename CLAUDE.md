@@ -136,9 +136,6 @@ For building directly on target ARM devices:
 # Build on cfl-test-bench (ARM64 build server)
 ./scripts/build-remote.sh --package test-bench --test-bench --binary fgs_server
 
-# Build on test-bench-pi (Raspberry Pi)
-./scripts/build-remote.sh --package test-bench --test-bench-pi --binary calibrate_serve --features sdl2
-
 # Build on Orin Nano (auto-enables playerone feature)
 ./scripts/build-remote.sh --package test-bench --orin --binary fgs_server
 
@@ -148,9 +145,9 @@ For building directly on target ARM devices:
 
 ### Deploy Scripts
 ```bash
-# Deploy calibrate_serve to test-bench-pi
-./scripts/deploy-calibrate-pi.sh           # Update only
-./scripts/deploy-calibrate-pi.sh --setup   # Full setup with systemd service
+# Deploy calibrate_serve to cfl-test-bench
+./scripts/deploy-calibrate-test-bench.sh           # Update only
+./scripts/deploy-calibrate-test-bench.sh --setup   # Full setup with systemd service
 
 # Deploy fgs_server to Orin or Neutralino
 ./scripts/deploy-fgs-orin.sh

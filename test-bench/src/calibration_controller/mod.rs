@@ -32,7 +32,7 @@ use clap::Parser;
 )]
 pub struct Args {
     /// HTTP endpoint for calibrate_serve pattern API
-    #[arg(long, default_value = "http://test-bench-pi.tail944341.ts.net:3001")]
+    #[arg(long, default_value = "http://cfl-test-bench.tail944341.ts.net:3001")]
     pub http_endpoint: String,
 
     /// ZMQ endpoint to receive tracking messages (SUB socket connects here)

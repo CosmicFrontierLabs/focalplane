@@ -141,7 +141,7 @@ impl RemotePatternState {
 import zmq
 ctx = zmq.Context()
 sock = ctx.socket(zmq.REQ)
-sock.connect('tcp://test-bench-pi.tail944341.ts.net:5556')
+sock.connect('tcp://cfl-test-bench.tail944341.ts.net:5556')
 sock.send_json({'type': 'Spot', 'x': 1280, 'y': 1280, 'fwhm': 5.0, 'intensity': 1.0})
 print(sock.recv_string())  # "ok"
 ```
@@ -208,7 +208,7 @@ enum CalibrationMode {
 **Command-line interface**:
 ```bash
 calibration_controller \
-    --pattern-pub tcp://test-bench-pi:5556 \
+    --pattern-pub tcp://cfl-test-bench:5556 \
     --tracking-sub tcp://orin:5555 \
     --grid-size 5 \
     --grid-spacing 200.0 \
@@ -377,7 +377,7 @@ async fn get_display_info(State(state): State<AppState>) -> Json<DisplayInfo> {
 
 **Usage**:
 ```bash
-curl http://test-bench-pi:8080/info
+curl http://cfl-test-bench:8080/info
 # {"width":2560,"height":2560,"pixel_pitch_um":9.6,"name":"OLED"}
 ```
 
@@ -448,7 +448,7 @@ let msg = TrackingMessage {
 **CLI changes to calibration_controller**:
 ```bash
 # Display info fetched via HTTP (existing server, new endpoint)
---display-info-url http://test-bench-pi.tail944341.ts.net:8080/info
+--display-info-url http://cfl-test-bench.tail944341.ts.net:8080/info
 
 # Sensor info auto-discovered from TrackingMessage stream
 # (no new endpoint needed)
@@ -527,16 +527,16 @@ Timeline:
 
 ## Deployment
 
-### Building and Deploying to test-bench-pi
+### Building and Deploying to cfl-test-bench
 
 ```bash
 # Build and deploy calibrate_serve to Pi
-./scripts/build-remote.sh --package test-bench --binary calibrate_serve --features sdl2 --test-bench-pi
+./scripts/build-remote.sh --package test-bench --binary calibrate_serve --features sdl2 --cfl-test-bench
 ```
 
 ### Managing the systemd Service
 
-calibrate_serve runs as a systemd service on test-bench-pi:
+calibrate_serve runs as a systemd service on cfl-test-bench:
 
 ```bash
 # View logs (use this, not manual nohup!)
