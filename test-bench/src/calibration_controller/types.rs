@@ -1,8 +1,7 @@
 //! Data structures for the calibration controller.
 
-use std::collections::VecDeque;
-
 use shared::optical_alignment::OpticalAlignment;
+use shared::ring_buffer::RingBuffer;
 
 /// A single measurement sample (sensor position + diameter).
 #[derive(Debug, Clone, Copy)]
@@ -19,8 +18,7 @@ pub struct MeasurementBuffer {
     pub display_y: f64,
     pub row: usize,
     pub col: usize,
-    samples: VecDeque<Measurement>,
-    max_samples: usize,
+    samples: RingBuffer<Measurement>,
 }
 
 impl MeasurementBuffer {
@@ -30,16 +28,12 @@ impl MeasurementBuffer {
             display_y,
             row,
             col,
-            samples: VecDeque::with_capacity(max_samples),
-            max_samples,
+            samples: RingBuffer::new(max_samples),
         }
     }
 
     pub fn push(&mut self, m: Measurement) {
-        if self.samples.len() >= self.max_samples {
-            self.samples.pop_front();
-        }
-        self.samples.push_back(m);
+        self.samples.push(m);
     }
 
     pub fn average(&self) -> Option<(f64, f64, f64)> {
@@ -98,8 +92,7 @@ pub struct App {
     pub cycle_count: u32,
     pub tracking_count: usize,
     /// Rolling log buffer for display
-    pub logs: VecDeque<String>,
-    max_logs: usize,
+    pub logs: RingBuffer<String>,
 }
 
 impl App {
@@ -122,16 +115,12 @@ impl App {
             current_display_xy: None,
             cycle_count: 0,
             tracking_count: 0,
-            logs: VecDeque::with_capacity(100),
-            max_logs: 100,
+            logs: RingBuffer::new(100),
         }
     }
 
     pub fn log(&mut self, msg: String) {
-        if self.logs.len() >= self.max_logs {
-            self.logs.pop_front();
-        }
-        self.logs.push_back(msg);
+        self.logs.push(msg);
     }
 
     pub fn update(

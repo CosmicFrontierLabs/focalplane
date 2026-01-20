@@ -26,6 +26,7 @@ pub mod optical_alignment;
 pub mod pattern_command;
 pub use pattern_command::generate_centered_grid;
 pub mod range_arg;
+pub mod ring_buffer;
 pub mod star_projector;
 pub mod test_util;
 pub mod units;
