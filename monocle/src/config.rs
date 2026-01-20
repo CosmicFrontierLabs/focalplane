@@ -203,6 +203,22 @@ fn default_noise_downsample() -> usize {
     16
 }
 
+/// Round a value to the nearest multiple of alignment.
+///
+/// This is used to snap ROI offsets to hardware-required alignment boundaries
+/// while minimizing the distance from the ideal position.
+///
+/// # Examples
+/// - `round_to_nearest_aligned(478, 16)` -> 480 (478 is closer to 480 than 464)
+/// - `round_to_nearest_aligned(468, 16)` -> 464 (468 is closer to 464 than 480)
+/// - `round_to_nearest_aligned(472, 16)` -> 480 (tie-breaker: rounds up)
+fn round_to_nearest_aligned(value: usize, alignment: usize) -> usize {
+    if alignment == 0 {
+        return value;
+    }
+    ((value + alignment / 2) / alignment) * alignment
+}
+
 impl FgsConfig {
     /// Compute an aligned ROI bounding box centered as close as possible to the given position.
     ///
@@ -230,9 +246,10 @@ impl FgsConfig {
         let ideal_min_col = (center_x.round() as usize).saturating_sub(roi_half);
         let ideal_min_row = (center_y.round() as usize).saturating_sub(roi_half);
 
-        // Snap to alignment boundaries (round down to nearest aligned position)
-        let aligned_min_col = (ideal_min_col / self.roi_h_alignment) * self.roi_h_alignment;
-        let aligned_min_row = (ideal_min_row / self.roi_v_alignment) * self.roi_v_alignment;
+        // Snap to NEAREST alignment boundary (not just round down)
+        // This minimizes the offset of the star from the ROI center
+        let aligned_min_col = round_to_nearest_aligned(ideal_min_col, self.roi_h_alignment);
+        let aligned_min_row = round_to_nearest_aligned(ideal_min_row, self.roi_v_alignment);
 
         // Compute max corners
         let max_col = aligned_min_col + self.roi_size - 1;
@@ -309,5 +326,79 @@ impl FgsConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_to_nearest_aligned_exact_multiple() {
+        // Values that are already aligned should stay the same
+        assert_eq!(round_to_nearest_aligned(0, 16), 0);
+        assert_eq!(round_to_nearest_aligned(16, 16), 16);
+        assert_eq!(round_to_nearest_aligned(32, 16), 32);
+        assert_eq!(round_to_nearest_aligned(480, 16), 480);
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_rounds_down() {
+        // Values closer to the lower boundary should round down
+        assert_eq!(round_to_nearest_aligned(1, 16), 0);
+        assert_eq!(round_to_nearest_aligned(7, 16), 0);
+        assert_eq!(round_to_nearest_aligned(468, 16), 464); // 468 is 4 away from 464, 12 away from 480
+        assert_eq!(round_to_nearest_aligned(471, 16), 464); // 471 is 7 away from 464, 9 away from 480
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_rounds_up() {
+        // Values closer to the upper boundary should round up
+        assert_eq!(round_to_nearest_aligned(9, 16), 16);
+        assert_eq!(round_to_nearest_aligned(15, 16), 16);
+        assert_eq!(round_to_nearest_aligned(478, 16), 480); // 478 is 14 away from 464, 2 away from 480
+        assert_eq!(round_to_nearest_aligned(473, 16), 480); // 473 is 9 away from 464, 7 away from 480
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_tie_rounds_up() {
+        // When exactly in the middle, rounds up (standard rounding behavior)
+        assert_eq!(round_to_nearest_aligned(8, 16), 16); // exactly halfway
+        assert_eq!(round_to_nearest_aligned(472, 16), 480); // exactly halfway between 464 and 480
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_small_alignment() {
+        // Test with alignment of 2 (typical vertical alignment)
+        assert_eq!(round_to_nearest_aligned(0, 2), 0);
+        assert_eq!(round_to_nearest_aligned(1, 2), 2); // rounds up at tie
+        assert_eq!(round_to_nearest_aligned(2, 2), 2);
+        assert_eq!(round_to_nearest_aligned(3, 2), 4);
+        assert_eq!(round_to_nearest_aligned(100, 2), 100);
+        assert_eq!(round_to_nearest_aligned(101, 2), 102);
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_alignment_1() {
+        // Alignment of 1 should return the value unchanged
+        assert_eq!(round_to_nearest_aligned(0, 1), 0);
+        assert_eq!(round_to_nearest_aligned(1, 1), 1);
+        assert_eq!(round_to_nearest_aligned(478, 1), 478);
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_alignment_0() {
+        // Alignment of 0 should return the value unchanged (edge case protection)
+        assert_eq!(round_to_nearest_aligned(478, 0), 478);
+    }
+
+    #[test]
+    fn test_round_to_nearest_aligned_large_values() {
+        // Test with realistic image coordinates
+        assert_eq!(round_to_nearest_aligned(4784, 16), 4784); // already aligned
+        assert_eq!(round_to_nearest_aligned(4785, 16), 4784); // rounds down
+        assert_eq!(round_to_nearest_aligned(4791, 16), 4784); // rounds down
+        assert_eq!(round_to_nearest_aligned(4792, 16), 4800); // tie rounds up
+        assert_eq!(round_to_nearest_aligned(4795, 16), 4800); // rounds up
     }
 }
