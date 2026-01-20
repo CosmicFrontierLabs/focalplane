@@ -5469,6 +5469,7 @@ dependencies = [
  "image 0.25.9",
  "imageproc",
  "libc",
+ "libftd2xx",
  "monocle",
  "nalgebra",
  "ndarray",

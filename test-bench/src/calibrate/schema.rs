@@ -145,11 +145,26 @@ pub fn get_pattern_schemas() -> SchemaResponse {
                 }],
             },
         ],
-        global_controls: vec![ControlSpec::Bool {
-            id: "invert".into(),
-            label: "Invert Colors".into(),
-            default: false,
-        }],
+        global_controls: vec![
+            ControlSpec::Bool {
+                id: "invert".into(),
+                label: "Invert Colors".into(),
+                default: false,
+            },
+            ControlSpec::Bool {
+                id: "emit_gyro".into(),
+                label: "Emit Gyro Data".into(),
+                default: false,
+            },
+            ControlSpec::FloatRange {
+                id: "plate_scale".into(),
+                label: "Plate Scale (arcsec/px)".into(),
+                min: 0.01,
+                max: 100.0,
+                step: 0.01,
+                default: 1.0,
+            },
+        ],
     }
 }
 

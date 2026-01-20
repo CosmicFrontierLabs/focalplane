@@ -13,8 +13,9 @@ use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use test_bench::calibrate::{
-    get_pattern_schemas, parse_pattern_request, pattern_to_dynamic, run_display, DisplayConfig,
-    DynamicPattern, OledSafetyWatchdog, PatternConfig, SchemaResponse,
+    get_pattern_schemas, list_ftdi_devices_info, parse_pattern_request, pattern_to_dynamic,
+    run_display, spawn_gyro_emitter, DisplayConfig, DynamicPattern, GyroEmissionParams,
+    GyroEmitterConfig, GyroEmitterHandle, OledSafetyWatchdog, PatternConfig, SchemaResponse,
 };
 use test_bench::display_patterns::remote_controlled::RemotePatternState;
 use test_bench::display_utils::{
@@ -61,6 +62,22 @@ struct Args {
         help = "ZMQ REP bind address for receiving pattern commands"
     )]
     zmq_bind: String,
+
+    #[arg(
+        long,
+        help = "FTDI device index for gyro emission (0 = first device). If not set, gyro emission is disabled."
+    )]
+    ftdi_device: Option<i32>,
+
+    #[arg(
+        long,
+        default_value = "18",
+        help = "Exail gyro remote terminal address"
+    )]
+    gyro_address: u8,
+
+    #[arg(long, help = "List available FTDI devices and exit")]
+    list_ftdi: bool,
 }
 
 struct AppState {
@@ -76,6 +93,10 @@ struct AppState {
     display_name: String,
     /// Display index for DPI queries
     display_index: u32,
+    /// Gyro emitter handle (None if FTDI device not configured)
+    gyro_emitter: Option<GyroEmitterHandle>,
+    /// Plate scale in arcsec/pixel for gyro emission (configurable via web UI)
+    plate_scale_arcsec_per_px: Arc<RwLock<f64>>,
 }
 
 async fn pattern_page(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -215,6 +236,8 @@ struct DynamicPatternRequest {
     pattern_id: String,
     values: serde_json::Map<String, serde_json::Value>,
     invert: Option<bool>,
+    emit_gyro: Option<bool>,
+    plate_scale: Option<f64>,
 }
 
 async fn update_pattern_config(
@@ -241,14 +264,47 @@ async fn update_pattern_config(
     match pattern_result {
         Ok(pattern) => {
             tracing::info!(
-                "HTTP config: pattern={} invert={:?}",
+                "HTTP config: pattern={} invert={:?} emit_gyro={:?} plate_scale={:?}",
                 req.pattern_id,
-                req.invert
+                req.invert,
+                req.emit_gyro,
+                req.plate_scale
             );
-            *state.pattern.write().await = pattern;
+            *state.pattern.write().await = pattern.clone();
 
             if let Some(invert) = req.invert {
                 *state.invert.write().await = invert;
+            }
+
+            // Update plate scale if provided
+            if let Some(plate_scale) = req.plate_scale {
+                *state.plate_scale_arcsec_per_px.write().await = plate_scale;
+            }
+
+            // Handle gyro emission toggle
+            if let Some(emit_gyro) = req.emit_gyro {
+                if let Some(ref gyro) = state.gyro_emitter {
+                    if emit_gyro {
+                        // Set the pattern as position source
+                        gyro.set_position_source(Arc::new(pattern.clone()));
+
+                        // Update params with plate scale and display size
+                        let plate_scale = *state.plate_scale_arcsec_per_px.read().await;
+                        gyro.set_params(GyroEmissionParams {
+                            plate_scale_arcsec_per_px: plate_scale,
+                            display_width: state.width,
+                            display_height: state.height,
+                        });
+
+                        gyro.enable();
+                    } else {
+                        gyro.disable();
+                    }
+                } else if emit_gyro {
+                    tracing::warn!(
+                        "Gyro emission requested but no FTDI device configured (use --ftdi-device)"
+                    );
+                }
             }
 
             state.watchdog.reset();
@@ -395,6 +451,26 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
+    // Handle --list-ftdi before anything else
+    if args.list_ftdi {
+        match list_ftdi_devices_info() {
+            Ok(devices) => {
+                if devices.is_empty() {
+                    println!("No FTDI devices found");
+                } else {
+                    println!("Found {} FTDI device(s):", devices.len());
+                    for dev in devices {
+                        println!("  {dev}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error listing FTDI devices: {e}");
+            }
+        }
+        return Ok(());
+    }
+
     check_frontend_files()?;
 
     // Either wait for OLED or initialize SDL normally
@@ -536,6 +612,30 @@ fn main() -> Result<()> {
 
     let invert = Arc::new(RwLock::new(false));
 
+    // Spawn gyro emitter if FTDI device is configured
+    let gyro_emitter = if let Some(device_index) = args.ftdi_device {
+        match spawn_gyro_emitter(GyroEmitterConfig {
+            device_index,
+            address: args.gyro_address,
+            ..Default::default()
+        }) {
+            Ok(handle) => {
+                tracing::info!(
+                    "Gyro emitter initialized on FTDI device {device_index} (disabled by default)"
+                );
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize gyro emitter: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let plate_scale = Arc::new(RwLock::new(1.0)); // Default 1 arcsec/px, configurable via web UI
+
     let state = Arc::new(AppState {
         pattern: pattern.clone(),
         width,
@@ -546,6 +646,8 @@ fn main() -> Result<()> {
         remote_state,
         display_name,
         display_index,
+        gyro_emitter,
+        plate_scale_arcsec_per_px: plate_scale,
     });
 
     let state_clone = state.clone();

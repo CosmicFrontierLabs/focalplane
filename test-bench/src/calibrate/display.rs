@@ -287,8 +287,6 @@ pub fn run_display<P: PatternSource>(
             }
         }
 
-        let mut pattern_changed = false;
-
         // Check for updates from external source (web API, watchdog, ZMQ)
         if let Some(rx) = source.update_receiver() {
             if rx.try_recv().is_ok() {
@@ -298,7 +296,6 @@ pub fn run_display<P: PatternSource>(
                 if !patterns_equal(&current_pattern, &new_pattern) || current_invert != new_invert {
                     current_pattern = new_pattern;
                     current_invert = new_invert;
-                    pattern_changed = true;
 
                     if !current_pattern.is_animated() {
                         img = render_pattern(&current_pattern, current_invert)?;

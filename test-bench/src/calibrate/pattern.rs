@@ -2,8 +2,10 @@ use anyhow::Result;
 use image::{ImageBuffer, Rgb};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::display_patterns as patterns;
+use crate::display_patterns::{CircularMotion, MotionTrajectory, Position2D};
 
 /// Unified pattern configuration for all calibration patterns.
 #[derive(Clone, Serialize, Deserialize)]
@@ -231,6 +233,34 @@ impl PatternConfig {
     pub fn apply_invert_buffer(buffer: &mut [u8]) {
         for byte in buffer.iter_mut() {
             *byte = 255 - *byte;
+        }
+    }
+}
+
+impl MotionTrajectory for PatternConfig {
+    fn position_at(
+        &self,
+        elapsed: Duration,
+        display_width: u32,
+        display_height: u32,
+    ) -> Position2D {
+        match self {
+            Self::WigglingGaussian { wiggle_radius, .. } => {
+                let motion = CircularMotion::new(*wiggle_radius, 10.0);
+                motion.position_at(elapsed)
+            }
+            Self::CirclingPixel {
+                orbit_radius_percent,
+                ..
+            } => {
+                // Convert % of FOV to pixels
+                let fov_size = display_width.min(display_height) as f64;
+                let radius_px = fov_size * (*orbit_radius_percent as f64 / 200.0);
+                let motion = CircularMotion::new(radius_px, 60.0);
+                motion.position_at(elapsed)
+            }
+            // Static patterns have no motion
+            _ => Position2D { x: 0.0, y: 0.0 },
         }
     }
 }
