@@ -12,74 +12,270 @@ use super::components::{
     Slider, SmallCheckbox, StatusCount, TextInput,
 };
 
-/// Configuration for a sparkline plot.
-struct SparklineConfig {
+/// Configuration for a single sparkline within the aligned panel.
+struct SparklineRow {
     label: &'static str,
     color: &'static str,
+    data: VecDeque<f64>,
     reference_line: Option<(f64, &'static str)>,
 }
 
-/// Render a sparkline SVG for the given data points.
-fn render_sparkline(data: &VecDeque<f64>, config: SparklineConfig) -> Html {
-    if data.is_empty() {
+/// Render aligned sparklines for X, Y, and SNR with shared time axis.
+/// All three plots share the same width and time scale for easy correlation.
+fn render_aligned_sparklines(history: &TrackingHistory) -> Html {
+    let x_data = history.x_slice().clone();
+    let y_data = history.y_slice().clone();
+    let snr_data = history.snr_slice().clone();
+
+    // All three should have the same length since they're pushed together
+    let data_len = x_data.len();
+    if data_len == 0 {
         return html! {};
     }
 
-    let width = 200.0;
-    let height = 40.0;
+    let rows = vec![
+        SparklineRow {
+            label: "X",
+            color: "#00aaff",
+            data: x_data,
+            reference_line: None,
+        },
+        SparklineRow {
+            label: "Y",
+            color: "#ffaa00",
+            data: y_data,
+            reference_line: None,
+        },
+        SparklineRow {
+            label: "SNR",
+            color: "#00ff00",
+            data: snr_data,
+            reference_line: Some((3.0, "#ff0000")),
+        },
+    ];
+
+    // Layout constants
+    let label_width = 35.0; // Width for labels on left
+    let plot_width = 270.0; // 50% wider (was 180)
+    let value_width = 95.0; // Width for BIG current value on right
+    let row_height = 64.0; // Doubled height for better visibility
     let padding = 2.0;
+    let total_width = label_width + plot_width + value_width;
+    let time_axis_height = 16.0;
+    let total_height = (rows.len() as f64) * row_height + time_axis_height;
 
-    let min_val = data.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_val = data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let range = (max_val - min_val).max(0.001);
+    // Calculate time span (assuming ~10Hz polling, 100 samples = ~10 seconds)
+    let time_span_secs = (data_len as f64) / 10.0;
 
-    let points: Vec<String> = data
+    // Build SVG rows
+    let row_svgs: Html = rows
         .iter()
         .enumerate()
-        .map(|(i, &val)| {
-            let x = padding + (i as f64 / data.len().max(1) as f64) * (width - 2.0 * padding);
-            let y = height - padding - ((val - min_val) / range) * (height - 2.0 * padding);
-            format!("{x:.1},{y:.1}")
+        .map(|(row_idx, row)| {
+            let y_offset = row_idx as f64 * row_height;
+
+            // Calculate min/max for this row's data
+            let min_val = row.data.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max_val = row.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let range = (max_val - min_val).max(0.001);
+
+            // Get current (latest) value
+            let current_val = row.data.back().copied().unwrap_or(0.0);
+
+            // Build path for this row
+            let points: Vec<String> = row
+                .data
+                .iter()
+                .enumerate()
+                .map(|(i, &val)| {
+                    let x = label_width
+                        + padding
+                        + (i as f64 / data_len.max(1) as f64) * (plot_width - 2.0 * padding);
+                    let y = y_offset + padding + (row_height - 2.0 * padding)
+                        - ((val - min_val) / range) * (row_height - 2.0 * padding);
+                    format!("{x:.1},{y:.1}")
+                })
+                .collect();
+
+            let path_d = if points.len() > 1 {
+                format!("M {} L {}", points[0], points[1..].join(" L "))
+            } else {
+                format!("M {} L {}", points[0], points[0])
+            };
+
+            // Reference line (for SNR threshold)
+            let ref_line = if let Some((ref_val, ref_color)) = row.reference_line {
+                if max_val >= ref_val && min_val <= ref_val {
+                    let y = y_offset + padding + (row_height - 2.0 * padding)
+                        - ((ref_val - min_val) / range) * (row_height - 2.0 * padding);
+                    html! {
+                        <line
+                            x1={(label_width + padding).to_string()}
+                            y1={y.to_string()}
+                            x2={(label_width + plot_width - padding).to_string()}
+                            y2={y.to_string()}
+                            stroke={ref_color}
+                            stroke-width="1"
+                            stroke-dasharray="2,2"
+                        />
+                    }
+                } else {
+                    html! {}
+                }
+            } else {
+                html! {}
+            };
+
+            // Row background and border
+            let bg_rect = html! {
+                <rect
+                    x={label_width.to_string()}
+                    y={y_offset.to_string()}
+                    width={plot_width.to_string()}
+                    height={row_height.to_string()}
+                    fill="#111"
+                    stroke="#333"
+                    stroke-width="0.5"
+                />
+            };
+
+            // Label on left (outside graph, green like framing elements)
+            let label_y = y_offset + row_height / 2.0 + 4.0;
+            let label_elem = html! {
+                <text
+                    x={(label_width - 4.0).to_string()}
+                    y={label_y.to_string()}
+                    fill="#00ff00"
+                    font-size="11"
+                    font-family="monospace"
+                    text-anchor="end"
+                >
+                    {row.label}
+                </text>
+            };
+
+            // Current value on right side - BIG like the graph height
+            let value_text = format!("{current_val:.2}");
+            let value_y = y_offset + row_height / 2.0 + 16.0; // Centered vertically for big text
+            let value_elem = html! {
+                <text
+                    x={(label_width + plot_width + 8.0).to_string()}
+                    y={value_y.to_string()}
+                    fill={row.color}
+                    font-size="48"
+                    font-family="monospace"
+                    font-weight="bold"
+                >
+                    {value_text}
+                </text>
+            };
+
+            // Vertical scale annotations (min at bottom, max at top)
+            let scale_x = label_width + plot_width - 3.0;
+            let max_text = format!("{max_val:.2}");
+            let min_text = format!("{min_val:.2}");
+            let scale_elems = html! {
+                <>
+                    <text
+                        x={scale_x.to_string()}
+                        y={(y_offset + 10.0).to_string()}
+                        fill="#666"
+                        font-size="9"
+                        font-family="monospace"
+                        text-anchor="end"
+                    >
+                        {max_text}
+                    </text>
+                    <text
+                        x={scale_x.to_string()}
+                        y={(y_offset + row_height - 3.0).to_string()}
+                        fill="#666"
+                        font-size="9"
+                        font-family="monospace"
+                        text-anchor="end"
+                    >
+                        {min_text}
+                    </text>
+                </>
+            };
+
+            html! {
+                <>
+                    { bg_rect }
+                    { ref_line }
+                    <path d={path_d} fill="none" stroke={row.color} stroke-width="1.5"/>
+                    { label_elem }
+                    { value_elem }
+                    { scale_elems }
+                </>
+            }
         })
         .collect();
 
-    let path_d = if points.len() > 1 {
-        format!("M {} L {}", points[0], points[1..].join(" L "))
-    } else {
-        format!("M {} L {}", points[0], points[0])
-    };
-
-    let reference_line_html = if let Some((ref_val, ref_color)) = config.reference_line {
-        if max_val >= ref_val && min_val <= ref_val {
-            let y = height - padding - ((ref_val - min_val) / range) * (height - 2.0 * padding);
-            html! {
-                <line
-                    x1={padding.to_string()}
-                    y1={y.to_string()}
-                    x2={(width - padding).to_string()}
-                    y2={y.to_string()}
-                    stroke={ref_color}
-                    stroke-width="1"
-                    stroke-dasharray="3,3"
-                />
-            }
-        } else {
-            html! {}
-        }
-    } else {
-        html! {}
+    // Time axis at bottom
+    let time_y = (rows.len() as f64) * row_height + 12.0;
+    let time_axis = html! {
+        <>
+            // Time axis line
+            <line
+                x1={label_width.to_string()}
+                y1={(time_y - 8.0).to_string()}
+                x2={(label_width + plot_width).to_string()}
+                y2={(time_y - 8.0).to_string()}
+                stroke="#444"
+                stroke-width="1"
+            />
+            // Left tick (oldest)
+            <line
+                x1={label_width.to_string()}
+                y1={(time_y - 10.0).to_string()}
+                x2={label_width.to_string()}
+                y2={(time_y - 6.0).to_string()}
+                stroke="#444"
+                stroke-width="1"
+            />
+            // Right tick (newest)
+            <line
+                x1={(label_width + plot_width).to_string()}
+                y1={(time_y - 10.0).to_string()}
+                x2={(label_width + plot_width).to_string()}
+                y2={(time_y - 6.0).to_string()}
+                stroke="#444"
+                stroke-width="1"
+            />
+            // Time labels
+            <text
+                x={label_width.to_string()}
+                y={time_y.to_string()}
+                fill="#666"
+                font-size="9"
+                font-family="monospace"
+            >
+                {format!("-{:.0}s", time_span_secs)}
+            </text>
+            <text
+                x={(label_width + plot_width).to_string()}
+                y={time_y.to_string()}
+                fill="#666"
+                font-size="9"
+                font-family="monospace"
+                text-anchor="end"
+            >
+                {"now"}
+            </text>
+        </>
     };
 
     html! {
-        <div class="metadata-item" style="margin-top: 5px;">
-            <span class="metadata-label">{config.label}</span>
-            <svg width={width.to_string()} height={height.to_string()} style="background: #111; border: 1px solid #333;">
-                { reference_line_html }
-                <path d={path_d} fill="none" stroke={config.color} stroke-width="1.5"/>
+        <div style="margin-top: 10px;">
+            <svg
+                width={total_width.to_string()}
+                height={total_height.to_string()}
+                style="display: block;"
+            >
+                { row_svgs }
+                { time_axis }
             </svg>
-            <div style="font-size: 0.7em; color: #666;">
-                {format!("Range: {:.2} - {:.2}", min_val, max_val)}
-            </div>
         </div>
     }
 }
@@ -210,20 +406,9 @@ pub struct TrackingSettingsViewProps {
     pub on_save: Callback<()>,
 }
 
-/// Render the tracking settings panel.
+/// Render the tracking settings panel (always visible).
 #[function_component(TrackingSettingsView)]
 pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
-    if !props.show {
-        return html! {
-            <SettingsButton
-                icon="⚙"
-                label="Settings"
-                expanded={false}
-                onclick={props.on_toggle.clone()}
-            />
-        };
-    }
-
     let settings = match &props.settings {
         Some(s) => s.clone(),
         None => return html! { <div>{"Loading settings..."}</div> },
@@ -275,12 +460,7 @@ pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
 
     html! {
         <>
-            <SettingsButton
-                icon="⚙"
-                label="Settings"
-                expanded={true}
-                onclick={props.on_toggle.clone()}
-            />
+            <div style="margin-top: 15px; color: #00ff00; font-size: 0.9em;">{"⚙ Settings"}</div>
             <SettingsPanel>
                 <Slider
                     label="Acq. Frames"
@@ -522,43 +702,8 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
             }
         }
         Some(TrackingState::Tracking { frames_processed }) => {
-            let position_text = status
-                .and_then(|s| s.position.as_ref())
-                .map(|p| format!("({:.2}, {:.2})", p.x, p.y))
-                .unwrap_or_else(|| "N/A".to_string());
-
-            let snr_text = status
-                .and_then(|s| s.position.as_ref())
-                .map(|p| format!("{:.1}", p.snr))
-                .unwrap_or_else(|| "N/A".to_string());
-
-            // Render sparkline plots using extracted function
-            let x_plot = render_sparkline(
-                props.history.x_slice(),
-                SparklineConfig {
-                    label: "X Position:",
-                    color: "#00aaff",
-                    reference_line: None,
-                },
-            );
-
-            let y_plot = render_sparkline(
-                props.history.y_slice(),
-                SparklineConfig {
-                    label: "Y Position:",
-                    color: "#ffaa00",
-                    reference_line: None,
-                },
-            );
-
-            let snr_plot = render_sparkline(
-                props.history.snr_slice(),
-                SparklineConfig {
-                    label: "SNR:",
-                    color: "#00ff00",
-                    reference_line: Some((3.0, "#ff0000")),
-                },
-            );
+            // Render aligned sparkline plots (values shown inline)
+            let sparklines = render_aligned_sparklines(&props.history);
 
             html! {
                 <>
@@ -566,22 +711,9 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                     { tracking_checkbox }
                     <div class="metadata-item" style="margin-top: 10px;">
                         <span style="color: #00ff00;">{"TRACKING"}</span>
+                        <span style="margin-left: 10px; color: #666;">{format!("({} frames)", frames_processed)}</span>
                     </div>
-                    <div class="metadata-item">
-                        <span class="metadata-label">{"Position:"}</span>
-                        <span style="color: #00ff00;">{position_text}</span>
-                    </div>
-                    <div class="metadata-item">
-                        <span class="metadata-label">{"SNR:"}</span>
-                        <span>{snr_text}</span>
-                    </div>
-                    { x_plot }
-                    { y_plot }
-                    { snr_plot }
-                    <div class="metadata-item">
-                        <span class="metadata-label">{"Frames:"}</span>
-                        <span>{frames_processed.to_string()}</span>
-                    </div>
+                    { sparklines }
                     { settings_view }
                     { export_view }
                 </>
