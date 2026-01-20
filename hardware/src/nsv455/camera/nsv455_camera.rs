@@ -326,6 +326,11 @@ impl CameraInterface for NSV455Camera {
         self.roi
     }
 
+    fn get_roi_offset_alignment(&self) -> (usize, usize) {
+        let constraints = self.get_roi_constraints();
+        (constraints.h_offset.step, constraints.v_offset.step)
+    }
+
     fn stream(
         &mut self,
         callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,
