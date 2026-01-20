@@ -30,6 +30,7 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use crate::calibration_overlay::{
     analyze_calibration_pattern, render_annotated_image, render_svg_overlay,
 };
+use crate::camera_init::ExposureArgs;
 use clap::Args;
 
 #[derive(Args, Debug, Clone)]
@@ -40,8 +41,8 @@ pub struct CommonServerArgs {
     #[arg(short = 'b', long, default_value = "0.0.0.0")]
     pub bind_address: String,
 
-    #[arg(short = 'e', long, default_value = "10")]
-    pub exposure_ms: u64,
+    #[command(flatten)]
+    pub exposure: ExposureArgs,
 
     #[arg(short = 'g', long, default_value = "100.0")]
     pub gain: f64,
@@ -1092,11 +1093,11 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
 ) -> anyhow::Result<()> {
     use tracing::info;
 
-    let exposure = std::time::Duration::from_millis(args.exposure_ms);
+    let exposure = args.exposure.as_duration();
     camera
         .set_exposure(exposure)
         .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
-    info!("Set camera exposure to {}ms", args.exposure_ms);
+    info!("Set camera exposure to {}ms", args.exposure.exposure_ms);
 
     camera
         .set_gain(args.gain)
@@ -1352,11 +1353,11 @@ pub async fn run_server_with_tracking<C: CameraInterface + Send + 'static>(
 ) -> anyhow::Result<()> {
     use tracing::info;
 
-    let exposure = std::time::Duration::from_millis(args.exposure_ms);
+    let exposure = args.exposure.as_duration();
     camera
         .set_exposure(exposure)
         .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
-    info!("Set camera exposure to {}ms", args.exposure_ms);
+    info!("Set camera exposure to {}ms", args.exposure.exposure_ms);
 
     camera
         .set_gain(args.gain)

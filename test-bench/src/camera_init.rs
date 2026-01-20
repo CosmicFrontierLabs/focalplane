@@ -4,9 +4,49 @@
 //! (cam_serve, cam_track, etc.) with conditional compilation based on feature flags.
 
 use anyhow::Context;
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, ValueEnum};
 use shared::camera_interface::{CameraInterface, SensorBitDepth};
 use shared::image_size::PixelShape;
+use std::time::Duration;
+
+/// Shared exposure time argument for clap-based binaries.
+///
+/// Use `#[command(flatten)]` to include this in your Args struct.
+/// Provides a standardized way to specify exposure time in milliseconds
+/// with a convenient method to get the value as `Duration`.
+#[derive(Args, Debug, Clone, Copy)]
+pub struct ExposureArgs {
+    /// Exposure time in milliseconds
+    #[arg(short = 'e', long, default_value = "10")]
+    pub exposure_ms: u64,
+}
+
+impl ExposureArgs {
+    /// Returns the exposure time as a `Duration`.
+    pub fn as_duration(&self) -> Duration {
+        Duration::from_millis(self.exposure_ms)
+    }
+}
+
+/// Optional exposure time argument with sub-millisecond precision.
+///
+/// Use `#[command(flatten)]` to include this in your Args struct.
+/// Unlike `ExposureArgs`, this is optional (uses camera default if not specified)
+/// and accepts floating-point values for sub-millisecond precision.
+#[derive(Args, Debug, Clone, Copy)]
+pub struct OptionalExposureArgs {
+    /// Override camera exposure time in milliseconds (supports decimals for sub-ms precision)
+    #[arg(short = 'e', long, value_name = "MS")]
+    pub exposure_ms: Option<f64>,
+}
+
+impl OptionalExposureArgs {
+    /// Returns the exposure time as a `Duration`, if specified.
+    pub fn as_duration(&self) -> Option<Duration> {
+        self.exposure_ms
+            .map(|ms| Duration::from_micros((ms * 1000.0) as u64))
+    }
+}
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum CameraType {

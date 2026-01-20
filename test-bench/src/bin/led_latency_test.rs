@@ -95,8 +95,8 @@ struct Args {
     #[command(flatten)]
     camera: camera_init::CameraArgs,
 
-    #[arg(short = 'e', long, default_value = "10", help = "Exposure time (ms)")]
-    exposure_ms: u64,
+    #[command(flatten)]
+    exposure: camera_init::ExposureArgs,
 
     #[arg(short = 'g', long, default_value = "100", help = "Camera gain")]
     gain: f64,
@@ -575,8 +575,8 @@ fn main() -> Result<()> {
     info!("Initializing camera...");
     let mut camera = camera_init::initialize_camera(&args.camera)?;
 
-    let exposure = Duration::from_millis(args.exposure_ms);
-    info!("Setting camera exposure to {}ms", args.exposure_ms);
+    let exposure = args.exposure.as_duration();
+    info!("Setting camera exposure to {}ms", args.exposure.exposure_ms);
     camera.set_exposure(exposure)?;
 
     info!("Setting camera gain to {}", args.gain);

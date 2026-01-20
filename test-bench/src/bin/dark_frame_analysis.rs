@@ -19,9 +19,8 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
-use test_bench::camera_init::{initialize_camera, CameraArgs};
+use test_bench::camera_init::{initialize_camera, CameraArgs, OptionalExposureArgs};
 use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
@@ -88,16 +87,8 @@ struct Args {
     )]
     dead_pixel_threshold: f64,
 
-    #[arg(
-        short = 'e',
-        long,
-        help = "Override camera exposure time in milliseconds",
-        long_help = "Set a specific exposure time for dark frame capture. If not specified, \
-            uses the camera's default exposure setting. Longer exposures reveal more thermal \
-            noise (dark current) while shorter exposures primarily measure read noise.",
-        value_name = "MS"
-    )]
-    exposure_ms: Option<f64>,
+    #[command(flatten)]
+    exposure: OptionalExposureArgs,
 
     #[arg(
         short = 'g',
@@ -145,12 +136,14 @@ fn main() -> Result<()> {
     let mut camera = initialize_camera(&args.camera)?;
 
     // Apply exposure override if specified
-    if let Some(exposure_ms) = args.exposure_ms {
-        let exposure = Duration::from_micros((exposure_ms * 1000.0) as u64);
+    if let Some(exposure) = args.exposure.as_duration() {
         camera
             .set_exposure(exposure)
             .map_err(|e| anyhow::anyhow!("Failed to set exposure: {e}"))?;
-        info!("Set exposure to {:.2} ms", exposure_ms);
+        info!(
+            "Set exposure to {:.2} ms",
+            args.exposure.exposure_ms.unwrap()
+        );
     }
 
     // Apply gain override if specified
