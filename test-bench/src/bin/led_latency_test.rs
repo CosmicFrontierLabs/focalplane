@@ -89,7 +89,18 @@ use tracing::{debug, info};
 #[command(
     author,
     version,
-    about = "LED rolling shutter latency characterization"
+    about = "LED rolling shutter latency characterization",
+    long_about = "Measures rolling shutter timing characteristics by controlling an LED and \
+        observing which sensor row first detects the brightness change.\n\n\
+        Experimental Setup:\n  \
+        - Test LED illuminates camera field of view\n  \
+        - GPIO pin controls LED timing with microsecond precision\n  \
+        - Camera captures frames during LED state transitions\n\n\
+        Phases:\n  \
+        1. Dark Frame Baseline: LED OFF, measure dark row means\n  \
+        2. Light Frame Baseline: LED ON, measure bright row means\n  \
+        3. Latency Characterization: Pulse LED and detect edges\n\n\
+        The output CSV contains rising/falling edge row numbers and calculated line rates."
 )]
 struct Args {
     #[command(flatten)]
@@ -98,56 +109,93 @@ struct Args {
     #[command(flatten)]
     exposure: camera_init::ExposureArgs,
 
-    #[arg(short = 'g', long, default_value = "100", help = "Camera gain")]
+    #[arg(
+        short = 'g',
+        long,
+        default_value = "100",
+        help = "Camera gain",
+        long_help = "Camera analog gain setting. Higher gain increases LED signal but also \
+            noise. Should provide good separation between dark and light baselines."
+    )]
     gain: f64,
 
-    #[arg(long, default_value = "128", help = "ROI width (centered on sensor)")]
+    #[arg(
+        long,
+        default_value = "128",
+        help = "ROI width (centered on sensor)",
+        long_help = "Width of the region-of-interest in pixels, centered on the sensor. \
+            A narrow ROI enables faster readout. Must cover the LED illumination area."
+    )]
     roi_width: usize,
 
-    #[arg(long, default_value = "128", help = "ROI height (centered on sensor)")]
+    #[arg(
+        long,
+        default_value = "128",
+        help = "ROI height (centered on sensor)",
+        long_help = "Height of the region-of-interest in pixels, centered on the sensor. \
+            More rows provide better line rate statistics but increase readout time."
+    )]
     roi_height: usize,
 
     #[arg(
         long,
         default_value = "10",
-        help = "Number of baseline frames (LED continuously on)"
+        help = "Number of baseline frames (LED continuously on/off)",
+        long_help = "Number of frames to capture for each baseline measurement. \
+            More frames improve statistical stability of the baseline."
     )]
     baseline_frames: usize,
 
     #[arg(
         long,
         default_value = "100",
-        help = "Minimum delay between frames (microseconds)"
+        help = "Minimum delay between frames (microseconds)",
+        long_help = "Minimum delay value for the latency sweep. The test varies delay from \
+            --min-delay-us to --max-delay-us in steps of --delay-step-us."
     )]
     min_delay_us: u64,
 
     #[arg(
         long,
         default_value = "10000",
-        help = "Maximum delay between frames (microseconds)"
+        help = "Maximum delay between frames (microseconds)",
+        long_help = "Maximum delay value for the latency sweep. Should be set based on \
+            expected frame exposure time."
     )]
     max_delay_us: u64,
 
-    #[arg(long, default_value = "100", help = "Delay step size (microseconds)")]
+    #[arg(
+        long,
+        default_value = "100",
+        help = "Delay step size (microseconds)",
+        long_help = "Step size for delay sweep in microseconds. Smaller steps give finer \
+            timing resolution but take longer to complete."
+    )]
     delay_step_us: u64,
 
     #[arg(
         long,
         default_value = "led_latency_results.csv",
-        help = "Output CSV file path"
+        help = "Output CSV file path",
+        long_help = "Path for the main results CSV file. Additional files will be created \
+            with _dark_baseline.csv, _light_baseline.csv, and _row_means.csv suffixes."
     )]
     output: String,
 
     #[arg(
         long,
-        help = "GPIO pin number (BOARD mode, e.g., 33 for Orin). Auto-detected if not specified.",
+        help = "GPIO pin number (BOARD mode, e.g., 33 for Orin)",
+        long_help = "GPIO pin number in BOARD numbering mode (physical pin on connector). \
+            Mutually exclusive with --gpio-line. If neither specified, auto-detected.",
         conflicts_with = "gpio_line"
     )]
     gpio_pin: Option<u32>,
 
     #[arg(
         long,
-        help = "GPIO line number (direct line offset on gpiochip0, e.g., 127 for Neutralino). Auto-detected if not specified.",
+        help = "GPIO line number (direct gpiochip0 offset)",
+        long_help = "GPIO line number as direct offset on gpiochip0 (e.g., 127 for Neutralino). \
+            Mutually exclusive with --gpio-pin. If neither specified, auto-detected.",
         conflicts_with = "gpio_pin"
     )]
     gpio_line: Option<u32>,
@@ -155,24 +203,35 @@ struct Args {
     #[arg(
         long,
         default_value = "5000",
-        help = "LED on duration for blink tests (microseconds)"
+        help = "LED on duration for blink tests (microseconds)",
+        long_help = "Duration to keep LED on during each pulse. Determines how many rows \
+            will be illuminated. Longer pulses span more rows but may exceed frame boundaries."
     )]
     led_on_duration_us: u64,
 
-    #[arg(long, help = "Blink GPIO to identify pin (500ms on/off cycles)")]
+    #[arg(
+        long,
+        help = "Blink GPIO to identify pin (500ms on/off cycles)",
+        long_help = "Enter identification mode where GPIO toggles every 500ms. Useful for \
+            verifying correct GPIO pin connection. Press Ctrl+C to exit."
+    )]
     identify: bool,
 
     #[arg(
         long,
         default_value = "100",
-        help = "Number of frames to capture during latency test"
+        help = "Number of frames to capture during latency test",
+        long_help = "Number of frames to capture during latency characterization phase. \
+            More frames provide better statistics on line rate variability."
     )]
     num_frames: usize,
 
     #[arg(
         long,
         default_value = "10000",
-        help = "Delay before LED pulse (microseconds) to shift pulse into frame"
+        help = "Delay before LED pulse (microseconds)",
+        long_help = "Delay between receiving a frame and pulsing the LED. Shifts pulse \
+            timing relative to the next frame's exposure window."
     )]
     pulse_delay_us: u64,
 
@@ -180,13 +239,17 @@ struct Args {
         long,
         default_value = "5",
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..),
-        help = "Number of initial frames to discard during warm-up (minimum 1)"
+        help = "Number of initial frames to discard during warm-up",
+        long_help = "Number of initial frames to discard before analysis. Allows camera \
+            and timing to stabilize before collecting data. Minimum: 1."
     )]
     warmup_drop_count: usize,
 
     #[arg(
         long,
-        help = "Directory to save representative baseline frames (optional)"
+        help = "Directory to save representative baseline frames",
+        long_help = "If specified, saves one dark and one light baseline frame as PNG files \
+            in this directory for visual inspection."
     )]
     save_frames_dir: Option<String>,
 }

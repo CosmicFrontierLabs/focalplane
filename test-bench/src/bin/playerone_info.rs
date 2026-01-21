@@ -4,10 +4,25 @@ use tracing::{info, Level};
 
 #[derive(Parser, Debug)]
 #[command(name = "playerone_info")]
-#[command(about = "Enumerate and display PlayerOne camera properties", long_about = None)]
+#[command(
+    about = "Enumerate and display PlayerOne camera properties",
+    long_about = "Lists all connected PlayerOne astronomy cameras and their properties.\n\n\
+        Useful for verifying camera connectivity and determining camera IDs before \
+        running other tools. When using multiple cameras, the camera index shown here \
+        corresponds to the --camera-id parameter in other tools.\n\n\
+        If no cameras are detected, verify:\n  \
+        - Camera is connected via USB\n  \
+        - PlayerOne SDK libraries are installed\n  \
+        - User has proper USB permissions (udev rules)"
+)]
 struct Args {
-    /// Show detailed properties for each camera
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        help = "Show detailed properties for each camera",
+        long_help = "Display additional properties including Bayer pattern, supported \
+            binning modes, and available image formats."
+    )]
     detailed: bool,
 }
 

@@ -33,18 +33,41 @@ use crate::calibration_overlay::{
 use crate::camera_init::ExposureArgs;
 use clap::Args;
 
+/// Common command-line arguments for camera server binaries.
 #[derive(Args, Debug, Clone)]
 pub struct CommonServerArgs {
-    #[arg(short = 'p', long, default_value = "3000")]
+    #[arg(
+        short = 'p',
+        long,
+        default_value = "3000",
+        help = "HTTP server port",
+        long_help = "TCP port for the HTTP/REST server. The web UI will be available at \
+            http://<bind_address>:<port>/. Default: 3000."
+    )]
     pub port: u16,
 
-    #[arg(short = 'b', long, default_value = "0.0.0.0")]
+    #[arg(
+        short = 'b',
+        long,
+        default_value = "0.0.0.0",
+        help = "HTTP server bind address",
+        long_help = "IP address to bind the HTTP server to. Use '0.0.0.0' to listen on all \
+            interfaces (required for remote access), or '127.0.0.1' for localhost-only access."
+    )]
     pub bind_address: String,
 
     #[command(flatten)]
     pub exposure: ExposureArgs,
 
-    #[arg(short = 'g', long, default_value = "100.0")]
+    #[arg(
+        short = 'g',
+        long,
+        default_value = "100.0",
+        help = "Initial camera gain setting",
+        long_help = "Initial analog gain setting for the camera sensor. Can be adjusted at \
+            runtime via the web UI. Higher gain amplifies both signal and noise. The valid \
+            range depends on the camera model. Typical range: 0-500."
+    )]
     pub gain: f64,
 }
 

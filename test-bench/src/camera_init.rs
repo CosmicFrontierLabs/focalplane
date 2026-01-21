@@ -16,8 +16,15 @@ use std::time::Duration;
 /// with a convenient method to get the value as `Duration`.
 #[derive(Args, Debug, Clone, Copy)]
 pub struct ExposureArgs {
-    /// Exposure time in milliseconds
-    #[arg(short = 'e', long, default_value = "10")]
+    #[arg(
+        short = 'e',
+        long,
+        default_value = "10",
+        help = "Exposure time in milliseconds",
+        long_help = "Initial exposure time for the camera in milliseconds. Can be adjusted \
+            at runtime via the web UI. Longer exposures collect more photons but reduce \
+            frame rate. Typical range: 1-1000ms depending on application."
+    )]
     pub exposure_ms: u64,
 }
 
@@ -35,8 +42,16 @@ impl ExposureArgs {
 /// and accepts floating-point values for sub-millisecond precision.
 #[derive(Args, Debug, Clone, Copy)]
 pub struct OptionalExposureArgs {
-    /// Override camera exposure time in milliseconds (supports decimals for sub-ms precision)
-    #[arg(short = 'e', long, value_name = "MS")]
+    #[arg(
+        short = 'e',
+        long,
+        value_name = "MS",
+        help = "Override camera exposure time in milliseconds",
+        long_help = "Set a specific exposure time for the camera. Supports decimal values \
+            for sub-millisecond precision (e.g., '0.5' for 500µs). If not specified, \
+            uses the camera's default exposure setting. Longer exposures reveal more \
+            thermal noise (dark current) while shorter exposures primarily measure read noise."
+    )]
     pub exposure_ms: Option<f64>,
 }
 
@@ -57,39 +72,68 @@ pub enum CameraType {
     Nsv,
 }
 
-/// Common camera initialization arguments
+/// Common camera initialization arguments.
 ///
 /// Supports different camera types via feature flags:
-/// - Mock camera: Always available
+/// - Mock camera: Always available (for testing)
 /// - PlayerOne cameras: Requires "playerone" feature
 /// - NSV455 cameras: Requires "nsv455" feature
 ///
 /// IMPORTANT: playerone and nsv455 features are mutually exclusive due to USB conflicts.
 #[derive(Parser, Debug, Clone)]
 pub struct CameraArgs {
-    /// Type of camera to use
-    #[arg(short = 't', long, value_enum)]
+    #[arg(
+        short = 't',
+        long,
+        value_enum,
+        help = "Type of camera to use",
+        long_help = "Camera type to initialize. Available types depend on compiled features:\n  \
+            - mock: Simulated camera for testing (always available)\n  \
+            - poa: PlayerOne astronomy camera (requires 'playerone' feature)\n  \
+            - nsv: NSV455 V4L2 camera (requires 'nsv455' feature)\n\n\
+            Note: playerone and nsv455 features are mutually exclusive."
+    )]
     pub camera_type: CameraType,
 
-    // Mock camera options
-    /// Width for mock camera
-    #[arg(long, default_value = "1024")]
+    #[arg(
+        long,
+        default_value = "1024",
+        help = "Width for mock camera in pixels",
+        long_help = "Sensor width in pixels for the mock camera. Only used when --camera-type=mock. \
+            Determines the simulated sensor resolution."
+    )]
     pub width: usize,
 
-    /// Height for mock camera
-    #[arg(long, default_value = "1024")]
+    #[arg(
+        long,
+        default_value = "1024",
+        help = "Height for mock camera in pixels",
+        long_help = "Sensor height in pixels for the mock camera. Only used when --camera-type=mock. \
+            Determines the simulated sensor resolution."
+    )]
     pub height: usize,
 
-    // PlayerOne camera options
     #[cfg(feature = "playerone")]
-    /// PlayerOne camera ID
-    #[arg(short = 'i', long, default_value = "0")]
+    #[arg(
+        short = 'i',
+        long,
+        default_value = "0",
+        help = "PlayerOne camera ID (0 = first camera)",
+        long_help = "Index of the PlayerOne camera to use (0-based). Use playerone_info to \
+            list connected cameras and their IDs. Only used when --camera-type=poa."
+    )]
     pub camera_id: i32,
 
-    // NSV455 camera options
     #[cfg(feature = "nsv455")]
-    /// V4L2 device path for NSV455
-    #[arg(short = 'd', long, default_value = "/dev/video0")]
+    #[arg(
+        short = 'd',
+        long,
+        default_value = "/dev/video0",
+        help = "V4L2 device path for NSV455 camera",
+        long_help = "Linux V4L2 device path for the NSV455 camera. Typically /dev/video0 or \
+            /dev/video1 depending on connection order. Use 'v4l2-ctl --list-devices' to \
+            find available devices. Only used when --camera-type=nsv."
+    )]
     pub device_path: String,
 }
 

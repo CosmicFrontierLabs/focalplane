@@ -62,30 +62,68 @@ impl TelescopeModel {
 #[command(
     name = "Motion Simulator",
     about = "Simulates spacecraft motion and star tracking dynamics",
-    long_about = None
+    long_about = "Motion simulation for space telescope tracking and attitude control.\n\n\
+        This simulator models spacecraft motion, attitude dynamics, and star tracking \
+        for space telescope applications. It provides functionality for:\n  \
+        - Spacecraft attitude propagation and control\n  \
+        - Star tracker simulation with realistic noise and errors\n  \
+        - Pointing stability analysis\n  \
+        - Tracking performance evaluation\n\n\
+        Note: This is currently a stub with planned future implementation."
 )]
 struct Args {
     #[command(flatten)]
     shared: SharedSimulationArgs,
 
-    /// Telescope model to use for simulation
-    #[arg(long, default_value_t = TelescopeModel::Demo50cm)]
+    #[arg(
+        long,
+        default_value_t = TelescopeModel::Demo50cm,
+        help = "Telescope model to use for simulation",
+        long_help = "Telescope optical configuration for the simulation. Available models:\n  \
+            - small50mm: Small 50mm aperture telescope (f/10)\n  \
+            - demo50cm: 50cm demo telescope (f/20) - default\n  \
+            - final1m: 1m final telescope design (f/10)\n  \
+            - weasel: Weasel telescope (f/7.3)"
+    )]
     telescope: TelescopeModel,
 
-    /// Sensor model to use for simulation
-    #[arg(long, default_value_t = SensorModel::Gsense6510bsi)]
+    #[arg(
+        long,
+        default_value_t = SensorModel::Gsense6510bsi,
+        help = "Sensor model to use for simulation",
+        long_help = "Camera sensor model defining pixel size, read noise, dark current, \
+            and other characteristics. The sensor choice affects detection limits and \
+            noise floor calculations."
+    )]
     sensor: SensorModel,
 
-    /// Simulation duration (e.g., "60s", "1.5m", "2000ms")
-    #[arg(long, default_value = "60s")]
+    #[arg(
+        long,
+        default_value = "60s",
+        help = "Simulation duration (e.g., \"60s\", \"1.5m\", \"2000ms\")",
+        long_help = "Total duration to run the motion simulation. Accepts human-readable \
+            duration strings like \"60s\" (60 seconds), \"1.5m\" (1.5 minutes), or \
+            \"2000ms\" (2000 milliseconds)."
+    )]
     duration: DurationArg,
 
-    /// Simulation time step (e.g., "100ms", "0.1s")
-    #[arg(long, default_value = "100ms")]
+    #[arg(
+        long,
+        default_value = "100ms",
+        help = "Simulation time step (e.g., \"100ms\", \"0.1s\")",
+        long_help = "Time step for the simulation integration. Smaller steps provide \
+            higher accuracy but increase computation time. Accepts human-readable \
+            duration strings."
+    )]
     timestep: DurationArg,
 
-    /// Output CSV file for motion data
-    #[arg(long, default_value = "motion_results.csv")]
+    #[arg(
+        long,
+        default_value = "motion_results.csv",
+        help = "Output CSV file for motion data",
+        long_help = "Path to the output CSV file containing motion simulation results. \
+            The file will contain timestamped attitude and position data."
+    )]
     output_csv: String,
 }
 

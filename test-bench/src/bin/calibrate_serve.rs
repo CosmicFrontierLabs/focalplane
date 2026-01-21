@@ -25,58 +25,125 @@ use test_bench::display_utils::{
 use tokio::sync::RwLock;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Calibration pattern web server")]
+#[command(
+    author,
+    version,
+    about = "Calibration pattern web server for OLED displays",
+    long_about = "Web server for displaying calibration patterns on OLED displays.\n\n\
+        This server provides a web interface for controlling calibration patterns displayed on \
+        an SDL2-controlled display. It supports multiple pattern types (grids, spots, AprilTags, etc.) \
+        and can receive pattern commands via both HTTP REST API and ZMQ sockets.\n\n\
+        Features:\n  \
+        - Web UI at http://<bind>:<port>/ for interactive pattern control\n  \
+        - REST API endpoints for programmatic access\n  \
+        - ZMQ REP socket for real-time pattern updates\n  \
+        - OLED burn-in protection with configurable idle timeout\n  \
+        - Optional gyro emission for hardware-in-the-loop testing"
+)]
 struct Args {
-    #[arg(short = 'p', long, default_value = "3001")]
+    #[arg(
+        short = 'p',
+        long,
+        default_value = "3001",
+        help = "HTTP server port",
+        long_help = "TCP port for the HTTP/REST server. The web UI will be available at \
+            http://<bind_address>:<port>/. Default: 3001."
+    )]
     port: u16,
 
-    #[arg(short = 'b', long, default_value = "0.0.0.0")]
+    #[arg(
+        short = 'b',
+        long,
+        default_value = "0.0.0.0",
+        help = "HTTP server bind address",
+        long_help = "IP address to bind the HTTP server to. Use '0.0.0.0' to listen on all \
+            interfaces (default), or '127.0.0.1' to restrict to localhost only."
+    )]
     bind_address: String,
 
-    #[arg(short, long, help = "Display index to use (0-based)")]
+    #[arg(
+        short,
+        long,
+        help = "Display index to use (0-based)",
+        long_help = "Index of the display to use for pattern output (0-based). Use --list to \
+            see available displays. If not specified, uses the first display found."
+    )]
     display: Option<u32>,
 
-    #[arg(short, long, help = "List available displays and exit")]
+    #[arg(
+        short,
+        long,
+        help = "List available displays and exit",
+        long_help = "Print a list of all available displays with their resolutions and exit. \
+            Useful for finding the correct --display index."
+    )]
     list: bool,
 
-    #[arg(long, help = "Poll until 2560x2560 OLED display is detected")]
+    #[arg(
+        long,
+        help = "Poll until 2560x2560 OLED display is detected",
+        long_help = "Wait for a 2560x2560 OLED display to be connected before starting. \
+            Useful for headless systems where the OLED may be powered on after boot. \
+            The server will poll at --poll-interval until the display appears."
+    )]
     wait_for_oled: bool,
 
     #[arg(
         long,
         default_value = "5",
-        help = "Seconds between OLED detection attempts"
+        help = "Seconds between OLED detection attempts",
+        long_help = "Interval in seconds between display detection attempts when using \
+            --wait-for-oled. Lower values detect the display faster but use more CPU."
     )]
     poll_interval: u64,
 
     #[arg(
         long,
         default_value = "600",
-        help = "Seconds of inactivity before screen goes black (OLED burn-in protection)"
+        help = "Seconds of inactivity before screen goes black (OLED burn-in protection)",
+        long_help = "Idle timeout in seconds for OLED burn-in protection. If no pattern \
+            updates are received within this time, the display automatically blanks to \
+            prevent burn-in. Set to 0 to disable (not recommended for OLED displays). \
+            Default: 600 seconds (10 minutes)."
     )]
     idle_timeout: u64,
 
     #[arg(
         long,
         default_value = "tcp://*:5556",
-        help = "ZMQ REP bind address for receiving pattern commands"
+        help = "ZMQ REP bind address for receiving pattern commands",
+        long_help = "ZeroMQ REP socket bind address for receiving pattern commands. \
+            Pattern commands are JSON-encoded PatternCommand messages (Spot, SpotGrid, \
+            Uniform, Clear). The socket replies 'ok' on success or 'error: <msg>' on failure. \
+            Default: tcp://*:5556 (all interfaces, port 5556)."
     )]
     zmq_bind: String,
 
     #[arg(
         long,
-        help = "FTDI device index for gyro emission (0 = first device). If not set, gyro emission is disabled."
+        help = "FTDI device index for gyro emission (0 = first device)",
+        long_help = "Index of the FTDI device to use for gyro angle emission. Use --list-ftdi \
+            to see available devices. When enabled, the server emits gyro angle packets based \
+            on pattern motion for hardware-in-the-loop testing. If not specified, gyro emission \
+            is disabled."
     )]
     ftdi_device: Option<i32>,
 
     #[arg(
         long,
         default_value = "18",
-        help = "Exail gyro remote terminal address"
+        help = "Exail gyro remote terminal address",
+        long_help = "Exail gyro remote terminal address for angle emission. This is the \
+            address byte in the gyro communication protocol. Default: 18."
     )]
     gyro_address: u8,
 
-    #[arg(long, help = "List available FTDI devices and exit")]
+    #[arg(
+        long,
+        help = "List available FTDI devices and exit",
+        long_help = "Print a list of all available FTDI devices and exit. Useful for finding \
+            the correct --ftdi-device index."
+    )]
     list_ftdi: bool,
 }
 
