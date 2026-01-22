@@ -43,8 +43,8 @@ usage() {
     echo ""
     echo "Environment Variables:"
     echo "  ORIN_HOST     Override Orin Nano host (default: meawoppl@orin-nano.tail944341.ts.net)"
-    echo "  NEUT_HOST     Override Neutralino host (default: cosmicfrontiers@orin-005.tail944341.ts.net)"
-    echo "  NSV_HOST      Override NSV host (default: cosmicfrontiers@orin-416.tail944341.ts.net)"
+    echo "  NEUT_HOST     Override Neutralino host (default: cosmicfrontier@orin-005.tail944341.ts.net)"
+    echo "  NSV_HOST      Override NSV host (default: cosmicfrontier@orin-416.tail944341.ts.net)"
     exit 0
 }
 
@@ -52,19 +52,19 @@ usage() {
 configure_target() {
     case $1 in
         neut|neutralino)
-            REMOTE_HOST="${NEUT_HOST:-cosmicfrontiers@orin-005.tail944341.ts.net}"
+            REMOTE_HOST="${NEUT_HOST:-cosmicfrontier@orin-005.tail944341.ts.net}"
             BUILD_TARGET="--neut"
             CAMERA_TYPE="nsv"
             CAMERA_DESC="NSV455"
-            REMOTE_USER="cosmicfrontiers"
+            REMOTE_USER="cosmicfrontier"
             FRIENDLY_NAME="neutralino"
             ;;
         nsv)
-            REMOTE_HOST="${NSV_HOST:-cosmicfrontiers@orin-416.tail944341.ts.net}"
+            REMOTE_HOST="${NSV_HOST:-cosmicfrontier@orin-416.tail944341.ts.net}"
             BUILD_TARGET="--nsv"
             CAMERA_TYPE="nsv"
             CAMERA_DESC="NSV455"
-            REMOTE_USER="cosmicfrontiers"
+            REMOTE_USER="cosmicfrontier"
             FRIENDLY_NAME="nsv"
             ;;
         orin|orin-nano)
@@ -141,11 +141,13 @@ fi
 
 "$SCRIPT_DIR/build-yew-frontends.sh"
 
-# Step 3: Sync frontend files
+# Step 3: Sync frontend files (build-remote.sh already synced to ~/bin/test-bench-frontend/dist/)
+# Just sync the fgs-specific files to ensure they're up to date
 print_info "Syncing frontend files to $FRIENDLY_NAME..."
+ssh "$REMOTE_HOST" "mkdir -p ~/bin/test-bench-frontend/dist/fgs"
 rsync -avz \
     "$PROJECT_ROOT/test-bench-frontend/dist/fgs/" \
-    "$REMOTE_HOST:~/$REMOTE_BUILD_DIR/test-bench-frontend/dist/fgs/"
+    "$REMOTE_HOST:~/bin/test-bench-frontend/dist/fgs/"
 print_success "Frontend files synced"
 
 if [ "$SETUP_MODE" = true ]; then
@@ -159,9 +161,9 @@ After=network.target
 [Service]
 Type=simple
 User=$REMOTE_USER
-WorkingDirectory=/home/$REMOTE_USER/$REMOTE_BUILD_DIR
+WorkingDirectory=/home/$REMOTE_USER/bin
 Environment=RUST_LOG=info
-ExecStart=/home/$REMOTE_USER/$REMOTE_BUILD_DIR/target/release/fgs_server --camera-type $CAMERA_TYPE
+ExecStart=/home/$REMOTE_USER/bin/fgs_server --camera-type $CAMERA_TYPE
 Restart=on-failure
 RestartSec=5
 

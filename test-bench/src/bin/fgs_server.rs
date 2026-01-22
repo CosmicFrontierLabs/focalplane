@@ -102,6 +102,7 @@ struct Args {
 
     #[arg(
         long,
+        default_value = "tcp://*:5555",
         help = "ZMQ PUB socket bind address for tracking updates",
         long_help = "Bind address for a ZeroMQ PUB socket that streams tracking updates in \
             real-time. Each tracking update is serialized as a TrackingMessage and published. \
@@ -111,7 +112,7 @@ struct Args {
             - tcp://127.0.0.1:5555 (TCP localhost only)",
         value_name = "ADDR"
     )]
-    zmq_pub: Option<String>,
+    zmq_pub: String,
 
     #[arg(
         long,

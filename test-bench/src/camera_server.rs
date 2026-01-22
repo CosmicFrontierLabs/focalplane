@@ -151,7 +151,7 @@ pub struct TrackingConfig {
     /// ROI vertical offset alignment (from camera constraints)
     pub roi_v_alignment: usize,
     /// ZMQ PUB socket bind address for tracking updates (e.g., tcp://*:5555)
-    pub zmq_pub: Option<String>,
+    pub zmq_pub: String,
 }
 
 impl Default for TrackingConfig {
@@ -167,7 +167,7 @@ impl Default for TrackingConfig {
             saturation_value: 65535.0,
             roi_h_alignment: 1,
             roi_v_alignment: 1,
-            zmq_pub: None,
+            zmq_pub: "tcp://*:5555".to_string(),
         }
     }
 }
@@ -1502,27 +1502,19 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
     let roi_h_alignment = tracking_config.roi_h_alignment;
     let roi_v_alignment = tracking_config.roi_v_alignment;
 
-    // Create ZMQ publisher for tracking telemetry if configured
-    let zmq_publisher: Option<Arc<TypedZmqPublisher<TrackingMessage>>> =
-        tracking_config.zmq_pub.as_ref().and_then(|bind_addr| {
-            let ctx = zmq::Context::new();
-            match ctx.socket(zmq::PUB) {
-                Ok(socket) => match socket.bind(bind_addr) {
-                    Ok(()) => {
-                        tracing::info!("ZMQ telemetry publisher bound to {}", bind_addr);
-                        Some(Arc::new(TypedZmqPublisher::new(socket)))
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to bind ZMQ socket to {}: {}", bind_addr, e);
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to create ZMQ PUB socket: {}", e);
-                    None
-                }
-            }
-        });
+    // Create ZMQ publisher for tracking telemetry (mandatory)
+    let zmq_publisher: Arc<TypedZmqPublisher<TrackingMessage>> = {
+        let bind_addr = &tracking_config.zmq_pub;
+        let ctx = zmq::Context::new();
+        let socket = ctx
+            .socket(zmq::PUB)
+            .expect("Failed to create ZMQ PUB socket");
+        socket
+            .bind(bind_addr)
+            .unwrap_or_else(|e| panic!("Failed to bind ZMQ socket to {bind_addr}: {e}"));
+        tracing::info!("ZMQ telemetry publisher bound to {}", bind_addr);
+        Arc::new(TypedZmqPublisher::new(socket))
+    };
 
     let fgs: Arc<StdMutex<Option<FineGuidanceSystem>>> = Arc::new(StdMutex::new(None));
     let pending_settings: Arc<StdMutex<Vec<CameraSettingsUpdate>>> =
@@ -1681,18 +1673,16 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                                 });
                                 status.num_guide_stars = *num_guide_stars;
 
-                                // Publish to ZMQ if configured
-                                if let Some(ref publisher) = zmq_for_cb {
-                                    let msg = TrackingMessage::new(
-                                        *track_id,
-                                        initial_position.x,
-                                        initial_position.y,
-                                        initial_position.timestamp,
-                                        initial_position.shape.clone(),
-                                    );
-                                    if let Err(e) = publisher.send(&msg) {
-                                        tracing::warn!("Failed to send ZMQ tracking message: {}", e);
-                                    }
+                                // Publish to ZMQ
+                                let msg = TrackingMessage::new(
+                                    *track_id,
+                                    initial_position.x,
+                                    initial_position.y,
+                                    initial_position.timestamp,
+                                    initial_position.shape.clone(),
+                                );
+                                if let Err(e) = zmq_for_cb.send(&msg) {
+                                    tracing::warn!("Failed to send ZMQ tracking message: {}", e);
                                 }
                             }
                             FgsCallbackEvent::TrackingUpdate { track_id, position } => {
@@ -1716,18 +1706,16 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                                 status.total_updates =
                                     tracking_cb.total_updates.load(Ordering::SeqCst);
 
-                                // Publish to ZMQ if configured
-                                if let Some(ref publisher) = zmq_for_cb {
-                                    let msg = TrackingMessage::new(
-                                        *track_id,
-                                        position.x,
-                                        position.y,
-                                        position.timestamp,
-                                        position.shape.clone(),
-                                    );
-                                    if let Err(e) = publisher.send(&msg) {
-                                        tracing::warn!("Failed to send ZMQ tracking message: {}", e);
-                                    }
+                                // Publish to ZMQ
+                                let msg = TrackingMessage::new(
+                                    *track_id,
+                                    position.x,
+                                    position.y,
+                                    position.timestamp,
+                                    position.shape.clone(),
+                                );
+                                if let Err(e) = zmq_for_cb.send(&msg) {
+                                    tracing::warn!("Failed to send ZMQ tracking message: {}", e);
                                 }
 
                                 // Write to CSV if configured

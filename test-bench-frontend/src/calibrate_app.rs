@@ -73,6 +73,7 @@ pub struct CalibrateFrontend {
     initial_config: Option<PatternConfigResponse>,
     selected_pattern_id: String,
     control_values: HashMap<String, ControlValue>,
+    global_control_values: HashMap<String, ControlValue>,
     invert: bool,
     image_url: String,
     image_refresh_handle: Option<gloo_timers::callback::Timeout>,
@@ -92,6 +93,7 @@ pub enum Msg {
     InitialConfigError,
     SelectPattern(String),
     UpdateControl(String, ControlValue),
+    UpdateGlobalControl(String, ControlValue),
     ToggleInvert,
     ApplyPattern,
     RefreshImage,
@@ -173,6 +175,7 @@ impl Component for CalibrateFrontend {
             initial_config: None,
             selected_pattern_id: "April".to_string(),
             control_values: HashMap::new(),
+            global_control_values: HashMap::new(),
             invert: false,
             image_url: format!("/jpeg?t={}", js_sys::Date::now()),
             image_refresh_handle: None,
@@ -238,6 +241,12 @@ impl Component for CalibrateFrontend {
                     }));
                 true
             }
+            Msg::UpdateGlobalControl(id, value) => {
+                self.global_control_values.insert(id, value);
+                // Immediate apply for global controls (checkboxes)
+                ctx.link().send_message(Msg::ApplyPattern);
+                true
+            }
             Msg::ToggleInvert => {
                 self.invert = !self.invert;
                 // Immediate apply for checkboxes (no dragging)
@@ -254,12 +263,36 @@ impl Component for CalibrateFrontend {
                     values.insert(k.clone(), v.to_json());
                 }
 
+                // Extract global control values
+                let emit_gyro = self
+                    .global_control_values
+                    .get("emit_gyro")
+                    .and_then(|v| match v {
+                        ControlValue::Bool(b) => Some(*b),
+                        _ => None,
+                    });
+                let plate_scale =
+                    self.global_control_values
+                        .get("plate_scale")
+                        .and_then(|v| match v {
+                            ControlValue::Float(f) => Some(*f),
+                            _ => None,
+                        });
+
                 wasm_bindgen_futures::spawn_local(async move {
-                    let body = serde_json::json!({
+                    let mut body = serde_json::json!({
                         "pattern_id": pattern_id,
                         "values": values,
                         "invert": invert,
                     });
+
+                    // Add optional global controls
+                    if let Some(emit) = emit_gyro {
+                        body["emit_gyro"] = serde_json::json!(emit);
+                    }
+                    if let Some(scale) = plate_scale {
+                        body["plate_scale"] = serde_json::json!(scale);
+                    }
 
                     let _ = Request::post("/config").json(&body).unwrap().send().await;
                 });
@@ -702,27 +735,114 @@ impl CalibrateFrontend {
     }
 
     fn view_global_controls(&self, ctx: &Context<Self>, schema: &SchemaResponse) -> Html {
-        // Handle invert specially since it's a known global control
-        let has_invert = schema
-            .global_controls
-            .iter()
-            .any(|c| matches!(c, ControlSpec::Bool { id, .. } if id == "invert"));
+        html! {
+            <>
+                // Invert is handled specially (uses self.invert state)
+                { schema.global_controls.iter().filter_map(|c| {
+                    if let ControlSpec::Bool { id, .. } = c {
+                        if id == "invert" {
+                            return Some(html! {
+                                <div class="control-group">
+                                    <label style="cursor: pointer;">
+                                        <input
+                                            type="checkbox"
+                                            checked={self.invert}
+                                            onchange={ctx.link().callback(|_| Msg::ToggleInvert)}
+                                        />
+                                        <span style="margin-left: 5px;">{"Invert Colors"}</span>
+                                    </label>
+                                </div>
+                            });
+                        }
+                    }
+                    None
+                }).collect::<Html>() }
 
-        if has_invert {
-            html! {
-                <div class="control-group">
-                    <label style="cursor: pointer;">
-                        <input
-                            type="checkbox"
-                            checked={self.invert}
-                            onchange={ctx.link().callback(|_| Msg::ToggleInvert)}
-                        />
-                        <span style="margin-left: 5px;">{"Invert Colors"}</span>
-                    </label>
-                </div>
+                // Other global controls rendered dynamically
+                { for schema.global_controls.iter().filter_map(|control| {
+                    // Skip invert, it's handled above
+                    if control.id() == "invert" {
+                        return None;
+                    }
+                    Some(self.view_global_control(ctx, control))
+                })}
+            </>
+        }
+    }
+
+    fn view_global_control(&self, ctx: &Context<Self>, control: &ControlSpec) -> Html {
+        match control {
+            ControlSpec::Bool { id, label, .. } => {
+                let current_value = self
+                    .global_control_values
+                    .get(id)
+                    .and_then(|v| match v {
+                        ControlValue::Bool(b) => Some(*b),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+
+                let id_clone = id.clone();
+                let onchange = ctx.link().callback(move |_| {
+                    Msg::UpdateGlobalControl(id_clone.clone(), ControlValue::Bool(!current_value))
+                });
+
+                html! {
+                    <div class="control-group">
+                        <label style="cursor: pointer;">
+                            <input
+                                type="checkbox"
+                                checked={current_value}
+                                {onchange}
+                            />
+                            <span style="margin-left: 5px;">{label}</span>
+                        </label>
+                    </div>
+                }
             }
-        } else {
-            html! {}
+            ControlSpec::FloatRange {
+                id,
+                label,
+                min,
+                max,
+                step,
+                default,
+            } => {
+                let current_value = self
+                    .global_control_values
+                    .get(id)
+                    .and_then(|v| match v {
+                        ControlValue::Float(f) => Some(*f),
+                        _ => None,
+                    })
+                    .unwrap_or(*default);
+
+                let id_clone = id.clone();
+                let oninput = ctx.link().callback(move |e: InputEvent| {
+                    let target: HtmlInputElement = e.target_unchecked_into();
+                    let value = target.value().parse().unwrap_or(0.0);
+                    Msg::UpdateGlobalControl(id_clone.clone(), ControlValue::Float(value))
+                });
+
+                html! {
+                    <div class="control-group">
+                        <label class="control-label">
+                            {label}{": "}
+                            <span class="range-value">{format!("{:.2}", current_value)}</span>
+                        </label>
+                        <input
+                            type="range"
+                            min={min.to_string()}
+                            max={max.to_string()}
+                            step={step.to_string()}
+                            value={current_value.to_string()}
+                            {oninput}
+                        />
+                    </div>
+                }
+            }
+            // Int and Text global controls not expected but handle for completeness
+            _ => html! {},
         }
     }
 }

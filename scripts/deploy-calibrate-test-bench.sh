@@ -96,7 +96,7 @@ WorkingDirectory=/home/meawoppl/rust-builds/meter-sim
 Environment=DISPLAY=:0
 Environment=SDL_VIDEODRIVER=x11
 Environment=RUST_LOG=info
-ExecStart=/home/meawoppl/rust-builds/meter-sim/target/release/calibrate_serve --wait-for-oled
+ExecStart=/home/meawoppl/rust-builds/meter-sim/target/release/calibrate_serve --wait-for-oled --ftdi-device 0
 Restart=on-failure
 RestartSec=5
 
