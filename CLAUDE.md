@@ -103,6 +103,18 @@ The hooks are versioned in the repo, so changes take effect immediately without 
 - Always check `git status` before committing to ensure no unwanted files are staged
 - **After pushing work to a branch, share the PR link directly** - Don't share diff/compare links, just the PR URL
 
+## Monitoring CI Status
+When waiting for CI checks on a PR, use `gh pr checks` with `--watch` or `--fail-fast`:
+```bash
+# Watch all checks until completion
+gh pr checks <pr-number> --watch
+
+# Watch and exit on first failure
+gh pr checks <pr-number> --watch --fail-fast
+```
+
+Do NOT use `sleep` commands to poll CI status - the `--watch` flag handles this properly.
+
 ## ARM64 Builds and Deployment
 
 ### Self-Hosted Runner
