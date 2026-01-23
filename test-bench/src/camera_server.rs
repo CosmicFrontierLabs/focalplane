@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use shared::bad_pixel_map::BadPixelMap;
 use shared::camera_interface::{CameraInterface, FrameMetadata, SensorGeometry};
 use shared::frame_writer::{FrameFormat, FrameWriterHandle};
-use shared::image_proc::detection::naive::detect_stars as detect_stars_naive;
 use shared::image_proc::u16_to_gray_image;
 use shared::tracking_message::TrackingMessage;
 use std::net::SocketAddr;
@@ -231,10 +230,6 @@ pub struct AppState<C: CameraInterface> {
     pub tracking_config: Option<TrackingConfig>,
     /// FSM control state (None if FSM not configured)
     pub fsm: Option<Arc<FsmSharedState>>,
-    /// Star detection settings for analysis overlay
-    pub star_detection_settings: Arc<RwLock<test_bench_shared::StarDetectionSettings>>,
-    /// Latest star detection result
-    pub latest_star_detection: Arc<RwLock<Option<test_bench_shared::StarDetectionResult>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -788,86 +783,6 @@ async fn get_zoom_endpoint<C: CameraInterface + 'static>(
     }
 }
 
-async fn get_zoom_annotated_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    axum::extract::Query(params): axum::extract::Query<ZoomQueryParams>,
-) -> Response {
-    let annotated_data = {
-        let latest = state.latest_annotated.read().await;
-        latest.clone()
-    };
-
-    match annotated_data {
-        Some((img, frame_num)) => {
-            let scale_factor = 4;
-            let scaled_size = params.size * scale_factor;
-
-            // Extract region from annotated image
-            let x_start = params.x.saturating_sub(params.size / 2);
-            let y_start = params.y.saturating_sub(params.size / 2);
-
-            let rgb_img = img.to_rgb8();
-            let (img_w, img_h) = (rgb_img.width() as usize, rgb_img.height() as usize);
-
-            // Create scaled RGB patch
-            let mut scaled_patch = Vec::with_capacity(scaled_size * scaled_size * 3);
-            for y in 0..scaled_size {
-                let src_y = y_start + y / scale_factor;
-                for x in 0..scaled_size {
-                    let src_x = x_start + x / scale_factor;
-                    if src_y < img_h && src_x < img_w {
-                        let pixel = rgb_img.get_pixel(src_x as u32, src_y as u32);
-                        scaled_patch.push(pixel[0]);
-                        scaled_patch.push(pixel[1]);
-                        scaled_patch.push(pixel[2]);
-                    } else {
-                        scaled_patch.push(0);
-                        scaled_patch.push(0);
-                        scaled_patch.push(0);
-                    }
-                }
-            }
-
-            let img = match image::RgbImage::from_raw(
-                scaled_size as u32,
-                scaled_size as u32,
-                scaled_patch,
-            ) {
-                Some(img) => img,
-                None => {
-                    return Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from("Failed to create image buffer"))
-                        .unwrap()
-                }
-            };
-
-            let mut jpeg_bytes = Vec::new();
-            if let Err(e) = img.write_to(
-                &mut std::io::Cursor::new(&mut jpeg_bytes),
-                image::ImageFormat::Jpeg,
-            ) {
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(format!("Failed to encode JPEG: {e}")))
-                    .unwrap();
-            }
-
-            Response::builder()
-                .header(header::CONTENT_TYPE, "image/jpeg")
-                .header("X-Center-X", params.x.to_string())
-                .header("X-Center-Y", params.y.to_string())
-                .header("X-Frame-Number", frame_num.to_string())
-                .body(Body::from(jpeg_bytes))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .body(Body::from("No annotated frame available yet"))
-            .unwrap(),
-    }
-}
-
 async fn logging_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,
@@ -1200,63 +1115,6 @@ async fn fsm_move_endpoint<C: CameraInterface + 'static>(
     }
 }
 
-// ==================== Star Detection Endpoints ====================
-
-async fn star_detection_settings_get_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    let settings = state.star_detection_settings.read().await.clone();
-    let json = serde_json::to_string(&settings).unwrap();
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json))
-        .unwrap()
-}
-
-async fn star_detection_settings_post_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    Json(new_settings): Json<test_bench_shared::StarDetectionSettings>,
-) -> Response {
-    {
-        let mut settings = state.star_detection_settings.write().await;
-        *settings = new_settings.clone();
-    }
-    tracing::info!(
-        "Star detection settings updated: enabled={}, sigma={:.1}, min_flux={:.0}",
-        new_settings.enabled,
-        new_settings.detection_sigma,
-        new_settings.min_flux
-    );
-    let json = serde_json::to_string(&new_settings).unwrap();
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json))
-        .unwrap()
-}
-
-async fn star_detection_result_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    let result = state.latest_star_detection.read().await.clone();
-    match result {
-        Some(r) => {
-            let json = serde_json::to_string(&r).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => {
-            let empty = test_bench_shared::StarDetectionResult::default();
-            let json = serde_json::to_string(&empty).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-    }
-}
-
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {
     use axum::routing::get_service;
     use tower_http::services::ServeDir;
@@ -1274,7 +1132,6 @@ pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> R
             "/zoom",
             post(set_zoom_endpoint::<C>).get(get_zoom_endpoint::<C>),
         )
-        .route("/zoom-annotated", get(get_zoom_annotated_endpoint::<C>))
         .route("/tracking/status", get(tracking_status_endpoint::<C>))
         .route("/tracking/events", get(tracking_events_endpoint::<C>))
         .route("/tracking/enable", post(tracking_enable_endpoint::<C>))
@@ -1288,15 +1145,6 @@ pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> R
         )
         .route("/fsm/status", get(fsm_status_endpoint::<C>))
         .route("/fsm/move", post(fsm_move_endpoint::<C>))
-        .route(
-            "/detection/settings",
-            get(star_detection_settings_get_endpoint::<C>)
-                .post(star_detection_settings_post_endpoint::<C>),
-        )
-        .route(
-            "/detection/result",
-            get(star_detection_result_endpoint::<C>),
-        )
         .nest_service(
             "/static",
             get_service(ServeDir::new("test-bench-frontend/dist/fgs")),
@@ -1349,10 +1197,6 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         tracking: None,
         tracking_config: None,
         fsm: None,
-        star_detection_settings: Arc::new(RwLock::new(
-            test_bench_shared::StarDetectionSettings::default(),
-        )),
-        latest_star_detection: Arc::new(RwLock::new(None)),
     });
 
     info!("Starting background capture loop...");
@@ -1464,123 +1308,27 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
             latest.clone()
         };
 
-        // Read detection settings
-        let settings = state.star_detection_settings.read().await.clone();
-
-        // Get bad pixel map if tracking config is available
-        let bad_pixel_map = state
-            .tracking_config
-            .as_ref()
-            .map(|tc| tc.bad_pixel_map.clone());
-
         if let Some((frame, metadata, capture_timestamp)) = frame_data {
             let frame_age = start_total.duration_since(capture_timestamp);
             let frame_num = metadata.frame_number;
 
-            let width = state.camera_geometry.width() as u32;
-            let height = state.camera_geometry.height() as u32;
-
-            let frame_for_analysis = frame.clone();
+            let frame_for_render = frame.clone();
             let result = tokio::task::spawn_blocking(move || {
-                let start_analysis = std::time::Instant::now();
-
-                // Convert frame to f64 for detection
-                let frame_f64 = frame_for_analysis.mapv(|v| v as f64);
-
-                // Compute background stats for threshold
-                let mean: f64 = frame_f64.iter().sum::<f64>() / frame_f64.len() as f64;
-                let variance: f64 = frame_f64.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                    / frame_f64.len() as f64;
-                let rms = variance.sqrt();
-                let threshold = mean + settings.detection_sigma * rms;
-
-                // Detect stars using naive centroiding
-                let raw_detections = if settings.enabled {
-                    detect_stars_naive(&frame_f64.view(), Some(threshold))
-                } else {
-                    Vec::new()
-                };
-
-                // Filter by bad pixel map and quality
-                let detected_stars: Vec<test_bench_shared::DetectedStar> = raw_detections
-                    .iter()
-                    .map(|det| {
-                        let near_bad_pixel = bad_pixel_map.as_ref().is_some_and(|bpm| {
-                            bpm.distance_to_nearest_bad_pixel(det.x as usize, det.y as usize)
-                                .is_some_and(|d| d < settings.min_bad_pixel_distance)
-                        });
-
-                        let valid = !near_bad_pixel
-                            && det.aspect_ratio < settings.max_aspect_ratio
-                            && det.flux >= settings.min_flux;
-
-                        test_bench_shared::DetectedStar {
-                            x: det.x,
-                            y: det.y,
-                            flux: det.flux,
-                            aspect_ratio: det.aspect_ratio,
-                            diameter: det.diameter,
-                            valid,
-                        }
-                    })
-                    .collect();
-
-                let analysis_time = start_analysis.elapsed();
-
-                // Log detection stats
-                let valid_count = detected_stars.iter().filter(|s| s.valid).count();
-                let invalid_count = detected_stars.len() - valid_count;
-                tracing::info!(
-                    "Star detection: {} total ({} valid, {} rejected), threshold={:.1}, time={:.1}ms",
-                    detected_stars.len(),
-                    valid_count,
-                    invalid_count,
-                    threshold,
-                    analysis_time.as_secs_f64() * 1000.0
-                );
-
-                // Render SVG overlay with detected stars
                 let start_render = std::time::Instant::now();
-                let svg_overlay = render_star_overlay_svg(width, height, &detected_stars);
-                let annotated_img =
-                    render_star_annotated_image(&frame_for_analysis, &detected_stars);
+                let gray_img = u16_to_gray_image(&frame_for_render);
+                let annotated_img = DynamicImage::ImageLuma8(gray_img);
                 let render_time = start_render.elapsed();
 
-                let detection_result = test_bench_shared::StarDetectionResult {
-                    stars: detected_stars,
-                    detection_time_ms: analysis_time.as_secs_f32() * 1000.0,
-                    frame_number: frame_num,
-                };
-
-                Ok::<_, anyhow::Error>((
-                    annotated_img,
-                    svg_overlay,
-                    detection_result,
-                    analysis_time,
-                    render_time,
-                ))
+                Ok::<_, anyhow::Error>((annotated_img, render_time))
             })
             .await;
 
             match result {
-                Ok(Ok((
-                    annotated_img,
-                    svg_overlay,
-                    detection_result,
-                    analysis_time,
-                    render_time,
-                ))) => {
+                Ok(Ok((annotated_img, render_time))) => {
                     let total_time = start_total.elapsed();
                     last_analysis_time = start_total;
 
                     let mut stats = state.stats.lock().await;
-                    stats
-                        .analysis_timing_ms
-                        .push(analysis_time.as_secs_f32() * 1000.0);
-                    if stats.analysis_timing_ms.len() > 100 {
-                        stats.analysis_timing_ms.remove(0);
-                    }
-
                     stats
                         .render_timing_ms
                         .push(render_time.as_secs_f32() * 1000.0);
@@ -1596,19 +1344,9 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
                     }
                     drop(stats);
 
-                    // Store star detection result
-                    {
-                        let mut latest_det = state.latest_star_detection.write().await;
-                        *latest_det = Some(detection_result);
-                    }
-
                     let mut latest = state.latest_annotated.write().await;
                     *latest = Some((annotated_img, frame_num));
                     drop(latest);
-
-                    let mut latest_svg = state.latest_overlay_svg.write().await;
-                    *latest_svg = Some((svg_overlay, frame_num));
-                    drop(latest_svg);
 
                     state.annotated_notify.notify_waiters();
 
@@ -1631,17 +1369,16 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
                     }
 
                     tracing::debug!(
-                        "Pipeline: frame={}, interval={:.1}ms, age={:.1}ms, analysis={:.1}ms, render={:.1}ms, total={:.1}ms",
+                        "Pipeline: frame={}, interval={:.1}ms, age={:.1}ms, render={:.1}ms, total={:.1}ms",
                         frame_num,
                         analysis_interval.as_secs_f64() * 1000.0,
                         frame_age.as_secs_f64() * 1000.0,
-                        analysis_time.as_secs_f64() * 1000.0,
                         render_time.as_secs_f64() * 1000.0,
                         total_time.as_secs_f64() * 1000.0
                     );
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("Analysis/render error in analysis loop: {e}");
+                    tracing::error!("Render error in analysis loop: {e}");
                 }
                 Err(e) => {
                     tracing::error!("Task join error in analysis loop: {e}");
@@ -1650,243 +1387,6 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-    }
-}
-
-/// Interpolate color from green (small radius) to banana yellow (large radius).
-/// Returns (r, g, b) values 0-255.
-fn radius_to_color(radius: f64, min_radius: f64, max_radius: f64) -> (u8, u8, u8) {
-    // Normalize radius to 0-1 range
-    let range = (max_radius - min_radius).max(1.0);
-    let t = ((radius - min_radius) / range).clamp(0.0, 1.0);
-
-    // Green (0, 255, 0) -> Banana yellow (255, 225, 53)
-    let r = (0.0 + t * 255.0) as u8;
-    let g = (255.0 - t * 30.0) as u8; // 255 -> 225
-    let b = (0.0 + t * 53.0) as u8;
-
-    (r, g, b)
-}
-
-/// Render star detection overlay as SVG.
-/// Uses soft alpha circles at 2x diameter with fins on outer edge (not crossing the star).
-/// Color varies from green (smallest stars) to banana yellow (largest stars).
-fn render_star_overlay_svg(
-    width: u32,
-    height: u32,
-    stars: &[test_bench_shared::DetectedStar],
-) -> String {
-    let mut svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" preserveAspectRatio="none">"#
-    );
-
-    // Find min/max diameter for color scaling (only valid stars)
-    let valid_stars: Vec<_> = stars.iter().filter(|s| s.valid).collect();
-    let valid_count = valid_stars.len();
-    let min_diameter = valid_stars
-        .iter()
-        .map(|s| s.diameter)
-        .fold(f64::INFINITY, f64::min)
-        .max(1.0);
-    let max_diameter = valid_stars
-        .iter()
-        .map(|s| s.diameter)
-        .fold(0.0, f64::max)
-        .max(min_diameter + 1.0);
-
-    // Calculate median diameter
-    let median_diameter = if valid_stars.is_empty() {
-        0.0
-    } else {
-        let mut diameters: Vec<f64> = valid_stars.iter().map(|s| s.diameter).collect();
-        diameters.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mid = diameters.len() / 2;
-        if diameters.len() % 2 == 0 {
-            (diameters[mid - 1] + diameters[mid]) / 2.0
-        } else {
-            diameters[mid]
-        }
-    };
-
-    for star in stars {
-        let (stroke_color, fill_color) = if star.valid {
-            // Color based on diameter: green (small) -> banana yellow (large)
-            let (r, g, b) = radius_to_color(star.diameter, min_diameter, max_diameter);
-            (
-                format!("rgba({r},{g},{b},0.7)"),
-                format!("rgba({r},{g},{b},0.15)"),
-            )
-        } else {
-            // Invalid stars stay orange
-            (
-                "rgba(255,102,0,0.6)".to_string(),
-                "rgba(255,102,0,0.1)".to_string(),
-            )
-        };
-
-        // Circle radius is 2x the star diameter, minimum 8px
-        let circle_radius = (star.diameter * 2.0).max(8.0);
-
-        // Draw soft filled circle around star
-        svg.push_str(&format!(
-            r#"<circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="{}" stroke="{}" stroke-width="2" />"#,
-            star.x, star.y, circle_radius, fill_color, stroke_color
-        ));
-
-        // Draw fins on outer edge (not crossing the star)
-        let fin_inner = circle_radius;
-        let fin_outer = circle_radius + 6.0;
-
-        // Top fin
-        svg.push_str(&format!(
-            r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="2" />"#,
-            star.x,
-            star.y - fin_inner,
-            star.x,
-            star.y - fin_outer,
-            stroke_color
-        ));
-        // Bottom fin
-        svg.push_str(&format!(
-            r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="2" />"#,
-            star.x,
-            star.y + fin_inner,
-            star.x,
-            star.y + fin_outer,
-            stroke_color
-        ));
-        // Left fin
-        svg.push_str(&format!(
-            r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="2" />"#,
-            star.x - fin_inner,
-            star.y,
-            star.x - fin_outer,
-            star.y,
-            stroke_color
-        ));
-        // Right fin
-        svg.push_str(&format!(
-            r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}" stroke="{}" stroke-width="2" />"#,
-            star.x + fin_inner,
-            star.y,
-            star.x + fin_outer,
-            star.y,
-            stroke_color
-        ));
-    }
-
-    // Add statistics text in top-left corner
-    // Use a background rect for readability, then text on top
-    svg.push_str(
-        "<rect x=\"10\" y=\"10\" width=\"280\" height=\"60\" fill=\"rgba(0,0,0,0.6)\" rx=\"5\" />",
-    );
-    svg.push_str("<text x=\"20\" y=\"35\" fill=\"#00ff00\" font-family=\"monospace\" font-size=\"18\">Stars: ");
-    svg.push_str(&valid_count.to_string());
-    svg.push_str("</text>");
-    svg.push_str("<text x=\"20\" y=\"58\" fill=\"#00ff00\" font-family=\"monospace\" font-size=\"18\">Median diameter: ");
-    svg.push_str(&format!("{median_diameter:.2}"));
-    svg.push_str(" px</text>");
-
-    svg.push_str("</svg>");
-    svg
-}
-
-/// Render annotated image with star markers.
-/// Uses soft circles at 2x diameter with fins on outer edge (not crossing the star).
-/// Color gradient: green (smallest) -> banana yellow (largest).
-fn render_star_annotated_image(
-    frame: &Array2<u16>,
-    stars: &[test_bench_shared::DetectedStar],
-) -> DynamicImage {
-    let gray_img = u16_to_gray_image(frame);
-    let mut rgb_img = DynamicImage::ImageLuma8(gray_img).to_rgb8();
-
-    // Find min/max diameter for color scaling
-    let valid_stars: Vec<_> = stars.iter().filter(|s| s.valid).collect();
-    let min_diameter = valid_stars
-        .iter()
-        .map(|s| s.diameter)
-        .fold(f64::INFINITY, f64::min)
-        .max(1.0);
-    let max_diameter = valid_stars
-        .iter()
-        .map(|s| s.diameter)
-        .fold(0.0, f64::max)
-        .max(min_diameter + 1.0);
-
-    for star in stars {
-        let x = star.x as i32;
-        let y = star.y as i32;
-        // 2x the star diameter for the circle, minimum 8px
-        let circle_radius = (star.diameter * 2.0).max(8.0) as i32;
-
-        let color = if star.valid {
-            let (r, g, b) = radius_to_color(star.diameter, min_diameter, max_diameter);
-            image::Rgb([r, g, b])
-        } else {
-            image::Rgb([255u8, 102u8, 0u8])
-        };
-
-        // Draw circle (simple approximation using line segments)
-        for angle in 0..48 {
-            let a1 = (angle as f64) * std::f64::consts::PI * 2.0 / 48.0;
-            let a2 = ((angle + 1) as f64) * std::f64::consts::PI * 2.0 / 48.0;
-            let x1 = x + (circle_radius as f64 * a1.cos()) as i32;
-            let y1 = y + (circle_radius as f64 * a1.sin()) as i32;
-            let x2 = x + (circle_radius as f64 * a2.cos()) as i32;
-            let y2 = y + (circle_radius as f64 * a2.sin()) as i32;
-
-            draw_line(&mut rgb_img, x1, y1, x2, y2, color);
-        }
-
-        // Draw fins on outer edge (not crossing the star)
-        let fin_inner = circle_radius;
-        let fin_outer = circle_radius + 6;
-
-        // Top fin
-        draw_line(&mut rgb_img, x, y - fin_inner, x, y - fin_outer, color);
-        // Bottom fin
-        draw_line(&mut rgb_img, x, y + fin_inner, x, y + fin_outer, color);
-        // Left fin
-        draw_line(&mut rgb_img, x - fin_inner, y, x - fin_outer, y, color);
-        // Right fin
-        draw_line(&mut rgb_img, x + fin_inner, y, x + fin_outer, y, color);
-    }
-
-    DynamicImage::ImageRgb8(rgb_img)
-}
-
-/// Draw a line on an RGB image using Bresenham's algorithm.
-fn draw_line(img: &mut image::RgbImage, x0: i32, y0: i32, x1: i32, y1: i32, color: image::Rgb<u8>) {
-    let (width, height) = (img.width() as i32, img.height() as i32);
-
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    let mut x = x0;
-    let mut y = y0;
-
-    loop {
-        if x >= 0 && x < width && y >= 0 && y < height {
-            img.put_pixel(x as u32, y as u32, color);
-        }
-
-        if x == x1 && y == y1 {
-            break;
-        }
-
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
-        }
     }
 }
 
@@ -1949,10 +1449,6 @@ pub async fn run_server_with_tracking<C: CameraInterface + Send + 'static>(
         tracking: Some(tracking_state),
         tracking_config: Some(tracking_config),
         fsm,
-        star_detection_settings: Arc::new(RwLock::new(
-            test_bench_shared::StarDetectionSettings::default(),
-        )),
-        latest_star_detection: Arc::new(RwLock::new(None)),
     });
 
     info!("Starting background capture loop with tracking support...");

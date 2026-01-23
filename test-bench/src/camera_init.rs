@@ -3,7 +3,6 @@
 //! Provides unified camera initialization logic that can be used by multiple binaries
 //! (cam_serve, cam_track, etc.) with conditional compilation based on feature flags.
 
-use anyhow::Context;
 use clap::{Args, Parser, ValueEnum};
 use shared::camera_interface::{CameraInterface, SensorBitDepth};
 use shared::image_size::PixelShape;
@@ -170,20 +169,28 @@ fn create_mock_camera(
     width: usize,
     height: usize,
 ) -> anyhow::Result<shared::camera_interface::mock::MockCameraInterface> {
-    use crate::display_patterns::apriltag;
+    use ndarray::Array2;
     use shared::camera_interface::mock::MockCameraInterface;
 
-    tracing::info!("Generating AprilTag calibration pattern...");
+    tracing::info!("Creating mock camera with checkerboard pattern...");
     tracing::info!("  Target size: {}x{}", width, height);
 
-    let apriltag_frame = apriltag::generate_as_array(width, height)
-        .context("Failed to generate AprilTag pattern")?;
-    let inverted_frame = apriltag_frame.mapv(|v| 65535 - v);
+    // Generate a simple checkerboard pattern for testing
+    let checker_size = 64;
+    let mut frame = Array2::zeros((height, width));
+    for y in 0..height {
+        for x in 0..width {
+            let checker_x = x / checker_size;
+            let checker_y = y / checker_size;
+            let is_white = (checker_x + checker_y) % 2 == 0;
+            frame[[y, x]] = if is_white { 60000u16 } else { 5000u16 };
+        }
+    }
 
     let mut camera = MockCameraInterface::new_repeating(
         PixelShape::with_width_height(width, height),
         SensorBitDepth::Bits16,
-        inverted_frame,
+        frame,
     );
     camera
         .set_exposure(std::time::Duration::from_millis(100))

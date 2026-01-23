@@ -3,7 +3,7 @@ name = "test-bench"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "AprilTag detection and calibration test bench"
+description = "Calibration test bench"
 repository.workspace = true
 license.workspace = true
 
@@ -48,7 +48,6 @@ required-features = ["linux-bins"]
 
 [dependencies]
 anyhow = "1.0"
-apriltag = "0.4.0"
 axum = "0.7"
 base64 = "0.22"
 bytemuck = "1.24.0"

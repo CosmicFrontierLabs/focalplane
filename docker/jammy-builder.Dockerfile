@@ -15,7 +15,6 @@ RUN apt-get update && apt-get install -y \
     libcfitsio-dev \
     libclang-dev \
     clang \
-    libapriltag-dev \
     libzmq3-dev \
     libfontconfig1-dev \
     libudev-dev \

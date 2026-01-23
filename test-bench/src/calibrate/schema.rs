@@ -8,11 +8,6 @@ pub fn get_pattern_schemas() -> SchemaResponse {
     SchemaResponse {
         patterns: vec![
             PatternSpec {
-                id: "April".into(),
-                name: "AprilTag Array".into(),
-                controls: vec![],
-            },
-            PatternSpec {
                 id: "Check".into(),
                 name: "Checkerboard".into(),
                 controls: vec![ControlSpec::IntRange {
@@ -186,7 +181,6 @@ pub fn parse_pattern_request(
     };
 
     match pattern_id {
-        "April" => Ok(PatternConfig::April),
         "Check" => Ok(PatternConfig::Check {
             checker_size: get_i64("checker_size", 100) as u32,
         }),
@@ -225,7 +219,6 @@ pub fn parse_pattern_request(
 pub fn pattern_to_dynamic(config: &PatternConfig) -> (String, serde_json::Value) {
     use serde_json::json;
     match config {
-        PatternConfig::April => ("April".into(), json!({})),
         PatternConfig::Check { checker_size } => {
             ("Check".into(), json!({"checker_size": checker_size}))
         }
@@ -253,7 +246,5 @@ pub fn pattern_to_dynamic(config: &PatternConfig) -> (String, serde_json::Value)
         PatternConfig::PixelGrid { spacing } => ("PixelGrid".into(), json!({"spacing": spacing})),
         PatternConfig::SiemensStar { spokes } => ("SiemensStar".into(), json!({"spokes": spokes})),
         PatternConfig::RemoteControlled { .. } => ("RemoteControlled".into(), json!({})),
-        // Advanced patterns aren't exposed via web API
-        _ => ("Unknown".into(), serde_json::json!({})),
     }
 }

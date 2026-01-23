@@ -28,7 +28,7 @@ pub type Gray16Image = ImageBuffer<Luma<u16>, Vec<u16>>;
 ///
 /// Performs pixel value inversion by subtracting each pixel from the maximum
 /// value for the given bit depth. Commonly used for converting negative images
-/// to positive or vice versa (e.g., inverting AprilTag patterns for detection).
+/// to positive or vice versa.
 ///
 /// # Arguments
 /// * `frame` - Reference to 2D grayscale array with u16 pixel values

@@ -31,7 +31,7 @@ use tokio::sync::RwLock;
     about = "Calibration pattern web server for OLED displays",
     long_about = "Web server for displaying calibration patterns on OLED displays.\n\n\
         This server provides a web interface for controlling calibration patterns displayed on \
-        an SDL2-controlled display. It supports multiple pattern types (grids, spots, AprilTags, etc.) \
+        an SDL2-controlled display. It supports multiple pattern types (grids, spots, etc.) \
         and can receive pattern commands via both HTTP REST API and ZMQ sockets.\n\n\
         Features:\n  \
         - Web UI at http://<bind>:<port>/ for interactive pattern control\n  \

@@ -287,7 +287,6 @@ else
     check_package "libcfitsio-dev" || print_warning "libcfitsio-dev not found"
     check_package "libclang-dev" || print_warning "libclang-dev not found"
     check_package "clang" || print_warning "clang not found"
-    check_package "libapriltag-dev" || print_warning "libapriltag-dev not found"
     check_package "libsdl2-dev" || print_warning "libsdl2-dev not found"
     check_package "libsdl2-image-dev" || print_warning "libsdl2-image-dev not found"
     check_package "libzmq3-dev" || print_warning "libzmq3-dev not found"

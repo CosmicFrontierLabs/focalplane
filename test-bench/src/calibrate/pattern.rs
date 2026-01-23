@@ -11,7 +11,6 @@ use crate::display_patterns::{CircularMotion, MotionTrajectory, Position2D};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PatternConfig {
-    April,
     Check {
         checker_size: u32,
     },
@@ -48,7 +47,6 @@ pub enum PatternConfig {
 impl std::fmt::Debug for PatternConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::April => write!(f, "April"),
             Self::Check { checker_size } => f
                 .debug_struct("Check")
                 .field("checker_size", checker_size)
@@ -115,7 +113,6 @@ impl PatternConfig {
     /// Returns the display name for this pattern.
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::April => "AprilTag Array",
             Self::Check { .. } => "Checkerboard",
             Self::Usaf => "USAF-1951 Target",
             Self::Static { .. } => "Digital Static",
@@ -132,7 +129,6 @@ impl PatternConfig {
     /// Generate the pattern as an image.
     pub fn generate(&self, width: u32, height: u32) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
         match self {
-            Self::April => patterns::apriltag::generate(width, height),
             Self::Check { checker_size } => Ok(patterns::checkerboard::generate(
                 width,
                 height,

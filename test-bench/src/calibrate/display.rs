@@ -368,7 +368,6 @@ fn patterns_equal(a: &PatternConfig, b: &PatternConfig) -> bool {
 
     // For non-animated patterns, compare the actual values
     match (a, b) {
-        (PatternConfig::April, PatternConfig::April) => true,
         (PatternConfig::Usaf, PatternConfig::Usaf) => true,
         (PatternConfig::Pixel, PatternConfig::Pixel) => true,
         (PatternConfig::Check { checker_size: a }, PatternConfig::Check { checker_size: b }) => {

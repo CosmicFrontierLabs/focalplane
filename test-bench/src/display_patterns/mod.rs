@@ -1,4 +1,3 @@
-pub mod apriltag;
 pub mod assets;
 pub mod checkerboard;
 pub mod circling_pixel;

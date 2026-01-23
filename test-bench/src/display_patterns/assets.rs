@@ -19,11 +19,4 @@ mod tests {
         println!("\nTotal embedded assets: {count}");
         assert!(count > 0, "No assets were embedded!");
     }
-
-    #[test]
-    fn test_apriltag_asset_exists() {
-        let tag_path = "apriltags/tag16h5/00.png";
-        let asset = Assets::get(tag_path);
-        assert!(asset.is_some(), "Failed to load AprilTag asset: {tag_path}");
-    }
 }

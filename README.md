@@ -21,11 +21,11 @@ The project is organized as a Rust workspace with multiple packages:
 - **hardware**: Hardware drivers for test bench equipment and flight hardware (Jetson Orin, cameras, gyros, PI stages)
 
 ### Test Infrastructure
-- **test-bench**: AprilTag detection and calibration test bench
+- **test-bench**: Calibration test bench
   - **poa_cameras**: PlayerOne Astronomy camera support for hardware testing (non-flight software)
 
 ### Test Infrastructure
-- **test-bench**: AprilTag detection and calibration test bench
+- **test-bench**: Calibration test bench
   - **display-util**: Display and visualization utilities for fullscreen pattern output
 
 ### Utilities
