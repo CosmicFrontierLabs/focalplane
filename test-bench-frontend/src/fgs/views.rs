@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 
 use test_bench_shared::{
-    CameraStats, ExportStatus, FsmStatus, TrackingSettings, TrackingState, TrackingStatus,
+    CameraStats, ExportStatus, FsmStatus, StarDetectionSettings, TrackingSettings, TrackingState,
+    TrackingStatus,
 };
 use yew::prelude::*;
 
@@ -333,23 +334,31 @@ pub struct ZoomViewProps {
     pub auto_update: bool,
     pub on_clear: Callback<()>,
     pub on_toggle_auto: Callback<()>,
+    #[prop_or_default]
+    pub use_annotated: bool,
 }
 
 /// Render the zoom region panel.
 #[function_component(ZoomView)]
 pub fn zoom_view(props: &ZoomViewProps) -> Html {
     let zoom_size = 128;
+    let endpoint = if props.use_annotated {
+        "/zoom-annotated"
+    } else {
+        "/zoom"
+    };
     let zoom_url = if let Some((x, y)) = props.zoom_center {
         if props.auto_update {
             format!(
-                "/zoom?x={}&y={}&size={}&t={}",
+                "{}?x={}&y={}&size={}&t={}",
+                endpoint,
                 x,
                 y,
                 zoom_size,
                 js_sys::Date::now()
             )
         } else {
-            format!("/zoom?x={x}&y={y}&size={zoom_size}")
+            format!("{endpoint}?x={x}&y={y}&size={zoom_size}")
         }
     } else {
         String::new()
@@ -872,6 +881,100 @@ pub fn fsm_view(props: &FsmViewProps) -> Html {
                 <div style="font-size: 0.7em; color: #ff0000; margin-top: 5px;">
                     {format!("Error: {}", err)}
                 </div>
+            }
+        </>
+    }
+}
+
+// ==================== Star Detection Settings ====================
+
+/// Props for star detection settings view.
+#[derive(Properties, PartialEq)]
+pub struct StarDetectionSettingsViewProps {
+    pub show: bool,
+    pub settings: Option<StarDetectionSettings>,
+    pub pending: bool,
+    pub on_toggle: Callback<()>,
+    pub on_update: Callback<(String, String)>,
+    pub on_save: Callback<()>,
+}
+
+/// Render the star detection settings panel.
+#[function_component(StarDetectionSettingsView)]
+pub fn star_detection_settings_view(props: &StarDetectionSettingsViewProps) -> Html {
+    let settings = match &props.settings {
+        Some(s) => s.clone(),
+        None => return html! { <div>{"Loading detection settings..."}</div> },
+    };
+
+    let make_slider_callback = |field: &'static str, on_update: Callback<(String, String)>| {
+        Callback::from(move |val: f64| {
+            on_update.emit((field.to_string(), val.to_string()));
+        })
+    };
+
+    let make_checkbox_callback = |field: &'static str, on_update: Callback<(String, String)>| {
+        Callback::from(move |_: ()| {
+            on_update.emit((field.to_string(), "toggle".to_string()));
+        })
+    };
+
+    html! {
+        <>
+            <SettingsButton
+                icon="⭐"
+                label="Detection"
+                expanded={props.show}
+                onclick={props.on_toggle.clone()}
+            />
+            if props.show {
+                <SettingsPanel>
+                    <Checkbox
+                        label="Enable Detection"
+                        checked={settings.enabled}
+                        onchange={make_checkbox_callback("enabled", props.on_update.clone())}
+                    />
+                    <Slider
+                        label="Detection σ"
+                        value={settings.detection_sigma}
+                        min={3.0}
+                        max={20.0}
+                        step={0.5}
+                        decimals={1}
+                        onchange={make_slider_callback("detection_sigma", props.on_update.clone())}
+                    />
+                    <Slider
+                        label="Bad Pixel Dist"
+                        value={settings.min_bad_pixel_distance}
+                        min={0.0}
+                        max={20.0}
+                        step={1.0}
+                        decimals={0}
+                        onchange={make_slider_callback("min_bad_pixel_distance", props.on_update.clone())}
+                    />
+                    <Slider
+                        label="Max Aspect"
+                        value={settings.max_aspect_ratio}
+                        min={1.0}
+                        max={5.0}
+                        step={0.1}
+                        decimals={1}
+                        onchange={make_slider_callback("max_aspect_ratio", props.on_update.clone())}
+                    />
+                    <Slider
+                        label="Min Flux"
+                        value={settings.min_flux}
+                        min={10.0}
+                        max={10000.0}
+                        step={10.0}
+                        decimals={0}
+                        onchange={make_slider_callback("min_flux", props.on_update.clone())}
+                    />
+                    <ApplyButton
+                        pending={props.pending}
+                        onclick={props.on_save.clone()}
+                    />
+                </SettingsPanel>
             }
         </>
     }

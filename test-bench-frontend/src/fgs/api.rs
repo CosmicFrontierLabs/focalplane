@@ -33,6 +33,12 @@ pub async fn check_url_ok(url: &str) -> bool {
     }
 }
 
+/// Fetch text content from a URL, returning None on failure.
+pub async fn fetch_text(url: &str) -> Option<String> {
+    let response = Request::get(url).send().await.ok()?;
+    response.text().await.ok()
+}
+
 /// Calculate exponential backoff delay for retry logic.
 pub fn calculate_backoff_delay(failure_count: u32, base_delay: u32, max_delay: u32) -> u32 {
     if failure_count == 0 {

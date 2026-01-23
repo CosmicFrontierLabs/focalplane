@@ -3,15 +3,15 @@ use wasm_bindgen::JsCast;
 use yew::prelude::*;
 
 use crate::fgs::{
-    api::{calculate_backoff_delay, check_url_ok, fetch_json_with_status, post_json},
+    api::{calculate_backoff_delay, check_url_ok, fetch_json_with_status, fetch_text, post_json},
     histogram::render_histogram,
-    views::{FsmView, StatsView, TrackingView, ZoomView},
+    views::{FsmView, StarDetectionSettingsView, StatsView, TrackingView, ZoomView},
 };
 
 pub use test_bench_shared::CameraStats;
 pub use test_bench_shared::{
-    ExportSettings, ExportStatus, FsmMoveRequest, FsmStatus, TrackingEnableRequest,
-    TrackingSettings, TrackingStatus,
+    ExportSettings, ExportStatus, FsmMoveRequest, FsmStatus, StarDetectionSettings,
+    TrackingEnableRequest, TrackingSettings, TrackingStatus,
 };
 
 /// Maximum history entries for sparkline plots (at ~10Hz polling = ~10 seconds)
@@ -99,6 +99,12 @@ pub struct FgsFrontend {
     fsm_move_pending: bool,
     fsm_target_x: f64,
     fsm_target_y: f64,
+    // Star detection state
+    star_detection_settings: Option<StarDetectionSettings>,
+    star_detection_pending: bool,
+    show_star_detection_settings: bool,
+    // SVG overlay for star detection (much faster than re-encoding full image)
+    overlay_svg: Option<String>,
 }
 
 pub enum Msg {
@@ -145,6 +151,15 @@ pub enum Msg {
     MoveFsm,
     FsmMoveComplete(FsmStatus),
     FsmMoveFailed,
+    // Star detection messages
+    StarDetectionSettingsLoaded(StarDetectionSettings),
+    ToggleStarDetectionSettings,
+    UpdateStarDetectionSetting(String, String),
+    SaveStarDetectionSettings,
+    StarDetectionSettingsSaved(StarDetectionSettings),
+    StarDetectionSettingsSaveFailed,
+    // SVG overlay message
+    OverlaySvgLoaded(String),
 }
 
 impl Component for FgsFrontend {
@@ -195,6 +210,10 @@ impl Component for FgsFrontend {
             fsm_move_pending: false,
             fsm_target_x: 0.0,
             fsm_target_y: 0.0,
+            star_detection_settings: None,
+            star_detection_pending: false,
+            show_star_detection_settings: false,
+            overlay_svg: None,
         }
     }
 
@@ -206,6 +225,7 @@ impl Component for FgsFrontend {
                 }
                 self.is_loading_image = true;
                 let link = ctx.link().clone();
+                // Always fetch /jpeg - much faster than /annotated for large sensors
                 let url = format!("/jpeg?t={}", js_sys::Date::now());
                 wasm_bindgen_futures::spawn_local(async move {
                     if check_url_ok(&url).await {
@@ -214,6 +234,20 @@ impl Component for FgsFrontend {
                         link.send_message(Msg::ImageError);
                     }
                 });
+                // Also fetch SVG overlay if star detection is enabled
+                let use_overlay = self
+                    .star_detection_settings
+                    .as_ref()
+                    .map(|s| s.enabled)
+                    .unwrap_or(false);
+                if use_overlay {
+                    let overlay_link = ctx.link().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(svg) = fetch_text("/overlay-svg").await {
+                            overlay_link.send_message(Msg::OverlaySvgLoaded(svg));
+                        }
+                    });
+                }
                 false
             }
             Msg::ImageLoaded(url) => {
@@ -358,6 +392,19 @@ impl Component for FgsFrontend {
                         link4.send_message(Msg::FsmStatusLoaded(status));
                     }
                 });
+
+                // Fetch star detection settings if we don't have them yet
+                if self.star_detection_settings.is_none() {
+                    let link5 = ctx.link().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let (_, result) =
+                            fetch_json_with_status::<StarDetectionSettings>("/detection/settings")
+                                .await;
+                        if let Some(settings) = result {
+                            link5.send_message(Msg::StarDetectionSettingsLoaded(settings));
+                        }
+                    });
+                }
                 false
             }
             Msg::TrackingStatusLoaded(status) => {
@@ -566,6 +613,85 @@ impl Component for FgsFrontend {
                 self.fsm_move_pending = false;
                 true
             }
+            // Star detection settings messages
+            Msg::StarDetectionSettingsLoaded(settings) => {
+                self.star_detection_settings = Some(settings);
+                true
+            }
+            Msg::ToggleStarDetectionSettings => {
+                self.show_star_detection_settings = !self.show_star_detection_settings;
+                true
+            }
+            Msg::UpdateStarDetectionSetting(field, value) => {
+                if let Some(ref mut settings) = self.star_detection_settings {
+                    match field.as_str() {
+                        "enabled" => settings.enabled = !settings.enabled,
+                        "detection_sigma" => {
+                            if let Ok(v) = value.parse() {
+                                settings.detection_sigma = v;
+                            }
+                        }
+                        "min_bad_pixel_distance" => {
+                            if let Ok(v) = value.parse() {
+                                settings.min_bad_pixel_distance = v;
+                            }
+                        }
+                        "max_aspect_ratio" => {
+                            if let Ok(v) = value.parse() {
+                                settings.max_aspect_ratio = v;
+                            }
+                        }
+                        "min_flux" => {
+                            if let Ok(v) = value.parse() {
+                                settings.min_flux = v;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                true
+            }
+            Msg::SaveStarDetectionSettings => {
+                if self.star_detection_pending {
+                    return false;
+                }
+                self.star_detection_pending = true;
+
+                if let Some(settings) = self.star_detection_settings.clone() {
+                    let link = ctx.link().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match post_json::<_, StarDetectionSettings>(
+                            "/detection/settings",
+                            &settings,
+                        )
+                        .await
+                        {
+                            Some(saved) => {
+                                link.send_message(Msg::StarDetectionSettingsSaved(saved))
+                            }
+                            None => link.send_message(Msg::StarDetectionSettingsSaveFailed),
+                        }
+                    });
+                }
+                true
+            }
+            Msg::StarDetectionSettingsSaved(settings) => {
+                self.star_detection_pending = false;
+                // Clear overlay if detection was disabled
+                if !settings.enabled {
+                    self.overlay_svg = None;
+                }
+                self.star_detection_settings = Some(settings);
+                true
+            }
+            Msg::StarDetectionSettingsSaveFailed => {
+                self.star_detection_pending = false;
+                true
+            }
+            Msg::OverlaySvgLoaded(svg) => {
+                self.overlay_svg = Some(svg);
+                true
+            }
         }
     }
 
@@ -662,6 +788,15 @@ impl Component for FgsFrontend {
                         on_move={ctx.link().callback(|_| Msg::MoveFsm)}
                     />
 
+                    <StarDetectionSettingsView
+                        show={self.show_star_detection_settings}
+                        settings={self.star_detection_settings.clone()}
+                        pending={self.star_detection_pending}
+                        on_toggle={ctx.link().callback(|_| Msg::ToggleStarDetectionSettings)}
+                        on_update={ctx.link().callback(|(field, val)| Msg::UpdateStarDetectionSetting(field, val))}
+                        on_save={ctx.link().callback(|_| Msg::SaveStarDetectionSettings)}
+                    />
+
                     <h2 style="margin-top: 30px;">{"Endpoints"}</h2>
                     <div class="metadata-item">
                         <a href="/jpeg">{"JPEG Frame"}</a><br/>
@@ -676,7 +811,7 @@ impl Component for FgsFrontend {
                         <span id="update-time"></span><br/>
                         <span id="frame-timestamp" style="color: #00aa00; font-size: 0.9em;"></span>
                     </div>
-                    <div class="image-container">
+                    <div class="image-container" style="position: relative;">
                         <img
                             id="camera-frame"
                             class="image-frame"
@@ -684,8 +819,21 @@ impl Component for FgsFrontend {
                             alt="Camera Frame"
                             onclick={onclick}
                             ontouchstart={ontouchstart}
-                            style="cursor: crosshair; touch-action: pinch-zoom;"
+                            style="cursor: crosshair; touch-action: pinch-zoom; display: block;"
                         />
+                        {if let Some(svg) = &self.overlay_svg {
+                            // The SVG needs width/height 100% to scale with the image
+                            let svg_with_style = svg.replacen(
+                                r#"<svg "#,
+                                r#"<svg style="width: 100%; height: 100%;" "#,
+                                1
+                            );
+                            Html::from_html_unchecked(AttrValue::from(format!(
+                                r#"<div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;">{svg_with_style}</div>"#
+                            )))
+                        } else {
+                            html! {}
+                        }}
                     </div>
                 </div>
 
@@ -699,6 +847,7 @@ impl Component for FgsFrontend {
                         auto_update={self.zoom_auto_update}
                         on_clear={ctx.link().callback(|_| Msg::ClearZoom)}
                         on_toggle_auto={ctx.link().callback(|_| Msg::ToggleZoomAutoUpdate)}
+                        use_annotated={self.star_detection_settings.as_ref().map(|s| s.enabled).unwrap_or(false)}
                     />
 
                     <h2 style="margin-top: 30px;">{"Histogram"}</h2>
