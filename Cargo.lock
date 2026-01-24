@@ -5064,6 +5064,7 @@ dependencies = [
  "serde_json",
  "starfield",
  "tempfile",
+ "test-bench-shared",
  "thiserror 1.0.69",
  "tiny-skia",
  "tracing",

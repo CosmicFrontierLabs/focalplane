@@ -90,6 +90,78 @@ impl CalibrateServerClient {
         self.http.post_no_response("/pattern", command).await
     }
 
+    // === Convenience Methods (wrapping PatternCommand) ===
+
+    /// Enable RemoteControlled mode on the display.
+    ///
+    /// This must be called before pattern commands will be visible.
+    pub async fn enable_remote_mode(&self) -> Result<(), CalibrateError> {
+        let config = PatternConfigRequest {
+            pattern_id: "RemoteControlled".to_string(),
+            values: serde_json::Map::new(),
+            invert: Some(false),
+            emit_gyro: None,
+            plate_scale: None,
+        };
+        self.set_config(&config).await
+    }
+
+    /// Display a single Gaussian spot.
+    ///
+    /// # Arguments
+    /// * `x` - X position in display pixels
+    /// * `y` - Y position in display pixels
+    /// * `fwhm` - Full-width at half-maximum in pixels
+    /// * `intensity` - Peak intensity (0.0 to 1.0)
+    pub async fn spot(
+        &self,
+        x: f64,
+        y: f64,
+        fwhm: f64,
+        intensity: f64,
+    ) -> Result<(), CalibrateError> {
+        self.set_pattern(&PatternCommand::Spot {
+            x,
+            y,
+            fwhm,
+            intensity,
+        })
+        .await
+    }
+
+    /// Display a grid of spots.
+    ///
+    /// # Arguments
+    /// * `positions` - List of (x, y) positions in display pixels
+    /// * `fwhm` - Full-width at half-maximum in pixels
+    /// * `intensity` - Peak intensity (0.0 to 1.0)
+    pub async fn spot_grid(
+        &self,
+        positions: Vec<(f64, f64)>,
+        fwhm: f64,
+        intensity: f64,
+    ) -> Result<(), CalibrateError> {
+        self.set_pattern(&PatternCommand::SpotGrid {
+            positions,
+            fwhm,
+            intensity,
+        })
+        .await
+    }
+
+    /// Display uniform gray level.
+    ///
+    /// # Arguments
+    /// * `level` - Gray level (0 = black, 255 = white)
+    pub async fn uniform(&self, level: u8) -> Result<(), CalibrateError> {
+        self.set_pattern(&PatternCommand::Uniform { level }).await
+    }
+
+    /// Clear display to black.
+    pub async fn clear(&self) -> Result<(), CalibrateError> {
+        self.set_pattern(&PatternCommand::Clear).await
+    }
+
     // === Image URLs ===
 
     /// Get the URL for JPEG pattern endpoint.

@@ -15,7 +15,7 @@ use super::Args;
 ///
 /// Iterates through each grid position, sends spot commands, collects
 /// tracking measurements, and estimates the affine transform.
-pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Calibration Controller (Single Pass Mode)");
     println!("==========================================");
 
@@ -25,7 +25,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         tracking_collector,
         positions,
         ..
-    } = initialize(args, true)?;
+    } = initialize(args, true).await?;
 
     let total_positions = positions.len();
 
@@ -48,10 +48,12 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Send spot command via REST
-        pattern_client.spot(*display_x, *display_y, args.spot_fwhm, args.spot_intensity)?;
+        pattern_client
+            .spot(*display_x, *display_y, args.spot_fwhm, args.spot_intensity)
+            .await?;
 
         // Wait for settle
-        std::thread::sleep(settle_duration);
+        tokio::time::sleep(settle_duration).await;
 
         // Collect measurements (x, y, diameter)
         let mut measurements: Vec<(f64, f64, f64)> = Vec::new();
@@ -73,7 +75,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if measurements.len() < args.measurements_per_position {
-                std::thread::sleep(Duration::from_millis(10));
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
 
@@ -115,7 +117,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // Clear display
     println!();
     println!("Clearing display...");
-    pattern_client.clear()?;
+    pattern_client.clear().await?;
 
     // Convert to correspondences for affine estimation
     let correspondences: Vec<PointCorrespondence> = calibration_points

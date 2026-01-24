@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use shared::pattern_client::PatternClient;
 use shared::tracking_collector::TrackingCollector;
+use test_bench_shared::CalibrateServerClient;
 
 use super::communication::discover_sensor_info;
 use super::grid::generate_centered_grid;
@@ -14,7 +14,7 @@ use super::Args;
 /// Initialized resources for calibration.
 pub struct CalibrationContext {
     /// HTTP client for pattern commands
-    pub pattern_client: PatternClient,
+    pub pattern_client: CalibrateServerClient,
     /// Tracking message collector
     pub tracking_collector: TrackingCollector,
     /// Detected or default sensor width
@@ -28,10 +28,10 @@ pub struct CalibrationContext {
 /// Initialize all connections and discover sensor info.
 ///
 /// Returns a CalibrationContext with all resources ready to use.
-pub fn initialize(
+pub async fn initialize(
     args: &Args,
     verbose: bool,
-) -> Result<CalibrationContext, Box<dyn std::error::Error>> {
+) -> Result<CalibrationContext, Box<dyn std::error::Error + Send + Sync>> {
     if verbose {
         println!("HTTP endpoint: {}", args.http_endpoint);
         println!("Tracking endpoint: {}", args.tracking_endpoint);
@@ -44,7 +44,7 @@ pub fn initialize(
     }
 
     // Create pattern client
-    let pattern_client = PatternClient::new(&args.http_endpoint);
+    let pattern_client = CalibrateServerClient::new(&args.http_endpoint);
 
     // Create tracking collector (waits for connection to establish)
     if verbose {
@@ -63,6 +63,7 @@ pub fn initialize(
     }
     pattern_client
         .enable_remote_mode()
+        .await
         .map_err(|e| format!("Failed to enable RemoteControlled mode: {e}"))?;
     if verbose {
         println!("RemoteControlled mode enabled");

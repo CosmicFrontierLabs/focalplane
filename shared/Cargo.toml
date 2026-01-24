@@ -8,9 +8,8 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["full"]
-full = ["tracking", "pattern-client", "frame-writer", "config-storage", "system-info"]
+full = ["tracking", "frame-writer", "config-storage", "system-info"]
 tracking = []
-pattern-client = []
 frame-writer = ["dep:fitsio"]
 config-storage = []
 system-info = []
@@ -59,6 +58,9 @@ crossbeam-channel = "0.5.15"
 anyhow = "1.0.100"
 tracing = "0.1.41"
 ureq = { version = "3.1.4", features = ["json"] }
+
+# Shared types (WASM-compatible lightweight crate)
+test-bench-shared = { path = "../test-bench-shared" }
 
 [dev-dependencies]
 approx = "0.5"

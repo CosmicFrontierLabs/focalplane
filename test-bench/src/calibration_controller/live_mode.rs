@@ -30,13 +30,13 @@ pub fn check_quit() -> bool {
 }
 
 /// Sleep while checking for quit key. Returns true if should quit.
-pub fn sleep_with_quit_check(duration: Duration) -> bool {
+pub async fn sleep_with_quit_check(duration: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < duration {
         if check_quit() {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     false
 }
@@ -45,7 +45,7 @@ pub fn sleep_with_quit_check(duration: Duration) -> bool {
 ///
 /// Continuously cycles through grid positions, collecting measurements
 /// and updating the display in real-time. Press 'q' to quit.
-pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize connections and discover sensor
     let CalibrationContext {
         pattern_client,
@@ -53,7 +53,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         sensor_width,
         sensor_height,
         positions,
-    } = initialize(args, false)?;
+    } = initialize(args, false).await?;
 
     let total_positions = positions.len();
 
@@ -91,7 +91,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut current_alignment: Option<OpticalAlignment> = None;
 
     // Main live loop
-    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
         loop {
             cycle_count += 1;
 
@@ -114,6 +114,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 // Send spot command via REST
                 if pattern_client
                     .spot(display_x, display_y, args.spot_fwhm, args.spot_intensity)
+                    .await
                     .is_err()
                 {
                     app.log(format!("  ✗ HTTP send failed for [{row},{col}]"));
@@ -124,7 +125,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Wait for settle (with quit check)
-                if sleep_with_quit_check(settle_duration) {
+                if sleep_with_quit_check(settle_duration).await {
                     return Ok(());
                 }
 
@@ -153,7 +154,7 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     if collected < args.measurements_per_position {
-                        std::thread::sleep(Duration::from_millis(10));
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }
 
@@ -212,7 +213,8 @@ pub fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
                 terminal.draw(|frame| ui(frame, &app))?;
             }
         }
-    })();
+    }
+    .await;
 
     // Restore terminal
     disable_raw_mode()?;

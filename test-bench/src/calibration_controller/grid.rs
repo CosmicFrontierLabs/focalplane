@@ -2,7 +2,7 @@
 //!
 //! Re-exports the shared grid generation function for use within calibration_controller.
 
-pub use shared::generate_centered_grid;
+pub use test_bench_shared::generate_centered_grid;
 
 #[cfg(test)]
 mod tests {
