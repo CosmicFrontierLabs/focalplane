@@ -4,43 +4,20 @@
 //! and WASM (frontend) environments. All API interactions are consolidated
 //! here for consistent error handling and type safety.
 
-use gloo_net::http::Request;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::Serialize;
 
+use crate::http_client::{HttpClient, HttpClientError};
 use crate::{DisplayInfo, PatternCommand, PatternConfigResponse, SchemaResponse};
 
 /// Error type for calibrate server operations.
-#[derive(Debug, thiserror::Error)]
-pub enum CalibrateError {
-    /// HTTP request failed
-    #[error("HTTP error: {0}")]
-    Http(String),
-    /// Failed to parse response
-    #[error("Parse error: {0}")]
-    Parse(String),
-    /// Connection failed
-    #[error("Connection error: {0}")]
-    Connection(String),
-    /// Request timed out
-    #[error("Timeout")]
-    Timeout,
-    /// Server returned an error status
-    #[error("Server error (status {status}): {message}")]
-    ServerError { status: u16, message: String },
-}
-
-impl From<gloo_net::Error> for CalibrateError {
-    fn from(err: gloo_net::Error) -> Self {
-        CalibrateError::Http(err.to_string())
-    }
-}
+pub type CalibrateError = HttpClientError;
 
 /// Client for interacting with calibrate_serve HTTP API.
 ///
 /// Works in both native Rust and WASM environments.
 #[derive(Debug, Clone)]
 pub struct CalibrateServerClient {
-    base_url: String,
+    http: HttpClient,
 }
 
 impl CalibrateServerClient {
@@ -50,9 +27,9 @@ impl CalibrateServerClient {
     ///
     /// * `base_url` - The base URL of the calibrate_serve (e.g., "http://localhost:3001")
     pub fn new(base_url: &str) -> Self {
-        // Remove trailing slash if present
-        let base_url = base_url.trim_end_matches('/').to_string();
-        Self { base_url }
+        Self {
+            http: HttpClient::new(base_url),
+        }
     }
 
     /// Create a client for same-origin web requests.
@@ -72,157 +49,52 @@ impl CalibrateServerClient {
 
     /// Get the base URL this client is configured for.
     pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    // === Internal HTTP helpers ===
-
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, CalibrateError> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = Request::get(&url).send().await?;
-
-        if !response.ok() {
-            return Err(CalibrateError::ServerError {
-                status: response.status(),
-                message: response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string()),
-            });
-        }
-
-        response
-            .json::<T>()
-            .await
-            .map_err(|e| CalibrateError::Parse(e.to_string()))
-    }
-
-    #[allow(dead_code)]
-    async fn post<T: Serialize, R: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &T,
-    ) -> Result<R, CalibrateError> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = Request::post(&url)
-            .json(body)
-            .map_err(|e| CalibrateError::Parse(e.to_string()))?
-            .send()
-            .await?;
-
-        if !response.ok() {
-            return Err(CalibrateError::ServerError {
-                status: response.status(),
-                message: response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string()),
-            });
-        }
-
-        response
-            .json::<R>()
-            .await
-            .map_err(|e| CalibrateError::Parse(e.to_string()))
-    }
-
-    async fn post_no_response<T: Serialize>(
-        &self,
-        path: &str,
-        body: &T,
-    ) -> Result<(), CalibrateError> {
-        let url = format!("{}{}", self.base_url, path);
-        let response = Request::post(&url)
-            .json(body)
-            .map_err(|e| CalibrateError::Parse(e.to_string()))?
-            .send()
-            .await?;
-
-        if !response.ok() {
-            return Err(CalibrateError::ServerError {
-                status: response.status(),
-                message: response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string()),
-            });
-        }
-
-        Ok(())
+        self.http.base_url()
     }
 
     // === Display Info ===
 
     /// Get display information.
-    ///
-    /// # Returns
-    ///
-    /// Display information including dimensions, pixel pitch, and name.
     pub async fn get_display_info(&self) -> Result<DisplayInfo, CalibrateError> {
-        self.get("/info").await
+        self.http.get("/info").await
     }
 
     // === Schema ===
 
     /// Get pattern schema.
-    ///
-    /// # Returns
-    ///
-    /// Schema describing available patterns and their controls.
     pub async fn get_schema(&self) -> Result<SchemaResponse, CalibrateError> {
-        self.get("/schema").await
+        self.http.get("/schema").await
     }
 
     // === Pattern Configuration ===
 
     /// Get current pattern configuration.
-    ///
-    /// # Returns
-    ///
-    /// The current pattern ID, parameter values, and invert state.
     pub async fn get_config(&self) -> Result<PatternConfigResponse, CalibrateError> {
-        self.get("/config").await
+        self.http.get("/config").await
     }
 
     /// Update pattern configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - The pattern configuration to apply
     pub async fn set_config(&self, config: &PatternConfigRequest) -> Result<(), CalibrateError> {
-        self.post_no_response("/config", config).await
+        self.http.post_no_response("/config", config).await
     }
 
     // === Pattern Commands (RemoteControlled mode) ===
 
     /// Get current pattern command.
-    ///
-    /// # Returns
-    ///
-    /// The current pattern command (Spot, SpotGrid, Uniform, or Clear).
     pub async fn get_pattern(&self) -> Result<PatternCommand, CalibrateError> {
-        self.get("/pattern").await
+        self.http.get("/pattern").await
     }
 
     /// Send pattern command.
-    ///
-    /// # Arguments
-    ///
-    /// * `command` - The pattern command to execute
-    ///
-    /// Note: The display must be in RemoteControlled mode for these
-    /// commands to have visible effect.
     pub async fn set_pattern(&self, command: &PatternCommand) -> Result<(), CalibrateError> {
-        self.post_no_response("/pattern", command).await
+        self.http.post_no_response("/pattern", command).await
     }
 
     // === Image URLs ===
-    // These return URLs rather than fetching data, since images are typically
-    // loaded directly by the browser/frontend.
 
     /// Get the URL for JPEG pattern endpoint.
     pub fn jpeg_url(&self) -> String {
-        format!("{}/jpeg", self.base_url)
+        format!("{}/jpeg", self.http.base_url())
     }
 }
 

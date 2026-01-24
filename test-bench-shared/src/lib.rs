@@ -6,10 +6,12 @@
 
 mod calibrate_client;
 mod fgs_client;
+mod http_client;
 mod ring_buffer;
 
 pub use calibrate_client::{CalibrateError, CalibrateServerClient, PatternConfigRequest};
 pub use fgs_client::{FgsError, FgsServerClient};
+pub use http_client::HttpClientError;
 pub use ring_buffer::RingBuffer;
 
 use serde::{Deserialize, Serialize};
