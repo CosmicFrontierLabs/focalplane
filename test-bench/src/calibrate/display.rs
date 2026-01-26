@@ -247,6 +247,8 @@ impl DynamicPattern {
         mjpeg.publish(MjpegFrame {
             jpeg_data: Bytes::from(jpeg_bytes),
             frame_number: *frame_num,
+            width: img.width(),
+            height: img.height(),
         });
 
         *last_publish = Instant::now();

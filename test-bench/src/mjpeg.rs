@@ -32,6 +32,10 @@ pub struct MjpegFrame {
     pub jpeg_data: Bytes,
     /// Frame sequence number (for debugging/logging)
     pub frame_number: u64,
+    /// Frame width in pixels
+    pub width: u32,
+    /// Frame height in pixels
+    pub height: u32,
 }
 
 /// Broadcaster for MJPEG frames to multiple HTTP clients.
@@ -39,8 +43,14 @@ pub struct MjpegFrame {
 /// Multiple clients can subscribe to the same frame source. Each frame
 /// is broadcast to all connected clients. Slow clients that fall behind
 /// will skip frames (they receive the latest available frame).
+///
+/// When the frame size changes (e.g., switching to/from ROI mode), the
+/// broadcaster recreates the channel, causing all subscribers to receive
+/// an error and disconnect. Clients should handle this by restarting the stream.
 pub struct MjpegBroadcaster {
-    tx: broadcast::Sender<MjpegFrame>,
+    tx: std::sync::RwLock<broadcast::Sender<MjpegFrame>>,
+    capacity: usize,
+    last_size: std::sync::RwLock<Option<(u32, u32)>>,
 }
 
 impl MjpegBroadcaster {
@@ -50,26 +60,62 @@ impl MjpegBroadcaster {
     /// receivers start missing frames. A capacity of 2-4 is usually sufficient.
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity);
-        Self { tx }
+        Self {
+            tx: std::sync::RwLock::new(tx),
+            capacity,
+            last_size: std::sync::RwLock::new(None),
+        }
     }
 
     /// Publish a new frame to all subscribers.
     ///
     /// Returns the number of active subscribers, or 0 if none.
+    ///
+    /// If the frame size has changed from the previous frame, all existing
+    /// subscribers are disconnected (the channel is recreated). This allows
+    /// clients to detect the size change via stream error and reconnect.
     pub fn publish(&self, frame: MjpegFrame) -> usize {
-        self.tx.send(frame).unwrap_or(0)
+        let new_size = (frame.width, frame.height);
+
+        // Check if size changed
+        let size_changed = {
+            let last = self.last_size.read().unwrap();
+            last.map(|old| old != new_size).unwrap_or(false)
+        };
+
+        if size_changed {
+            // Recreate the channel to disconnect all subscribers
+            let (new_tx, _) = broadcast::channel(self.capacity);
+            let mut tx = self.tx.write().unwrap();
+            *tx = new_tx;
+            tracing::info!(
+                "MJPEG frame size changed to {}x{}, disconnected all subscribers",
+                new_size.0,
+                new_size.1
+            );
+        }
+
+        // Update last known size
+        {
+            let mut last = self.last_size.write().unwrap();
+            *last = Some(new_size);
+        }
+
+        // Publish to current channel
+        let tx = self.tx.read().unwrap();
+        tx.send(frame).unwrap_or(0)
     }
 
     /// Create a subscriber that receives frames from this broadcaster.
     pub fn subscribe(&self) -> MjpegSubscriber {
-        MjpegSubscriber {
-            rx: self.tx.subscribe(),
-        }
+        let tx = self.tx.read().unwrap();
+        MjpegSubscriber { rx: tx.subscribe() }
     }
 
     /// Get the current number of active subscribers.
     pub fn subscriber_count(&self) -> usize {
-        self.tx.receiver_count()
+        let tx = self.tx.read().unwrap();
+        tx.receiver_count()
     }
 }
 
@@ -229,9 +275,50 @@ mod tests {
         let frame = MjpegFrame {
             jpeg_data: Bytes::from_static(b"test"),
             frame_number: 1,
+            width: 640,
+            height: 480,
         };
         // Should not panic, just return 0
         assert_eq!(broadcaster.publish(frame), 0);
+    }
+
+    #[test]
+    fn test_frame_size_change_disconnects_subscribers() {
+        let broadcaster = MjpegBroadcaster::new(4);
+
+        // Publish first frame to establish size
+        let frame1 = MjpegFrame {
+            jpeg_data: Bytes::from_static(b"frame1"),
+            frame_number: 1,
+            width: 640,
+            height: 480,
+        };
+        broadcaster.publish(frame1);
+
+        // Subscribe after first frame
+        let _sub = broadcaster.subscribe();
+        assert_eq!(broadcaster.subscriber_count(), 1);
+
+        // Publish frame with same size - subscriber should remain
+        let frame2 = MjpegFrame {
+            jpeg_data: Bytes::from_static(b"frame2"),
+            frame_number: 2,
+            width: 640,
+            height: 480,
+        };
+        broadcaster.publish(frame2);
+        assert_eq!(broadcaster.subscriber_count(), 1);
+
+        // Publish frame with different size - subscriber should be disconnected
+        let frame3 = MjpegFrame {
+            jpeg_data: Bytes::from_static(b"frame3"),
+            frame_number: 3,
+            width: 320,
+            height: 240,
+        };
+        broadcaster.publish(frame3);
+        // After channel recreation, old subscriber is disconnected
+        assert_eq!(broadcaster.subscriber_count(), 0);
     }
 
     #[test]

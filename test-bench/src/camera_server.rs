@@ -1312,6 +1312,8 @@ pub fn capture_loop_blocking<C: CameraInterface + Send + 'static>(state: Arc<App
                 state_clone.mjpeg.publish(MjpegFrame {
                     jpeg_data,
                     frame_number: frame_num,
+                    width: frame_owned.ncols() as u32,
+                    height: frame_owned.nrows() as u32,
                 });
                 last_mjpeg_publish = std::time::Instant::now();
             }
@@ -1927,6 +1929,8 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                     state_clone.mjpeg.publish(MjpegFrame {
                         jpeg_data,
                         frame_number: frame_num,
+                        width: frame_owned.ncols() as u32,
+                        height: frame_owned.nrows() as u32,
                     });
                     last_mjpeg_publish = std::time::Instant::now();
                 }

@@ -163,6 +163,8 @@ pub enum Msg {
     StarDetectionSettingsSaveFailed,
     // SVG overlay message
     OverlaySvgLoaded(String),
+    // MJPEG stream error (server disconnected due to frame size change)
+    StreamError,
 }
 
 impl Component for FgsFrontend {
@@ -658,6 +660,12 @@ impl Component for FgsFrontend {
                 self.overlay_svg = Some(svg);
                 true
             }
+            Msg::StreamError => {
+                // Server disconnected the MJPEG stream (likely due to frame size change)
+                // Restart the stream with a cache-busting timestamp
+                self.image_url = format!("/mjpeg?t={}", js_sys::Date::now());
+                true
+            }
         }
     }
 
@@ -779,6 +787,7 @@ impl Component for FgsFrontend {
                             alt="Camera Frame"
                             onclick={onclick}
                             ontouchstart={ontouchstart}
+                            onerror={ctx.link().callback(|_| Msg::StreamError)}
                             style="cursor: crosshair; touch-action: pinch-zoom; display: block;"
                         />
                         {if let Some(svg) = &self.overlay_svg {
