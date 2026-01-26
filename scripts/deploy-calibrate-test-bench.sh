@@ -34,11 +34,14 @@ usage() {
     echo "Deploy calibrate_serve to cfl-test-bench."
     echo ""
     echo "Modes:"
-    echo "  (default)     Update: build, sync frontend, restart service"
-    echo "  --setup       Full setup: build, sync, install systemd service"
+    echo "  (default)     Update: build and restart service"
+    echo "  --setup       Full setup: build, install systemd service"
     echo ""
     echo "Options:"
     echo "  -h, --help    Show this help"
+    echo ""
+    echo "Note: Frontend assets are now embedded in the binary at compile time."
+    echo "      No separate frontend build or sync is needed."
     exit 0
 }
 
@@ -59,11 +62,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Step 1: Build calibrate_serve on cfl-test-bench
-print_info "Building calibrate_serve on cfl-test-bench..."
-"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary calibrate_serve --test-bench --features sdl2
-
-# Step 2: Build frontend locally (requires trunk)
-print_info "Building frontend WASM files locally..."
+# Note: Frontend assets are embedded in the binary at compile time,
+# so we need to build the frontend first before compiling the server.
+print_info "Building frontend WASM files locally (for embedding)..."
 if ! command -v trunk &> /dev/null; then
     print_error "trunk not found. Install with: cargo install --locked trunk"
     exit 1
@@ -71,12 +72,11 @@ fi
 
 "$SCRIPT_DIR/build-yew-frontends.sh"
 
-# Step 3: Sync frontend files to test-bench
-print_info "Syncing frontend files to cfl-test-bench..."
-rsync -avz \
-    "$PROJECT_ROOT/test-bench-frontend/dist/calibrate/" \
-    "$REMOTE_HOST:~/$REMOTE_BUILD_DIR/test-bench-frontend/dist/calibrate/"
-print_success "Frontend files synced"
+# Step 2: Build calibrate_serve on cfl-test-bench
+# The build-remote.sh script syncs the source including frontend dist files,
+# which are then embedded into the binary during compilation.
+print_info "Building calibrate_serve on cfl-test-bench..."
+"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary calibrate_serve --test-bench --features sdl2
 
 if [ "$SETUP_MODE" = true ]; then
     # Full setup: install systemd service

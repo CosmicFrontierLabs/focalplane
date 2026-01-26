@@ -5573,6 +5573,7 @@ dependencies = [
  "libc",
  "libftd2xx",
  "meter-math",
+ "mime_guess",
  "monocle",
  "nalgebra",
  "ndarray",

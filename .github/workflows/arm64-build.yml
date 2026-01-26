@@ -28,6 +28,22 @@ jobs:
         rustc --version
         cargo --version
 
+    # Build frontends first - required for embedded assets in server binaries
+    - name: Build frontends (for embedding)
+      run: |
+        source ~/.cargo/env
+        # Ensure wasm target is available
+        rustup target add wasm32-unknown-unknown || true
+        # Install trunk if not available
+        command -v trunk || cargo install --locked trunk
+        # Install matching wasm-bindgen-cli
+        WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked || true
+        # Build frontends
+        cd test-bench-frontend
+        trunk build --config Trunk-calibrate.toml
+        trunk build --config Trunk-fgs.toml
+
     - name: Build fgs_server (NSV455 camera)
       run: |
         source ~/.cargo/env

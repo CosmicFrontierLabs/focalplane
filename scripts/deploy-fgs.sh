@@ -28,14 +28,17 @@ usage() {
     echo "Deploy fgs_server to NSV device (orin-005)."
     echo ""
     echo "Modes:"
-    echo "  (default)     Update: build, sync frontend, restart service"
-    echo "  --setup       Full setup: build, sync, install systemd service"
+    echo "  (default)     Update: build and restart service"
+    echo "  --setup       Full setup: build, install systemd service"
     echo ""
     echo "Options:"
     echo "  -h, --help    Show this help"
     echo ""
     echo "Environment Variables:"
     echo "  NSV_HOST      Override NSV host (default: cosmicfrontier@orin-005.tail944341.ts.net)"
+    echo ""
+    echo "Note: Frontend assets are now embedded in the binary at compile time."
+    echo "      No separate frontend build or sync is needed."
     exit 0
 }
 
@@ -69,12 +72,10 @@ done
 
 print_info "Deploying fgs_server ($CAMERA_DESC) to $FRIENDLY_NAME..."
 
-# Step 1: Build fgs_server on remote
-print_info "Building fgs_server on $FRIENDLY_NAME..."
-"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary fgs_server --nsv
-
-# Step 2: Build frontend locally (requires trunk)
-print_info "Building frontend WASM files locally..."
+# Step 1: Build frontend locally (for embedding into binary)
+# Note: Frontend assets are embedded in the binary at compile time,
+# so we need to build the frontend first before compiling the server.
+print_info "Building frontend WASM files locally (for embedding)..."
 if ! command -v trunk &> /dev/null; then
     print_error "trunk not found. Install with: cargo install --locked trunk"
     exit 1
@@ -82,14 +83,11 @@ fi
 
 "$SCRIPT_DIR/build-yew-frontends.sh"
 
-# Step 3: Sync frontend files (build-remote.sh already synced to ~/bin/test-bench-frontend/dist/)
-# Just sync the fgs-specific files to ensure they're up to date
-print_info "Syncing frontend files to $FRIENDLY_NAME..."
-ssh "$REMOTE_HOST" "mkdir -p ~/bin/test-bench-frontend/dist/fgs"
-rsync -avz \
-    "$PROJECT_ROOT/test-bench-frontend/dist/fgs/" \
-    "$REMOTE_HOST:~/bin/test-bench-frontend/dist/fgs/"
-print_success "Frontend files synced"
+# Step 2: Build fgs_server on remote
+# The build-remote.sh script syncs the source including frontend dist files,
+# which are then embedded into the binary during compilation.
+print_info "Building fgs_server on $FRIENDLY_NAME..."
+"$SCRIPT_DIR/build-remote.sh" --package test-bench --binary fgs_server --nsv
 
 if [ "$SETUP_MODE" = true ]; then
     # Full setup: install systemd service

@@ -69,6 +69,7 @@ rand = "0.9"
 rayon = "1.11.0"
 resvg = { version = "0.45.0", features = ["text"] }
 rust-embed = "8.7.2"
+mime_guess = "2"
 rustfft = "6.4.1"
 rusttype = "0.9.3"
 sdl2 = { version = "0.37", features = ["image"], optional = true }

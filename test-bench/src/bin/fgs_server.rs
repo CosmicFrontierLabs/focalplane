@@ -4,7 +4,7 @@
 //! cam_track (monocle FGS tracking) into a single binary. When tracking
 //! is enabled via the web UI, the system detects spots, locks on, and tracks them.
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use clap::Parser;
 use hardware::pi::S330;
 use shared::config_storage::ConfigStorage;
@@ -112,34 +112,11 @@ struct Args {
     fsm_ip: Option<String>,
 }
 
-fn check_frontend_files() -> Result<()> {
-    let wasm_file = "test-bench-frontend/dist/fgs/fgs_wasm_bg.wasm";
-    let js_file = "test-bench-frontend/dist/fgs/fgs_wasm.js";
-
-    if !std::path::Path::new(wasm_file).exists() || !std::path::Path::new(js_file).exists() {
-        anyhow::bail!(
-            "Frontend WASM files not found!\n\n\
-            The camera server requires compiled Yew frontend files.\n\n\
-            To build the frontends, run:\n\
-            \x20   ./scripts/build-yew-frontends.sh\n\n\
-            Or if you don't have trunk installed:\n\
-            \x20   cargo install --locked trunk\n\
-            \x20   ./scripts/build-yew-frontends.sh\n\n\
-            Missing files:\n\
-            \x20   - {wasm_file}\n\
-            \x20   - {js_file}"
-        );
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-
-    check_frontend_files()?;
 
     info!("Initializing camera...");
     let camera = initialize_camera(&args.camera)?;

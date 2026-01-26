@@ -22,6 +22,7 @@ use test_bench::display_utils::{
     estimate_pixel_pitch_um, get_display_resolution, list_displays, resolve_display_index,
     wait_for_oled_display, OLED_HEIGHT, OLED_PIXEL_PITCH_UM, OLED_WIDTH,
 };
+use test_bench::embedded_assets::serve_calibrate_frontend;
 use test_bench_shared::PatternCommand;
 use tokio::sync::RwLock;
 
@@ -440,9 +441,6 @@ async fn get_pattern_command(State(state): State<Arc<AppState>>) -> Json<Pattern
 
 #[tokio::main]
 async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -> Result<()> {
-    use axum::routing::get_service;
-    use tower_http::services::ServeDir;
-
     let app = Router::new()
         .route("/", get(pattern_page))
         .route("/info", get(get_display_info))
@@ -452,9 +450,9 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
         .route("/config", axum::routing::post(update_pattern_config))
         .route("/pattern", get(get_pattern_command))
         .route("/pattern", axum::routing::post(post_pattern_command))
-        .nest_service(
+        .nest(
             "/static",
-            get_service(ServeDir::new("test-bench-frontend/dist/calibrate")),
+            Router::new().fallback(get(serve_calibrate_frontend)),
         )
         .with_state(state.clone());
 
@@ -476,27 +474,6 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
     Ok(())
 }
 
-fn check_frontend_files() -> Result<()> {
-    let wasm_file = "test-bench-frontend/dist/calibrate/calibrate_wasm_bg.wasm";
-    let js_file = "test-bench-frontend/dist/calibrate/calibrate_wasm.js";
-
-    if !std::path::Path::new(wasm_file).exists() || !std::path::Path::new(js_file).exists() {
-        anyhow::bail!(
-            "Frontend WASM files not found!\n\n\
-            The calibrate server requires compiled Yew frontend files.\n\n\
-            To build the frontends, run:\n\
-            \x20   ./scripts/build-yew-frontends.sh\n\n\
-            Or if you don't have trunk installed:\n\
-            \x20   cargo install --locked trunk\n\
-            \x20   ./scripts/build-yew-frontends.sh\n\n\
-            Missing files:\n\
-            \x20   - {wasm_file}\n\
-            \x20   - {js_file}"
-        );
-    }
-    Ok(())
-}
-
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
@@ -505,8 +482,6 @@ fn main() -> Result<()> {
     if args.ftdi.handle_list_ftdi()? {
         return Ok(());
     }
-
-    check_frontend_files()?;
 
     // Either wait for OLED or initialize SDL normally
     let (sdl_context, display_index, width, height, display_name) = if args.wait_for_oled {

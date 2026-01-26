@@ -30,6 +30,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 
 use crate::camera_init::ExposureArgs;
+use crate::embedded_assets::serve_fgs_frontend;
 use clap::Args;
 
 /// Common command-line arguments for camera server binaries.
@@ -1116,9 +1117,6 @@ async fn fsm_move_endpoint<C: CameraInterface + 'static>(
 }
 
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {
-    use axum::routing::get_service;
-    use tower_http::services::ServeDir;
-
     Router::new()
         .route("/", get(camera_status_page::<C>))
         .route("/jpeg", get(jpeg_frame_endpoint::<C>))
@@ -1145,10 +1143,7 @@ pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> R
         )
         .route("/fsm/status", get(fsm_status_endpoint::<C>))
         .route("/fsm/move", post(fsm_move_endpoint::<C>))
-        .nest_service(
-            "/static",
-            get_service(ServeDir::new("test-bench-frontend/dist/fgs")),
-        )
+        .nest("/static", Router::new().fallback(get(serve_fgs_frontend)))
         .with_state(state)
         .layer(middleware::from_fn(logging_middleware))
 }

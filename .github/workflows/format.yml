@@ -20,7 +20,28 @@ jobs:
       with:
         install-deps: 'true'
         setup-cache: 'false'
-    
+
+    - name: Add wasm32 target
+      run: rustup target add wasm32-unknown-unknown
+
+    # Build frontends - required for embedded assets in clippy check
+    - name: Install wasm-bindgen-cli
+      run: |
+        WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)".*/\1/')
+        echo "Installing wasm-bindgen-cli version $WASM_BINDGEN_VERSION"
+        cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked || true
+
+    - name: Install Trunk
+      uses: jetli/trunk-action@v0.4.0
+      with:
+        version: 'v0.21.4'
+
+    - name: Build frontends (for embedding)
+      run: |
+        cd test-bench-frontend
+        trunk build --config Trunk-calibrate.toml
+        trunk build --config Trunk-fgs.toml
+
     - name: Check formatting
       run: cargo fmt --all -- --check
     
