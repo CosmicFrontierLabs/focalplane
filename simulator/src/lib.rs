@@ -84,7 +84,6 @@ pub use shared::units;
 // Re-exports for easier access
 pub use hardware::sensor::SensorConfig;
 pub use hardware::telescope::TelescopeConfig;
-pub use meter_math::icp::{iterative_closest_point, ICPResult};
 pub use photometry::quantum_efficiency::QuantumEfficiency;
 pub use photometry::spectrum::{Spectrum, CGS};
 pub use photometry::trapezoid::trap_integrate;
