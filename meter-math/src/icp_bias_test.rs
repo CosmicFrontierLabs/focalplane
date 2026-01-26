@@ -1,7 +1,7 @@
 //! Test module for ICP bias analysis using Kolmogorov-Smirnov testing
 
 use super::*;
-use crate::algo::stats::{ks_critical_value, ks_test_normal, pearson_correlation};
+use crate::stats::{ks_critical_value, ks_test_normal, pearson_correlation};
 use nalgebra::{Matrix2, Vector2};
 use ndarray::Array2;
 use rand::{rngs::StdRng, Rng, SeedableRng};

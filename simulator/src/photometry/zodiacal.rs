@@ -126,7 +126,7 @@ use thiserror::Error;
 
 use crate::hardware::SatelliteConfig;
 use crate::photometry::{spectrum::Spectrum, STISZodiacalSpectrum};
-use shared::algo::bilinear::{BilinearInterpolator, InterpolationError};
+use meter_math::bilinear::{BilinearInterpolator, InterpolationError};
 use shared::units::LengthExt;
 
 /// Ecliptic latitude/elongation of minimum measurable zodiacal light brightness.

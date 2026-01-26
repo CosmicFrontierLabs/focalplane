@@ -93,6 +93,7 @@ crossterm = "0.29.0"
 libftd2xx = "0.33.1"
 async-stream = "0.3"
 futures = "0.3.31"
+meter-math = { version = "0.1.0", path = "../meter-math" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpiod = "0.3.0"

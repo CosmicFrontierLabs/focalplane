@@ -8,8 +8,8 @@ use std::f64::consts::PI;
 
 use nalgebra::Vector3;
 
-use super::quaternion::Quaternion;
 use crate::units::{Angle, AngleExt};
+use meter_math::Quaternion;
 
 /// A trait defining a motion model that produces quaternion orientation as a function of time
 pub trait MotionModel {

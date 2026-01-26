@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "meter-math",
     "simulator",
     "monocle",
     "monocle_harness",

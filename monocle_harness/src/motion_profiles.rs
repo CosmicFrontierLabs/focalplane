@@ -3,7 +3,7 @@
 //! Provides various pointing motion functions for testing tracking algorithms,
 //! including static, sinusoidal, circular, and chaotic motions.
 
-use shared::algo::spline::CubicSpline;
+use meter_math::CubicSpline;
 use starfield::Equatorial;
 use std::f64::consts::PI;
 use std::time::Duration;

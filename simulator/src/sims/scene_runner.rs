@@ -14,10 +14,8 @@ use crate::{
 use core::f64;
 use image::DynamicImage;
 use log::{debug, info, warn};
-use shared::algo::{
-    icp::{icp_match_indices, Locatable2d},
-    MinMaxScan,
-};
+use meter_math::icp::{icp_match_indices, Locatable2d};
+use shared::algo::MinMaxScan;
 use shared::frame_writer::{FrameFormat, FrameWriterHandle};
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::image_proc::detection::{detect_stars_unified, StarFinder};
@@ -28,6 +26,19 @@ use shared::viz::histogram::{Histogram, HistogramConfig, Scale};
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield::image::starfinders::StellarSource;
 use starfield::Equatorial;
+
+/// Wrapper to implement Locatable2d for dyn StellarSource
+struct LocatableStellarSource<'a>(&'a dyn StellarSource);
+
+impl Locatable2d for LocatableStellarSource<'_> {
+    fn x(&self) -> f64 {
+        self.0.get_centroid().0
+    }
+
+    fn y(&self) -> f64 {
+        self.0.get_centroid().1
+    }
+}
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -355,8 +366,13 @@ pub fn run_experiment<T: StarCatalog>(
                 // Now we take our detected stars and match them against the sources
                 // Get projected stars from scene instead of render_result
                 let projected_stars: Vec<StarInFrame> = scene.stars.clone();
+                // Wrap detected stars for ICP matching
+                let wrapped_detected: Vec<LocatableStellarSource> = detected_stars
+                    .iter()
+                    .map(|s| LocatableStellarSource(s.as_ref()))
+                    .collect();
                 let result = match icp_match_indices(
-                    &detected_stars,
+                    &wrapped_detected,
                     &projected_stars,
                     params.common_args.icp_max_iterations,
                     params.common_args.icp_convergence_threshold,
@@ -422,8 +438,9 @@ pub fn run_experiment<T: StarCatalog>(
                                     .map(|(src_idx, tgt_idx)| {
                                         let detected = &detected_stars[*src_idx];
                                         let catalog = &projected_stars[*tgt_idx];
-                                        let dx = detected.x() - catalog.x();
-                                        let dy = detected.y() - catalog.y();
+                                        let (det_x, det_y) = detected.get_centroid();
+                                        let dx = det_x - catalog.x();
+                                        let dy = det_y - catalog.y();
                                         let error = (dx * dx + dy * dy).sqrt();
                                         (error, dx, dy)
                                     })

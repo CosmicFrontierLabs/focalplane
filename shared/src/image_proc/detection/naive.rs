@@ -28,8 +28,8 @@ use ndarray::{Array2, ArrayView2};
 #[cfg(test)]
 use std::collections::HashSet;
 
-use crate::algo::icp::Locatable2d;
 use crate::image_proc::centroid::{compute_centroid_from_mask, SpotShape};
+use meter_math::Locatable2d;
 use starfield::image::starfinders::StellarSource;
 
 /// Star detection result with sub-pixel position and shape characterization.
@@ -119,16 +119,6 @@ impl StellarSource for StarDetection {
 
     fn flux(&self) -> f64 {
         self.flux
-    }
-}
-
-impl Locatable2d for Box<dyn StellarSource> {
-    fn x(&self) -> f64 {
-        self.get_centroid().0
-    }
-
-    fn y(&self) -> f64 {
-        self.get_centroid().1
     }
 }
 

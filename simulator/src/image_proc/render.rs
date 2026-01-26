@@ -8,8 +8,8 @@ use crate::{
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
     star_math::star_data_to_fluxes,
 };
+use meter_math::Locatable2d;
 use shared::{
-    algo::icp::Locatable2d,
     image_proc::noise::apply_poisson_photon_noise,
     star_projector::StarProjector,
     units::{AngleExt, Area},

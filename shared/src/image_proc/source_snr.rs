@@ -21,7 +21,7 @@ use ndarray::ArrayView2;
 
 use super::aperture_photometry::collect_aperture_pixels;
 use super::detection::StarDetection;
-use crate::algo::stats::median;
+use meter_math::stats::median;
 
 /// Calculate signal-to-noise ratio at a specific position using aperture photometry.
 ///

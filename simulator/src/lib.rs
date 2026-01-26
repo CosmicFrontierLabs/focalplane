@@ -84,11 +84,11 @@ pub use shared::units;
 // Re-exports for easier access
 pub use hardware::sensor::SensorConfig;
 pub use hardware::telescope::TelescopeConfig;
+pub use meter_math::icp::{iterative_closest_point, ICPResult};
 pub use photometry::quantum_efficiency::QuantumEfficiency;
 pub use photometry::spectrum::{Spectrum, CGS};
 pub use photometry::trapezoid::trap_integrate;
 pub use scene::Scene;
-pub use shared::algo::icp::{iterative_closest_point, ICPResult};
 pub use shared::image_proc::histogram_stretch::stretch_histogram;
 pub use star_math::{field_diameter, pixel_scale, star_data_to_fluxes};
 pub use starfield::catalogs::StarPosition;

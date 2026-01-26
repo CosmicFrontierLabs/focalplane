@@ -3,8 +3,8 @@
 //! Wraps the shared matrix utilities with FSM-calibration-specific
 //! error types and validation.
 
+use meter_math::matrix2::{self, DegenerateVectorsError, SingularMatrixError};
 use nalgebra::{Matrix2, Vector2};
-use shared::algo::matrix2::{self, DegenerateVectorsError, SingularMatrixError};
 use thiserror::Error;
 
 /// Minimum angle (degrees) between FSM axes to consider calibration valid

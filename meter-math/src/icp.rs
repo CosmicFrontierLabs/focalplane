@@ -8,7 +8,7 @@ use nalgebra::{Matrix2, Vector2, Vector3};
 use ndarray::Array2;
 use thiserror::Error;
 
-use crate::algo::quaternion::Quaternion;
+use crate::quaternion::Quaternion;
 
 /// Errors that can occur during ICP object matching
 #[derive(Error, Debug)]
