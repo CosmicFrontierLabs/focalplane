@@ -11,7 +11,7 @@ use crate::fgs::{
 pub use test_bench_shared::CameraStats;
 pub use test_bench_shared::{
     ExportSettings, ExportStatus, FsmMoveRequest, FsmStatus, StarDetectionSettings,
-    TrackingEnableRequest, TrackingSettings, TrackingStatus,
+    TrackingEnableRequest, TrackingSettings, TrackingState, TrackingStatus,
 };
 
 /// Maximum history entries for sparkline plots (at ~10Hz polling = ~10 seconds)
@@ -61,6 +61,10 @@ impl TrackingHistory {
 
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.points.clear();
     }
 }
 
@@ -412,6 +416,18 @@ impl Component for FgsFrontend {
             }
             Msg::TrackingStatusLoaded(status) => {
                 self.tracking_available = true;
+
+                // Check if we just left the Tracking state - if so, clear history
+                let was_tracking = matches!(
+                    self.tracking_status.as_ref().map(|s| &s.state),
+                    Some(TrackingState::Tracking { .. })
+                );
+                let is_tracking = matches!(&status.state, TrackingState::Tracking { .. });
+
+                if was_tracking && !is_tracking {
+                    self.tracking_history.clear();
+                }
+
                 // Update position and SNR history if we have a position
                 if let Some(ref pos) = status.position {
                     self.tracking_history.push(
