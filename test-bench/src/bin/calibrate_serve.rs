@@ -13,9 +13,9 @@ use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use test_bench::calibrate::{
-    get_pattern_schemas, list_ftdi_devices_info, parse_pattern_request, pattern_to_dynamic,
-    run_display, spawn_gyro_emitter, DisplayConfig, DynamicPattern, GyroEmissionParams,
-    GyroEmitterConfig, GyroEmitterHandle, OledSafetyWatchdog, PatternConfig, SchemaResponse,
+    get_pattern_schemas, parse_pattern_request, pattern_to_dynamic, run_display,
+    spawn_gyro_emitter, DisplayConfig, DynamicPattern, GyroEmissionParams, GyroEmitterConfig,
+    GyroEmitterHandle, OledSafetyWatchdog, PatternConfig, SchemaResponse,
 };
 use test_bench::display_patterns::remote_controlled::RemotePatternState;
 use test_bench::display_utils::{
@@ -120,15 +120,9 @@ struct Args {
     )]
     zmq_bind: String,
 
-    #[arg(
-        long,
-        help = "FTDI device index for gyro emission (0 = first device)",
-        long_help = "Index of the FTDI device to use for gyro angle emission. Use --list-ftdi \
-            to see available devices. When enabled, the server emits gyro angle packets based \
-            on pattern motion for hardware-in-the-loop testing. If not specified, gyro emission \
-            is disabled."
-    )]
-    ftdi_device: Option<i32>,
+    /// FTDI device options for gyro emission (use --list-ftdi to see available devices)
+    #[command(flatten)]
+    ftdi: hardware::ftdi::FtdiArgs,
 
     #[arg(
         long,
@@ -138,14 +132,6 @@ struct Args {
             address byte in the gyro communication protocol. Default: 18."
     )]
     gyro_address: u8,
-
-    #[arg(
-        long,
-        help = "List available FTDI devices and exit",
-        long_help = "Print a list of all available FTDI devices and exit. Useful for finding \
-            the correct --ftdi-device index."
-    )]
-    list_ftdi: bool,
 }
 
 struct AppState {
@@ -516,22 +502,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Handle --list-ftdi before anything else
-    if args.list_ftdi {
-        match list_ftdi_devices_info() {
-            Ok(devices) => {
-                if devices.is_empty() {
-                    println!("No FTDI devices found");
-                } else {
-                    println!("Found {} FTDI device(s):", devices.len());
-                    for dev in devices {
-                        println!("  {dev}");
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error listing FTDI devices: {e}");
-            }
-        }
+    if args.ftdi.handle_list_ftdi()? {
         return Ok(());
     }
 
@@ -676,9 +647,10 @@ fn main() -> Result<()> {
     let invert = Arc::new(RwLock::new(false));
 
     // Spawn gyro emitter if FTDI device is configured
-    let gyro_emitter = if let Some(device_index) = args.ftdi_device {
+    let gyro_emitter = if let Some(device_index) = args.ftdi.ftdi_device {
         match spawn_gyro_emitter(GyroEmitterConfig {
             device_index,
+            baud_rate: args.ftdi.ftdi_baud,
             address: args.gyro_address,
             ..Default::default()
         }) {

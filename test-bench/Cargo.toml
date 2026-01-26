@@ -110,7 +110,7 @@ full-linux = ["nsv455", "orin", "pi-fsm", "ftdi", "linux-bins"]
 nsv455 = ["hardware/nsv455", "supported-camera"]
 orin = ["hardware/orin"]
 pi-fsm = ["hardware/pi-fsm"]
-ftdi = ["hardware/ftdi"]
+ftdi = ["hardware/ftdi", "hardware/exail"]
 # Existing features
 linux-bins = ["orin"]
 supported-camera = []

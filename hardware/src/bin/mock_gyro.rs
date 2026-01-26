@@ -8,26 +8,18 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use bytemuck::bytes_of;
 use clap::Parser;
-use libftd2xx::{Ftdi, FtdiCommon};
+use libftd2xx::FtdiCommon;
 use log::{debug, info};
 
-use hardware::ftdi::{build_full_packet, build_raw_packet, list_ftdi_devices, print_device_info};
+use hardware::ftdi::{build_full_packet, build_raw_packet};
 
 #[derive(Parser, Debug)]
 #[command(name = "mock_gyro")]
 #[command(about = "Mock Exail Asterix NS gyro transmitter")]
 struct Args {
-    /// List connected FTDI devices and exit
-    #[arg(short, long)]
-    list: bool,
-
-    /// FTDI device index (0 = first device)
-    #[arg(short, long, default_value = "0")]
-    device: i32,
-
-    /// Baud rate in bits per second
-    #[arg(short, long, default_value = "1000000")]
-    baud: u32,
+    /// FTDI device options (use --list-ftdi to see available devices)
+    #[command(flatten)]
+    ftdi: hardware::ftdi::FtdiArgs,
 
     /// Packet interval in milliseconds
     #[arg(short, long, default_value = "2")]
@@ -59,48 +51,12 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let devices = list_ftdi_devices()?;
-
-    if args.list {
-        println!("Found {} FTDI device(s):", devices.len());
-        for (i, dev) in devices.iter().enumerate() {
-            print_device_info(i, dev);
-        }
+    // Handle --list-ftdi flag
+    if args.ftdi.handle_list_ftdi()? {
         return Ok(());
     }
 
-    if devices.is_empty() {
-        anyhow::bail!("No FTDI devices found");
-    }
-
-    if args.device as usize >= devices.len() {
-        anyhow::bail!(
-            "Device index {} out of range (found {} devices)",
-            args.device,
-            devices.len()
-        );
-    }
-
-    let selected = &devices[args.device as usize];
-    info!(
-        "Opening FTDI device {} - Serial: {:?}, Description: {:?}",
-        args.device, selected.serial_number, selected.description
-    );
-
-    let mut ft = Ftdi::with_index(args.device).context("Failed to open FTDI device")?;
-
-    info!("Setting baud rate to {} bps", args.baud);
-    ft.set_baud_rate(args.baud)
-        .context("Failed to set baud rate")?;
-
-    info!("Configuring for low latency");
-    ft.set_latency_timer(Duration::from_millis(1))
-        .context("Failed to set latency timer")?;
-    ft.set_usb_parameters(64)
-        .context("Failed to set USB parameters")?;
-
-    ft.set_timeouts(Duration::from_millis(100), Duration::from_millis(100))
-        .context("Failed to set timeouts")?;
+    let mut ft = args.ftdi.open_device_or_default()?;
 
     let interval = Duration::from_millis(args.interval_ms);
     let mut time_counter: u32 = 0;

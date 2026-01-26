@@ -14,27 +14,18 @@ use log::{debug, info, warn};
 use serialport::SerialPort;
 
 use hardware::exail::{parse, verify_checksum_bytes, GyroMessage};
-use hardware::ftdi::{list_ftdi_devices, print_device_info};
 
 #[derive(Parser, Debug)]
 #[command(name = "listen_gyro")]
 #[command(about = "Exail Asterix NS gyro receiver and validator")]
 struct Args {
-    /// List connected FTDI devices and exit
-    #[arg(short, long)]
-    list: bool,
+    /// FTDI device options (use --list-ftdi to see available devices)
+    #[command(flatten)]
+    ftdi: hardware::ftdi::FtdiArgs,
 
-    /// FTDI device index (0 = first device). Mutually exclusive with --serial.
-    #[arg(short, long, default_value = "0", conflicts_with = "serial")]
-    device: i32,
-
-    /// Serial port path (e.g., /dev/ttyTHS1). Mutually exclusive with --device.
-    #[arg(short, long, conflicts_with = "device")]
+    /// Serial port path (e.g., /dev/ttyTHS1). Mutually exclusive with --ftdi-device.
+    #[arg(long, conflicts_with = "ftdi_device")]
     serial: Option<String>,
-
-    /// Baud rate in bits per second
-    #[arg(short, long, default_value = "1000000")]
-    baud: u32,
 
     /// Number of packets to receive (0 = infinite)
     #[arg(short, long, default_value = "0")]
@@ -272,53 +263,17 @@ impl Statistics {
 }
 
 fn open_ftdi_reader(args: &Args) -> Result<FtdiReader> {
-    let devices = list_ftdi_devices()?;
-
-    if devices.is_empty() {
-        anyhow::bail!("No FTDI devices found");
-    }
-
-    if args.device as usize >= devices.len() {
-        anyhow::bail!(
-            "Device index {} out of range (found {} devices)",
-            args.device,
-            devices.len()
-        );
-    }
-
-    let selected = &devices[args.device as usize];
-    info!(
-        "Opening FTDI device {} - Serial: {:?}, Description: {:?}",
-        args.device, selected.serial_number, selected.description
-    );
-
-    let mut ftdi = Ftdi::with_index(args.device).context("Failed to open FTDI device")?;
-
-    info!("Setting baud rate to {} bps", args.baud);
-    ftdi.set_baud_rate(args.baud)
-        .context("Failed to set baud rate")?;
-
-    info!("Configuring for low latency");
-    ftdi.set_latency_timer(Duration::from_millis(1))
-        .context("Failed to set latency timer")?;
-    ftdi.set_usb_parameters(64)
-        .context("Failed to set USB parameters")?;
-
-    ftdi.set_timeouts(Duration::from_millis(100), Duration::from_millis(100))
-        .context("Failed to set timeouts")?;
-
+    let ftdi = args.ftdi.open_device_or_default()?;
     Ok(FtdiReader { ftdi })
 }
 
 fn open_serial_reader(path: &str, baud: u32) -> Result<SerialReader> {
-    info!("Opening serial port: {path}");
+    info!("Opening serial port: {path} at {baud} bps");
 
     let port = serialport::new(path, baud)
         .timeout(Duration::from_millis(100))
         .open()
         .with_context(|| format!("Failed to open serial port {path}"))?;
-
-    info!("Serial port opened at {baud} bps");
 
     Ok(SerialReader { port })
 }
@@ -397,19 +352,14 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Handle --list for FTDI devices
-    if args.list {
-        let devices = list_ftdi_devices()?;
-        println!("Found {} FTDI device(s):", devices.len());
-        for (i, dev) in devices.iter().enumerate() {
-            print_device_info(i, dev);
-        }
+    // Handle --list-ftdi flag
+    if args.ftdi.handle_list_ftdi()? {
         return Ok(());
     }
 
     // Determine input source and run receiver
     if let Some(serial_path) = &args.serial {
-        let reader = open_serial_reader(serial_path, args.baud)?;
+        let reader = open_serial_reader(serial_path, args.ftdi.ftdi_baud)?;
         run_receiver(reader, &args)
     } else {
         let reader = open_ftdi_reader(&args)?;
