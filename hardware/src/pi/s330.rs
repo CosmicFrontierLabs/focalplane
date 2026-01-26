@@ -178,35 +178,39 @@ impl S330 {
 
     /// Move both tilt axes (1 and 2) to absolute positions.
     ///
+    /// # Arguments
+    /// * `axis1` - Target position for axis 1 in µrad (microradians)
+    /// * `axis2` - Target position for axis 2 in µrad (microradians)
+    ///
     /// This is a fast move command without error checking, suitable for
     /// high-speed motion loops.
-    pub fn move_to(&mut self, x: f64, y: f64) -> GcsResult<()> {
-        self.e727.move_to_fast(Some(x), Some(y), None, None)
+    pub fn move_to(&mut self, axis1: f64, axis2: f64) -> GcsResult<()> {
+        self.e727.move_to_fast(Some(axis1), Some(axis2), None, None)
     }
 
     /// Get current positions of both tilt axes.
     ///
-    /// Returns `(x, y)` positions in physical units (µrad).
+    /// Returns `(axis1, axis2)` positions in µrad (microradians).
     pub fn get_position(&mut self) -> GcsResult<(f64, f64)> {
-        let x = self.e727.get_position(Axis::Axis1)?;
-        let y = self.e727.get_position(Axis::Axis2)?;
-        Ok((x, y))
+        let axis1 = self.e727.get_position(Axis::Axis1)?;
+        let axis2 = self.e727.get_position(Axis::Axis2)?;
+        Ok((axis1, axis2))
     }
 
     /// Get the center positions (midpoint of travel range) for both tilt axes.
     ///
-    /// Returns `(center_x, center_y)` in physical units (µrad).
+    /// Returns `(center_axis1, center_axis2)` in µrad (microradians).
     pub fn get_centers(&mut self) -> GcsResult<(f64, f64)> {
         self.e727.get_xy_centers()
     }
 
     /// Get the travel range for both tilt axes.
     ///
-    /// Returns `((min_x, max_x), (min_y, max_y))` in physical units (µrad).
+    /// Returns `((min_axis1, max_axis1), (min_axis2, max_axis2))` in µrad (microradians).
     pub fn get_travel_ranges(&mut self) -> GcsResult<((f64, f64), (f64, f64))> {
-        let range_x = self.e727.get_travel_range(Axis::Axis1)?;
-        let range_y = self.e727.get_travel_range(Axis::Axis2)?;
-        Ok((range_x, range_y))
+        let range_axis1 = self.e727.get_travel_range(Axis::Axis1)?;
+        let range_axis2 = self.e727.get_travel_range(Axis::Axis2)?;
+        Ok((range_axis1, range_axis2))
     }
 
     /// Get the physical unit string for the tilt axes (typically "µrad").
