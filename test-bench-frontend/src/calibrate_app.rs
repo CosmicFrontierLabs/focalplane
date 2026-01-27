@@ -376,6 +376,9 @@ impl Component for CalibrateFrontend {
                     { self.view_pattern_controls(ctx, current_pattern) }
 
                     { self.view_global_controls(ctx, schema) }
+
+                    <h2 style="margin-top: 20px;">{"Gyro Output"}</h2>
+                    { self.view_gyro_controls(ctx, schema) }
                 </div>
 
                 <div class="column center-panel">
@@ -730,13 +733,28 @@ impl CalibrateFrontend {
                     None
                 }).collect::<Html>() }
 
-                // Other global controls rendered dynamically
+                // Other global controls rendered dynamically (excluding gyro controls)
                 { for schema.global_controls.iter().filter_map(|control| {
-                    // Skip invert, it's handled above
-                    if control.id() == "invert" {
+                    // Skip invert (handled above) and gyro controls (separate section)
+                    if control.id() == "invert" || control.id() == "emit_gyro" || control.id() == "plate_scale" {
                         return None;
                     }
                     Some(self.view_global_control(ctx, control))
+                })}
+            </>
+        }
+    }
+
+    fn view_gyro_controls(&self, ctx: &Context<Self>, schema: &SchemaResponse) -> Html {
+        html! {
+            <>
+                { for schema.global_controls.iter().filter_map(|control| {
+                    // Only render gyro-related controls
+                    if control.id() == "emit_gyro" || control.id() == "plate_scale" {
+                        Some(self.view_global_control(ctx, control))
+                    } else {
+                        None
+                    }
                 })}
             </>
         }
