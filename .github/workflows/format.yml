@@ -19,7 +19,7 @@ jobs:
       uses: ./.github/actions/setup
       with:
         install-deps: 'true'
-        setup-cache: 'false'
+        setup-cache: 'true'
 
     - name: Add wasm32 target
       run: rustup target add wasm32-unknown-unknown

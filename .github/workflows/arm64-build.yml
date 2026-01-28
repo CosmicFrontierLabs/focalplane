@@ -21,6 +21,7 @@ jobs:
 
     # No need to install Rust or system deps - pre-installed on self-hosted runner
     # See scripts/setup-github-runner.sh for dependency list
+    # Note: No GitHub Actions cache here - self-hosted runner has persistent local storage
 
     - name: Check Rust version
       run: |
