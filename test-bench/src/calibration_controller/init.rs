@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use shared::tracking_collector::TrackingCollector;
+use crate::tracking_collector::TrackingCollector;
 use test_bench_shared::CalibrateServerClient;
 
 use super::communication::discover_sensor_info;

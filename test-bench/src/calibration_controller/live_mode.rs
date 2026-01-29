@@ -143,7 +143,7 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
                         return Ok(());
                     }
 
-                    let msgs = tracking_collector.poll();
+                    let msgs = tracking_collector.poll().unwrap_or_default();
                     for msg in msgs {
                         buffer.push(Measurement {
                             sensor_x: msg.x,

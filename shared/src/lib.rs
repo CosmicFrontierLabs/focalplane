@@ -40,7 +40,4 @@ pub mod frame_writer;
 pub mod system_info;
 
 #[cfg(feature = "tracking")]
-pub mod tracking_collector;
-
-#[cfg(feature = "tracking")]
 pub mod tracking_message;

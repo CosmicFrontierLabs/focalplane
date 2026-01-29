@@ -69,7 +69,7 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
                 break;
             }
 
-            let msgs = tracking_collector.poll();
+            let msgs = tracking_collector.poll().unwrap_or_default();
             for msg in msgs {
                 measurements.push((msg.x, msg.y, msg.shape.diameter));
             }

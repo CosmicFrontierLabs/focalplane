@@ -2,8 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::tracking_collector::TrackingCollector;
 use shared::system_info::SensorInfo;
-use shared::tracking_collector::TrackingCollector;
 
 /// Wait for sensor info from tracking messages.
 ///
@@ -16,10 +16,15 @@ pub fn discover_sensor_info(
 ) -> Option<SensorInfo> {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        for msg in collector.poll() {
-            if let Some(info) = msg.sensor_info {
-                return Some(info);
+        match collector.poll() {
+            Ok(msgs) => {
+                for msg in msgs {
+                    if let Some(info) = msg.sensor_info {
+                        return Some(info);
+                    }
+                }
             }
+            Err(_) => return None,
         }
         std::thread::sleep(Duration::from_millis(10));
     }

@@ -9,7 +9,46 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::tracking_message::TrackingMessage;
+use shared::tracking_message::TrackingMessage;
+
+/// Error type for collection operations.
+#[derive(Debug, Clone)]
+pub enum CollectError {
+    /// Operation timed out before completing
+    Timeout {
+        got: usize,
+        expected: usize,
+        elapsed: Duration,
+    },
+    /// SSE connection was lost during collection
+    Disconnected { got: usize, error: Option<String> },
+}
+
+impl std::fmt::Display for CollectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CollectError::Timeout {
+                got,
+                expected,
+                elapsed,
+            } => {
+                write!(
+                    f,
+                    "Timeout: collected {got}/{expected} messages in {elapsed:?}"
+                )
+            }
+            CollectError::Disconnected { got, error } => {
+                if let Some(e) = error {
+                    write!(f, "Disconnected after {got} messages: {e}")
+                } else {
+                    write!(f, "Disconnected after {got} messages")
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for CollectError {}
 
 /// Shared state between the collector and background reader thread.
 struct SharedState {
@@ -82,77 +121,116 @@ impl TrackingCollector {
     /// Poll for all currently available messages (non-blocking).
     ///
     /// Returns immediately with all pending messages, or an empty Vec if none.
-    pub fn poll(&self) -> Vec<TrackingMessage> {
+    /// Also returns an error if the connection has been lost.
+    pub fn poll(&self) -> Result<Vec<TrackingMessage>, CollectError> {
         let mut state = self.state.lock().unwrap();
-        state.buffer.drain(..).collect()
+        let messages: Vec<_> = state.buffer.drain(..).collect();
+
+        if !state.connected && messages.is_empty() {
+            return Err(CollectError::Disconnected {
+                got: 0,
+                error: state.error.clone(),
+            });
+        }
+
+        Ok(messages)
     }
 
     /// Collect messages for a specified duration.
     ///
     /// Blocks until the duration elapses, collecting all messages received
-    /// during that time.
-    pub fn collect(&self, duration: Duration) -> Vec<TrackingMessage> {
+    /// during that time. Returns error if connection is lost during collection.
+    pub fn collect(&self, duration: Duration) -> Result<Vec<TrackingMessage>, CollectError> {
         let start = Instant::now();
         let mut messages = Vec::new();
 
         while start.elapsed() < duration {
-            messages.extend(self.poll());
+            match self.poll() {
+                Ok(msgs) => messages.extend(msgs),
+                Err(CollectError::Disconnected { error, .. }) => {
+                    return Err(CollectError::Disconnected {
+                        got: messages.len(),
+                        error,
+                    });
+                }
+                Err(e) => return Err(e),
+            }
             thread::sleep(Duration::from_millis(10));
         }
 
-        messages.extend(self.poll());
-        messages
+        // Final poll
+        if let Ok(msgs) = self.poll() {
+            messages.extend(msgs);
+        }
+
+        Ok(messages)
     }
 
-    /// Collect exactly N messages or timeout.
+    /// Collect exactly N messages or return an error.
     ///
     /// Blocks until `count` messages are collected or `timeout` elapses.
-    /// Optionally filters messages by minimum flux.
     ///
-    /// Returns the collected messages. If fewer than `count` messages were
-    /// collected before timeout, returns what was collected.
+    /// # Errors
+    /// Returns `CollectError::Timeout` if timeout elapses before collecting enough messages.
+    /// Returns `CollectError::Disconnected` if the SSE connection is lost.
     pub fn collect_n(
         &self,
         count: usize,
         timeout: Duration,
-        min_flux: Option<f64>,
-    ) -> Vec<TrackingMessage> {
+    ) -> Result<Vec<TrackingMessage>, CollectError> {
         let start = Instant::now();
         let mut messages = Vec::with_capacity(count);
 
         while messages.len() < count && start.elapsed() < timeout {
-            for msg in self.poll() {
-                if let Some(min) = min_flux {
-                    if msg.shape.flux >= min {
+            match self.poll() {
+                Ok(msgs) => {
+                    for msg in msgs {
                         messages.push(msg);
+                        if messages.len() >= count {
+                            break;
+                        }
                     }
-                } else {
-                    messages.push(msg);
                 }
-                if messages.len() >= count {
-                    break;
+                Err(CollectError::Disconnected { error, .. }) => {
+                    return Err(CollectError::Disconnected {
+                        got: messages.len(),
+                        error,
+                    });
                 }
+                Err(e) => return Err(e),
             }
             if messages.len() < count {
                 thread::sleep(Duration::from_millis(10));
             }
         }
 
-        messages
+        if messages.len() < count {
+            return Err(CollectError::Timeout {
+                got: messages.len(),
+                expected: count,
+                elapsed: start.elapsed(),
+            });
+        }
+
+        Ok(messages)
     }
 
     /// Wait for at least one message to arrive.
     ///
-    /// Returns true if a message was received within the timeout.
-    pub fn wait_for_message(&self, timeout: Duration) -> bool {
+    /// Returns `Ok(true)` if a message was received within the timeout.
+    /// Returns `Ok(false)` if timeout elapsed with no messages.
+    /// Returns `Err` if connection was lost.
+    pub fn wait_for_message(&self, timeout: Duration) -> Result<bool, CollectError> {
         let start = Instant::now();
         while start.elapsed() < timeout {
-            if !self.poll().is_empty() {
-                return true;
+            match self.poll() {
+                Ok(msgs) if !msgs.is_empty() => return Ok(true),
+                Ok(_) => {}
+                Err(e) => return Err(e),
             }
             thread::sleep(Duration::from_millis(50));
         }
-        false
+        Ok(false)
     }
 
     /// Check if the SSE connection is currently active.
@@ -163,6 +241,14 @@ impl TrackingCollector {
     /// Get the last connection error, if any.
     pub fn last_error(&self) -> Option<String> {
         self.state.lock().unwrap().error.clone()
+    }
+
+    /// Clear all buffered messages.
+    ///
+    /// Use this before collecting samples to ensure only fresh messages
+    /// are captured, discarding any that accumulated during moves or waits.
+    pub fn clear(&self) {
+        self.state.lock().unwrap().buffer.clear();
     }
 
     fn sse_reader_thread(
@@ -194,8 +280,10 @@ impl TrackingCollector {
                                     }
                                 }
                             }
-                            Err(_) => {
-                                state.lock().unwrap().connected = false;
+                            Err(e) => {
+                                let mut s = state.lock().unwrap();
+                                s.connected = false;
+                                s.error = Some(format!("SSE read error: {e}"));
                                 break;
                             }
                         }
