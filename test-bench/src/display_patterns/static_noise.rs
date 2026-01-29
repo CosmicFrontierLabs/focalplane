@@ -1,7 +1,9 @@
 use image::{ImageBuffer, Rgb};
 use rand::Rng;
+use shared::image_size::PixelShape;
 
-pub fn generate_into_buffer(buffer: &mut [u8], width: u32, height: u32, block_size: u32) {
+pub fn generate_into_buffer(buffer: &mut [u8], size: PixelShape, block_size: u32) {
+    let (width, height) = size.to_u32_tuple();
     let mut rng = rand::rng();
     let blocks_x = width.div_ceil(block_size);
     let blocks_y = height.div_ceil(block_size);
@@ -28,9 +30,10 @@ pub fn generate_into_buffer(buffer: &mut [u8], width: u32, height: u32, block_si
     }
 }
 
-pub fn generate(width: u32, height: u32, block_size: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+pub fn generate(size: PixelShape, block_size: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut buffer = vec![0u8; (width * height * 3) as usize];
-    generate_into_buffer(&mut buffer, width, height, block_size);
+    generate_into_buffer(&mut buffer, size, block_size);
     ImageBuffer::from_raw(width, height, buffer).unwrap()
 }
 
@@ -40,7 +43,7 @@ mod tests {
 
     #[test]
     fn test_static_noise_pattern_generation() {
-        let img = generate(640, 480, 10);
+        let img = generate(PixelShape::new(640, 480), 10);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
     }

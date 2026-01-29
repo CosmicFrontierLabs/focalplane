@@ -90,16 +90,7 @@ pub fn generate_into_buffer(
             intensity,
         } => {
             let norm = state.get_norm_factor(fwhm, intensity);
-            render_gaussian_spot(
-                buffer,
-                size.width as u32,
-                size.height as u32,
-                x,
-                y,
-                fwhm,
-                norm,
-                BlendMode::Overwrite,
-            );
+            render_gaussian_spot(buffer, size, x, y, fwhm, norm, BlendMode::Overwrite);
         }
 
         PatternCommand::SpotGrid {
@@ -109,16 +100,7 @@ pub fn generate_into_buffer(
         } => {
             let norm = state.get_norm_factor(fwhm, intensity);
             for (x, y) in &positions {
-                render_gaussian_spot(
-                    buffer,
-                    size.width as u32,
-                    size.height as u32,
-                    *x,
-                    *y,
-                    fwhm,
-                    norm,
-                    BlendMode::Additive,
-                );
+                render_gaussian_spot(buffer, size, *x, *y, fwhm, norm, BlendMode::Additive);
             }
         }
 
@@ -150,10 +132,7 @@ mod tests {
         });
 
         // Generate pattern
-        let size = PixelShape {
-            width: 1024,
-            height: 1024,
-        };
+        let size = PixelShape::new(1024, 1024);
         let mut buffer = vec![0u8; 1024 * 1024 * 3];
         generate_into_buffer(&mut buffer, size, &state);
 
@@ -171,10 +150,7 @@ mod tests {
             .unwrap()
             .set_command(PatternCommand::Uniform { level: 128 });
 
-        let size = PixelShape {
-            width: 100,
-            height: 100,
-        };
+        let size = PixelShape::new(100, 100);
         let mut buffer = vec![0u8; 100 * 100 * 3];
         generate_into_buffer(&mut buffer, size, &state);
 
@@ -195,10 +171,7 @@ mod tests {
         // Then clear
         state.lock().unwrap().set_command(PatternCommand::Clear);
 
-        let size = PixelShape {
-            width: 100,
-            height: 100,
-        };
+        let size = PixelShape::new(100, 100);
         let mut buffer = vec![255u8; 100 * 100 * 3];
         generate_into_buffer(&mut buffer, size, &state);
 

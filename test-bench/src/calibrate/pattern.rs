@@ -1,6 +1,7 @@
 use anyhow::Result;
 use image::{ImageBuffer, Rgb};
 use serde::{Deserialize, Serialize};
+use shared::image_size::PixelShape;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,7 +41,7 @@ pub enum PatternConfig {
     #[serde(skip)]
     RemoteControlled {
         state: Arc<Mutex<patterns::remote_controlled::RemotePatternState>>,
-        pattern_size: shared::image_size::PixelShape,
+        pattern_size: PixelShape,
     },
 }
 
@@ -127,45 +128,36 @@ impl PatternConfig {
     }
 
     /// Generate the pattern as an image.
-    pub fn generate(&self, width: u32, height: u32) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
+    pub fn generate(&self, size: PixelShape) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
+        let (width, height) = size.to_u32_tuple();
         match self {
-            Self::Check { checker_size } => Ok(patterns::checkerboard::generate(
-                width,
-                height,
-                *checker_size,
-            )),
-            Self::Usaf => patterns::usaf::generate(width, height),
-            Self::Static { pixel_size } => {
-                Ok(patterns::static_noise::generate(width, height, *pixel_size))
+            Self::Check { checker_size } => {
+                Ok(patterns::checkerboard::generate(size, *checker_size))
             }
-            Self::Pixel => Ok(patterns::pixel::generate(width, height)),
+            Self::Usaf => patterns::usaf::generate(size),
+            Self::Static { pixel_size } => Ok(patterns::static_noise::generate(size, *pixel_size)),
+            Self::Pixel => Ok(patterns::pixel::generate(size)),
             Self::CirclingPixel {
                 orbit_count,
                 orbit_radius_percent,
             } => Ok(patterns::circling_pixel::generate(
-                width,
-                height,
+                size,
                 *orbit_count,
                 *orbit_radius_percent,
             )),
-            Self::Uniform { level } => Ok(patterns::uniform::generate(width, height, *level)),
+            Self::Uniform { level } => Ok(patterns::uniform::generate(size, *level)),
             Self::WigglingGaussian {
                 fwhm,
                 wiggle_radius,
                 intensity,
             } => Ok(patterns::wiggling_gaussian::generate(
-                width,
-                height,
+                size,
                 *fwhm,
                 *wiggle_radius,
                 *intensity,
             )),
-            Self::PixelGrid { spacing } => {
-                Ok(patterns::pixel_grid::generate(width, height, *spacing))
-            }
-            Self::SiemensStar { spokes } => {
-                Ok(patterns::siemens_star::generate(width, height, *spokes))
-            }
+            Self::PixelGrid { spacing } => Ok(patterns::pixel_grid::generate(size, *spacing)),
+            Self::SiemensStar { spokes } => Ok(patterns::siemens_star::generate(size, *spokes)),
             // Animated patterns start with black - animation fills them in
             Self::RemoteControlled { .. } => {
                 Ok(ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0])))
@@ -174,10 +166,10 @@ impl PatternConfig {
     }
 
     /// Generate the pattern directly into a buffer (for animated patterns).
-    pub fn generate_into_buffer(&self, buffer: &mut [u8], width: u32, height: u32) {
+    pub fn generate_into_buffer(&self, buffer: &mut [u8], size: PixelShape) {
         match self {
             Self::Static { pixel_size } => {
-                patterns::static_noise::generate_into_buffer(buffer, width, height, *pixel_size);
+                patterns::static_noise::generate_into_buffer(buffer, size, *pixel_size);
             }
             Self::CirclingPixel {
                 orbit_count,
@@ -185,8 +177,7 @@ impl PatternConfig {
             } => {
                 patterns::circling_pixel::generate_into_buffer(
                     buffer,
-                    width,
-                    height,
+                    size,
                     *orbit_count,
                     *orbit_radius_percent,
                 );
@@ -198,8 +189,7 @@ impl PatternConfig {
             } => {
                 patterns::wiggling_gaussian::generate_into_buffer(
                     buffer,
-                    width,
-                    height,
+                    size,
                     *fwhm,
                     *wiggle_radius,
                     *intensity,
@@ -234,12 +224,7 @@ impl PatternConfig {
 }
 
 impl MotionTrajectory for PatternConfig {
-    fn position_at(
-        &self,
-        elapsed: Duration,
-        display_width: u32,
-        display_height: u32,
-    ) -> Position2D {
+    fn position_at(&self, elapsed: Duration, display_size: PixelShape) -> Position2D {
         match self {
             Self::WigglingGaussian { wiggle_radius, .. } => {
                 let motion = CircularMotion::new(*wiggle_radius, 10.0);
@@ -250,7 +235,7 @@ impl MotionTrajectory for PatternConfig {
                 ..
             } => {
                 // Convert % of FOV to pixels
-                let fov_size = display_width.min(display_height) as f64;
+                let fov_size = display_size.width.min(display_size.height) as f64;
                 let radius_px = fov_size * (*orbit_radius_percent as f64 / 200.0);
                 let motion = CircularMotion::new(radius_px, 60.0);
                 motion.position_at(elapsed)

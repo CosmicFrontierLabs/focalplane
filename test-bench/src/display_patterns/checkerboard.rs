@@ -1,6 +1,8 @@
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 
-pub fn generate(width: u32, height: u32, checker_size: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+pub fn generate(size: PixelShape, checker_size: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut img = ImageBuffer::new(width, height);
 
     for y in 0..height {
@@ -28,7 +30,7 @@ mod tests {
 
     #[test]
     fn test_checkerboard_pattern_generation() {
-        let img = generate(800, 600, 50);
+        let img = generate(PixelShape::new(800, 600), 50);
         assert_eq!(img.width(), 800);
         assert_eq!(img.height(), 600);
 

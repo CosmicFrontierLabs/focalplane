@@ -1,14 +1,15 @@
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 
-pub fn generate(width: u32, height: u32, num_spokes: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+pub fn generate(size: PixelShape, num_spokes: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut img = ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0]));
 
     if num_spokes == 0 {
         return img;
     }
 
-    let center_x = width as f64 / 2.0;
-    let center_y = height as f64 / 2.0;
+    let (center_x, center_y) = size.center();
 
     for y in 0..height {
         for x in 0..width {
@@ -35,7 +36,7 @@ mod tests {
 
     #[test]
     fn test_siemens_star_pattern_generation() {
-        let img = generate(640, 480, 16);
+        let img = generate(PixelShape::new(640, 480), 16);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
 
@@ -44,7 +45,7 @@ mod tests {
 
     #[test]
     fn test_siemens_star_zero_spokes() {
-        let img = generate(100, 100, 0);
+        let img = generate(PixelShape::new(100, 100), 0);
         assert_eq!(img.width(), 100);
         assert_eq!(img.height(), 100);
         assert_eq!(*img.get_pixel(50, 50), Rgb([0, 0, 0]));

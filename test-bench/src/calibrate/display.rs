@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -254,10 +255,21 @@ impl PatternSource for DynamicPattern {
 
 /// Configuration for the display runner.
 pub struct DisplayConfig {
-    pub width: u32,
-    pub height: u32,
+    pub size: PixelShape,
     pub display_index: u32,
     pub show_fps: bool,
+}
+
+impl DisplayConfig {
+    /// Get width in pixels.
+    pub fn width(&self) -> u32 {
+        self.size.width as u32
+    }
+
+    /// Get height in pixels.
+    pub fn height(&self) -> u32 {
+        self.size.height as u32
+    }
 }
 
 /// Run the SDL display loop with the given pattern source.
@@ -282,7 +294,7 @@ pub fn run_display<P: PatternSource>(
         .map_err(|e| anyhow::anyhow!("Failed to get display bounds: {e}"))?;
 
     let window = video_subsystem
-        .window("Calibration Pattern", config.width, config.height)
+        .window("Calibration Pattern", config.width(), config.height())
         .position(display_bounds.x(), display_bounds.y())
         .fullscreen_desktop()
         .build()
@@ -297,8 +309,8 @@ pub fn run_display<P: PatternSource>(
     let mut texture = texture_creator
         .create_texture_streaming(
             sdl2::pixels::PixelFormatEnum::RGB24,
-            config.width,
-            config.height,
+            config.width(),
+            config.height(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create texture: {e:?}"))?;
 
@@ -306,9 +318,10 @@ pub fn run_display<P: PatternSource>(
         .event_pump()
         .map_err(|e| anyhow::anyhow!("Failed to get event pump: {e}"))?;
 
+    let display_size = config.size;
     let render_pattern =
         |pattern: &PatternConfig, invert: bool| -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
-            let mut img = pattern.generate(config.width, config.height)?;
+            let mut img = pattern.generate(display_size)?;
             if invert {
                 PatternConfig::apply_invert(&mut img);
             }
@@ -318,11 +331,11 @@ pub fn run_display<P: PatternSource>(
     // Initial render
     let (mut current_pattern, mut current_invert) = source.current();
     let mut img = render_pattern(&current_pattern, current_invert)?;
-    let mut buffer: Vec<u8> = vec![0; (config.width * config.height * 3) as usize];
+    let mut buffer: Vec<u8> = vec![0; (config.width() * config.height() * 3) as usize];
 
     if !current_pattern.is_animated() {
         texture
-            .update(None, img.as_raw(), (config.width * 3) as usize)
+            .update(None, img.as_raw(), (config.width() * 3) as usize)
             .map_err(|e| anyhow::anyhow!("Failed to update texture: {e:?}"))?;
         // Stream the rendered image
         source.on_rendered(&img);
@@ -388,7 +401,7 @@ pub fn run_display<P: PatternSource>(
                     if !current_pattern.is_animated() {
                         img = render_pattern(&current_pattern, current_invert)?;
                         texture
-                            .update(None, img.as_raw(), (config.width * 3) as usize)
+                            .update(None, img.as_raw(), (config.width() * 3) as usize)
                             .map_err(|e| anyhow::anyhow!("Failed to update texture: {e:?}"))?;
                         // Stream the rendered image
                         source.on_rendered(&img);
@@ -399,7 +412,7 @@ pub fn run_display<P: PatternSource>(
 
         // Handle animated patterns (render every frame)
         if current_pattern.is_animated() {
-            current_pattern.generate_into_buffer(&mut buffer, config.width, config.height);
+            current_pattern.generate_into_buffer(&mut buffer, display_size);
 
             let buffer_to_use: &[u8] = if current_invert {
                 // Invert in place for animated patterns
@@ -412,12 +425,12 @@ pub fn run_display<P: PatternSource>(
             };
 
             texture
-                .update(None, buffer_to_use, (config.width * 3) as usize)
+                .update(None, buffer_to_use, (config.width() * 3) as usize)
                 .map_err(|e| anyhow::anyhow!("Failed to update texture: {e:?}"))?;
 
             // Stream the rendered image (rate-limited in on_rendered)
             if let Some(anim_img) =
-                ImageBuffer::from_raw(config.width, config.height, buffer_to_use.to_vec())
+                ImageBuffer::from_raw(config.width(), config.height(), buffer_to_use.to_vec())
             {
                 source.on_rendered(&anim_img);
             }

@@ -14,6 +14,7 @@ use libftd2xx::{Ftdi, FtdiCommon};
 use tracing::{debug, error, info, warn};
 
 use crate::display_patterns::{MotionTrajectory, Position2D};
+use shared::image_size::PixelShape;
 
 /// Gyro emitter configuration.
 #[derive(Debug, Clone)]
@@ -65,12 +66,12 @@ impl Default for GyroEmissionParams {
 
 /// Trait object wrapper for MotionTrajectory to allow dynamic dispatch.
 pub trait PositionSource: Send + Sync {
-    fn position_at(&self, elapsed: Duration, width: u32, height: u32) -> Position2D;
+    fn position_at(&self, elapsed: Duration, display_size: PixelShape) -> Position2D;
 }
 
 impl<T: MotionTrajectory + Send + Sync> PositionSource for T {
-    fn position_at(&self, elapsed: Duration, width: u32, height: u32) -> Position2D {
-        MotionTrajectory::position_at(self, elapsed, width, height)
+    fn position_at(&self, elapsed: Duration, display_size: PixelShape) -> Position2D {
+        MotionTrajectory::position_at(self, elapsed, display_size)
     }
 }
 
@@ -242,7 +243,9 @@ fn run_gyro_emitter_loop(
                 // Get position from pattern
                 let position = if let Some(ref src) = source {
                     let elapsed = now.duration_since(motion_start);
-                    src.position_at(elapsed, p.display_width, p.display_height)
+                    let display_size =
+                        PixelShape::new(p.display_width as usize, p.display_height as usize);
+                    src.position_at(elapsed, display_size)
                 } else {
                     Position2D { x: 0.0, y: 0.0 }
                 };

@@ -1,20 +1,19 @@
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 use std::time::SystemTime;
 
 use super::shared::{compute_normalization_factor, render_gaussian_spot, BlendMode};
 
 pub fn generate_into_buffer(
     buffer: &mut [u8],
-    width: u32,
-    height: u32,
+    size: PixelShape,
     fwhm_pixels: f64,
     wiggle_radius_pixels: f64,
     max_intensity: f64,
 ) {
     buffer.fill(0);
 
-    let center_x = width as f64 / 2.0;
-    let center_y = height as f64 / 2.0;
+    let (center_x, center_y) = size.center();
 
     let elapsed = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -31,8 +30,7 @@ pub fn generate_into_buffer(
 
     render_gaussian_spot(
         buffer,
-        width,
-        height,
+        size,
         gaussian_x,
         gaussian_y,
         fwhm_pixels,
@@ -42,17 +40,16 @@ pub fn generate_into_buffer(
 }
 
 pub fn generate(
-    width: u32,
-    height: u32,
+    size: PixelShape,
     fwhm_pixels: f64,
     wiggle_radius_pixels: f64,
     max_intensity: f64,
 ) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut buffer = vec![0u8; (width * height * 3) as usize];
     generate_into_buffer(
         &mut buffer,
-        width,
-        height,
+        size,
         fwhm_pixels,
         wiggle_radius_pixels,
         max_intensity,
@@ -66,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_wiggling_gaussian_pattern_generation() {
-        let img = generate(640, 480, 47.0, 50.0, 255.0);
+        let img = generate(PixelShape::new(640, 480), 47.0, 50.0, 255.0);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
     }

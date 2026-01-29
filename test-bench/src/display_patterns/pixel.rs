@@ -1,6 +1,8 @@
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 
-pub fn generate(width: u32, height: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+pub fn generate(size: PixelShape) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut img = ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0]));
     let center_x = width / 2;
     let center_y = height / 2;
@@ -14,7 +16,7 @@ mod tests {
 
     #[test]
     fn test_pixel_pattern_generation() {
-        let img = generate(100, 100);
+        let img = generate(PixelShape::new(100, 100));
         assert_eq!(img.width(), 100);
         assert_eq!(img.height(), 100);
 

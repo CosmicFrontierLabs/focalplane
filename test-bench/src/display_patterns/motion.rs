@@ -3,6 +3,7 @@
 //! Patterns that move (like WigglingGaussian or CirclingPixel) implement this trait
 //! to expose their position for gyro simulation and other motion-aware systems.
 
+use shared::image_size::PixelShape;
 use std::time::Duration;
 
 /// 2D position in pixel coordinates (relative to display center).
@@ -23,10 +24,8 @@ pub trait MotionTrajectory {
     ///
     /// # Arguments
     /// * `elapsed` - Time since the motion started (typically since pattern activation)
-    /// * `display_width` - Display width in pixels (for computing radius from % values)
-    /// * `display_height` - Display height in pixels (for computing radius from % values)
-    fn position_at(&self, elapsed: Duration, display_width: u32, display_height: u32)
-        -> Position2D;
+    /// * `display_size` - Display dimensions in pixels (for computing radius from % values)
+    fn position_at(&self, elapsed: Duration, display_size: PixelShape) -> Position2D;
 }
 
 /// Circular motion parameters (shared between WigglingGaussian, CirclingPixel, etc.)

@@ -1,6 +1,7 @@
 //! Shared utilities for display pattern generation.
 
 use shared::image_proc::airy::PixelScaledAiryDisk;
+use shared::image_size::PixelShape;
 use shared::units::{LengthExt, Wavelength};
 
 /// Reference wavelength for PSF calculations (550nm green light).
@@ -47,25 +48,23 @@ pub enum BlendMode {
 /// Render a gaussian-like spot (Airy disk PSF) into an RGB buffer.
 ///
 /// # Arguments
-/// * `buffer` - RGB24 buffer (width * height * 3 bytes)
-/// * `width` - Buffer width in pixels
-/// * `height` - Buffer height in pixels
+/// * `buffer` - RGB24 buffer (size.width * size.height * 3 bytes)
+/// * `size` - Buffer dimensions in pixels
 /// * `spot_x` - Spot center X coordinate
 /// * `spot_y` - Spot center Y coordinate
 /// * `fwhm_pixels` - Full width at half maximum in pixels
 /// * `normalization_factor` - Intensity scaling factor (from `compute_normalization_factor`)
 /// * `blend_mode` - How to combine with existing pixels
-#[allow(clippy::too_many_arguments)]
 pub fn render_gaussian_spot(
     buffer: &mut [u8],
-    width: u32,
-    height: u32,
+    size: PixelShape,
     spot_x: f64,
     spot_y: f64,
     fwhm_pixels: f64,
     normalization_factor: f64,
     blend_mode: BlendMode,
 ) {
+    let (width, height) = size.to_u32_tuple();
     let reference_wavelength = Wavelength::from_nanometers(REFERENCE_WAVELENGTH_NM);
     let psf = PixelScaledAiryDisk::with_fwhm(fwhm_pixels, reference_wavelength);
 
@@ -118,8 +117,7 @@ mod tests {
         let norm = compute_normalization_factor(5.0, 255.0);
         render_gaussian_spot(
             &mut buffer,
-            100,
-            100,
+            PixelShape::new(100, 100),
             50.0,
             50.0,
             5.0,
@@ -138,8 +136,7 @@ mod tests {
         let norm = compute_normalization_factor(5.0, 100.0);
         render_gaussian_spot(
             &mut buffer,
-            100,
-            100,
+            PixelShape::new(100, 100),
             50.0,
             50.0,
             5.0,

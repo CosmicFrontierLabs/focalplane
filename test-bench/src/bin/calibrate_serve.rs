@@ -155,7 +155,8 @@ async fn jpeg_pattern_endpoint(State(state): State<Arc<AppState>>) -> Response {
     let pattern_config = state.pattern.read().await.clone();
     let invert = *state.invert.read().await;
 
-    let mut img = match pattern_config.generate(state.width, state.height) {
+    let size = shared::image_size::PixelShape::new(state.width as usize, state.height as usize);
+    let mut img = match pattern_config.generate(size) {
         Ok(img) => img,
         Err(e) => {
             return Response::builder()
@@ -562,8 +563,7 @@ fn main() -> Result<()> {
         .with_ws_stream(state.ws_stream.clone());
 
     let display_config = DisplayConfig {
-        width,
-        height,
+        size: shared::image_size::PixelShape::new(width as usize, height as usize),
         display_index,
         show_fps: false,
     };

@@ -1,11 +1,13 @@
 use crate::display_patterns::assets::Assets;
 use anyhow::{Context, Result};
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 use std::sync::Arc;
 use tiny_skia::{Pixmap, Transform};
 use usvg::{fontdb, Options, Tree};
 
-pub fn generate(width: u32, height: u32) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
+pub fn generate(size: PixelShape) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
+    let (width, height) = size.to_u32_tuple();
     let asset_data =
         Assets::get("usaf-1951.svg").context("Failed to load embedded USAF-1951 SVG")?;
     let svg_data = std::str::from_utf8(&asset_data.data).context("SVG file is not valid UTF-8")?;
@@ -59,7 +61,7 @@ mod tests {
 
     #[test]
     fn test_usaf_pattern_generation() {
-        let result = generate(1024, 768);
+        let result = generate(PixelShape::new(1024, 768));
         if let Err(e) = &result {
             panic!("USAF pattern generation failed: {e}");
         }

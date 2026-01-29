@@ -61,7 +61,7 @@ impl MockCameraInterface {
     }
 
     pub fn new_zeros(size: PixelShape, bit_depth: SensorBitDepth) -> Self {
-        let frame_data = size.empty_array_u16();
+        let frame_data = Array2::zeros((size.height, size.width));
         Self::new_repeating(size, bit_depth, frame_data)
     }
 

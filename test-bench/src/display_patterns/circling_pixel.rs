@@ -1,13 +1,14 @@
 use image::{ImageBuffer, Rgb};
+use shared::image_size::PixelShape;
 use std::time::SystemTime;
 
 pub fn generate_into_buffer(
     buffer: &mut [u8],
-    width: u32,
-    height: u32,
+    size: PixelShape,
     orbit_count: u32,
     radius_percent: u32,
 ) {
+    let (width, height) = size.to_u32_tuple();
     buffer.fill(0);
 
     let center_x = width / 2;
@@ -47,13 +48,13 @@ pub fn generate_into_buffer(
 }
 
 pub fn generate(
-    width: u32,
-    height: u32,
+    size: PixelShape,
     orbit_count: u32,
     radius_percent: u32,
 ) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    let (width, height) = size.to_u32_tuple();
     let mut buffer = vec![0u8; (width * height * 3) as usize];
-    generate_into_buffer(&mut buffer, width, height, orbit_count, radius_percent);
+    generate_into_buffer(&mut buffer, size, orbit_count, radius_percent);
     ImageBuffer::from_raw(width, height, buffer).unwrap()
 }
 
@@ -63,7 +64,7 @@ mod tests {
 
     #[test]
     fn test_circling_pixel_pattern_generation() {
-        let img = generate(640, 480, 1, 50);
+        let img = generate(PixelShape::new(640, 480), 1, 50);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
 
