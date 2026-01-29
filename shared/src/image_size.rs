@@ -76,3 +76,136 @@ impl fmt::Display for PixelShape {
         write!(f, "{}x{}", self.width, self.height)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_with_width_height() {
+        let shape = PixelShape::with_width_height(640, 480);
+        assert_eq!(shape.width, 640);
+        assert_eq!(shape.height, 480);
+    }
+
+    #[test]
+    fn test_empty_array_f64() {
+        let shape = PixelShape::with_width_height(100, 50);
+        let arr: Array2<f64> = shape.empty_array();
+        assert_eq!(arr.shape(), &[50, 100]); // (height, width) row-major
+        assert!(arr.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_empty_array_f32() {
+        let shape = PixelShape::with_width_height(32, 64);
+        let arr: Array2<f32> = shape.empty_array();
+        assert_eq!(arr.shape(), &[64, 32]); // (height, width)
+        assert!(arr.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_empty_array_u16() {
+        let shape = PixelShape::with_width_height(256, 128);
+        let arr = shape.empty_array_u16();
+        assert_eq!(arr.shape(), &[128, 256]); // (height, width)
+        assert!(arr.iter().all(|&x| x == 0));
+    }
+
+    #[test]
+    fn test_pixel_count() {
+        let shape = PixelShape::with_width_height(1920, 1080);
+        assert_eq!(shape.pixel_count(), 1920 * 1080);
+    }
+
+    #[test]
+    fn test_pixel_count_zero() {
+        let shape = PixelShape::with_width_height(0, 100);
+        assert_eq!(shape.pixel_count(), 0);
+    }
+
+    #[test]
+    fn test_to_tuple() {
+        let shape = PixelShape::with_width_height(800, 600);
+        assert_eq!(shape.to_tuple(), (800, 600));
+    }
+
+    #[test]
+    fn test_from_tuple() {
+        let shape = PixelShape::from_tuple((1024, 768));
+        assert_eq!(shape.width, 1024);
+        assert_eq!(shape.height, 768);
+    }
+
+    #[test]
+    fn test_from_tuple_roundtrip() {
+        let original = PixelShape::with_width_height(512, 384);
+        let tuple = original.to_tuple();
+        let recovered = PixelShape::from_tuple(tuple);
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_from_impl() {
+        let shape: PixelShape = (320, 240).into();
+        assert_eq!(shape.width, 320);
+        assert_eq!(shape.height, 240);
+    }
+
+    #[test]
+    fn test_into_tuple_impl() {
+        let shape = PixelShape::with_width_height(160, 120);
+        let tuple: (usize, usize) = shape.into();
+        assert_eq!(tuple, (160, 120));
+    }
+
+    #[test]
+    fn test_display() {
+        let shape = PixelShape::with_width_height(1280, 720);
+        assert_eq!(format!("{}", shape), "1280x720");
+    }
+
+    #[test]
+    fn test_debug() {
+        let shape = PixelShape::with_width_height(64, 64);
+        let debug_str = format!("{:?}", shape);
+        assert!(debug_str.contains("64"));
+        assert!(debug_str.contains("PixelShape"));
+    }
+
+    #[test]
+    fn test_clone_and_copy() {
+        let shape = PixelShape::with_width_height(100, 100);
+        let cloned = shape.clone();
+        let copied = shape; // Copy trait
+        assert_eq!(shape, cloned);
+        assert_eq!(shape, copied);
+    }
+
+    #[test]
+    fn test_equality() {
+        let a = PixelShape::with_width_height(50, 60);
+        let b = PixelShape::with_width_height(50, 60);
+        let c = PixelShape::with_width_height(60, 50);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(PixelShape::with_width_height(100, 200));
+        set.insert(PixelShape::with_width_height(100, 200)); // duplicate
+        set.insert(PixelShape::with_width_height(200, 100)); // different
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_serde_roundtrip() {
+        let original = PixelShape::with_width_height(1920, 1080);
+        let json = serde_json::to_string(&original).unwrap();
+        let recovered: PixelShape = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, recovered);
+    }
+}
