@@ -400,3 +400,106 @@ pub fn detect_and_select_guides(
 
     Ok((guide_star, detected_stars))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_detection(id: usize, x: f64, y: f64, flux: f64) -> StarDetection {
+        StarDetection {
+            id,
+            x,
+            y,
+            flux,
+            m_xx: 1.0,
+            m_yy: 1.0,
+            m_xy: 0.0,
+            aspect_ratio: 1.0,
+            diameter: 4.0,
+        }
+    }
+
+    #[test]
+    fn test_calculate_detection_stats_empty() {
+        let detections: Vec<StarDetection> = vec![];
+        assert!(calculate_detection_stats(&detections).is_none());
+    }
+
+    #[test]
+    fn test_calculate_detection_stats_single() {
+        let detections = vec![make_detection(0, 50.0, 50.0, 1000.0)];
+        let stats = calculate_detection_stats(&detections).unwrap();
+        assert_eq!(stats.count, 1);
+        assert_eq!(stats.brightest_flux, 1000.0);
+        assert_eq!(stats.dimmest_flux, 1000.0);
+        assert_eq!(stats.mean_flux, 1000.0);
+    }
+
+    #[test]
+    fn test_calculate_detection_stats_multiple() {
+        let detections = vec![
+            make_detection(0, 10.0, 10.0, 100.0),
+            make_detection(1, 20.0, 20.0, 200.0),
+            make_detection(2, 30.0, 30.0, 300.0),
+        ];
+        let stats = calculate_detection_stats(&detections).unwrap();
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.brightest_flux, 300.0);
+        assert_eq!(stats.dimmest_flux, 100.0);
+        assert_eq!(stats.mean_flux, 200.0);
+    }
+
+    #[test]
+    fn test_calculate_detection_stats_mean_accuracy() {
+        let detections = vec![
+            make_detection(0, 0.0, 0.0, 10.0),
+            make_detection(1, 0.0, 0.0, 20.0),
+            make_detection(2, 0.0, 0.0, 30.0),
+            make_detection(3, 0.0, 0.0, 40.0),
+        ];
+        let stats = calculate_detection_stats(&detections).unwrap();
+        assert_eq!(stats.count, 4);
+        assert_eq!(stats.mean_flux, 25.0); // (10+20+30+40)/4
+    }
+
+    #[test]
+    fn test_star_detection_stats_log() {
+        // Just verify log doesn't panic - this is a basic smoke test
+        let stats = StarDetectionStats {
+            count: 5,
+            brightest_flux: 5000.0,
+            dimmest_flux: 100.0,
+            mean_flux: 1500.0,
+        };
+        // This should not panic
+        stats.log("Test note");
+    }
+
+    #[test]
+    fn test_star_detection_stats_clone() {
+        let stats = StarDetectionStats {
+            count: 3,
+            brightest_flux: 3000.0,
+            dimmest_flux: 500.0,
+            mean_flux: 1250.0,
+        };
+        let cloned = stats.clone();
+        assert_eq!(stats.count, cloned.count);
+        assert_eq!(stats.brightest_flux, cloned.brightest_flux);
+        assert_eq!(stats.dimmest_flux, cloned.dimmest_flux);
+        assert_eq!(stats.mean_flux, cloned.mean_flux);
+    }
+
+    #[test]
+    fn test_star_detection_stats_debug() {
+        let stats = StarDetectionStats {
+            count: 10,
+            brightest_flux: 10000.0,
+            dimmest_flux: 200.0,
+            mean_flux: 2500.0,
+        };
+        let debug_str = format!("{:?}", stats);
+        assert!(debug_str.contains("StarDetectionStats"));
+        assert!(debug_str.contains("10"));
+    }
+}
