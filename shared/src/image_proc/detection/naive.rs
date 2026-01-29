@@ -28,9 +28,10 @@ use ndarray::{Array2, ArrayView2};
 #[cfg(test)]
 use std::collections::HashSet;
 
-use crate::image_proc::centroid::{compute_centroid_from_mask, SpotShape};
+use crate::image_proc::centroid::compute_centroid_from_mask;
 use meter_math::Locatable2d;
 use starfield::image::starfinders::StellarSource;
+use test_bench_shared::SpotShape;
 
 /// Star detection result with sub-pixel position and shape characterization.
 ///

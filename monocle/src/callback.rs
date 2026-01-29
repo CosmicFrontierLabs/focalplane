@@ -1,7 +1,6 @@
 use ndarray::Array2;
-use shared::camera_interface::Timestamp;
-use shared::image_proc::centroid::SpotShape;
 use std::sync::Arc;
+use test_bench_shared::{SpotShape, Timestamp};
 
 /// Position estimate for tracking callbacks
 #[derive(Debug, Clone)]

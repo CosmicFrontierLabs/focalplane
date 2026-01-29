@@ -19,6 +19,7 @@ shared = { path = "../shared", default-features = false }
 nalgebra = "0.32"
 rand = "0.9"
 rand_chacha = "0.9"
+test-bench-shared = { version = "0.1.0", path = "../test-bench-shared" }
 
 [dev-dependencies]
 env_logger = "0.11"

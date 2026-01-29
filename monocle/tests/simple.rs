@@ -95,8 +95,8 @@ fn test_single_stationary_star() {
 
 #[test]
 fn test_guidance_update_timestamp_correlation() {
-    use shared::camera_interface::Timestamp;
     use std::time::Duration;
+    use test_bench_shared::Timestamp;
 
     // Initialize logging
     let _ = env_logger::builder().is_test(true).try_init();

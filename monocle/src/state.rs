@@ -1,6 +1,6 @@
 use ndarray::ArrayView2;
 use serde::{Deserialize, Serialize};
-use shared::camera_interface::Timestamp;
+use test_bench_shared::Timestamp;
 
 /// Fine Guidance System states
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

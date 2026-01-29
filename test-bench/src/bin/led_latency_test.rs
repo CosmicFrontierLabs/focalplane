@@ -378,8 +378,8 @@ fn run_baseline_measurement(
 }
 
 fn timestamp_diff_s(
-    first: &shared::camera_interface::Timestamp,
-    current: &shared::camera_interface::Timestamp,
+    first: &test_bench_shared::Timestamp,
+    current: &test_bench_shared::Timestamp,
 ) -> f64 {
     let first_us = first
         .seconds
@@ -424,7 +424,7 @@ fn run_latency_characterization(
 
     // Capture phase - prioritize timing, minimize processing
     let mut captured_frames: Vec<CapturedFrame> = Vec::with_capacity(num_frames);
-    let mut first_timestamp: Option<shared::camera_interface::Timestamp> = None;
+    let mut first_timestamp: Option<test_bench_shared::Timestamp> = None;
     let mut first_instant: Option<std::time::Instant> = None;
     let mut frame_count = 0;
 

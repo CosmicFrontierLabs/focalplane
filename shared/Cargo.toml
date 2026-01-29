@@ -60,7 +60,7 @@ tracing = "0.1.41"
 ureq = { version = "3.1.4", features = ["json"] }
 
 # Shared types (WASM-compatible lightweight crate)
-test-bench-shared = { path = "../test-bench-shared" }
+test-bench-shared = { version = "0.1.0", path = "../test-bench-shared" }
 meter-math = { version = "0.1.0", path = "../meter-math" }
 rand_chacha = "0.9"
 

@@ -4,32 +4,11 @@
 //! sub-pixel positions of stellar objects from image data and masks.
 
 use ndarray::ArrayView2;
-
 use serde::{Deserialize, Serialize};
+pub use test_bench_shared::SpotShape;
 
 /// Maximum intensity value for 16-bit unsigned images (2^16 - 1)
 pub const SATURATION_16BIT: f64 = 65535.0;
-
-/// Spot shape characterization without position.
-///
-/// Contains flux, shape moments, and size measurements extracted from a centroid
-/// calculation. Used for transmitting shape data separately from position
-/// (e.g., in tracking messages where frame-relative position is stored separately).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpotShape {
-    /// Total flux (sum of all pixel intensities)
-    pub flux: f64,
-    /// Second central moment μ₂₀ (variance in x-direction)
-    pub m_xx: f64,
-    /// Second central moment μ₀₂ (variance in y-direction)
-    pub m_yy: f64,
-    /// Second central moment μ₁₁ (covariance between x and y)
-    pub m_xy: f64,
-    /// Aspect ratio (λ₁/λ₂) from eigenvalues of moment matrix
-    pub aspect_ratio: f64,
-    /// Estimated object diameter in pixels
-    pub diameter: f64,
-}
 
 /// Result from centroid calculation containing position and shape properties
 ///

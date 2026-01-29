@@ -4,9 +4,8 @@
 //! (e.g., cam_track publishing to calibration subscribers).
 
 use serde::{Deserialize, Serialize};
+use test_bench_shared::{SpotShape, Timestamp};
 
-use crate::camera_interface::Timestamp;
-use crate::image_proc::centroid::SpotShape;
 use crate::system_info::SensorInfo;
 
 /// A tracking update message containing the position of a tracked target.

@@ -9,48 +9,12 @@ pub mod ring_buffer;
 use crate::image_proc::detection::AABB;
 use crate::image_size::PixelShape;
 use ndarray::{Array2, ArrayView2};
-use serde::{Deserialize, Serialize};
 use starfield::Equatorial;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
-
-/// Timestamp structure aligned with V4L2 format
-/// Represents time as seconds and nanoseconds since an epoch
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Timestamp {
-    /// Seconds component
-    pub seconds: u64,
-    /// Nanoseconds component (0-999,999,999)
-    pub nanos: u64,
-}
-
-impl Timestamp {
-    /// Create a new timestamp
-    pub fn new(seconds: u64, nanos: u64) -> Self {
-        Self { seconds, nanos }
-    }
-
-    /// Create a timestamp from a Duration since epoch
-    pub fn from_duration(duration: Duration) -> Self {
-        let total_nanos = duration.as_nanos();
-        let seconds = (total_nanos / 1_000_000_000) as u64;
-        let nanos = (total_nanos % 1_000_000_000) as u64;
-        Self { seconds, nanos }
-    }
-
-    /// Convert to Duration
-    pub fn to_duration(&self) -> Duration {
-        Duration::new(self.seconds, self.nanos as u32)
-    }
-}
-
-impl fmt::Display for Timestamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}.{:09}", self.seconds, self.nanos)
-    }
-}
+pub use test_bench_shared::Timestamp;
 
 /// Error type for camera operations
 #[derive(Debug)]
