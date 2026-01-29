@@ -162,6 +162,41 @@ impl CalibrateServerClient {
         self.set_pattern(&PatternCommand::Clear).await
     }
 
+    // === Pattern Config Helpers ===
+
+    /// Set display to center pixel pattern.
+    ///
+    /// Shows a single bright pixel at the center of the display.
+    /// Useful for calibration where a point source is needed.
+    pub async fn set_pixel_pattern(&self) -> Result<(), CalibrateError> {
+        let config = PatternConfigRequest {
+            pattern_id: "Pixel".to_string(),
+            values: serde_json::Map::new(),
+            invert: Some(false),
+            emit_gyro: None,
+            plate_scale: None,
+        };
+        self.set_config(&config).await
+    }
+
+    /// Turn off display by setting uniform black.
+    ///
+    /// Uses the Uniform pattern with level 0 via /config endpoint,
+    /// which works regardless of remote control mode.
+    pub async fn set_blank(&self) -> Result<(), CalibrateError> {
+        let config = PatternConfigRequest {
+            pattern_id: "Uniform".to_string(),
+            values: serde_json::json!({"level": 0})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            invert: Some(false),
+            emit_gyro: None,
+            plate_scale: None,
+        };
+        self.set_config(&config).await
+    }
+
     // === Image URLs ===
 
     /// Get the URL for JPEG pattern endpoint.
