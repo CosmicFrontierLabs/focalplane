@@ -312,7 +312,7 @@ pub fn get_centroids(stars: &[StarDetection]) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
+    use approx::{abs_diff_eq, assert_relative_eq};
     use ndarray::Array2;
 
     #[test]
@@ -516,12 +516,12 @@ mod tests {
         // Verify exact centroid position - should be exactly (2,2)
         println!("5x5 cross centroid: ({}, {})", star.x, star.y);
         assert!(
-            (star.x - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.x, 2.0, epsilon = 1e-10),
             "X-centroid error: {}",
             star.x - 2.0
         );
         assert!(
-            (star.y - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.y, 2.0, epsilon = 1e-10),
             "Y-centroid error: {}",
             star.y - 2.0
         );
@@ -561,12 +561,12 @@ mod tests {
         // Verify exact centroid position - should be exactly (2,2)
         println!("3x3 pattern centroid: ({}, {})", star.x, star.y);
         assert!(
-            (star.x - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.x, 2.0, epsilon = 1e-10),
             "X-centroid error: {}",
             star.x - 2.0
         );
         assert!(
-            (star.y - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.y, 2.0, epsilon = 1e-10),
             "Y-centroid error: {}",
             star.y - 2.0
         );
@@ -598,7 +598,7 @@ mod tests {
 
         // Y-centroid should still be exactly 2.0
         assert!(
-            (star.y - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.y, 2.0, epsilon = 1e-10),
             "Y-centroid error: {}",
             star.y - 2.0
         );
@@ -630,7 +630,7 @@ mod tests {
 
         // X-centroid should still be exactly 2.0
         assert!(
-            (star.x - 2.0).abs() < 1e-10,
+            abs_diff_eq!(star.x, 2.0, epsilon = 1e-10),
             "X-centroid error: {}",
             star.x - 2.0
         );
@@ -677,12 +677,12 @@ mod tests {
         // Verify exact centroid position - should be exactly (2.5, 2.5)
         println!("6x6 pattern centroid: ({}, {})", star.x, star.y);
         assert!(
-            (star.x - 2.5).abs() < 1e-10,
+            abs_diff_eq!(star.x, 2.5, epsilon = 1e-10),
             "X-centroid error: {}",
             star.x - 2.5
         );
         assert!(
-            (star.y - 2.5).abs() < 1e-10,
+            abs_diff_eq!(star.y, 2.5, epsilon = 1e-10),
             "Y-centroid error: {}",
             star.y - 2.5
         );
@@ -716,12 +716,12 @@ mod tests {
         // Verify sub-pixel centroid position
         println!("Subpixel pattern centroid: ({}, {})", star.x, star.y);
         assert!(
-            (star.x - 2.75).abs() < 0.05,
+            abs_diff_eq!(star.x, 2.75, epsilon = 0.05),
             "X-centroid error: {}",
             star.x - 2.75
         );
         assert!(
-            (star.y - 2.75).abs() < 0.05,
+            abs_diff_eq!(star.y, 2.75, epsilon = 0.05),
             "Y-centroid error: {}",
             star.y - 2.75
         );
@@ -796,7 +796,7 @@ mod tests {
         let x_bias = star_normal.x - 2.0;
         let y_bias = star_swapped.y - 2.0;
         assert!(
-            (x_bias - y_bias).abs() < 0.01,
+            abs_diff_eq!(x_bias, y_bias, epsilon = 0.01),
             "X bias ({x_bias}) should match Y bias ({y_bias})"
         );
     }

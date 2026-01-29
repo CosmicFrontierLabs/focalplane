@@ -144,6 +144,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_measurement_buffer_average() {
@@ -159,9 +160,9 @@ mod tests {
             diameter: 5.0,
         });
         let (x, y, d) = buffer.average().unwrap();
-        assert!((x - 10.0).abs() < 1e-10);
-        assert!((y - 20.0).abs() < 1e-10);
-        assert!((d - 5.0).abs() < 1e-10);
+        assert_abs_diff_eq!(x, 10.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(y, 20.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(d, 5.0, epsilon = 1e-10);
 
         // Multiple measurements
         buffer.push(Measurement {
@@ -170,9 +171,9 @@ mod tests {
             diameter: 7.0,
         });
         let (x, y, d) = buffer.average().unwrap();
-        assert!((x - 15.0).abs() < 1e-10);
-        assert!((y - 30.0).abs() < 1e-10);
-        assert!((d - 6.0).abs() < 1e-10);
+        assert_abs_diff_eq!(x, 15.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(y, 30.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(d, 6.0, epsilon = 1e-10);
     }
 
     #[test]
@@ -204,6 +205,6 @@ mod tests {
         });
         assert_eq!(buffer.len(), 3);
         let (x, _, _) = buffer.average().unwrap();
-        assert!((x - 3.0).abs() < 1e-10); // (2+3+4)/3 = 3
+        assert_abs_diff_eq!(x, 3.0, epsilon = 1e-10); // (2+3+4)/3 = 3
     }
 }

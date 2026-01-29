@@ -71,6 +71,7 @@ pub fn collect_aperture_pixels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::abs_diff_eq;
     use ndarray::Array2;
 
     #[test]
@@ -104,7 +105,7 @@ mod tests {
         );
         for &pixel in &aperture_pixels {
             assert!(
-                (pixel - 100.0).abs() < 0.1,
+                abs_diff_eq!(pixel, 100.0, epsilon = 0.1),
                 "Aperture pixels should be ~100.0"
             );
         }
@@ -116,7 +117,7 @@ mod tests {
         );
         for &pixel in &background_pixels {
             assert!(
-                (pixel - 50.0).abs() < 0.1,
+                abs_diff_eq!(pixel, 50.0, epsilon = 0.1),
                 "Background pixels should be ~50.0"
             );
         }
@@ -167,14 +168,12 @@ mod tests {
             collect_aperture_pixels(&image.view(), 10.0, 10.0, 2.0, 4.0, 6.0);
 
         // All pixels should have value 1.0
-        assert_eq!(
-            aperture_pixels.iter().all(|&p| (p - 1.0).abs() < 1e-10),
-            true
-        );
-        assert_eq!(
-            background_pixels.iter().all(|&p| (p - 1.0).abs() < 1e-10),
-            true
-        );
+        assert!(aperture_pixels
+            .iter()
+            .all(|&p| abs_diff_eq!(p, 1.0, epsilon = 1e-10)));
+        assert!(background_pixels
+            .iter()
+            .all(|&p| abs_diff_eq!(p, 1.0, epsilon = 1e-10)));
     }
 
     #[test]

@@ -214,6 +214,7 @@ pub fn ui(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_project_display_corners() {
@@ -233,19 +234,19 @@ mod tests {
         let corners = project_display_corners(&alignment, 1000, 1000);
 
         // Top-left: (0,0) -> (100, 100)
-        assert!((corners[0].0 - 100.0).abs() < 1e-10);
-        assert!((corners[0].1 - 100.0).abs() < 1e-10);
+        assert_abs_diff_eq!(corners[0].0, 100.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(corners[0].1, 100.0, epsilon = 1e-10);
 
         // Top-right: (1000,0) -> (1100, 100)
-        assert!((corners[1].0 - 1100.0).abs() < 1e-10);
-        assert!((corners[1].1 - 100.0).abs() < 1e-10);
+        assert_abs_diff_eq!(corners[1].0, 1100.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(corners[1].1, 100.0, epsilon = 1e-10);
 
         // Bottom-right: (1000,1000) -> (1100, 1100)
-        assert!((corners[2].0 - 1100.0).abs() < 1e-10);
-        assert!((corners[2].1 - 1100.0).abs() < 1e-10);
+        assert_abs_diff_eq!(corners[2].0, 1100.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(corners[2].1, 1100.0, epsilon = 1e-10);
 
         // Bottom-left: (0,1000) -> (100, 1100)
-        assert!((corners[3].0 - 100.0).abs() < 1e-10);
-        assert!((corners[3].1 - 1100.0).abs() < 1e-10);
+        assert_abs_diff_eq!(corners[3].0, 100.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(corners[3].1, 1100.0, epsilon = 1e-10);
     }
 }

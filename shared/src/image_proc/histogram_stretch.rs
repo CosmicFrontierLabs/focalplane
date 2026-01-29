@@ -219,6 +219,7 @@ pub fn sigma_stretch(input: &Array2<f64>, sigma: f64, maxiters: Option<usize>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::abs_diff_eq;
     use ndarray::Array2;
 
     #[test]
@@ -261,7 +262,7 @@ mod tests {
         // Allow 5% tolerance for the mid-point check
         let tolerance = 0.05 * (v2 - v1);
         assert!(
-            (actual_7000 - expected_7000).abs() < tolerance,
+            abs_diff_eq!(actual_7000, expected_7000, epsilon = tolerance),
             "Mid-range value not mapped proportionally. Expected: {expected_7000}, Actual: {actual_7000}"
         );
     }

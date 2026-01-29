@@ -395,6 +395,7 @@ impl AxisMeasurements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::abs_diff_eq;
     use std::f64::consts::PI;
 
     /// Mock FSM that applies a known transform to commands
@@ -589,22 +590,22 @@ mod tests {
         // For identity transform, fsm_to_sensor should be close to identity
         let fsm_to_sensor = calibration.fsm_to_sensor;
         assert!(
-            (fsm_to_sensor[(0, 0)] - 1.0).abs() < 0.1,
+            abs_diff_eq!(fsm_to_sensor[(0, 0)], 1.0, epsilon = 0.1),
             "M[0,0] should be ~1.0, got {}",
             fsm_to_sensor[(0, 0)]
         );
         assert!(
-            fsm_to_sensor[(0, 1)].abs() < 0.1,
+            abs_diff_eq!(fsm_to_sensor[(0, 1)], 0.0, epsilon = 0.1),
             "M[0,1] should be ~0.0, got {}",
             fsm_to_sensor[(0, 1)]
         );
         assert!(
-            fsm_to_sensor[(1, 0)].abs() < 0.1,
+            abs_diff_eq!(fsm_to_sensor[(1, 0)], 0.0, epsilon = 0.1),
             "M[1,0] should be ~0.0, got {}",
             fsm_to_sensor[(1, 0)]
         );
         assert!(
-            (fsm_to_sensor[(1, 1)] - 1.0).abs() < 0.1,
+            abs_diff_eq!(fsm_to_sensor[(1, 1)], 1.0, epsilon = 0.1),
             "M[1,1] should be ~1.0, got {}",
             fsm_to_sensor[(1, 1)]
         );
@@ -650,13 +651,13 @@ mod tests {
         // For scaled transform, diagonal elements should be ~scale
         let fsm_to_sensor = calibration.fsm_to_sensor;
         assert!(
-            (fsm_to_sensor[(0, 0)] - scale).abs() < 0.01,
+            abs_diff_eq!(fsm_to_sensor[(0, 0)], scale, epsilon = 0.01),
             "M[0,0] should be ~{}, got {}",
             scale,
             fsm_to_sensor[(0, 0)]
         );
         assert!(
-            (fsm_to_sensor[(1, 1)] - scale).abs() < 0.01,
+            abs_diff_eq!(fsm_to_sensor[(1, 1)], scale, epsilon = 0.01),
             "M[1,1] should be ~{}, got {}",
             scale,
             fsm_to_sensor[(1, 1)]
@@ -666,7 +667,7 @@ mod tests {
         let sensor_to_fsm = calibration.sensor_to_fsm;
         let expected_inv = 1.0 / scale;
         assert!(
-            (sensor_to_fsm[(0, 0)] - expected_inv).abs() < 10.0,
+            abs_diff_eq!(sensor_to_fsm[(0, 0)], expected_inv, epsilon = 10.0),
             "Inverse M[0,0] should be ~{}, got {}",
             expected_inv,
             sensor_to_fsm[(0, 0)]
@@ -713,35 +714,41 @@ mod tests {
 
     #[test]
     fn test_mock_fsm_identity() {
+        use approx::assert_abs_diff_eq;
+
         let mut fsm = MockFsm::identity();
 
         fsm.move_to(100.0, 50.0).unwrap();
         let (x, y) = fsm.get_position().unwrap();
 
-        assert!((x - 100.0).abs() < 1e-10);
-        assert!((y - 50.0).abs() < 1e-10);
+        assert_abs_diff_eq!(x, 100.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(y, 50.0, epsilon = 1e-10);
     }
 
     #[test]
     fn test_mock_fsm_rotated() {
+        use approx::assert_abs_diff_eq;
+
         let mut fsm = MockFsm::rotated(PI / 2.0); // 90 degree rotation
 
         fsm.move_to(100.0, 0.0).unwrap();
         let (x, y) = fsm.get_position().unwrap();
 
         // 90 degree rotation: (100, 0) -> (0, 100)
-        assert!(x.abs() < 1e-10);
-        assert!((y - 100.0).abs() < 1e-10);
+        assert_abs_diff_eq!(x, 0.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(y, 100.0, epsilon = 1e-10);
     }
 
     #[test]
     fn test_mock_fsm_scaled() {
+        use approx::assert_abs_diff_eq;
+
         let mut fsm = MockFsm::scaled(2.0, 0.5);
 
         fsm.move_to(100.0, 100.0).unwrap();
         let (x, y) = fsm.get_position().unwrap();
 
-        assert!((x - 200.0).abs() < 1e-10);
-        assert!((y - 50.0).abs() < 1e-10);
+        assert_abs_diff_eq!(x, 200.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(y, 50.0, epsilon = 1e-10);
     }
 }

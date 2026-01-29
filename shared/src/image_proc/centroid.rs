@@ -208,7 +208,7 @@ pub fn compute_centroid_from_mask_with_saturation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
+    use approx::{abs_diff_eq, assert_relative_eq};
     use ndarray::Array2;
 
     #[test]
@@ -279,17 +279,17 @@ mod tests {
 
         // Check centroid is at center
         assert!(
-            (result.x - 3.0).abs() < 1e-10,
+            abs_diff_eq!(result.x, 3.0, epsilon = 1e-10),
             "x centroid should be 3.0, got {}",
             result.x
         );
         assert!(
-            (result.y - 3.0).abs() < 1e-10,
+            abs_diff_eq!(result.y, 3.0, epsilon = 1e-10),
             "y centroid should be 3.0, got {}",
             result.y
         );
         assert!(
-            (result.flux - 300.0).abs() < 1e-10,
+            abs_diff_eq!(result.flux, 300.0, epsilon = 1e-10),
             "flux should be 300.0, got {}",
             result.flux
         );
@@ -316,7 +316,7 @@ mod tests {
 
         // Check m_xy is near zero for aligned pattern
         assert!(
-            result.m_xy.abs() < 0.1,
+            abs_diff_eq!(result.m_xy, 0.0, epsilon = 0.1),
             "m_xy should be near zero for axis-aligned pattern, got {}",
             result.m_xy
         );
@@ -385,7 +385,7 @@ mod tests {
         // Moments in x and y should be equal for 45-degree diagonal
         let moment_ratio = result.m_xx / result.m_yy;
         assert!(
-            (moment_ratio - 1.0).abs() < 0.1,
+            abs_diff_eq!(moment_ratio, 1.0, epsilon = 0.1),
             "m_xx/m_yy should be close to 1.0 for diagonal pattern, got {moment_ratio}"
         );
     }
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(result.n_saturated.0, 100.0, "Cutoff should be 100.0");
         assert_eq!(result.n_saturated.1, 2, "Should have 2 saturated pixels");
         assert!(
-            (result.flux - 575.0).abs() < 1e-10,
+            abs_diff_eq!(result.flux, 575.0, epsilon = 1e-10),
             "Total flux should be 575.0"
         );
 
@@ -550,11 +550,11 @@ mod tests {
         // Verify result is reasonable
         let final_result = compute_centroid_from_mask(&image.view(), &mask.view());
         assert!(
-            (final_result.x - center_x).abs() < 0.1,
+            abs_diff_eq!(final_result.x, center_x, epsilon = 0.1),
             "Centroid x should be near center"
         );
         assert!(
-            (final_result.y - center_y).abs() < 0.1,
+            abs_diff_eq!(final_result.y, center_y, epsilon = 0.1),
             "Centroid y should be near center"
         );
         assert!(

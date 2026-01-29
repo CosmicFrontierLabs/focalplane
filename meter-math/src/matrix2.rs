@@ -120,7 +120,7 @@ pub fn scale_matrix(sx: f64, sy: f64) -> Matrix2<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use std::f64::consts::PI;
 
     #[test]
@@ -177,7 +177,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.determinant.abs() < 1e-9);
+        assert_abs_diff_eq!(err.determinant, 0.0, epsilon = 1e-9);
     }
 
     #[test]

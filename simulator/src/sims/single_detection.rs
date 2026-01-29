@@ -257,6 +257,7 @@ mod tests {
     use crate::hardware::sensor::models::{ALL_SENSORS, GSENSE4040BSI, HWK4123};
     use crate::hardware::telescope::models::IDEAL_50CM;
     use crate::photometry::zodiacal::SolarAngularCoordinates;
+    use approx::abs_diff_eq;
     use std::time::Duration;
 
     #[test]
@@ -444,7 +445,7 @@ mod tests {
         // Check position errors are identical
         for (i, ((x1, y1), (x2, y2))) in result1.xy_err.iter().zip(&result2.xy_err).enumerate() {
             assert!(
-                (x1 - x2).abs() < 1e-10 && (y1 - y2).abs() < 1e-10,
+                abs_diff_eq!(*x1, *x2, epsilon = 1e-10) && abs_diff_eq!(*y1, *y2, epsilon = 1e-10),
                 "Detection {i} positions should be identical: ({x1:.6}, {y1:.6}) vs ({x2:.6}, {y2:.6})"
             );
         }

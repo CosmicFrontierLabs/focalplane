@@ -269,7 +269,7 @@ pub fn cubic_spline_interpolate(x: Vec<f64>, y: Vec<f64>, n_points: usize) -> (V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
 
     #[test]
     fn test_linear_interpolation() {
@@ -532,7 +532,7 @@ mod tests {
         assert_relative_eq!(first_deriv, 3.0, epsilon = 0.1);
 
         // Second derivative should be near zero for linear function
-        assert!(second_deriv.abs() < 0.1);
+        assert_abs_diff_eq!(second_deriv, 0.0, epsilon = 0.1);
     }
 
     #[test]

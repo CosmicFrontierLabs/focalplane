@@ -366,6 +366,7 @@ pub trait StateEstimator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_timestamp_roundtrip() {
@@ -381,7 +382,7 @@ mod tests {
 
         let arcsec = gyro.to_arcseconds();
         // 1 radian ≈ 206264.8 arcseconds
-        assert!((arcsec[0] - 206.26480624709636).abs() < 0.001);
+        assert_abs_diff_eq!(arcsec[0], 206.26480624709636, epsilon = 0.001);
     }
 
     #[test]
@@ -389,11 +390,11 @@ mod tests {
         let fgs = FgsReadout::new(1.0, 2.0, 0.01, 0.04, Timestamp::from_micros(1000));
         let radians = fgs.to_radians();
         // 1 arcsec ≈ 4.848e-6 radians
-        assert!((radians[0] - 4.84813681109536e-6).abs() < 1e-12);
+        assert_abs_diff_eq!(radians[0], 4.84813681109536e-6, epsilon = 1e-12);
 
         let std = fgs.std_dev();
-        assert!((std[0] - 0.1).abs() < 1e-10);
-        assert!((std[1] - 0.2).abs() < 1e-10);
+        assert_abs_diff_eq!(std[0], 0.1, epsilon = 1e-10);
+        assert_abs_diff_eq!(std[1], 0.2, epsilon = 1e-10);
     }
 
     #[test]

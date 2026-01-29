@@ -41,6 +41,7 @@ pub struct SensorInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_display_info_serialization() {
@@ -57,7 +58,7 @@ mod tests {
 
         assert_eq!(parsed.width, 2560);
         assert_eq!(parsed.height, 2560);
-        assert!((parsed.pixel_pitch_um.unwrap() - 9.6).abs() < 1e-10);
+        assert_abs_diff_eq!(parsed.pixel_pitch_um.unwrap(), 9.6, epsilon = 1e-10);
         assert_eq!(parsed.name, "OLED");
     }
 
@@ -93,7 +94,7 @@ mod tests {
 
         assert_eq!(parsed.width, 9576);
         assert_eq!(parsed.height, 6388);
-        assert!((parsed.pixel_pitch_um - 3.76).abs() < 1e-10);
+        assert_abs_diff_eq!(parsed.pixel_pitch_um, 3.76, epsilon = 1e-10);
         assert_eq!(parsed.name, "IMX455");
     }
 }

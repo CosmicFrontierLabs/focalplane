@@ -145,7 +145,7 @@ pub fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
+    use approx::{abs_diff_eq, assert_relative_eq};
 
     #[test]
     fn test_erf_basic_values() {
@@ -274,7 +274,7 @@ mod tests {
         let y = vec![2.0, 4.0, 6.0, 8.0, 10.0];
         let corr = pearson_correlation(&x, &y);
         assert!(
-            (corr - 1.0).abs() < 1e-10,
+            abs_diff_eq!(corr, 1.0, epsilon = 1e-10),
             "Perfect positive correlation should be 1.0"
         );
 
@@ -282,7 +282,7 @@ mod tests {
         let y_neg = vec![10.0, 8.0, 6.0, 4.0, 2.0];
         let corr_neg = pearson_correlation(&x, &y_neg);
         assert!(
-            (corr_neg + 1.0).abs() < 1e-10,
+            abs_diff_eq!(corr_neg, -1.0, epsilon = 1e-10),
             "Perfect negative correlation should be -1.0"
         );
     }

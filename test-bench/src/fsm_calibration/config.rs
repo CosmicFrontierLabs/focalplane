@@ -59,15 +59,16 @@ pub struct FsmAxisCalibration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_default_config() {
         let config = FsmCalibrationConfig::default();
 
-        assert!((config.wiggle_amplitude_urad - 100.0).abs() < f64::EPSILON);
-        assert!((config.wiggle_frequency_hz - 1.0).abs() < f64::EPSILON);
+        assert_abs_diff_eq!(config.wiggle_amplitude_urad, 100.0, epsilon = f64::EPSILON);
+        assert_abs_diff_eq!(config.wiggle_frequency_hz, 1.0, epsilon = f64::EPSILON);
         assert_eq!(config.wiggle_cycles, 5);
-        assert!((config.verify_radius_urad - 150.0).abs() < f64::EPSILON);
-        assert!((config.min_fit_r_squared - 0.95).abs() < f64::EPSILON);
+        assert_abs_diff_eq!(config.verify_radius_urad, 150.0, epsilon = f64::EPSILON);
+        assert_abs_diff_eq!(config.min_fit_r_squared, 0.95, epsilon = f64::EPSILON);
     }
 }

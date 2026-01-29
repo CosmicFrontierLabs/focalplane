@@ -64,6 +64,7 @@ impl CircularMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_circular_motion_position() {
@@ -71,12 +72,12 @@ mod tests {
 
         // At t=0, should be at (radius, 0)
         let pos = motion.position_at(Duration::from_secs(0));
-        assert!((pos.x - 10.0).abs() < 1e-10);
-        assert!(pos.y.abs() < 1e-10);
+        assert_abs_diff_eq!(pos.x, 10.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(pos.y, 0.0, epsilon = 1e-10);
 
         // At t=2.5 (1/4 period), should be at (0, radius)
         let pos = motion.position_at(Duration::from_secs_f64(2.5));
-        assert!(pos.x.abs() < 1e-10);
-        assert!((pos.y - 10.0).abs() < 1e-10);
+        assert_abs_diff_eq!(pos.x, 0.0, epsilon = 1e-10);
+        assert_abs_diff_eq!(pos.y, 10.0, epsilon = 1e-10);
     }
 }
