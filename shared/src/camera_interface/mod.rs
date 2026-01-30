@@ -435,6 +435,10 @@ impl CameraInterface for Box<dyn CameraInterface> {
         (**self).check_roi_size(size)
     }
 
+    fn get_roi_offset_alignment(&self) -> (usize, usize) {
+        (**self).get_roi_offset_alignment()
+    }
+
     fn stream(
         &mut self,
         callback: &mut dyn FnMut(&Array2<u16>, &FrameMetadata) -> bool,

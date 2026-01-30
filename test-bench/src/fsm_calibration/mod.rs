@@ -7,32 +7,28 @@
 //! # Overview
 //!
 //! The calibration process:
-//! 1. Apply sinusoidal wiggle to each FSM axis independently
-//! 2. Record centroid motion on the detector
-//! 3. Fit sinusoids to extract response vectors
-//! 4. Build 2x2 transform matrix mapping FSM commands to sensor motion
+//! 1. Move FSM to discrete step positions (negative, zero, positive)
+//! 2. Wait for settle time after each move
+//! 3. Collect tracking messages at each position
+//! 4. Compute response vectors from centroid displacement
+//! 5. Build 2x2 transform matrix mapping FSM commands to sensor motion
 //!
 //! # Modules
 //!
 //! - [`config`] - Calibration configuration parameters
-//! - [`generator`] - Sinusoidal command generation for FSM wiggle
-//! - [`fitter`] - Sinusoid fitting to extract amplitude and phase from centroid data
 //! - [`matrix`] - 2x2 transform matrix operations using nalgebra
-//! - [`executor`] - Calibration workflow orchestration
+//! - [`executor`] - Static step calibration workflow orchestration
 
 pub mod config;
 pub mod executor;
-pub mod fitter;
-pub mod generator;
 pub mod matrix;
 
 pub use config::{FsmAxisCalibration, FsmCalibrationConfig};
 pub use executor::{
-    CalibrationError, CalibrationExecutor, CalibrationProgress, CentroidMeasurement,
-    CentroidSource, FsmInterface, NoProgress, ProgressCallback,
+    compute_response_vector, extract_intercept, CalibrationRawData, RawSample,
+    StaticCalibrationError, StaticStepExecutor, StepMeasurement,
 };
-pub use fitter::{FitError, SinusoidFit};
-pub use generator::SinusoidGenerator;
+pub use hardware::FsmInterface;
 pub use matrix::{
     build_transform_matrix, invert_matrix, FsmDegenerateAxesError, FsmSingularMatrixError,
 };
