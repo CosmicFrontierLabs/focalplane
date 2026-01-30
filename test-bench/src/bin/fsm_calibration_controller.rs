@@ -15,8 +15,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 use test_bench::fsm_calibration::{
-    CalibrationRawData, FsmAxisCalibration, FsmCalibrationConfig, StaticCalibrationError,
-    StaticStepExecutor,
+    CalibrationRawData, FsmAxisCalibration, FsmCalibrationConfig, FsmTransform,
+    StaticCalibrationError, StaticStepExecutor,
 };
 use test_bench::tracking_collector::TrackingCollector;
 use tracing::{error, info, warn};
@@ -71,6 +71,15 @@ struct Args {
             The CSV contains: axis, fsm_command_urad, sample_index, centroid_x, centroid_y, timestamp_s"
     )]
     output_csv: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Output JSON file for calibration transform",
+        long_help = "If provided, saves the calibration transform to a JSON file that can be \
+            loaded later for FSM control. Contains the transform matrices, intercept, center \
+            position, measurement noise, and calibration timestamp."
+    )]
+    output_json: Option<PathBuf>,
 
     /// Calibration parameters (swing range, num steps, samples, etc.)
     #[command(flatten)]
@@ -172,6 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Calibrate serve:   {}", args.calibrate_serve_url);
     if let Some(ref path) = args.output_csv {
         info!("Output CSV:        {:?}", path);
+    }
+    if let Some(ref path) = args.output_json {
+        info!("Output JSON:       {:?}", path);
     }
     info!("");
 
@@ -363,6 +375,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(e) => {
                         error!("Failed to write CSV: {e}");
                         return Err(e.into());
+                    }
+                }
+            }
+
+            // Write JSON transform if requested
+            if let Some(ref json_path) = args.output_json {
+                info!("");
+                info!("Writing transform to {:?}...", json_path);
+                match FsmTransform::from_calibration(&calibration) {
+                    Ok(transform) => match transform.save(json_path) {
+                        Ok(()) => info!("JSON transform saved successfully"),
+                        Err(e) => {
+                            error!("Failed to write JSON: {e}");
+                            return Err(e.to_string().into());
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to create transform (singular matrix?): {e}");
+                        return Err(e.to_string().into());
                     }
                 }
             }

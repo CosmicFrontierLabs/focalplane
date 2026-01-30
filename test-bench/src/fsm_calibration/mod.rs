@@ -22,6 +22,7 @@
 pub mod config;
 pub mod executor;
 pub mod matrix;
+pub mod transform;
 
 pub use config::{FsmAxisCalibration, FsmCalibrationConfig};
 pub use executor::{
@@ -32,3 +33,4 @@ pub use hardware::FsmInterface;
 pub use matrix::{
     build_transform_matrix, invert_matrix, FsmDegenerateAxesError, FsmSingularMatrixError,
 };
+pub use transform::{FsmTransform, FsmTransformError};

@@ -5565,6 +5565,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "bytes",
+ "chrono",
  "clap",
  "crossbeam-channel",
  "crossterm",
