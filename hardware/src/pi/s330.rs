@@ -87,7 +87,8 @@ impl S330 {
         }
 
         if !params_correct {
-            // Run shutdown sequence to safely depower before changing params
+            // Disable servos before changing params (shutdown_sequence handles cold start gracefully)
+            info!("Axis 3 parameters need correction, preparing controller...");
             self.shutdown_sequence()?;
 
             // Elevate command level to 1 for parameter write access
@@ -250,7 +251,7 @@ impl S330 {
     /// Execute the S-330 shutdown sequence.
     ///
     /// This performs a safe shutdown:
-    /// 1. Smoothly slew to center position over 250ms
+    /// 1. Smoothly slew to center position over 250ms (if servos are on)
     /// 2. Disable servo mode for axes 1 and 2
     /// 3. Set piezo output voltage to 0V for axes 1 and 2
     /// 4. Wait for voltages to reach 0V
@@ -258,8 +259,16 @@ impl S330 {
     fn shutdown_sequence(&mut self) -> GcsResult<()> {
         info!("S-330 shutdown sequence starting...");
 
-        // Slew smoothly to center position before disabling servos
-        self.slew_to_center()?;
+        // Check if servos are enabled before attempting to slew
+        let servo1_on = self.e727.get_servo(Axis::Axis1).unwrap_or(false);
+        let servo2_on = self.e727.get_servo(Axis::Axis2).unwrap_or(false);
+
+        if servo1_on && servo2_on {
+            // Slew smoothly to center position before disabling servos
+            self.slew_to_center()?;
+        } else {
+            info!("Servos not enabled, skipping slew to center");
+        }
 
         // a. Disable servo mode for axes 1 and 2
         info!("Disabling servos on axes 1 and 2...");
@@ -303,8 +312,9 @@ impl S330 {
     /// Smoothly slew to center position over SHUTDOWN_SLEW_DURATION.
     ///
     /// Sends position commands every SHUTDOWN_SLEW_INTERVAL, linearly interpolating
-    /// from current position to center. This prevents jarring motion when powering down.
-    fn slew_to_center(&mut self) -> GcsResult<()> {
+    /// from current position to center. This prevents jarring motion when powering down
+    /// or when tracking is lost.
+    pub fn slew_to_center(&mut self) -> GcsResult<()> {
         // Get current position and travel ranges
         let (start_x, start_y) = self.get_position()?;
         let ((min_x, max_x), (min_y, max_y)) = self.get_travel_ranges()?;
