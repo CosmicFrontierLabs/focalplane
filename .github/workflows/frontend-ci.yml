@@ -11,7 +11,7 @@ env:
 
 jobs:
   build-frontend:
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-latest-medium
     defaults:
       run:
         working-directory: test-bench-frontend
