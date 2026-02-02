@@ -488,14 +488,17 @@ impl CalibrateFrontend {
             Msg::SelectPattern(target.value())
         });
 
+        // Use value attribute on select to control which option is selected
+        // This ensures the dropdown updates when selected_pattern_id changes
+        let current_value = self.selected_pattern_id.clone();
+
         html! {
             <div class="control-group">
                 <label class="control-label">{"Pattern Type:"}</label>
-                <select id="pattern-type" {onchange}>
+                <select id="pattern-type" value={current_value} {onchange}>
                     { for schema.patterns.iter().map(|p| {
-                        let selected = p.id == self.selected_pattern_id;
                         html! {
-                            <option value={p.id.clone()} {selected}>{&p.name}</option>
+                            <option value={p.id.clone()}>{&p.name}</option>
                         }
                     })}
                 </select>
