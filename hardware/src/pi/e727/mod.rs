@@ -491,13 +491,13 @@ impl E727 {
         Ok((min + max) / 2.0)
     }
 
-    /// Get center positions for X and Y axes (1 and 2).
+    /// Get center positions for axes 1 and 2.
     ///
-    /// Returns `(center_x, center_y)` tuple.
-    pub fn get_xy_centers(&mut self) -> GcsResult<(f64, f64)> {
-        let center_x = self.get_center(Axis::Axis1)?;
-        let center_y = self.get_center(Axis::Axis2)?;
-        Ok((center_x, center_y))
+    /// Returns `(center_axis1, center_axis2)` tuple.
+    pub fn get_axis12_centers(&mut self) -> GcsResult<(f64, f64)> {
+        let center_axis1 = self.get_center(Axis::Axis1)?;
+        let center_axis2 = self.get_center(Axis::Axis2)?;
+        Ok((center_axis1, center_axis2))
     }
 
     // ==================== Parameter Access (SPA) ====================

@@ -244,7 +244,7 @@ impl S330 {
     ///
     /// Returns `(center_axis1, center_axis2)` in µrad (microradians).
     pub fn get_centers(&mut self) -> GcsResult<(f64, f64)> {
-        self.e727.get_xy_centers()
+        self.e727.get_axis12_centers()
     }
 
     /// Get the travel range for both tilt axes.
@@ -388,16 +388,16 @@ impl S330 {
     /// or when tracking is lost.
     pub fn slew_to_center(&mut self) -> GcsResult<()> {
         // Get current position and travel ranges
-        let (start_x, start_y) = self.get_position()?;
-        let ((min_x, max_x), (min_y, max_y)) = self.get_travel_ranges()?;
+        let (start_axis1, start_axis2) = self.get_position()?;
+        let ((min_axis1, max_axis1), (min_axis2, max_axis2)) = self.get_travel_ranges()?;
 
         // Calculate center position
-        let center_x = (min_x + max_x) / 2.0;
-        let center_y = (min_y + max_y) / 2.0;
+        let center_axis1 = (min_axis1 + max_axis1) / 2.0;
+        let center_axis2 = (min_axis2 + max_axis2) / 2.0;
 
         info!(
             "Slewing to center ({:.1}, {:.1}) from ({:.1}, {:.1}) µrad...",
-            center_x, center_y, start_x, start_y
+            center_axis1, center_axis2, start_axis1, start_axis2
         );
 
         let start_time = Instant::now();
@@ -413,15 +413,15 @@ impl S330 {
             let t = elapsed.as_secs_f64() / total_duration_secs;
 
             // Interpolate position
-            let x = start_x + (center_x - start_x) * t;
-            let y = start_y + (center_y - start_y) * t;
+            let axis1 = start_axis1 + (center_axis1 - start_axis1) * t;
+            let axis2 = start_axis2 + (center_axis2 - start_axis2) * t;
 
-            self.move_to(x, y)?;
+            self.move_to(axis1, axis2)?;
             std::thread::sleep(SHUTDOWN_SLEW_INTERVAL);
         }
 
         // Final move to exact center
-        self.move_to(center_x, center_y)?;
+        self.move_to(center_axis1, center_axis2)?;
         info!("Slew to center complete");
 
         Ok(())
