@@ -5585,6 +5585,7 @@ dependencies = [
  "ndarray",
  "prometheus",
  "rand 0.9.2",
+ "rand_distr 0.5.1",
  "ratatui",
  "rayon",
  "resvg",
