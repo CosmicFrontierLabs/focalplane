@@ -30,6 +30,37 @@ const SHUTDOWN_SLEW_DURATION: Duration = Duration::from_millis(250);
 /// Interval between position commands during shutdown slew.
 const SHUTDOWN_SLEW_INTERVAL: Duration = Duration::from_millis(10);
 
+/// Result of a clamped move operation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MoveResult {
+    /// Position was within limits, moved as requested.
+    Ok { x: f64, y: f64 },
+    /// Position was clamped to travel limits.
+    Clamped {
+        requested_x: f64,
+        requested_y: f64,
+        actual_x: f64,
+        actual_y: f64,
+    },
+}
+
+impl MoveResult {
+    /// Get the actual position that was commanded.
+    pub fn position(&self) -> (f64, f64) {
+        match self {
+            MoveResult::Ok { x, y } => (*x, *y),
+            MoveResult::Clamped {
+                actual_x, actual_y, ..
+            } => (*actual_x, *actual_y),
+        }
+    }
+
+    /// Check if the move was clamped.
+    pub fn was_clamped(&self) -> bool {
+        matches!(self, MoveResult::Clamped { .. })
+    }
+}
+
 /// PI S-330 Fast Steering Mirror driver.
 ///
 /// Wraps an E727 controller with S-330-specific initialization and cleanup.
@@ -236,6 +267,35 @@ impl S330 {
     /// Get the physical unit string for the tilt axes (typically "µrad").
     pub fn get_unit(&mut self) -> GcsResult<String> {
         self.e727.get_unit(Axis::Axis1)
+    }
+
+    /// Move both tilt axes to positions, clamping to travel limits.
+    ///
+    /// # Arguments
+    /// * `axis1` - Target position for axis 1 in µrad (microradians)
+    /// * `axis2` - Target position for axis 2 in µrad (microradians)
+    ///
+    /// # Returns
+    /// `MoveResult::Ok` if within limits, `MoveResult::Clamped` if clamped.
+    pub fn move_clamped(&mut self, axis1: f64, axis2: f64) -> GcsResult<MoveResult> {
+        let ((x_min, x_max), (y_min, y_max)) = self.get_travel_ranges()?;
+        let clamped_axis1 = axis1.clamp(x_min, x_max);
+        let clamped_axis2 = axis2.clamp(y_min, y_max);
+        self.move_to(clamped_axis1, clamped_axis2)?;
+
+        if clamped_axis1 != axis1 || clamped_axis2 != axis2 {
+            Ok(MoveResult::Clamped {
+                requested_x: axis1,
+                requested_y: axis2,
+                actual_x: clamped_axis1,
+                actual_y: clamped_axis2,
+            })
+        } else {
+            Ok(MoveResult::Ok {
+                x: clamped_axis1,
+                y: clamped_axis2,
+            })
+        }
     }
 }
 
