@@ -1,7 +1,17 @@
 //! FSM Transform - Persistent calibration transform with conversion methods
 //!
-//! Provides a serializable transform that maps between FSM commands (µrad) and
-//! sensor positions (pixels), supporting both forward and inverse conversions.
+//! Maps between FSM commands [µrad] and sensor centroid positions [pixels],
+//! accounting for the optical geometry between FSM and sensor.
+//!
+//! # Why This Transform Exists
+//!
+//! The relationship between FSM angles and centroid motion depends on:
+//! - Physical mounting orientation of the FSM
+//! - Optical path (fold mirrors, lenses, beam compression)
+//! - Detector orientation relative to optical axis
+//!
+//! The 2x2 calibration matrix captures rotation, scale, and sign inversions
+//! between the FSM coordinate frame and sensor coordinate frame.
 
 use nalgebra::{Matrix2, Vector2};
 use serde::{Deserialize, Serialize};
@@ -43,32 +53,42 @@ pub enum FsmTransformLoadError {
     SingularMatrix(#[from] SingularMatrixError),
 }
 
-/// Persistent FSM calibration transform
+/// Persistent FSM calibration transform.
 ///
-/// Maps between FSM commands in microradians and sensor centroid positions in pixels.
+/// Maps between FSM commands [µrad] and sensor centroid positions [pixels].
 /// Supports JSON serialization for persistence across sessions.
 ///
-/// The matrix is validated to be invertible on construction/load, so all conversion
-/// methods are infallible at runtime.
+/// The matrix is validated to be invertible on construction/load, so all
+/// conversion methods are infallible at runtime.
 ///
-/// # Coordinate System
+/// # Coordinate Frames
 ///
-/// The transform models the relationship:
+/// - **FSM frame**: Physical actuator coordinates [µrad]
+/// - **Sensor frame**: Detector pixel coordinates [pixels]
+///
+/// # Transform Directions
+///
 /// ```text
-/// sensor_delta = fsm_to_sensor * fsm_delta
+/// FSM → Sensor:  sensor_delta = fsm_to_sensor × fsm_delta
+/// Sensor → FSM:  fsm_delta = sensor_to_fsm × sensor_delta  (inverse)
 /// ```
 ///
-/// Where:
-/// - `fsm_delta` is FSM motion in µrad
-/// - `sensor_delta` is centroid motion in pixels
-/// - `intercept_pixels` is the reference centroid position
+/// The `sensor_to_fsm` matrix (inverse) is what the guiding controller needs
+/// to convert LOS controller output to FSM commands.
+///
+/// # Example Interpretation
+///
+/// If `fsm_to_sensor[1,1] = -0.02` (negative), then:
+/// - +1 µrad on FSM axis 2 causes -0.02 pixels motion in sensor Y
+/// - FSM Y and sensor Y move in opposite directions
+/// - The `sensor_to_fsm` inverse handles this automatically
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsmTransform {
-    /// Transform matrix from FSM µrad to sensor pixels [pixels/µrad]
+    /// Forward transform: FSM → Sensor [pixels/µrad]
     /// Stored as row-major [m00, m01, m10, m11]
     fsm_to_sensor: [f64; 4],
 
-    /// Centroid position at reference FSM position (pixels)
+    /// Centroid position when FSM is at reference (usually center) [pixels]
     intercept_pixels: [f64; 2],
 
     /// Calibration timestamp (ISO 8601)
