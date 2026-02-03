@@ -6,6 +6,7 @@
 use clap::{Args, Parser, ValueEnum};
 use shared::camera_interface::{CameraInterface, SensorBitDepth};
 use shared::image_size::PixelShape;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Shared exposure time argument for clap-based binaries.
@@ -60,6 +61,14 @@ impl OptionalExposureArgs {
         self.exposure_ms
             .map(|ms| Duration::from_micros((ms * 1000.0) as u64))
     }
+}
+
+/// Command-line arguments for FSM calibration file.
+#[derive(Args, Debug, Clone)]
+pub struct CalibrationArgs {
+    /// Path to FSM calibration JSON file
+    #[arg(long, help = "Path to FSM calibration JSON file")]
+    pub calibration: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, ValueEnum, Default)]

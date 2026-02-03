@@ -12,57 +12,12 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use monocle::controllers::{LosControlOutput, LosController};
-use nalgebra::{Matrix2, Vector2};
+use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
 use rustfft::{num_complex::Complex, FftPlanner};
-use serde::Deserialize;
-use std::path::PathBuf;
-
-/// FSM calibration transform (simplified version for simulation)
-#[derive(Debug, Clone, Deserialize)]
-struct FsmTransform {
-    fsm_to_sensor: [f64; 4],
-    #[allow(dead_code)]
-    intercept_pixels: [f64; 2],
-    #[allow(dead_code)]
-    calibration_timestamp: Option<String>,
-    #[allow(dead_code)]
-    description: Option<String>,
-}
-
-impl FsmTransform {
-    fn identity() -> Self {
-        // Use realistic scale: ~0.02 px/µrad (typical FSM calibration)
-        // This matches the LOS controller's design assumptions
-        Self {
-            fsm_to_sensor: [0.02, 0.0, 0.0, 0.02],
-            intercept_pixels: [0.0, 0.0],
-            calibration_timestamp: None,
-            description: Some("Default transform (0.02 px/µrad)".to_string()),
-        }
-    }
-
-    fn load(path: &PathBuf) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let transform: FsmTransform = serde_json::from_str(&content)?;
-        Ok(transform)
-    }
-
-    fn fsm_to_sensor_matrix(&self) -> Matrix2<f64> {
-        Matrix2::new(
-            self.fsm_to_sensor[0],
-            self.fsm_to_sensor[1],
-            self.fsm_to_sensor[2],
-            self.fsm_to_sensor[3],
-        )
-    }
-
-    /// Convert FSM angle delta (µrad) to sensor pixel delta
-    fn angle_delta_to_pix_delta(&self, delta_angle_x: f64, delta_angle_y: f64) -> (f64, f64) {
-        let delta = self.fsm_to_sensor_matrix() * Vector2::new(delta_angle_x, delta_angle_y);
-        (delta.x, delta.y)
-    }
-}
+use shared::fsm_transform::FsmTransform;
+use std::path::{Path, PathBuf};
+use test_bench::camera_init::CalibrationArgs;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -86,9 +41,8 @@ struct Args {
     #[arg(long, default_value = "1.0")]
     jitter_rms: f64,
 
-    /// Path to FSM calibration JSON file
-    #[arg(long)]
-    calibration: Option<PathBuf>,
+    #[command(flatten)]
+    calibration: CalibrationArgs,
 
     /// Output directory for plots (default: current directory)
     #[arg(long, default_value = ".")]
@@ -210,7 +164,7 @@ impl SimulationResults {
         (frequencies, psd)
     }
 
-    fn write_csv(&self, path: &PathBuf) -> Result<()> {
+    fn write_csv(&self, path: &Path) -> Result<()> {
         let mut wtr = csv::Writer::from_path(path)?;
         wtr.write_record([
             "time", "jitter_x", "jitter_y", "error_x", "error_y", "fsm_x", "fsm_y",
@@ -232,7 +186,7 @@ impl SimulationResults {
         Ok(())
     }
 
-    fn write_psd_csv(&self, path: &PathBuf) -> Result<()> {
+    fn write_psd_csv(&self, path: &Path) -> Result<()> {
         let (freq_jitter, psd_jitter_x) = Self::compute_psd(&self.jitter_x, self.sample_rate);
         let (_, psd_jitter_y) = Self::compute_psd(&self.jitter_y, self.sample_rate);
         let (_, psd_error_x) = Self::compute_psd(&self.error_x, self.sample_rate);
@@ -275,7 +229,6 @@ fn run_simulation(
     let mut results = SimulationResults::new(n_samples, framerate);
 
     // Initialize random number generator
-    use rand::SeedableRng;
     let mut rng: rand::rngs::StdRng = match seed {
         Some(s) => rand::rngs::StdRng::seed_from_u64(s),
         None => rand::rngs::StdRng::from_os_rng(),
@@ -340,25 +293,18 @@ fn main() -> Result<()> {
     println!("Frame rate: {:.1} Hz", args.framerate);
     println!("Jitter RMS: {:.3} px/axis", args.jitter_rms);
 
-    // Load or create identity transform
-    let transform = if let Some(ref cal_path) = args.calibration {
-        println!("Loading calibration from {cal_path:?}");
-        FsmTransform::load(cal_path).context("Failed to load calibration file")?
-    } else {
-        println!("No calibration file specified, using default transform");
-        println!("  (0.02 px/µrad - typical FSM scale)");
-        FsmTransform::identity()
-    };
+    let calibration_path = args
+        .calibration
+        .calibration
+        .as_ref()
+        .context("--calibration is required")?;
+    println!("Loading calibration from {calibration_path:?}");
+    let transform =
+        FsmTransform::load(calibration_path).context("Failed to load calibration file")?;
 
-    // Print transform info
-    let matrix = transform.fsm_to_sensor_matrix();
-    println!("\nFSM-to-Sensor Transform:");
-    println!("  [{:+.6}, {:+.6}]", matrix[(0, 0)], matrix[(0, 1)]);
-    println!("  [{:+.6}, {:+.6}]", matrix[(1, 0)], matrix[(1, 1)]);
-    println!(
-        "  Scale: {:.4} px/µrad (approx)",
-        (matrix[(0, 0)].powi(2) + matrix[(1, 1)].powi(2)).sqrt() / 2.0_f64.sqrt()
-    );
+    if let Some(desc) = transform.description() {
+        println!("Transform: {desc}");
+    }
 
     // Run simulation
     println!("\nRunning simulation...");
@@ -436,4 +382,45 @@ fn print_ascii_plot(title: &str, data: &[f64], width: usize, height: usize) {
         grid[height - 1].iter().collect::<String>()
     );
     println!("           └{}", "─".repeat(downsampled.len().min(width)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_simulation_produces_expected_output_count() {
+        let transform =
+            FsmTransform::new([0.02, 0.0, 0.0, 0.02], [0.0, 0.0]).expect("valid transform");
+
+        let duration = 1.0;
+        let framerate = 40.0;
+        let jitter_rms = 1.0;
+        let seed = Some(42);
+
+        let results = run_simulation(duration, framerate, jitter_rms, &transform, seed);
+
+        let expected_samples = (duration * framerate).ceil() as usize;
+        assert_eq!(results.time.len(), expected_samples);
+        assert_eq!(results.jitter_x.len(), expected_samples);
+        assert_eq!(results.jitter_y.len(), expected_samples);
+        assert_eq!(results.error_x.len(), expected_samples);
+        assert_eq!(results.error_y.len(), expected_samples);
+        assert_eq!(results.fsm_x.len(), expected_samples);
+        assert_eq!(results.fsm_y.len(), expected_samples);
+    }
+
+    #[test]
+    fn test_run_simulation_deterministic_with_seed() {
+        let transform =
+            FsmTransform::new([0.02, 0.0, 0.0, 0.02], [0.0, 0.0]).expect("valid transform");
+
+        let results1 = run_simulation(0.5, 40.0, 1.0, &transform, Some(123));
+        let results2 = run_simulation(0.5, 40.0, 1.0, &transform, Some(123));
+
+        assert_eq!(results1.jitter_x, results2.jitter_x);
+        assert_eq!(results1.jitter_y, results2.jitter_y);
+        assert_eq!(results1.error_x, results2.error_x);
+        assert_eq!(results1.fsm_x, results2.fsm_x);
+    }
 }

@@ -9,6 +9,7 @@ use clap::Parser;
 use hardware::pi::FsmArgs;
 use shared::config_storage::ConfigStorage;
 use std::sync::Arc;
+use test_bench::camera_init::CalibrationArgs;
 use test_bench::camera_init::{initialize_camera, CameraArgs};
 use test_bench::camera_server::{CommonServerArgs, FsmSharedState, TrackingConfig};
 use tracing::info;
@@ -145,6 +146,9 @@ struct Args {
 
     #[command(flatten)]
     fsm: FsmArgs,
+
+    #[command(flatten)]
+    calibration: CalibrationArgs,
 }
 
 #[tokio::main]
