@@ -235,6 +235,18 @@ impl Component for FgsFrontend {
             }
             Msg::ToggleAnnotation => {
                 self.show_annotation = !self.show_annotation;
+                if self.show_annotation {
+                    // Start polling for SVG overlay
+                    let link = ctx.link().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(svg) = crate::fgs::api::fetch_text("/overlay-svg").await {
+                            link.send_message(Msg::OverlaySvgLoaded(svg));
+                        }
+                    });
+                } else {
+                    // Clear the overlay when disabled
+                    self.overlay_svg = None;
+                }
                 true
             }
             Msg::ToggleLogScale => {
@@ -341,6 +353,16 @@ impl Component for FgsFrontend {
                     wasm_bindgen_futures::spawn_local(async move {
                         if let Ok(settings) = client.get_star_detection_settings().await {
                             link5.send_message(Msg::StarDetectionSettingsLoaded(settings));
+                        }
+                    });
+                }
+
+                // Fetch SVG overlay if enabled
+                if self.show_annotation {
+                    let link6 = ctx.link().clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(svg) = crate::fgs::api::fetch_text("/overlay-svg").await {
+                            link6.send_message(Msg::OverlaySvgLoaded(svg));
                         }
                     });
                 }
@@ -689,25 +711,14 @@ impl Component for FgsFrontend {
                         }}
                     </div>
 
-                    <h2 style="margin-top: 30px;">{"Display Options"}</h2>
-                    <div class="metadata-item">
-                        <label style="cursor: pointer;">
-                            <input
-                                type="checkbox"
-                                checked={self.show_annotation}
-                                onchange={ctx.link().callback(|_| Msg::ToggleAnnotation)}
-                                style="width: 20px; height: 20px; vertical-align: middle;"
-                            />
-                            <span style="margin-left: 5px;">{"Show Analysis"}</span>
-                        </label>
-                    </div>
-
                     <TrackingView
                         available={self.tracking_available}
                         status={self.tracking_status.clone()}
                         toggle_pending={self.tracking_toggle_pending}
                         on_toggle_tracking={ctx.link().callback(|_| Msg::ToggleTracking)}
                         history={self.tracking_history.clone()}
+                        show_overlay={self.show_annotation}
+                        on_toggle_overlay={ctx.link().callback(|_| Msg::ToggleAnnotation)}
                         show_settings={self.show_tracking_settings}
                         settings={self.tracking_settings.clone()}
                         settings_pending={self.tracking_settings_pending}

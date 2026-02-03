@@ -453,63 +453,80 @@ pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
         },
     ];
 
+    let toggle_text = if props.show {
+        "▼ Settings"
+    } else {
+        "▶ Settings"
+    };
+
     html! {
         <>
-            <div style="margin-top: 15px; color: #00ff00; font-size: 0.9em;">{"⚙ Settings"}</div>
-            <SettingsPanel>
-                <Slider
-                    label="Acq. Frames"
-                    value={settings.acquisition_frames as f64}
-                    min={1.0}
-                    max={20.0}
-                    step={1.0}
-                    decimals={0}
-                    onchange={make_slider_callback("acquisition_frames", props.on_update.clone())}
-                />
-                <Select
-                    label="ROI Size"
-                    value={settings.roi_size}
-                    options={roi_options}
-                    onchange={make_select_callback("roi_size", props.on_update.clone())}
-                />
-                <Slider
-                    label="Detection σ"
-                    value={settings.detection_threshold_sigma}
-                    min={2.0}
-                    max={10.0}
-                    step={0.5}
-                    decimals={1}
-                    onchange={make_slider_callback("detection_threshold_sigma", props.on_update.clone())}
-                />
-                <Slider
-                    label="SNR Min"
-                    value={settings.snr_min}
-                    min={3.0}
-                    max={500.0}
-                    step={5.0}
-                    decimals={0}
-                    onchange={make_slider_callback("snr_min", props.on_update.clone())}
-                />
-                <Slider
-                    label="SNR Dropout"
-                    value={settings.snr_dropout_threshold}
-                    min={1.0}
-                    max={200.0}
-                    step={5.0}
-                    decimals={0}
-                    onchange={make_slider_callback("snr_dropout_threshold", props.on_update.clone())}
-                />
-                <Slider
-                    label="FWHM (px)"
-                    value={settings.fwhm}
-                    min={1.0}
-                    max={20.0}
-                    step={0.5}
-                    decimals={1}
-                    onchange={make_slider_callback("fwhm", props.on_update.clone())}
-                />
-                <ApplyButton pending={props.pending} onclick={props.on_save.clone()} />
-            </SettingsPanel>
+            <div
+                style="margin-top: 15px; color: #00ff00; font-size: 0.9em; cursor: pointer;"
+                onclick={props.on_toggle.reform(|_| ())}
+            >
+                {toggle_text}
+            </div>
+            {if props.show {
+                html! {
+                    <SettingsPanel>
+                        <Slider
+                            label="Acq. Frames"
+                            value={settings.acquisition_frames as f64}
+                            min={1.0}
+                            max={20.0}
+                            step={1.0}
+                            decimals={0}
+                            onchange={make_slider_callback("acquisition_frames", props.on_update.clone())}
+                        />
+                        <Select
+                            label="ROI Size"
+                            value={settings.roi_size}
+                            options={roi_options}
+                            onchange={make_select_callback("roi_size", props.on_update.clone())}
+                        />
+                        <Slider
+                            label="Detection σ"
+                            value={settings.detection_threshold_sigma}
+                            min={2.0}
+                            max={10.0}
+                            step={0.5}
+                            decimals={1}
+                            onchange={make_slider_callback("detection_threshold_sigma", props.on_update.clone())}
+                        />
+                        <Slider
+                            label="SNR Min"
+                            value={settings.snr_min}
+                            min={3.0}
+                            max={500.0}
+                            step={5.0}
+                            decimals={0}
+                            onchange={make_slider_callback("snr_min", props.on_update.clone())}
+                        />
+                        <Slider
+                            label="SNR Dropout"
+                            value={settings.snr_dropout_threshold}
+                            min={1.0}
+                            max={200.0}
+                            step={5.0}
+                            decimals={0}
+                            onchange={make_slider_callback("snr_dropout_threshold", props.on_update.clone())}
+                        />
+                        <Slider
+                            label="FWHM (px)"
+                            value={settings.fwhm}
+                            min={1.0}
+                            max={20.0}
+                            step={0.5}
+                            decimals={1}
+                            onchange={make_slider_callback("fwhm", props.on_update.clone())}
+                        />
+                        <ApplyButton pending={props.pending} onclick={props.on_save.clone()} />
+                    </SettingsPanel>
+                }
+            } else {
+                html! {}
+            }}
         </>
     }
 }
@@ -620,6 +637,9 @@ pub struct TrackingViewProps {
     pub on_toggle_tracking: Callback<()>,
     /// Position and SNR history for plotting
     pub history: TrackingHistory,
+    // Star detection overlay
+    pub show_overlay: bool,
+    pub on_toggle_overlay: Callback<()>,
     // Tracking settings
     pub show_settings: bool,
     pub settings: Option<TrackingSettings>,
@@ -659,6 +679,17 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
         </div>
     };
 
+    let overlay_checkbox = html! {
+        <div class="metadata-item">
+            <Checkbox
+                label="Star Detection Overlay"
+                checked={props.show_overlay}
+                disabled={false}
+                onchange={props.on_toggle_overlay.clone()}
+            />
+        </div>
+    };
+
     let settings_view = html! {
         <TrackingSettingsView
             show={props.show_settings}
@@ -688,6 +719,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                 <>
                     <h2 style="margin-top: 30px;">{"Tracking"}</h2>
                     { tracking_checkbox }
+                    { overlay_checkbox }
                     <div class="metadata-item" style="margin-top: 10px;">
                         <span style="color: #ffaa00;">{format!("Acquiring... ({} frames)", frames_collected)}</span>
                     </div>
@@ -704,6 +736,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                 <>
                     <h2 style="margin-top: 30px;">{"Tracking"}</h2>
                     { tracking_checkbox }
+                    { overlay_checkbox }
                     <div class="metadata-item" style="margin-top: 10px;">
                         <span style="color: #00ff00;">{"TRACKING"}</span>
                         <span style="margin-left: 10px; color: #666;">{format!("({} frames)", frames_processed)}</span>
@@ -719,6 +752,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                 <>
                     <h2 style="margin-top: 30px;">{"Tracking"}</h2>
                     { tracking_checkbox }
+                    { overlay_checkbox }
                     <div class="metadata-item" style="margin-top: 10px;">
                         <span style="color: #ff0000;">{format!("Reacquiring... (attempt {})", attempts)}</span>
                     </div>
@@ -738,6 +772,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                 <>
                     <h2 style="margin-top: 30px;">{"Tracking"}</h2>
                     { tracking_checkbox }
+                    { overlay_checkbox }
                     <div class="metadata-item" style="margin-top: 10px;">
                         <span class="metadata-label">{"State:"}</span>
                         <span>{state_text}</span>

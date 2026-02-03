@@ -83,7 +83,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "5",
+        default_value = "1",
         help = "Number of frames for FGS acquisition phase",
         long_help = "Number of full-frame images to collect during the FGS acquisition \
             phase before selecting guide stars. More frames improve detection reliability \
