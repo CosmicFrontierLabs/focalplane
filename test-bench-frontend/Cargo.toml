@@ -28,6 +28,7 @@ wasm-bindgen = "0.2.106"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
     "Blob",
+    "Clipboard",
     "Document",
     "DomRect",
     "Element",
@@ -37,6 +38,7 @@ web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
     "ImageData",
     "MouseEvent",
+    "Navigator",
     "Touch",
     "TouchEvent",
     "TouchList",

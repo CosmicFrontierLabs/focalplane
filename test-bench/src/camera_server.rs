@@ -1133,10 +1133,11 @@ async fn fsm_move_endpoint<C: CameraInterface + 'static>(
 /// Streams log entries to connected clients as JSON messages.
 async fn ws_log_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
+    axum::extract::Query(params): axum::extract::Query<crate::ws_log_stream::LogStreamParams>,
     ws: WebSocketUpgrade,
 ) -> Response {
     let broadcaster = state.log_broadcaster.clone();
-    ws.on_upgrade(move |socket| ws_log_handler(socket, broadcaster))
+    ws.on_upgrade(move |socket| ws_log_handler(socket, broadcaster, params.level))
 }
 
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {

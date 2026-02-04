@@ -25,6 +25,7 @@ use test_bench::display_utils::{
     wait_for_oled_display, OLED_HEIGHT, OLED_PIXEL_PITCH_UM, OLED_WIDTH,
 };
 use test_bench::embedded_assets::{serve_calibrate_frontend, serve_calibrate_index_with_data};
+use test_bench::ws_log_stream::{ws_log_handler, LogBroadcaster};
 use test_bench::ws_stream::WsBroadcaster;
 use tokio::sync::RwLock;
 
@@ -144,6 +145,8 @@ struct AppState {
     plate_scale_arcsec_per_px: Arc<RwLock<f64>>,
     /// WebSocket broadcaster for streaming pattern preview (with proper close events)
     ws_stream: Arc<WsBroadcaster>,
+    /// WebSocket broadcaster for log streaming
+    log_broadcaster: Arc<LogBroadcaster>,
 }
 
 async fn pattern_page(State(state): State<Arc<AppState>>) -> Response {
@@ -431,6 +434,16 @@ async fn get_pattern_command(State(state): State<Arc<AppState>>) -> Json<Pattern
     Json(cmd)
 }
 
+/// WebSocket endpoint for log streaming.
+async fn ws_log_endpoint(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<test_bench::ws_log_stream::LogStreamParams>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let broadcaster = state.log_broadcaster.clone();
+    ws.on_upgrade(move |socket| ws_log_handler(socket, broadcaster, params.level))
+}
+
 #[tokio::main]
 async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -> Result<()> {
     let app = Router::new()
@@ -443,6 +456,7 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
         .route("/config", axum::routing::post(update_pattern_config))
         .route("/pattern", get(get_pattern_command))
         .route("/pattern", axum::routing::post(post_pattern_command))
+        .route("/logs", get(ws_log_endpoint))
         .fallback(get(serve_calibrate_frontend))
         .with_state(state.clone());
 
@@ -465,7 +479,7 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let log_broadcaster = test_bench::ws_log_stream::init_tracing();
     let args = Args::parse();
 
     // Handle --list-ftdi before anything else
@@ -560,6 +574,7 @@ fn main() -> Result<()> {
         gyro_emitter,
         plate_scale_arcsec_per_px: plate_scale,
         ws_stream: Arc::new(WsBroadcaster::new(4)),
+        log_broadcaster,
     });
 
     let state_clone = state.clone();

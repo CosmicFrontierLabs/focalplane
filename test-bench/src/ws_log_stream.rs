@@ -9,9 +9,9 @@
 //! 2. Add the `WsLogLayer` to your tracing subscriber
 //! 3. Register the `/logs` WebSocket endpoint with your router
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use shared_wasm::{LogEntry, LogLevel};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,11 +45,6 @@ impl LogBroadcaster {
     /// Subscribe to the log stream.
     pub fn subscribe(&self) -> broadcast::Receiver<LogEntry> {
         self.tx.subscribe()
-    }
-
-    /// Get the current number of subscribers.
-    pub fn subscriber_count(&self) -> usize {
-        self.tx.receiver_count()
     }
 }
 
@@ -99,16 +94,8 @@ impl WsLogLayer {
     pub fn new(broadcaster: Arc<LogBroadcaster>) -> Self {
         Self {
             broadcaster,
-            min_level: Level::DEBUG,
+            min_level: Level::TRACE,
         }
-    }
-
-    /// Set the minimum log level to broadcast.
-    ///
-    /// Only logs at or above this level will be sent to WebSocket clients.
-    pub fn with_min_level(mut self, level: Level) -> Self {
-        self.min_level = level;
-        self
     }
 }
 
@@ -121,11 +108,6 @@ where
 
         // Skip if below minimum level
         if *metadata.level() > self.min_level {
-            return;
-        }
-
-        // Skip if no subscribers (avoid work when nobody is listening)
-        if self.broadcaster.subscriber_count() == 0 {
             return;
         }
 
@@ -159,10 +141,23 @@ where
     }
 }
 
+/// Query parameters for the `/logs` WebSocket endpoint.
+#[derive(Debug, Deserialize)]
+pub struct LogStreamParams {
+    /// Minimum log level to stream. Defaults to Info.
+    #[serde(default = "default_log_level")]
+    pub level: LogLevel,
+}
+
+fn default_log_level() -> LogLevel {
+    LogLevel::Info
+}
+
 /// WebSocket handler for log streaming.
 ///
 /// Clients connect and receive a stream of JSON-encoded `LogEntry` messages.
-pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>) {
+/// The `min_level` parameter controls per-client server-side filtering.
+pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>, min_level: LogLevel) {
     let (mut sender, mut receiver) = ws.split();
     let mut rx = broadcaster.subscribe();
 
@@ -186,6 +181,9 @@ pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>) {
             log_result = rx.recv() => {
                 match log_result {
                     Ok(entry) => {
+                        if !entry.level.passes_filter(&min_level) {
+                            continue;
+                        }
                         if let Ok(json) = serde_json::to_string(&entry) {
                             if let Err(e) = sender.send(Message::Text(json)).await {
                                 tracing::debug!("Log WebSocket send error: {}", e);
@@ -211,11 +209,6 @@ pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>) {
     }
 
     recv_task.abort();
-}
-
-/// Create a WebSocket upgrade handler for the log stream endpoint.
-pub async fn ws_log_endpoint(ws: WebSocketUpgrade, broadcaster: Arc<LogBroadcaster>) -> Response {
-    ws.on_upgrade(move |socket| ws_log_handler(socket, broadcaster))
 }
 
 /// Initialize tracing with console output and WebSocket streaming.
@@ -248,9 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcaster_creation() {
-        let broadcaster = LogBroadcaster::new(16);
-        assert_eq!(broadcaster.subscriber_count(), 0);
+    fn test_log_level_passes_filter() {
+        assert!(LogLevel::Error.passes_filter(&LogLevel::Warn));
+        assert!(LogLevel::Warn.passes_filter(&LogLevel::Warn));
+        assert!(!LogLevel::Info.passes_filter(&LogLevel::Warn));
+        assert!(LogLevel::Trace.passes_filter(&LogLevel::Trace));
+        assert!(!LogLevel::Debug.passes_filter(&LogLevel::Error));
     }
 
     #[test]
@@ -270,7 +266,6 @@ mod tests {
     async fn test_broadcast_with_subscriber() {
         let broadcaster = LogBroadcaster::new(16);
         let mut rx = broadcaster.subscribe();
-        assert_eq!(broadcaster.subscriber_count(), 1);
 
         let entry = LogEntry {
             timestamp_ms: 12345,

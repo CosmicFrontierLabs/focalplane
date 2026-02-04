@@ -3,6 +3,10 @@
 //! A reusable Yew component that connects to a `/logs` WebSocket endpoint
 //! and displays streaming log messages with automatic scrolling.
 
+use std::cell::Cell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+
 use gloo_net::websocket::{futures::WebSocket, Message};
 use shared_wasm::{LogEntry, LogLevel};
 use wasm_bindgen_futures::spawn_local;
@@ -27,7 +31,7 @@ pub struct LogViewerProps {
     #[prop_or(true)]
     pub show_targets: bool,
     /// Minimum log level to display
-    #[prop_or(LogLevel::Debug)]
+    #[prop_or(LogLevel::Info)]
     pub min_level: LogLevel,
 }
 
@@ -43,14 +47,21 @@ pub enum LogViewerMsg {
     ToggleAutoScroll,
     /// Reconnect to WebSocket
     Reconnect,
+    /// Copy all logs to clipboard
+    CopyLogs,
+    /// Set the minimum log level filter
+    SetMinLevel(LogLevel),
 }
 
 /// A reusable log viewer component that streams logs via WebSocket.
 pub struct LogViewer {
-    logs: Vec<LogEntry>,
+    logs: VecDeque<LogEntry>,
     connected: bool,
     auto_scroll: bool,
     container_ref: NodeRef,
+    filter_level: LogLevel,
+    /// Shared flag to signal the current WebSocket task to shut down.
+    ws_shutdown: Rc<Cell<bool>>,
 }
 
 impl Component for LogViewer {
@@ -58,34 +69,33 @@ impl Component for LogViewer {
     type Properties = LogViewerProps;
 
     fn create(ctx: &Context<Self>) -> Self {
-        // Start WebSocket connection
         let link = ctx.link().clone();
-        let ws_url = ctx.props().ws_url.clone();
+        let initial_level = ctx.props().min_level;
+        let url = log_ws_url(&ctx.props().ws_url, initial_level);
+        let shutdown = Rc::new(Cell::new(false));
+        let shutdown_clone = shutdown.clone();
         spawn_local(async move {
-            connect_websocket(ws_url.to_string(), link).await;
+            connect_websocket(url, link, shutdown_clone).await;
         });
 
         Self {
-            logs: Vec::new(),
+            logs: VecDeque::new(),
             connected: false,
             auto_scroll: true,
             container_ref: NodeRef::default(),
+            filter_level: initial_level,
+            ws_shutdown: shutdown,
         }
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             LogViewerMsg::LogReceived(entry) => {
-                // Filter by minimum level
-                if !should_display(&entry.level, &ctx.props().min_level) {
-                    return false;
-                }
-
-                self.logs.push(entry);
+                self.logs.push_back(entry);
 
                 // Trim old entries
                 if self.logs.len() > MAX_LOG_ENTRIES {
-                    self.logs.remove(0);
+                    self.logs.pop_front();
                 }
 
                 // Auto-scroll to bottom
@@ -110,12 +120,40 @@ impl Component for LogViewer {
                 true
             }
             LogViewerMsg::Reconnect => {
-                let link = ctx.link().clone();
-                let ws_url = ctx.props().ws_url.clone();
-                spawn_local(async move {
-                    connect_websocket(ws_url.to_string(), link).await;
-                });
+                self.spawn_connection(ctx);
                 false
+            }
+            LogViewerMsg::CopyLogs => {
+                let text: String = self
+                    .logs
+                    .iter()
+                    .map(|entry| {
+                        let total_secs = entry.timestamp_ms / 1000;
+                        let hours = (total_secs / 3600) % 24;
+                        let mins = (total_secs / 60) % 60;
+                        let secs = total_secs % 60;
+                        let millis = entry.timestamp_ms % 1000;
+                        let short_target =
+                            entry.target.rsplit("::").next().unwrap_or(&entry.target);
+                        format!(
+                            "{:02}:{:02}:{:02}.{:03} {:5} [{}] {}",
+                            hours, mins, secs, millis, entry.level, short_target, entry.message
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // Copy to clipboard
+                if let Some(window) = web_sys::window() {
+                    let clipboard = window.navigator().clipboard();
+                    let _ = clipboard.write_text(&text);
+                }
+                false
+            }
+            LogViewerMsg::SetMinLevel(level) => {
+                self.filter_level = level;
+                self.spawn_connection(ctx);
+                true
             }
         }
     }
@@ -134,6 +172,16 @@ impl Component for LogViewer {
         let on_clear = link.callback(|_| LogViewerMsg::Clear);
         let on_toggle_scroll = link.callback(|_| LogViewerMsg::ToggleAutoScroll);
         let on_reconnect = link.callback(|_| LogViewerMsg::Reconnect);
+        let on_copy = link.callback(|_| LogViewerMsg::CopyLogs);
+
+        // Level filter callbacks
+        let on_level_trace = link.callback(|_| LogViewerMsg::SetMinLevel(LogLevel::Trace));
+        let on_level_debug = link.callback(|_| LogViewerMsg::SetMinLevel(LogLevel::Debug));
+        let on_level_info = link.callback(|_| LogViewerMsg::SetMinLevel(LogLevel::Info));
+        let on_level_warn = link.callback(|_| LogViewerMsg::SetMinLevel(LogLevel::Warn));
+        let on_level_error = link.callback(|_| LogViewerMsg::SetMinLevel(LogLevel::Error));
+
+        let log_count = self.logs.len();
 
         let scroll_btn_style = if self.auto_scroll {
             "background: #00ff00; color: #000;"
@@ -150,15 +198,29 @@ impl Component for LogViewer {
                             {"[LOG] "}{status_text}
                         </span>
                         <span style="color: #666; margin-left: 10px;">
-                            {format!("{} entries", self.logs.len())}
+                            {format!("{} entries", log_count)}
                         </span>
                     </div>
-                    <div style="display: flex; gap: 5px;">
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        // Level filter buttons
+                        <span style="color: #666; font-size: 0.85em;">{"Level:"}</span>
+                        {render_level_btn("T", LogLevel::Trace, &self.filter_level, on_level_trace)}
+                        {render_level_btn("D", LogLevel::Debug, &self.filter_level, on_level_debug)}
+                        {render_level_btn("I", LogLevel::Info, &self.filter_level, on_level_info)}
+                        {render_level_btn("W", LogLevel::Warn, &self.filter_level, on_level_warn)}
+                        {render_level_btn("E", LogLevel::Error, &self.filter_level, on_level_error)}
+                        <span style="border-left: 1px solid #444; height: 16px; margin: 0 3px;"></span>
                         <button
                             onclick={on_toggle_scroll}
                             style={format!("border: none; padding: 2px 6px; cursor: pointer; font-size: 0.9em; {scroll_btn_style}")}
                         >
                             {"Auto-scroll"}
+                        </button>
+                        <button
+                            onclick={on_copy}
+                            style="background: #333; color: #fff; border: none; padding: 2px 6px; cursor: pointer; font-size: 0.9em;"
+                        >
+                            {"Copy"}
                         </button>
                         <button
                             onclick={on_clear}
@@ -191,6 +253,45 @@ impl Component for LogViewer {
                 </div>
             </div>
         }
+    }
+}
+
+impl LogViewer {
+    /// Signal the current WebSocket task to stop, then spawn a new connection.
+    fn spawn_connection(&mut self, ctx: &Context<Self>) {
+        self.ws_shutdown.set(true);
+        let shutdown = Rc::new(Cell::new(false));
+        self.ws_shutdown = shutdown.clone();
+
+        let link = ctx.link().clone();
+        let url = log_ws_url(&ctx.props().ws_url, self.filter_level);
+        spawn_local(async move {
+            connect_websocket(url, link, shutdown).await;
+        });
+    }
+}
+
+/// Render a level filter button.
+fn render_level_btn(
+    label: &str,
+    level: LogLevel,
+    current: &LogLevel,
+    onclick: Callback<MouseEvent>,
+) -> Html {
+    let is_active = std::mem::discriminant(&level) == std::mem::discriminant(current);
+    let bg = if is_active { level.color() } else { "#333" };
+    let fg = if is_active { "#000" } else { "#888" };
+
+    html! {
+        <button
+            onclick={onclick}
+            style={format!(
+                "background: {bg}; color: {fg}; border: none; padding: 2px 5px; cursor: pointer; font-size: 0.85em; font-weight: bold; min-width: 20px;"
+            )}
+            title={format!("Filter to {level} and above")}
+        >
+            {label}
+        </button>
     }
 }
 
@@ -234,34 +335,26 @@ fn render_log_entry(entry: &LogEntry, props: &LogViewerProps) -> Html {
     }
 }
 
-/// Check if a log level should be displayed given the minimum level.
-fn should_display(level: &LogLevel, min_level: &LogLevel) -> bool {
-    let level_rank = match level {
-        LogLevel::Trace => 0,
-        LogLevel::Debug => 1,
-        LogLevel::Info => 2,
-        LogLevel::Warn => 3,
-        LogLevel::Error => 4,
-    };
-    let min_rank = match min_level {
-        LogLevel::Trace => 0,
-        LogLevel::Debug => 1,
-        LogLevel::Info => 2,
-        LogLevel::Warn => 3,
-        LogLevel::Error => 4,
-    };
-    level_rank >= min_rank
+/// Build a WebSocket URL with the level query parameter.
+fn log_ws_url(base: &str, level: LogLevel) -> String {
+    format!("{}?level={}", base, level.as_str())
 }
 
 /// Connect to WebSocket and stream log entries.
-async fn connect_websocket(url: String, link: yew::html::Scope<LogViewer>) {
+///
+/// The `shutdown` flag is checked after each message. When set to `true` the
+/// loop exits and the WebSocket is dropped (closing the connection).
+async fn connect_websocket(
+    url: String,
+    link: yew::html::Scope<LogViewer>,
+    shutdown: Rc<Cell<bool>>,
+) {
     use futures_util::StreamExt;
 
     // Build full WebSocket URL
     let ws_url = if url.starts_with("ws://") || url.starts_with("wss://") {
         url
     } else {
-        // Relative URL - build from current location
         let window = web_sys::window().expect("no window");
         let location = window.location();
         let protocol = if location.protocol().unwrap_or_default() == "https:" {
@@ -280,16 +373,16 @@ async fn connect_websocket(url: String, link: yew::html::Scope<LogViewer>) {
             let (_, mut read) = ws.split();
 
             while let Some(msg) = read.next().await {
+                if shutdown.get() {
+                    break;
+                }
                 match msg {
                     Ok(Message::Text(text)) => {
-                        // Try to parse as LogEntry
                         if let Ok(entry) = serde_json::from_str::<LogEntry>(&text) {
                             link.send_message(LogViewerMsg::LogReceived(entry));
                         }
                     }
-                    Ok(Message::Bytes(_)) => {
-                        // Binary messages not used for logs
-                    }
+                    Ok(Message::Bytes(_)) => {}
                     Err(e) => {
                         web_sys::console::log_1(&format!("WebSocket error: {e:?}").into());
                         break;
@@ -297,7 +390,9 @@ async fn connect_websocket(url: String, link: yew::html::Scope<LogViewer>) {
                 }
             }
 
-            link.send_message(LogViewerMsg::ConnectionStatus(false));
+            if !shutdown.get() {
+                link.send_message(LogViewerMsg::ConnectionStatus(false));
+            }
         }
         Err(e) => {
             web_sys::console::log_1(&format!("Failed to connect WebSocket: {e:?}").into());

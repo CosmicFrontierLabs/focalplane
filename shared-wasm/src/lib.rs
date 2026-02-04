@@ -592,6 +592,33 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// Numeric severity rank (higher = more severe).
+    pub fn rank(&self) -> u8 {
+        match self {
+            LogLevel::Trace => 0,
+            LogLevel::Debug => 1,
+            LogLevel::Info => 2,
+            LogLevel::Warn => 3,
+            LogLevel::Error => 4,
+        }
+    }
+
+    /// Check if this level passes a minimum filter.
+    pub fn passes_filter(&self, min_level: &LogLevel) -> bool {
+        self.rank() >= min_level.rank()
+    }
+
+    /// Lowercase string for URL query parameters.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+
     /// Get CSS color for this log level.
     pub fn color(&self) -> &'static str {
         match self {
