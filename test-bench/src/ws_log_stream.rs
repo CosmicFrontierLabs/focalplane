@@ -218,13 +218,16 @@ pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>, min
 pub fn init_tracing() -> Arc<LogBroadcaster> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::EnvFilter;
 
     let log_broadcaster = Arc::new(LogBroadcaster::new(64));
     let log_layer = WsLogLayer::new(log_broadcaster.clone());
 
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
     tracing_subscriber::registry()
         .with(log_layer)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
         .init();
 
     log_broadcaster
