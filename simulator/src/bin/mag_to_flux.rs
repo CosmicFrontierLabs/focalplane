@@ -67,8 +67,6 @@ struct DetectorResults {
     detector_name: String,
     data_points: Vec<(f64, f64)>,
     fit_range: (f64, f64),
-    #[allow(dead_code)]
-    bit_depth: u8,
 }
 
 /// Create and save the magnitude vs flux plot for all detectors
@@ -344,7 +342,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             detector_name: format!("{detector:?}"),
             data_points,
             fit_range: (fit_start, fit_end),
-            bit_depth: satellite_config.sensor.bit_depth,
         });
     }
 

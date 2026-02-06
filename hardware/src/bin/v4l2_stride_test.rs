@@ -10,8 +10,6 @@ use v4l::video::Capture;
 struct ResolutionInfo {
     width: u32,
     height: u32,
-    #[allow(dead_code)]
-    fps: f32,
 }
 
 #[derive(Parser, Debug)]
@@ -35,7 +33,7 @@ fn enumerate_resolutions(_device_path: &str) -> Result<Vec<ResolutionInfo>> {
 
     Ok(known_resolutions
         .into_iter()
-        .map(|(width, height, fps)| ResolutionInfo { width, height, fps })
+        .map(|(width, height, _fps)| ResolutionInfo { width, height })
         .collect())
 }
 

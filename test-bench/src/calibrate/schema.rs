@@ -162,11 +162,10 @@ pub fn get_pattern_schemas() -> SchemaResponse {
 ///
 /// Note: RemoteControlled pattern is handled specially in calibrate_serve
 /// since it needs the shared remote state.
-#[allow(unused_variables)]
 pub fn parse_pattern_request(
     pattern_id: &str,
     values: &serde_json::Map<String, serde_json::Value>,
-    display_size: Option<(u32, u32)>,
+    _display_size: Option<(u32, u32)>,
 ) -> Result<PatternConfig, String> {
     let get_i64 = |key: &str, default: i64| -> i64 {
         values.get(key).and_then(|v| v.as_i64()).unwrap_or(default)

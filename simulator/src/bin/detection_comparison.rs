@@ -57,8 +57,6 @@ struct AlgorithmResults {
     false_positives: u32,
     spurious_detections: u32,
     multiple_detections: u32,
-    #[allow(dead_code)]
-    no_detections: u32,
     avg_error_pixels: f64,
 }
 
@@ -69,11 +67,6 @@ impl AlgorithmResults {
 
     fn false_positive_rate(&self) -> f64 {
         self.false_positives as f64 / self.experiments as f64
-    }
-
-    #[allow(dead_code)]
-    fn no_detection_rate(&self) -> f64 {
-        self.no_detections as f64 / self.experiments as f64
     }
 }
 
@@ -88,7 +81,6 @@ fn test_algorithm(
     let mut false_positives = 0;
     let mut spurious_detections = 0;
     let mut multiple_detections = 0;
-    let mut no_detections = 0;
     let mut total_error = 0.0;
 
     for _ in 0..args.experiments {
@@ -173,14 +165,13 @@ fn test_algorithm(
                 })
                 .collect(),
             Err(_) => {
-                no_detections += 1;
                 continue;
             }
         };
 
         // Analyze detections
         if detected_stars.is_empty() {
-            no_detections += 1;
+            // No detection
         } else if detected_stars.len() > 1 {
             multiple_detections += 1;
             false_positives += 1;
@@ -216,7 +207,6 @@ fn test_algorithm(
         false_positives,
         spurious_detections,
         multiple_detections,
-        no_detections,
         avg_error_pixels: avg_error,
     }
 }

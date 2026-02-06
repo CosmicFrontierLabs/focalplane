@@ -1,24 +1,4 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use log::debug;
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-pub struct ImageData {
-    pub data: String,      // Base64 encoded raw u16 image data
-    pub shape: Vec<usize>, // [height, width]
-    pub dtype: String,     // Always "uint16"
-}
-
-#[allow(dead_code)]
-pub fn raw_image_to_base64_json(frame_data: &[u8], width: u32, height: u32) -> ImageData {
-    let encoded = STANDARD.encode(frame_data);
-
-    ImageData {
-        data: encoded,
-        shape: vec![height as usize, width as usize],
-        dtype: "uint16".to_string(),
-    }
-}
 
 pub fn compute_histogram(pixels: &[u8]) -> Vec<u32> {
     let mut histogram = vec![0u32; 256];

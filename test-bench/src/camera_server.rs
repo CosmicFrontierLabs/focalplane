@@ -247,7 +247,6 @@ pub struct AppState<C: CameraInterface> {
 pub struct FrameStats {
     pub total_frames: u64,
     pub fps_samples: Vec<f32>,
-    #[allow(dead_code)]
     pub last_frame_time: std::time::Instant,
     pub last_temperatures: std::collections::HashMap<String, f64>,
     pub histogram: Vec<u32>,

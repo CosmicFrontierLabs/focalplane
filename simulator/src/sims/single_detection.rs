@@ -21,9 +21,7 @@ use core::f64;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use shared::image_proc::detection::{detect_stars_unified, StarDetection, StarFinder};
-#[allow(unused_imports)]
-// Wavelength is needed for type alias, even though trait provides the method
-use shared::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
+use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::f64::consts::PI;
@@ -258,6 +256,7 @@ mod tests {
     use crate::hardware::telescope::models::IDEAL_50CM;
     use crate::photometry::zodiacal::SolarAngularCoordinates;
     use approx::abs_diff_eq;
+    use shared::units::{Temperature, TemperatureExt};
     use std::time::Duration;
 
     #[test]
