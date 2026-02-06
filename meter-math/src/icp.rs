@@ -10,11 +10,14 @@ use thiserror::Error;
 
 use crate::quaternion::Quaternion;
 
-/// Errors that can occur during ICP object matching
+/// Errors that can occur during ICP operations
 #[derive(Error, Debug)]
 pub enum ICPError {
     #[error("Invalid argument: {0}")]
     ArgumentError(String),
+
+    #[error("SVD decomposition failed to produce U or V^T matrices")]
+    SvdFailed,
 }
 
 /// Result of ICP algorithm containing transformation parameters and matching points
@@ -129,7 +132,7 @@ fn compute_optimal_transform(
     source_points: &[Vector2<f64>],
     target_points: &[Vector2<f64>],
     matches: &[(usize, usize)],
-) -> (Quaternion, Vector2<f64>) {
+) -> Result<(Quaternion, Vector2<f64>), ICPError> {
     let mut src_matched = Vec::with_capacity(matches.len());
     let mut tgt_matched = Vec::with_capacity(matches.len());
 
@@ -154,8 +157,8 @@ fn compute_optimal_transform(
 
     // Perform SVD
     let svd = h.svd(true, true);
-    let u = svd.u.unwrap();
-    let v_t = svd.v_t.unwrap();
+    let u = svd.u.ok_or(ICPError::SvdFailed)?;
+    let v_t = svd.v_t.ok_or(ICPError::SvdFailed)?;
 
     // Compute rotation matrix
     let mut r = v_t.transpose() * u.transpose();
@@ -177,7 +180,7 @@ fn compute_optimal_transform(
     // Compute translation
     let t = target_centroid - r * source_centroid;
 
-    (q, t)
+    Ok((q, t))
 }
 
 /// Converts ndarray point representation to nalgebra Vector2 format.
@@ -285,25 +288,28 @@ fn calculate_error(
 /// * `convergence_threshold` - Error threshold for convergence
 ///
 /// # Returns
-/// * `ICPResult` - Struct containing transformation parameters and matching information
+/// * `Result<ICPResult, ICPError>` - Struct containing transformation parameters and matching information
+///
+/// # Errors
+/// * `ICPError::ArgumentError` - If input arrays don't have 2 columns
+/// * `ICPError::SvdFailed` - If SVD decomposition fails during iteration
 ///
 pub fn iterative_closest_point(
     source_points: &Array2<f64>,
     target_points: &Array2<f64>,
     max_iterations: usize,
     convergence_threshold: f64,
-) -> ICPResult {
-    // Validate input dimensions
-    assert_eq!(
-        source_points.shape()[1],
-        2,
-        "Source points must have shape [n_points, 2]"
-    );
-    assert_eq!(
-        target_points.shape()[1],
-        2,
-        "Target points must have shape [m_points, 2]"
-    );
+) -> Result<ICPResult, ICPError> {
+    if source_points.shape()[1] != 2 {
+        return Err(ICPError::ArgumentError(
+            "Source points must have shape [n_points, 2]".to_string(),
+        ));
+    }
+    if target_points.shape()[1] != 2 {
+        return Err(ICPError::ArgumentError(
+            "Target points must have shape [m_points, 2]".to_string(),
+        ));
+    }
 
     // Convert to Vector2 points for easier manipulation
     let source_vec = convert_to_vector2_points(source_points);
@@ -330,7 +336,7 @@ pub fn iterative_closest_point(
         matches = find_closest_points(&current_source, &target_vec);
 
         // Compute optimal transformation
-        let (q, t) = compute_optimal_transform(&source_vec, &target_vec, &matches);
+        let (q, t) = compute_optimal_transform(&source_vec, &target_vec, &matches)?;
 
         // Update transformation
         rotation_quat = q;
@@ -362,14 +368,14 @@ pub fn iterative_closest_point(
     // Calculate final error
     let final_error = calculate_error(&source_vec, &target_vec, &matches, &rotation, &translation);
 
-    ICPResult {
+    Ok(ICPResult {
         rotation_quat,
         rotation,
         translation,
         matches,
         mean_squared_error: final_error,
         iterations,
-    }
+    })
 }
 
 /// Trait for objects that can be located in a 2D Cartesian coordinate system.
@@ -413,9 +419,7 @@ impl Locatable2d for Vector2<f64> {
 ///
 /// # Errors
 /// * `ICPError::ArgumentError` - If either source or target slice is empty, or if convergence_threshold is not positive.
-///
-/// # Panics
-/// * Panics if Array2 conversion fails (programming error) or if ICP returns out-of-bounds indices (programming error).
+/// * `ICPError::SvdFailed` - If the SVD decomposition fails during ICP iteration.
 pub fn icp_match_objects<R1, R2>(
     source: &[R1],
     target: &[R2],
@@ -456,28 +460,13 @@ where
         &target_points,
         max_iterations,
         convergence_threshold,
-    );
+    )?;
 
     // Map indices back to original objects (cloned)
     let matched_objects: Vec<(R1, R2)> = result
         .matches
         .iter()
-        .map(|&(src_idx, tgt_idx)| {
-            // Ensure indices are within bounds before accessing
-            assert!(
-                src_idx < source.len(),
-                "ICP returned out-of-bounds source index: {} >= {}",
-                src_idx,
-                source.len()
-            );
-            assert!(
-                tgt_idx < target.len(),
-                "ICP returned out-of-bounds target index: {} >= {}",
-                tgt_idx,
-                target.len()
-            );
-            (source[src_idx].clone(), target[tgt_idx].clone())
-        })
+        .map(|&(src_idx, tgt_idx)| (source[src_idx].clone(), target[tgt_idx].clone()))
         .collect();
 
     Ok((matched_objects, result))
@@ -499,6 +488,7 @@ where
 ///
 /// # Errors
 /// * `ICPError::ArgumentError` - If either source or target slice is empty, or if convergence_threshold is not positive.
+/// * `ICPError::SvdFailed` - If the SVD decomposition fails during ICP iteration.
 pub fn icp_match_indices<R1, R2>(
     source: &[R1],
     target: &[R2],
@@ -539,7 +529,7 @@ where
         &target_points,
         max_iterations,
         convergence_threshold,
-    );
+    )?;
 
     Ok((result.matches.clone(), result))
 }
@@ -589,7 +579,7 @@ mod tests {
 
         // Compute optimal transformation with known matches
         let (rotation_quat, translation) =
-            compute_optimal_transform(&source_vec, &target_vec, custom_matches);
+            compute_optimal_transform(&source_vec, &target_vec, custom_matches).unwrap();
 
         // Extract 2D rotation matrix from quaternion
         let full_rotation = rotation_quat.to_rotation_matrix();
@@ -687,7 +677,7 @@ mod tests {
         let many_target = Array2::from_shape_vec((point_count, 2), many_target_points).unwrap();
 
         // Run full ICP algorithm
-        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9);
+        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9).unwrap();
 
         // Just verify the algorithm runs; we're not testing convergence in the full case
         println!(
@@ -771,7 +761,7 @@ mod tests {
         let many_target = Array2::from_shape_vec((point_count, 2), many_target_points).unwrap();
 
         // Run full ICP algorithm
-        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9);
+        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9).unwrap();
 
         // Just verify the algorithm runs; we're not testing convergence in the full case
         println!(
@@ -864,7 +854,7 @@ mod tests {
         let many_target = Array2::from_shape_vec((point_count, 2), many_target_points).unwrap();
 
         // Run full ICP algorithm
-        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9);
+        let full_result = iterative_closest_point(&many_source, &many_target, 20, 1e-9).unwrap();
 
         // Just verify the algorithm runs; we're not testing convergence in the full case
         println!(
@@ -926,7 +916,7 @@ mod tests {
         let target = Array2::from_shape_vec((point_count, 2), target_points).unwrap();
 
         // Run ICP on noisy data
-        let result = iterative_closest_point(&source, &target, 50, 1e-9);
+        let result = iterative_closest_point(&source, &target, 50, 1e-9).unwrap();
 
         // Check results with more relaxed tolerance due to noise
         // Just verify the algorithm runs with noisy data; we're not testing convergence
@@ -1261,7 +1251,7 @@ mod tests {
         let target = Array2::from_shape_vec((3, 2), vec![1.0, 1.0, 2.0, 1.0, 1.0, 2.0]).unwrap();
 
         // Run ICP algorithm
-        let result = iterative_closest_point(&source, &target, 100, 1e-6);
+        let result = iterative_closest_point(&source, &target, 100, 1e-6).unwrap();
 
         // Verify the result structure is valid
         assert_eq!(result.matches.len(), 3); // Should match 3 source points
@@ -1350,7 +1340,8 @@ mod tests {
             let target_array = Array2::from_shape_vec((n_points, 2), target_points).unwrap();
 
             // Run ICP
-            let icp_result = iterative_closest_point(&source_array, &target_array, 100, 1e-9);
+            let icp_result =
+                iterative_closest_point(&source_array, &target_array, 100, 1e-9).unwrap();
 
             // Debug: check if all points are matched correctly (they should be since we have same points with small noise)
             if trial < 10 {
@@ -1503,7 +1494,7 @@ mod tests {
         let target_array = Array2::from_shape_vec((total_points, 2), target_points).unwrap();
 
         // Run ICP
-        let icp_result = iterative_closest_point(&source_array, &target_array, 100, 1e-6);
+        let icp_result = iterative_closest_point(&source_array, &target_array, 100, 1e-6).unwrap();
 
         // Check if the recovered transformation is biased by outliers
         let rotation_error = (icp_result.rotation - true_rotation).norm();
