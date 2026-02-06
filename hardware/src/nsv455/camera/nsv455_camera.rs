@@ -19,6 +19,66 @@ use v4l::io::traits::CaptureStream;
 use v4l::prelude::*;
 use v4l::video::Capture;
 
+/// Error returned when a frame buffer is too small to unpack.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "frame buffer too small: need {needed_bytes} bytes for {width}x{height} frame \
+     (stride={stride}), got {actual_bytes}"
+)]
+pub struct UnpackFrameError {
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+    pub needed_bytes: usize,
+    pub actual_bytes: usize,
+}
+
+/// Convert a raw V4L2 frame buffer of little-endian `u16` pixels into a flat `Vec<u16>`.
+///
+/// Handles stride padding: when `stride > width * 2`, the extra bytes at the
+/// end of each row are skipped.
+pub fn unpack_u16_frame(
+    frame_data: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+) -> Result<Vec<u16>, UnpackFrameError> {
+    let row_bytes = width * 2;
+    let needed = if stride == row_bytes {
+        height * row_bytes
+    } else {
+        (height - 1) * stride + row_bytes
+    };
+
+    if frame_data.len() < needed {
+        return Err(UnpackFrameError {
+            width,
+            height,
+            stride,
+            needed_bytes: needed,
+            actual_bytes: frame_data.len(),
+        });
+    }
+
+    // Fast path: no row padding, so the pixel data is contiguous and we can
+    // reinterpret the entire byte slice as u16 in one shot.
+    if stride == row_bytes {
+        return Ok(bytemuck::cast_slice::<u8, u16>(&frame_data[..needed]).to_vec());
+    }
+
+    // Slow path: stride includes padding bytes at the end of each row (e.g.
+    // alignment to a cache line or DMA boundary). Copy pixel data row-by-row,
+    // skipping the padding between rows.
+    let mut pixels = Vec::with_capacity(width * height);
+    for row in 0..height {
+        let row_start = row * stride;
+        let row_u16 =
+            bytemuck::cast_slice::<u8, u16>(&frame_data[row_start..row_start + row_bytes]);
+        pixels.extend_from_slice(row_u16);
+    }
+    Ok(pixels)
+}
+
 pub struct NSV455Camera {
     device_path: String,
     config: CameraConfig,
@@ -405,37 +465,14 @@ impl CameraInterface for NSV455Camera {
                 .next()
                 .map_err(|e| CameraError::CaptureError(format!("Failed to get frame: {e}")))?;
 
-            let frame_data = buf.to_vec();
-            // let stride =
-            //     calculate_stride(actual_format.width, actual_format.height, frame_data.len());
             let stride = actual_format.stride as usize;
-
-            // TODO: Extra memcopy in the inner loop that could be avoided with a cast.
-            // We're returning a pointer to a strided 2D array, so we could potentially
-            // cast directly to Array2<u16> with custom strides instead of copying pixels.
-            let mut pixels = Vec::with_capacity(width * height);
-
-            for row in 0..height {
-                let row_start = row * stride;
-                let row_end = row_start + (width * 2);
-
-                if row_end <= frame_data.len() {
-                    for col in 0..width {
-                        let pixel_start = row_start + (col * 2);
-                        if pixel_start + 1 < frame_data.len() {
-                            let pixel_value = u16::from_le_bytes([
-                                frame_data[pixel_start],
-                                frame_data[pixel_start + 1],
-                            ]);
-                            pixels.push(pixel_value);
-                        }
-                    }
+            let pixels = match unpack_u16_frame(&buf, width, height, stride) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("{e}");
+                    continue;
                 }
-            }
-
-            if pixels.len() != width * height {
-                continue;
-            }
+            };
 
             let array = Array2::from_shape_vec((height, width), pixels)
                 .map_err(|e| CameraError::CaptureError(format!("Failed to create array: {e}")))?;
@@ -505,5 +542,74 @@ impl CameraInterface for NSV455Camera {
         // V4L2 doesn't provide a standard serial, and device path is not camera-specific
         tracing::warn!("NSV455 serial number is hardcoded - awaiting Neutralino guidance");
         "NSV455_UNKNOWN".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpack_no_padding() {
+        // 3x2 image, stride == width*2 (no padding)
+        let pixels: Vec<u16> = vec![1, 2, 3, 4, 5, 6];
+        let bytes: Vec<u8> = pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
+        let result = unpack_u16_frame(&bytes, 3, 2, 6).unwrap();
+        assert_eq!(result, pixels);
+    }
+
+    #[test]
+    fn unpack_with_stride_padding() {
+        // 3x2 image with stride=8 (2 padding bytes per row)
+        let row0: Vec<u16> = vec![10, 20, 30];
+        let row1: Vec<u16> = vec![40, 50, 60];
+        let mut bytes = Vec::new();
+        for p in &row0 {
+            bytes.extend_from_slice(&p.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0xAA, 0xBB]); // padding
+        for p in &row1 {
+            bytes.extend_from_slice(&p.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0xCC, 0xDD]); // padding
+
+        let result = unpack_u16_frame(&bytes, 3, 2, 8).unwrap();
+        assert_eq!(result, vec![10, 20, 30, 40, 50, 60]);
+    }
+
+    #[test]
+    fn unpack_buffer_too_small() {
+        let bytes = vec![0u8; 4]; // only 2 pixels worth of data
+        let err = unpack_u16_frame(&bytes, 3, 2, 6).unwrap_err();
+        assert_eq!(err.width, 3);
+        assert_eq!(err.height, 2);
+        assert_eq!(err.stride, 6);
+        assert_eq!(err.needed_bytes, 12);
+        assert_eq!(err.actual_bytes, 4);
+    }
+
+    #[test]
+    fn unpack_single_pixel() {
+        let bytes = 42u16.to_le_bytes().to_vec();
+        let result = unpack_u16_frame(&bytes, 1, 1, 2).unwrap();
+        assert_eq!(result, vec![42]);
+    }
+
+    #[test]
+    fn unpack_large_stride_buffer_too_small() {
+        // stride=16, but buffer only has enough for no-padding layout
+        let bytes = vec![0u8; 12]; // 3*2*2 = 12, but need (1*16 + 6) = 22
+        let err = unpack_u16_frame(&bytes, 3, 2, 16).unwrap_err();
+        assert_eq!(err.needed_bytes, 22);
+        assert_eq!(err.actual_bytes, 12);
+    }
+
+    #[test]
+    fn unpack_error_message_is_descriptive() {
+        let err = unpack_u16_frame(&[0u8; 4], 100, 200, 200).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("100x200"), "missing dimensions: {msg}");
+        assert!(msg.contains("stride=200"), "missing stride: {msg}");
+        assert!(msg.contains("got 4"), "missing actual size: {msg}");
     }
 }
