@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use shared::bad_pixel_map::BadPixelMap;
 use shared::image_proc::detection::aabb::AABB;
 
+use crate::error::FgsError;
+
 /// Criteria for filtering candidate guide stars during acquisition.
 ///
 /// These parameters control which detected stars are considered suitable for
@@ -282,23 +284,27 @@ impl FgsConfig {
     pub fn validate(
         &self,
         camera: Option<&dyn shared::camera_interface::CameraInterface>,
-    ) -> Result<(), String> {
+    ) -> Result<(), FgsError> {
         let roi_half = self.roi_size as f64 / 2.0;
 
         if self.filters.minimum_edge_distance <= roi_half {
-            return Err(format!(
+            return Err(FgsError::InvalidConfig(format!(
                 "minimum_edge_distance ({:.1}) must be greater than roi_size/2 ({:.1}) to ensure ROI never extends beyond image boundaries",
                 self.filters.minimum_edge_distance,
                 roi_half
-            ));
+            )));
         }
 
         if self.roi_size == 0 {
-            return Err("roi_size must be greater than 0".to_string());
+            return Err(FgsError::InvalidConfig(
+                "roi_size must be greater than 0".to_string(),
+            ));
         }
 
         if self.acquisition_frames == 0 {
-            return Err("acquisition_frames must be greater than 0".to_string());
+            return Err(FgsError::InvalidConfig(
+                "acquisition_frames must be greater than 0".to_string(),
+            ));
         }
 
         // Validate against camera-specific ROI constraints if camera provided
@@ -307,7 +313,7 @@ impl FgsConfig {
                 self.roi_size,
                 self.roi_size,
             ))
-            .map_err(|e| format!("ROI size validation failed: {e}"))?;
+            .map_err(|e| FgsError::InvalidConfig(format!("ROI size validation failed: {e}")))?;
         }
 
         Ok(())

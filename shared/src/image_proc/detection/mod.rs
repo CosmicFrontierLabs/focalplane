@@ -32,4 +32,4 @@ pub mod unified;
 pub use aabb::{aabbs_to_tuples, merge_overlapping_aabbs, tuples_to_aabbs, union_aabbs, AABB};
 pub use naive::{calculate_star_centroid, detect_stars, get_centroids, StarDetection};
 pub use thresholding::{apply_threshold, connected_components, get_bounding_boxes, otsu_threshold};
-pub use unified::{detect_stars as detect_stars_unified, StarFinder};
+pub use unified::{detect_stars as detect_stars_unified, DetectionError, StarFinder};

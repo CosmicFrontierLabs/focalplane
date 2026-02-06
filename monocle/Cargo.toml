@@ -20,6 +20,7 @@ nalgebra = "0.32"
 rand = "0.9"
 rand_chacha = "0.9"
 shared-wasm = { version = "0.1.0", path = "../shared-wasm" }
+thiserror = "2.0"
 
 [features]
 c-reference = []

@@ -33,9 +33,23 @@
 use ndarray::ArrayView2;
 use starfield::image::starfinders::{DAOStarFinder, IRAFStarFinder, StellarSource};
 use std::time::Instant;
+use thiserror::Error;
 
 use super::config::{dao_autoconfig, iraf_autoconfig};
 use crate::image_proc::airy::PixelScaledAiryDisk;
+
+/// Errors from unified star detection.
+#[derive(Error, Debug)]
+pub enum DetectionError {
+    /// Star finder algorithm failed to initialize.
+    #[error("{algorithm:?} star finder creation failed: {reason}")]
+    AlgorithmCreation {
+        /// Which algorithm failed.
+        algorithm: StarFinder,
+        /// Underlying error message.
+        reason: String,
+    },
+}
 
 /// Available star detection algorithms with different complexity/performance tradeoffs.
 ///
@@ -113,7 +127,7 @@ pub fn detect_stars(
     scaled_airy_disk: &PixelScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
-) -> Result<Vec<Box<dyn StellarSource>>, String> {
+) -> Result<Vec<Box<dyn StellarSource>>, DetectionError> {
     let start_time = Instant::now();
     let (height, width) = image.dim();
     let total_pixels = height * width;
@@ -143,7 +157,7 @@ fn detect_dao(
     scaled_airy_disk: &PixelScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
-) -> Result<Vec<Box<dyn StellarSource>>, String> {
+) -> Result<Vec<Box<dyn StellarSource>>, DetectionError> {
     // Convert u16 image to f64 for DAO algorithm
     let image_f64 = image.mapv(|x| x as f64);
 
@@ -152,7 +166,10 @@ fn detect_dao(
 
     // Create DAO star finder and detect sources
     let star_finder =
-        DAOStarFinder::new(config).map_err(|e| format!("DAO star finder creation failed: {e}"))?;
+        DAOStarFinder::new(config).map_err(|e| DetectionError::AlgorithmCreation {
+            algorithm: StarFinder::Dao,
+            reason: e.to_string(),
+        })?;
 
     let stars = star_finder
         .find_stars(&image_f64, None)
@@ -172,7 +189,7 @@ fn detect_iraf(
     scaled_airy_disk: &PixelScaledAiryDisk,
     background_rms: f64,
     detection_sigma: f64,
-) -> Result<Vec<Box<dyn StellarSource>>, String> {
+) -> Result<Vec<Box<dyn StellarSource>>, DetectionError> {
     // Convert u16 image to f64 for IRAF algorithm
     let image_f64 = image.mapv(|x| x as f64);
 
@@ -180,8 +197,11 @@ fn detect_iraf(
     let config = iraf_autoconfig(scaled_airy_disk, background_rms, detection_sigma);
 
     // Create IRAF star finder and detect sources
-    let star_finder = IRAFStarFinder::new(config)
-        .map_err(|e| format!("IRAF star finder creation failed: {e}"))?;
+    let star_finder =
+        IRAFStarFinder::new(config).map_err(|e| DetectionError::AlgorithmCreation {
+            algorithm: StarFinder::Iraf,
+            reason: e.to_string(),
+        })?;
 
     let stars = star_finder
         .find_stars(&image_f64, None)
@@ -200,7 +220,7 @@ fn detect_naive(
     image: ArrayView2<u16>,
     background_rms: f64,
     detection_sigma: f64,
-) -> Result<Vec<Box<dyn StellarSource>>, String> {
+) -> Result<Vec<Box<dyn StellarSource>>, DetectionError> {
     // Convert u16 image to f64 for centroiding algorithm
     let image_f64 = image.mapv(|x| x as f64);
     let image_view = image_f64.view();

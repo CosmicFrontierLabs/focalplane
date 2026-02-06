@@ -22,7 +22,7 @@ once_cell = "1.19" # Lazy static initialization
 resvg = { version = "0.45.0", features = ["text"] } # SVG rendering library
 tiny-skia = "0.11" # Rendering backend for resvg
 usvg = "0.45.0" # SVG parser for resvg
-thiserror = "1.0" # Error handling
+thiserror = "2.0" # Error handling
 clap = { version = "4.5", features = [
     "derive",
 ] } # Command line argument parsing

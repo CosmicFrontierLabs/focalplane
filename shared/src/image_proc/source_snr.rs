@@ -18,10 +18,43 @@
 //! cosmic rays or neighboring sources in the background annulus.
 
 use ndarray::ArrayView2;
+use thiserror::Error;
 
 use super::aperture_photometry::collect_aperture_pixels;
 use super::detection::StarDetection;
 use meter_math::stats::median;
+
+/// Errors from SNR calculations.
+#[derive(Error, Debug)]
+pub enum SnrError {
+    /// Aperture contains no pixels at the given position.
+    #[error("aperture contains no pixels at position ({x:.1}, {y:.1}) with radius {radius:.1}")]
+    EmptyAperture {
+        /// X coordinate of the source.
+        x: f64,
+        /// Y coordinate of the source.
+        y: f64,
+        /// Aperture radius used.
+        radius: f64,
+    },
+
+    /// Insufficient background pixels for noise estimation.
+    #[error(
+        "insufficient background pixels ({count}) at position ({x:.1}, {y:.1}), need at least 10"
+    )]
+    InsufficientBackground {
+        /// Number of background pixels found.
+        count: usize,
+        /// X coordinate of the source.
+        x: f64,
+        /// Y coordinate of the source.
+        y: f64,
+    },
+
+    /// Statistical computation failed.
+    #[error("stats computation failed: {0}")]
+    StatsError(String),
+}
 
 /// Calculate signal-to-noise ratio at a specific position using aperture photometry.
 ///
@@ -43,10 +76,10 @@ use meter_math::stats::median;
 ///
 /// # Errors
 ///
-/// Returns an error string if:
-/// - Aperture contains no pixels
-/// - Background annulus contains fewer than 10 pixels
-/// - Noise estimate is zero or negative (indicates no variation in background)
+/// Returns [`SnrError`] if:
+/// - Aperture contains no pixels ([`SnrError::EmptyAperture`])
+/// - Background annulus contains fewer than 10 pixels ([`SnrError::InsufficientBackground`])
+/// - Statistical computation fails ([`SnrError::StatsError`])
 pub fn calculate_snr_at_position(
     x: f64,
     y: f64,
@@ -54,7 +87,7 @@ pub fn calculate_snr_at_position(
     aperture_radius: f64,
     background_inner_radius: f64,
     background_outer_radius: f64,
-) -> Result<f64, String> {
+) -> Result<f64, SnrError> {
     let (aperture_pixels, background_pixels) = collect_aperture_pixels(
         image,
         x,
@@ -65,21 +98,24 @@ pub fn calculate_snr_at_position(
     );
 
     if aperture_pixels.is_empty() {
-        return Err(format!(
-            "Aperture contains no pixels at position ({x:.1}, {y:.1}) with radius {aperture_radius:.1}"
-        ));
+        return Err(SnrError::EmptyAperture {
+            x,
+            y,
+            radius: aperture_radius,
+        });
     }
 
     if background_pixels.len() < 10 {
-        return Err(format!(
-            "Insufficient background pixels ({}) at position ({x:.1}, {y:.1}), need at least 10",
-            background_pixels.len()
-        ));
+        return Err(SnrError::InsufficientBackground {
+            count: background_pixels.len(),
+            x,
+            y,
+        });
     }
 
     // Estimate local background level using median of background annulus pixels
-    let background_median = median(&background_pixels)
-        .map_err(|e| format!("Failed to compute background median: {e}"))?;
+    let background_median =
+        median(&background_pixels).map_err(|e| SnrError::StatsError(e.to_string()))?;
 
     // Calculate signal: total flux in aperture minus background contribution
     let aperture_sum: f64 = aperture_pixels.iter().sum();
@@ -92,7 +128,7 @@ pub fn calculate_snr_at_position(
         .map(|&val| (val - background_median).abs())
         .collect();
 
-    let mad = median(&deviations).map_err(|e| format!("Failed to compute MAD: {e}"))?;
+    let mad = median(&deviations).map_err(|e| SnrError::StatsError(e.to_string()))?;
 
     // Convert MAD to RMS noise estimate (σ ≈ 1.4826 × MAD for Gaussian noise)
     let noise_rms = 1.4826 * mad;
@@ -134,10 +170,10 @@ pub fn calculate_snr_at_position(
 ///
 /// # Errors
 ///
-/// Returns an error string if:
-/// - Aperture contains no pixels
-/// - Background annulus contains fewer than 10 pixels
-/// - Noise estimate is zero or negative (indicates no variation in background)
+/// Returns [`SnrError`] if:
+/// - Aperture contains no pixels ([`SnrError::EmptyAperture`])
+/// - Background annulus contains fewer than 10 pixels ([`SnrError::InsufficientBackground`])
+/// - Statistical computation fails ([`SnrError::StatsError`])
 ///
 /// # Performance Notes
 ///
@@ -149,7 +185,7 @@ pub fn calculate_snr(
     aperture_radius: f64,
     background_inner_radius: f64,
     background_outer_radius: f64,
-) -> Result<f64, String> {
+) -> Result<f64, SnrError> {
     calculate_snr_at_position(
         detection.x,
         detection.y,
@@ -487,10 +523,8 @@ mod tests {
             "SNR calculation should fail when insufficient background pixels available"
         );
         assert!(
-            result
-                .unwrap_err()
-                .contains("Insufficient background pixels"),
-            "Error should mention insufficient background pixels"
+            matches!(result.unwrap_err(), SnrError::InsufficientBackground { .. }),
+            "Error should be InsufficientBackground variant"
         );
     }
 

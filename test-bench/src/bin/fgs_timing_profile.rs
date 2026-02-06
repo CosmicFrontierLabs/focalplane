@@ -165,7 +165,9 @@ fn run_iteration(
 
     // Start FGS
     let time_to_track_start = Instant::now();
-    let (_update, settings) = fgs.process_event(FgsEvent::StartFgs)?;
+    let (_update, settings) = fgs
+        .process_event(FgsEvent::StartFgs)
+        .map_err(|e| e.to_string())?;
     apply_settings(camera, settings)?;
 
     // Phase 1: Full-frame stream for acquisition + calibration
@@ -203,7 +205,7 @@ fn run_iteration(
                     frame_count < total_acq_frames
                 }
                 Err(e) => {
-                    acq_error = Some(e);
+                    acq_error = Some(e.to_string());
                     false
                 }
             }
@@ -241,7 +243,7 @@ fn run_iteration(
                     first_track_frame_ms = t_track.elapsed().as_secs_f64() * 1000.0;
                 }
                 Err(e) => {
-                    track_error = Some(e);
+                    track_error = Some(e.to_string());
                 }
             }
             false

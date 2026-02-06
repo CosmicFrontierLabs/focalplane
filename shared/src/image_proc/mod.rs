@@ -57,7 +57,7 @@ pub use convolve2d::{convolve2d, gaussian_kernel, ConvolveMode, ConvolveOptions}
 pub use detection::{
     aabbs_to_tuples, apply_threshold, connected_components, detect_stars, detect_stars_unified,
     get_bounding_boxes, get_centroids, merge_overlapping_aabbs, otsu_threshold, tuples_to_aabbs,
-    union_aabbs, StarDetection, StarFinder, AABB,
+    union_aabbs, DetectionError, StarDetection, StarFinder, AABB,
 };
 pub use histogram_stretch::stretch_histogram;
 pub use image::{
@@ -70,4 +70,4 @@ pub use overlay::{
     draw_bounding_boxes, draw_simple_boxes, draw_stars_with_sizes, draw_stars_with_x_markers,
     overlay_to_image,
 };
-pub use source_snr::{calculate_snr, filter_by_snr};
+pub use source_snr::{calculate_snr, filter_by_snr, SnrError};

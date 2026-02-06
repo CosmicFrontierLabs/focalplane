@@ -3281,6 +3281,7 @@ dependencies = [
  "serde",
  "shared",
  "shared-wasm",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5090,7 +5091,7 @@ dependencies = [
  "shared-wasm",
  "starfield",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tiny-skia",
  "tracing",
  "uom",
@@ -5220,7 +5221,7 @@ dependencies = [
  "shared-wasm",
  "starfield",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tiny-skia",
  "uom",
  "url",
@@ -5611,7 +5612,7 @@ dependencies = [
  "simulator",
  "starfield",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tiny-skia",
  "tokio",
  "tokio-stream",

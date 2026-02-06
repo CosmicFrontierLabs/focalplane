@@ -98,6 +98,7 @@ use std::sync::{Arc, Mutex};
 pub mod callback;
 pub mod config;
 pub mod controllers;
+pub mod error;
 pub mod filters;
 pub mod selection;
 pub mod state;
@@ -109,6 +110,7 @@ use shared::image_proc::detection::aabb::AABB;
 pub use crate::callback::{CallbackId, FgsCallbackEvent, PositionEstimate, TrackingLostReason};
 pub use crate::config::{compute_aligned_roi, FgsConfig, GuideStarFilters};
 pub use crate::controllers::{LosControlOutput, LosController};
+pub use crate::error::FgsError;
 pub use crate::state::{FgsEvent, FgsState};
 
 /// Camera settings update requested by FGS
@@ -356,7 +358,7 @@ impl FineGuidanceSystem {
         frames_collected: usize,
         frame: ArrayView2<u16>,
         _timestamp: Timestamp,
-    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), FgsError> {
         let frames = frames_collected + 1;
         let (height, width) = frame.dim();
         self.accumulate_frame(frame)?;
@@ -395,7 +397,7 @@ impl FineGuidanceSystem {
         &mut self,
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
-    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), FgsError> {
         self.detect_and_select_guides(frame)?;
 
         if let Some(guide_star) = &self.guide_star {
@@ -412,11 +414,9 @@ impl FineGuidanceSystem {
                 h_alignment,
                 v_alignment,
             )
-            .ok_or_else(|| {
-                format!(
-                    "Could not compute aligned ROI for star at ({:.1}, {:.1})",
-                    guide_star.x, guide_star.y
-                )
+            .ok_or(FgsError::RoiComputation {
+                x: guide_star.x,
+                y: guide_star.y,
             })?;
 
             log::info!(
@@ -455,25 +455,23 @@ impl FineGuidanceSystem {
         frames_processed: usize,
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
-    ) -> Result<StateTransitionResult, String> {
+    ) -> Result<StateTransitionResult, FgsError> {
         let update_result = self.track(frame, timestamp);
 
         // Check for SNR dropout - triggers transition back to Acquiring (full-frame)
-        if let Err(ref e) = update_result {
-            if e.starts_with("SNR_DROPOUT:") {
-                log::warn!("SNR dropped below threshold, restarting acquisition: {e}");
+        if let Err(ref e @ FgsError::SnrDropout { .. }) = update_result {
+            log::warn!("SNR dropped below threshold, restarting acquisition: {e}");
 
-                // Emit tracking lost event
-                self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak);
-                self.clear_acquisition_state();
+            // Emit tracking lost event
+            self.emit_tracking_lost_event(TrackingLostReason::SignalTooWeak);
+            self.clear_acquisition_state();
 
-                return Ok((
-                    FgsState::Acquiring {
-                        frames_collected: 0,
-                    },
-                    (None, vec![CameraSettingsUpdate::ClearROI]),
-                ));
-            }
+            return Ok((
+                FgsState::Acquiring {
+                    frames_collected: 0,
+                },
+                (None, vec![CameraSettingsUpdate::ClearROI]),
+            ));
         }
 
         let update_opt = update_result?;
@@ -521,7 +519,7 @@ impl FineGuidanceSystem {
         attempts: usize,
         frame: ArrayView2<u16>,
         _timestamp: Timestamp,
-    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<(FgsState, Vec<CameraSettingsUpdate>), FgsError> {
         let recovered = self.attempt_reacquisition(frame)?;
 
         if recovered {
@@ -601,7 +599,7 @@ impl FineGuidanceSystem {
     pub fn process_event(
         &mut self,
         event: FgsEvent<'_>,
-    ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), FgsError> {
         use FgsState::*;
 
         // Capture frame data if this is a ProcessFrame event for FrameProcessed callback
@@ -706,7 +704,7 @@ impl FineGuidanceSystem {
         &mut self,
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
-    ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), String> {
+    ) -> Result<(Option<GuidanceUpdate>, Vec<CameraSettingsUpdate>), FgsError> {
         self.process_event(FgsEvent::ProcessFrame(frame, timestamp))
     }
 
@@ -737,12 +735,12 @@ impl FineGuidanceSystem {
     }
 
     /// Accumulate frames during acquisition
-    fn accumulate_frame(&mut self, frame: ArrayView2<u16>) -> Result<(), String> {
+    fn accumulate_frame(&mut self, frame: ArrayView2<u16>) -> Result<(), FgsError> {
         match &mut self.accumulated_frame {
             Some(sum) => {
                 // Add this frame to the existing sum
                 if sum.shape() != frame.shape() {
-                    return Err("Frame dimensions mismatch".to_string());
+                    return Err(FgsError::FrameDimensionMismatch);
                 }
                 for ((i, j), value) in frame.indexed_iter() {
                     sum[[i, j]] += *value as f64;
@@ -762,13 +760,13 @@ impl FineGuidanceSystem {
     }
 
     /// Detect stars and select guide stars from averaged frame
-    fn detect_and_select_guides(&mut self, _frame: ArrayView2<u16>) -> Result<(), String> {
+    fn detect_and_select_guides(&mut self, _frame: ArrayView2<u16>) -> Result<(), FgsError> {
         use std::time::Instant;
 
         let t0 = Instant::now();
         let averaged_frame = self
             .get_averaged_frame()
-            .ok_or("No accumulated frame available for calibration")?;
+            .ok_or(FgsError::NoAccumulatedFrame)?;
         let averaging_elapsed = t0.elapsed();
         log::info!(
             "Frame averaging: {:.1}ms ({} frames accumulated)",
@@ -777,7 +775,8 @@ impl FineGuidanceSystem {
         );
 
         let (guide_star, detected_stars) =
-            selection::detect_and_select_guides(averaged_frame.view(), &self.config)?;
+            selection::detect_and_select_guides(averaged_frame.view(), &self.config)
+                .map_err(FgsError::InvalidConfig)?;
 
         self.guide_star = guide_star;
         self.detected_stars = detected_stars;
@@ -806,18 +805,12 @@ impl FineGuidanceSystem {
         &mut self,
         frame: ArrayView2<u16>,
         timestamp: Timestamp,
-    ) -> Result<Option<GuidanceUpdate>, String> {
+    ) -> Result<Option<GuidanceUpdate>, FgsError> {
         use shared::image_proc::centroid::compute_centroid_from_mask;
 
-        let guide_star = self
-            .guide_star
-            .as_ref()
-            .ok_or("No guide star available for tracking")?;
+        let guide_star = self.guide_star.as_ref().ok_or(FgsError::NoGuideStar)?;
 
-        let roi_bounds = self
-            .current_roi
-            .as_ref()
-            .ok_or("No ROI available for tracking")?;
+        let roi_bounds = self.current_roi.as_ref().ok_or(FgsError::NoRoi)?;
 
         // Check if we're receiving an ROI frame that matches expected size
         let (frame_height, frame_width) = frame.dim();
@@ -876,14 +869,14 @@ impl FineGuidanceSystem {
             aperture * 2.0,
             aperture * 3.0,
         )
-        .map_err(|e| format!("Failed to calculate SNR during tracking: {e}"))?;
+        .map_err(|e| FgsError::SnrCalculation(e.to_string()))?;
 
         // Check if SNR dropped below threshold - return specific error for state machine handling
         if snr < self.config.snr_dropout_threshold {
-            return Err(format!(
-                "SNR_DROPOUT: {:.2} < {:.2}",
-                snr, self.config.snr_dropout_threshold
-            ));
+            return Err(FgsError::SnrDropout {
+                measured: snr,
+                threshold: self.config.snr_dropout_threshold,
+            });
         }
 
         // Convert centroid position back to full frame coordinates
@@ -900,7 +893,7 @@ impl FineGuidanceSystem {
     }
 
     /// Attempt to reacquire lost guide stars
-    fn attempt_reacquisition(&mut self, _frame: ArrayView2<u16>) -> Result<bool, String> {
+    fn attempt_reacquisition(&mut self, _frame: ArrayView2<u16>) -> Result<bool, FgsError> {
         // See TODO.md: Monocle (FGS/Tracking) - Implement reacquisition logic
         Ok(false)
     }
