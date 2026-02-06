@@ -47,6 +47,11 @@ name = "nsv455_test_pattern"
 path = "src/bin/nsv455_test_pattern.rs"
 required-features = ["linux-bins"]
 
+[[bin]]
+name = "v4l2_switch_timing"
+path = "src/bin/v4l2_switch_timing.rs"
+required-features = ["linux-bins"]
+
 [dependencies]
 anyhow = "1.0"
 async-stream = "0.3.6"
