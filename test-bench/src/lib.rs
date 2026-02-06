@@ -2,6 +2,7 @@ pub mod calibration_controller;
 pub mod camera_init;
 pub mod display_patterns;
 pub mod embedded_assets;
+pub mod fgs_ws_client;
 pub mod tracking_collector;
 pub mod ws_log_stream;
 pub mod ws_stream;

@@ -4,11 +4,13 @@
 //! sinusoidal wiggle. Moves to discrete positions, waits for settle, then
 //! collects tracking messages.
 
+use crate::fgs_ws_client::{FgsWsClient, FgsWsClientError};
 use crate::tracking_collector::TrackingCollector;
 use hardware::FsmInterface;
 use nalgebra::Vector2;
-use shared_wasm::{CalibrateServerClient, FgsServerClient, StatsScan, TrackingState};
-use std::mem::discriminant;
+use shared_wasm::{
+    CalibrateServerClient, FgsWsCommand, StatsScan, TrackingEnableRequest, TrackingState,
+};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::info;
@@ -42,7 +44,7 @@ pub enum StaticCalibrationError {
 
     /// Tracking control error
     #[error("tracking control error: {0}")]
-    TrackingError(String),
+    TrackingError(#[from] FgsWsClientError),
 
     /// Tracking failed to reacquire
     #[error("tracking failed to reacquire within timeout")]
@@ -161,26 +163,26 @@ pub struct StaticStepExecutor<F: FsmInterface> {
     fsm: F,
     collector: TrackingCollector,
     config: FsmCalibrationConfig,
-    tracking: FgsServerClient,
+    fgs: FgsWsClient,
     display: CalibrateServerClient,
     raw_data: CalibrationRawData,
     calibration_start: Option<Instant>,
 }
 
 impl<F: FsmInterface> StaticStepExecutor<F> {
-    /// Create a new static step calibration executor
+    /// Create a new static step calibration executor.
     pub fn new(
         fsm: F,
         collector: TrackingCollector,
         config: FsmCalibrationConfig,
-        tracking: FgsServerClient,
+        fgs: FgsWsClient,
         display: CalibrateServerClient,
     ) -> Self {
         Self {
             fsm,
             collector,
             config,
-            tracking,
+            fgs,
             display,
             raw_data: CalibrationRawData::default(),
             calibration_start: None,
@@ -190,79 +192,28 @@ impl<F: FsmInterface> StaticStepExecutor<F> {
     /// Enable tracking and wait for it to lock on.
     ///
     /// Returns Ok(true) if tracking locked on within timeout, Ok(false) if timeout expired.
-    async fn enable_tracking_and_wait(&self, axis: u8) -> Result<bool, StaticCalibrationError> {
+    async fn enable_tracking_and_wait(&mut self, axis: u8) -> Result<bool, StaticCalibrationError> {
         info!("Axis {}: enabling tracking", axis);
-        self.tracking
-            .set_tracking_enabled(true)
-            .await
-            .map_err(|e| StaticCalibrationError::TrackingError(e.to_string()))?;
-
+        let cmd = FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest { enabled: true });
+        let target = TrackingState::Tracking {
+            frames_processed: 0,
+        };
         let timeout = Duration::from_secs_f64(self.config.lock_on_time_secs);
 
-        // Use a dummy TrackingState::Tracking to match on variant
-        match self
-            .wait_for_tracking_state(
-                TrackingState::Tracking {
-                    frames_processed: 0,
-                },
-                timeout,
-            )
-            .await
-        {
+        match self.fgs.send_command_and_wait(cmd, target, timeout).await {
             Ok(_) => Ok(true),
-            Err(StaticCalibrationError::TrackingReacquireFailed) => Ok(false),
-            Err(e) => Err(e),
+            Err(FgsWsClientError::Timeout) => Ok(false),
+            Err(e) => Err(e.into()),
         }
     }
 
     /// Disable tracking and wait for idle state.
-    async fn disable_tracking(&self) -> Result<(), StaticCalibrationError> {
-        self.tracking
-            .set_tracking_enabled(false)
-            .await
-            .map_err(|e| StaticCalibrationError::TrackingError(e.to_string()))?;
-
-        // Wait for tracking to become idle (up to 5 seconds)
-        self.wait_for_tracking_state(TrackingState::Idle, Duration::from_secs(5))
+    async fn disable_tracking(&mut self) -> Result<(), StaticCalibrationError> {
+        let cmd = FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest { enabled: false });
+        self.fgs
+            .send_command_and_wait(cmd, TrackingState::Idle, Duration::from_secs(5))
             .await?;
-
         Ok(())
-    }
-
-    /// Wait for tracking to reach a specific state.
-    ///
-    /// Polls the tracking status every 250ms until the state matches or timeout is reached.
-    ///
-    /// # Arguments
-    /// * `target_state` - The tracking state to wait for (variant only, inner values ignored)
-    /// * `max_wait` - Maximum duration to wait before returning timeout error
-    ///
-    /// # Returns
-    /// * `Ok(TrackingState)` - The actual state when matched (includes inner values)
-    /// * `Err(TrackingReacquireFailed)` - If timeout reached without matching state
-    pub async fn wait_for_tracking_state(
-        &self,
-        target_state: TrackingState,
-        max_wait: Duration,
-    ) -> Result<TrackingState, StaticCalibrationError> {
-        let start = Instant::now();
-
-        while start.elapsed() < max_wait {
-            let status = self
-                .tracking
-                .get_tracking_status()
-                .await
-                .map_err(|e| StaticCalibrationError::TrackingError(e.to_string()))?;
-
-            // Compare enum variants only (ignoring inner values)
-            if discriminant(&status.state) == discriminant(&target_state) {
-                return Ok(status.state);
-            }
-
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-
-        Err(StaticCalibrationError::TrackingReacquireFailed)
     }
 
     /// Refresh the display pattern to prevent OLED timeout.

@@ -451,7 +451,7 @@ async fn run_web_server(state: Arc<AppState>, port: u16, bind_address: String) -
         .route("/info", get(get_display_info))
         .route("/schema", get(get_schema))
         .route("/jpeg", get(jpeg_pattern_endpoint))
-        .route("/ws-stream", get(ws_stream_endpoint))
+        .route("/ws/frames", get(ws_stream_endpoint))
         .route("/config", get(get_pattern_config))
         .route("/config", axum::routing::post(update_pattern_config))
         .route("/pattern", get(get_pattern_command))

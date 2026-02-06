@@ -17,16 +17,17 @@ use monocle::config::{FgsConfig, GuideStarFilters};
 use monocle::state::FgsEvent;
 use monocle::{apply_camera_settings, FgsState, FineGuidanceSystem};
 use ndarray::{s, Array2};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use shared::bad_pixel_map::BadPixelMap;
 use shared::camera_interface::{CameraInterface, FrameMetadata, SensorGeometry};
 use shared::frame_writer::{FrameFormat, FrameWriterHandle};
 use shared::image_proc::u16_to_gray_image;
 use shared::tracking_message::TrackingMessage;
 use shared_wasm::{
-    CameraStats, CameraTimingStats, ExportSettings, ExportStatus, FrameExportMetadata,
-    FsmMoveRequest, FsmStatus, RawFrameResponse, TrackingEnableRequest, TrackingPosition,
-    TrackingSettings, TrackingState, TrackingStatus,
+    CameraStats, CameraTimingStats, CommandError, ExportSettings, ExportStatus, FgsWsCommand,
+    FgsWsMessage, FrameExportMetadata, FsmMoveRequest, FsmStatus, RawFrameResponse,
+    StarDetectionSettings, TrackingEnableRequest, TrackingPosition, TrackingSettings,
+    TrackingState, TrackingStatus,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -39,8 +40,9 @@ use crate::embedded_assets::{serve_fgs_frontend, serve_fgs_index_with_data};
 use crate::mjpeg::encode_ndarray_jpeg;
 use crate::ws_log_stream::{ws_log_handler, LogBroadcaster};
 use crate::ws_stream::{WsBroadcaster, WsFrame};
-use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use clap::Args;
+use futures::{SinkExt, StreamExt};
 
 /// Common command-line arguments for camera server binaries.
 #[derive(Args, Debug, Clone)]
@@ -90,12 +92,41 @@ pub struct ZoomRegion {
     pub timestamp: std::time::Instant,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ZoomCoords {
-    pub x: usize,
-    pub y: usize,
+/// Query parameters for the `/ws/frames` endpoint.
+///
+/// When `zoom` is provided as "x,y", returns zoomed frames centered at that position.
+/// When omitted, returns the main camera stream.
+#[derive(Debug, Default, Deserialize)]
+pub struct FramesQueryParams {
+    /// Zoom center as "x,y" coordinates (e.g., "320,240")
+    #[serde(default, deserialize_with = "deserialize_zoom_coords")]
+    pub zoom: Option<(usize, usize)>,
 }
 
+fn deserialize_zoom_coords<'de, D>(deserializer: D) -> Result<Option<(usize, usize)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => {
+            let parts: Vec<&str> = s.split(',').collect();
+            if parts.len() != 2 {
+                return Err(serde::de::Error::custom("zoom must be 'x,y'"));
+            }
+            let x = parts[0]
+                .parse()
+                .map_err(|_| serde::de::Error::custom("invalid x coordinate"))?;
+            let y = parts[1]
+                .parse()
+                .map_err(|_| serde::de::Error::custom("invalid y coordinate"))?;
+            Ok(Some((x, y)))
+        }
+    }
+}
+
+/// Query parameters for the zoom HTTP endpoints (`POST /zoom`, `GET /zoom`).
 #[derive(Debug, Deserialize)]
 pub struct ZoomQueryParams {
     pub x: usize,
@@ -219,6 +250,32 @@ impl FsmSharedState {
     }
 }
 
+/// Broadcaster for FGS status updates to WebSocket clients.
+///
+/// Follows the same pattern as `LogBroadcaster`. Publishes `FgsWsMessage`
+/// variants when state changes, replacing HTTP polling.
+pub struct FgsStatusBroadcaster {
+    tx: broadcast::Sender<FgsWsMessage>,
+}
+
+impl FgsStatusBroadcaster {
+    /// Create a new status broadcaster with the given buffer capacity.
+    pub fn new(capacity: usize) -> Self {
+        let (tx, _) = broadcast::channel(capacity);
+        Self { tx }
+    }
+
+    /// Publish a status update to all connected WebSocket clients.
+    pub fn publish(&self, msg: FgsWsMessage) {
+        let _ = self.tx.send(msg);
+    }
+
+    /// Subscribe to the status stream.
+    pub fn subscribe(&self) -> broadcast::Receiver<FgsWsMessage> {
+        self.tx.subscribe()
+    }
+}
+
 pub struct AppState<C: CameraInterface> {
     pub camera: Arc<Mutex<C>>,
     pub stats: Arc<Mutex<FrameStats>>,
@@ -239,8 +296,16 @@ pub struct AppState<C: CameraInterface> {
     pub fsm: Option<Arc<FsmSharedState>>,
     /// WebSocket broadcaster for streaming camera frames (with proper close events)
     pub ws_stream: Arc<WsBroadcaster>,
+    /// WebSocket broadcaster for streaming zoom region frames
+    pub ws_zoom: Arc<WsBroadcaster>,
+    /// Current zoom center coordinates, set by WebSocket clients
+    pub ws_zoom_center: Arc<std::sync::RwLock<Option<(usize, usize)>>>,
     /// WebSocket broadcaster for log streaming
     pub log_broadcaster: Arc<LogBroadcaster>,
+    /// WebSocket broadcaster for FGS status updates
+    pub fgs_status: Arc<FgsStatusBroadcaster>,
+    /// Star detection overlay settings
+    pub star_detection_settings: Arc<RwLock<StarDetectionSettings>>,
 }
 
 #[derive(Debug, Clone)]
@@ -286,13 +351,17 @@ fn extract_patch(
     let frame_height = frame.nrows();
     let frame_width = frame.ncols();
 
-    let x_start = center_x.saturating_sub(half_size);
-    let y_start = center_y.saturating_sub(half_size);
+    let x_start = center_x
+        .saturating_sub(half_size)
+        .min(frame_width.saturating_sub(1));
+    let y_start = center_y
+        .saturating_sub(half_size)
+        .min(frame_height.saturating_sub(1));
     let x_end = (x_start + patch_size).min(frame_width);
     let y_end = (y_start + patch_size).min(frame_height);
 
-    let actual_width = x_end - x_start;
-    let actual_height = y_end - y_start;
+    let actual_width = x_end.saturating_sub(x_start);
+    let actual_height = y_end.saturating_sub(y_start);
 
     let mut patch = Array2::zeros((patch_size, patch_size));
 
@@ -304,6 +373,55 @@ fn extract_patch(
     }
 
     patch
+}
+
+/// Encode a zoom patch as a JPEG WsFrame, scaled 4x with normalized intensity.
+fn encode_zoom_frame(
+    frame: &Array2<u16>,
+    center_x: usize,
+    center_y: usize,
+    frame_number: u64,
+) -> Option<WsFrame> {
+    let patch_size = 128;
+    let patch = extract_patch(frame, center_x, center_y, patch_size);
+    let scale_factor = 4;
+    let scaled_size = patch_size * scale_factor;
+
+    let max_val = *patch.iter().max().unwrap_or(&1) as f32;
+    let scale = if max_val > 0.0 { 255.0 / max_val } else { 1.0 };
+
+    let mut scaled_patch = Vec::with_capacity(scaled_size * scaled_size);
+    for y in 0..scaled_size {
+        let src_y = y / scale_factor;
+        for x in 0..scaled_size {
+            let src_x = x / scale_factor;
+            if src_y < patch.nrows() && src_x < patch.ncols() {
+                scaled_patch.push(((patch[[src_y, src_x]] as f32) * scale) as u8);
+            } else {
+                scaled_patch.push(0);
+            }
+        }
+    }
+
+    let img = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(
+        scaled_size as u32,
+        scaled_size as u32,
+        scaled_patch,
+    )?;
+
+    let mut jpeg_bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut jpeg_bytes),
+        image::ImageFormat::Jpeg,
+    )
+    .ok()?;
+
+    Some(WsFrame {
+        jpeg_data: bytes::Bytes::from(jpeg_bytes),
+        frame_number,
+        width: scaled_size as u32,
+        height: scaled_size as u32,
+    })
 }
 
 fn compute_histogram_u16(frame: &Array2<u16>) -> Vec<u32> {
@@ -369,23 +487,48 @@ async fn jpeg_frame_endpoint<C: CameraInterface + 'static>(
         .unwrap()
 }
 
-/// WebSocket image streaming endpoint.
+/// WebSocket endpoint for streaming camera frames as binary data.
 ///
-/// Provides image streaming with proper connection lifecycle management.
-/// Clients receive binary frames with metadata and get clean close events
-/// when the stream needs to restart (e.g., frame size change).
+/// When called without query params, streams the main camera feed.
+/// When called with `?zoom=320,240`, streams a zoomed crop centered at those coordinates.
 ///
 /// Protocol:
 /// - First 4 bytes: width (u32 LE)
 /// - Next 4 bytes: height (u32 LE)
 /// - Next 8 bytes: frame_number (u64 LE)
 /// - Remaining: JPEG data
-async fn ws_stream_endpoint<C: CameraInterface + 'static>(
+async fn ws_frames_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
+    axum::extract::Query(params): axum::extract::Query<FramesQueryParams>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let broadcaster = state.ws_stream.clone();
-    ws.on_upgrade(move |socket| crate::ws_stream::ws_stream_handler(socket, broadcaster))
+    match params.zoom {
+        Some((x, y)) => {
+            // Zoom mode: stream cropped frames
+            let broadcaster = state.ws_zoom.clone();
+            let zoom_center = state.ws_zoom_center.clone();
+
+            {
+                let mut center = zoom_center.write().unwrap();
+                *center = Some((x, y));
+            }
+
+            ws.on_upgrade(move |socket| async move {
+                crate::ws_stream::ws_stream_handler(socket, broadcaster.clone()).await;
+
+                if broadcaster.subscriber_count() == 0 {
+                    let mut center = zoom_center.write().unwrap();
+                    *center = None;
+                }
+                tracing::debug!("Zoom WebSocket connection closed");
+            })
+        }
+        None => {
+            // Main stream mode
+            let broadcaster = state.ws_stream.clone();
+            ws.on_upgrade(move |socket| crate::ws_stream::ws_stream_handler(socket, broadcaster))
+        }
+    }
 }
 
 async fn raw_frame_endpoint<C: CameraInterface + 'static>(
@@ -428,68 +571,6 @@ async fn raw_frame_endpoint<C: CameraInterface + 'static>(
         exposure_us: metadata.exposure.as_micros(),
         frame_number: metadata.frame_number,
         image_base64: encoded,
-    };
-
-    let json = serde_json::to_string(&response).unwrap();
-
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json))
-        .unwrap()
-}
-
-async fn stats_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    let stats = state.stats.lock().await;
-    let avg_fps = if stats.fps_samples.is_empty() {
-        0.0
-    } else {
-        stats.fps_samples.iter().sum::<f32>() / stats.fps_samples.len() as f32
-    };
-
-    let avg_capture_ms = if stats.capture_timing_ms.is_empty() {
-        0.0
-    } else {
-        stats.capture_timing_ms.iter().sum::<f32>() / stats.capture_timing_ms.len() as f32
-    };
-
-    let avg_analysis_ms = if stats.analysis_timing_ms.is_empty() {
-        0.0
-    } else {
-        stats.analysis_timing_ms.iter().sum::<f32>() / stats.analysis_timing_ms.len() as f32
-    };
-
-    let avg_render_ms = if stats.render_timing_ms.is_empty() {
-        0.0
-    } else {
-        stats.render_timing_ms.iter().sum::<f32>() / stats.render_timing_ms.len() as f32
-    };
-
-    let avg_total_pipeline_ms = if stats.total_pipeline_ms.is_empty() {
-        0.0
-    } else {
-        stats.total_pipeline_ms.iter().sum::<f32>() / stats.total_pipeline_ms.len() as f32
-    };
-
-    let response = CameraStats {
-        total_frames: stats.total_frames,
-        avg_fps,
-        temperatures: stats.last_temperatures.clone(),
-        histogram: stats.histogram.clone(),
-        histogram_mean: stats.histogram_mean,
-        histogram_max: stats.histogram_max,
-        timing: Some(CameraTimingStats {
-            avg_capture_ms,
-            avg_analysis_ms,
-            avg_render_ms,
-            avg_total_pipeline_ms,
-            capture_samples: stats.capture_timing_ms.len(),
-            analysis_samples: stats.analysis_timing_ms.len(),
-        }),
-        device_name: state.camera_name.clone(),
-        width: state.camera_geometry.width() as u32,
-        height: state.camera_geometry.height() as u32,
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -686,7 +767,7 @@ async fn fits_frame_endpoint<C: CameraInterface + 'static>(
 
 async fn set_zoom_endpoint<C: CameraInterface + 'static>(
     State(state): State<Arc<AppState<C>>>,
-    Json(coords): Json<ZoomCoords>,
+    Json(coords): Json<ZoomQueryParams>,
 ) -> Response {
     let frame_data = {
         let latest = state.latest_frame.read().await;
@@ -818,25 +899,6 @@ async fn logging_middleware(
     response
 }
 
-async fn tracking_status_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            let status = tracking.status.read().await.clone();
-            let json = serde_json::to_string(&status).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
-    }
-}
-
 /// SSE endpoint for real-time tracking events
 ///
 /// Streams TrackingMessage updates to multiple subscribers via Server-Sent Events.
@@ -877,253 +939,192 @@ async fn tracking_events_endpoint<C: CameraInterface + 'static>(
     ))
 }
 
-async fn tracking_enable_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    Json(req): Json<TrackingEnableRequest>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            let was_enabled = tracking.enabled.swap(req.enabled, Ordering::SeqCst);
-            if was_enabled != req.enabled {
-                tracking.restart_requested.store(true, Ordering::SeqCst);
-                tracing::info!(
-                    "Tracking {} (restart requested)",
-                    if req.enabled { "enabled" } else { "disabled" }
-                );
-            }
+// ==================== WebSocket Command Handlers ====================
 
-            let mut status = tracking.status.write().await;
-            status.enabled = req.enabled;
-            if !req.enabled {
-                status.state = TrackingState::Idle;
-                status.position = None;
-                status.num_guide_stars = 0;
-            }
-            drop(status);
+async fn handle_set_tracking_enabled<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    req: TrackingEnableRequest,
+) -> Result<(), CommandError> {
+    let tracking = state.tracking.as_ref().ok_or_else(|| CommandError {
+        command: "SetTrackingEnabled".into(),
+        message: "Tracking not available".into(),
+    })?;
 
-            let status = tracking.status.read().await.clone();
-            let json = serde_json::to_string(&status).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
+    let was_enabled = tracking.enabled.swap(req.enabled, Ordering::SeqCst);
+    if was_enabled != req.enabled {
+        tracking.restart_requested.store(true, Ordering::SeqCst);
+        tracing::info!(
+            "Tracking {} (restart requested)",
+            if req.enabled { "enabled" } else { "disabled" }
+        );
     }
+
+    let mut status = tracking.status.write().await;
+    status.enabled = req.enabled;
+    if !req.enabled {
+        status.state = TrackingState::Idle;
+        status.position = None;
+        status.num_guide_stars = 0;
+    }
+    drop(status);
+
+    let status = tracking.status.read().await.clone();
+    state
+        .fgs_status
+        .publish(FgsWsMessage::TrackingStatus(status));
+    Ok(())
 }
 
-async fn tracking_settings_get_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            let settings = tracking.settings.read().await.clone();
-            let json = serde_json::to_string(&settings).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
+async fn handle_set_tracking_settings<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    new_settings: TrackingSettings,
+) -> Result<(), CommandError> {
+    let tracking = state.tracking.as_ref().ok_or_else(|| CommandError {
+        command: "SetTrackingSettings".into(),
+        message: "Tracking not available".into(),
+    })?;
+
+    {
+        let mut settings = tracking.settings.write().await;
+        *settings = new_settings.clone();
     }
+
+    if tracking.enabled.load(Ordering::SeqCst) {
+        tracking.restart_requested.store(true, Ordering::SeqCst);
+        tracing::info!("Tracking settings updated, restart requested to apply");
+    } else {
+        tracing::info!("Tracking settings updated");
+    }
+
+    state
+        .fgs_status
+        .publish(FgsWsMessage::TrackingSettings(new_settings));
+    Ok(())
 }
 
-async fn tracking_settings_post_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    Json(new_settings): Json<TrackingSettings>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            // Update settings
-            {
-                let mut settings = tracking.settings.write().await;
-                *settings = new_settings.clone();
-            }
-
-            // Request restart to apply new settings
-            if tracking.enabled.load(Ordering::SeqCst) {
-                tracking.restart_requested.store(true, Ordering::SeqCst);
-                tracing::info!("Tracking settings updated, restart requested to apply");
-            } else {
-                tracing::info!("Tracking settings updated");
-            }
-
-            let json = serde_json::to_string(&new_settings).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
+async fn handle_set_detection_settings<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    new_settings: StarDetectionSettings,
+) -> Result<(), CommandError> {
+    {
+        let mut settings = state.star_detection_settings.write().await;
+        *settings = new_settings.clone();
     }
+    state
+        .fgs_status
+        .publish(FgsWsMessage::DetectionSettings(new_settings));
+    Ok(())
 }
 
-async fn export_status_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            let settings = tracking.export_settings.read().await.clone();
-            let last_error = tracking.export_last_error.read().await.clone();
-            let status = ExportStatus {
-                csv_records_written: tracking.export_csv_records.load(Ordering::SeqCst),
-                frames_exported: tracking.export_frames_written.load(Ordering::SeqCst),
-                settings,
-                last_error,
-            };
-            let json = serde_json::to_string(&status).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
+async fn handle_set_export_settings<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    new_settings: ExportSettings,
+) -> Result<(), CommandError> {
+    let tracking = state.tracking.as_ref().ok_or_else(|| CommandError {
+        command: "SetExportSettings".into(),
+        message: "Tracking not available".into(),
+    })?;
+
+    {
+        let mut settings = tracking.export_settings.write().await;
+        *settings = new_settings.clone();
     }
+
+    if (new_settings.csv_enabled || new_settings.frames_enabled)
+        && tracking.enabled.load(Ordering::SeqCst)
+    {
+        tracking.restart_requested.store(true, Ordering::SeqCst);
+        tracing::info!("Export settings updated, restart requested to apply");
+    }
+
+    tracing::info!(
+        "Export settings updated: csv={} ({}), frames={} ({})",
+        new_settings.csv_enabled,
+        new_settings.csv_filename,
+        new_settings.frames_enabled,
+        new_settings.frames_directory
+    );
+
+    state
+        .fgs_status
+        .publish(FgsWsMessage::ExportStatus(ExportStatus {
+            csv_records_written: tracking.export_csv_records.load(Ordering::SeqCst),
+            frames_exported: tracking.export_frames_written.load(Ordering::SeqCst),
+            settings: new_settings,
+            last_error: tracking.export_last_error.read().await.clone(),
+        }));
+    Ok(())
 }
 
-async fn export_settings_post_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    Json(new_settings): Json<ExportSettings>,
-) -> Response {
-    match &state.tracking {
-        Some(tracking) => {
-            // Update settings
-            {
-                let mut settings = tracking.export_settings.write().await;
-                *settings = new_settings.clone();
-            }
+async fn handle_move_fsm<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    request: FsmMoveRequest,
+) -> Result<(), CommandError> {
+    let fsm_state = state.fsm.as_ref().ok_or_else(|| CommandError {
+        command: "MoveFsm".into(),
+        message: "FSM not available".into(),
+    })?;
 
-            // If enabling export, signal restart to create new writers
-            if (new_settings.csv_enabled || new_settings.frames_enabled)
-                && tracking.enabled.load(Ordering::SeqCst)
-            {
-                tracking.restart_requested.store(true, Ordering::SeqCst);
-                tracing::info!("Export settings updated, restart requested to apply");
-            }
+    let x = request
+        .x_urad
+        .clamp(fsm_state.x_range.0, fsm_state.x_range.1);
+    let y = request
+        .y_urad
+        .clamp(fsm_state.y_range.0, fsm_state.y_range.1);
 
-            tracing::info!(
-                "Export settings updated: csv={} ({}), frames={} ({})",
-                new_settings.csv_enabled,
-                new_settings.csv_filename,
-                new_settings.frames_enabled,
-                new_settings.frames_directory
-            );
+    let fsm_arc = Arc::clone(fsm_state);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut fsm = fsm_arc.fsm.lock().unwrap();
+        fsm.move_to(x, y)
+    })
+    .await
+    .map_err(|e| CommandError {
+        command: "MoveFsm".into(),
+        message: format!("FSM task failed: {e}"),
+    })?;
 
-            let json = serde_json::to_string(&new_settings).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tracking not available"))
-            .unwrap(),
-    }
-}
+    match result {
+        Ok(()) => {
+            fsm_state.set_x(x);
+            fsm_state.set_y(y);
+            *fsm_state.last_error.write().await = None;
 
-// ==================== FSM Endpoints ====================
-
-async fn fsm_status_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-) -> Response {
-    match &state.fsm {
-        Some(fsm_state) => {
-            let last_error = fsm_state.last_error.read().await.clone();
             let status = FsmStatus {
                 connected: true,
-                x_urad: fsm_state.get_x(),
-                y_urad: fsm_state.get_y(),
+                x_urad: x,
+                y_urad: y,
                 x_min: fsm_state.x_range.0,
                 x_max: fsm_state.x_range.1,
                 y_min: fsm_state.y_range.0,
                 y_max: fsm_state.y_range.1,
-                last_error,
+                last_error: None,
             };
-            let json = serde_json::to_string(&status).unwrap();
-            Response::builder()
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))
-                .unwrap()
+            state.fgs_status.publish(FgsWsMessage::FsmStatus(status));
+            Ok(())
         }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("FSM not available"))
-            .unwrap(),
+        Err(e) => {
+            let error_msg = format!("FSM move failed: {e}");
+            tracing::error!("{}", error_msg);
+            *fsm_state.last_error.write().await = Some(error_msg.clone());
+            Err(CommandError {
+                command: "MoveFsm".into(),
+                message: error_msg,
+            })
+        }
     }
 }
 
-async fn fsm_move_endpoint<C: CameraInterface + 'static>(
-    State(state): State<Arc<AppState<C>>>,
-    Json(request): Json<FsmMoveRequest>,
-) -> Response {
-    match &state.fsm {
-        Some(fsm_state) => {
-            // Clamp positions to valid range
-            let x = request
-                .x_urad
-                .clamp(fsm_state.x_range.0, fsm_state.x_range.1);
-            let y = request
-                .y_urad
-                .clamp(fsm_state.y_range.0, fsm_state.y_range.1);
-
-            // Move FSM (blocking operation on std::sync::Mutex)
-            let result = {
-                let mut fsm = fsm_state.fsm.lock().unwrap();
-                fsm.move_to(x, y)
-            };
-
-            match result {
-                Ok(()) => {
-                    // Update cached position
-                    fsm_state.set_x(x);
-                    fsm_state.set_y(y);
-                    *fsm_state.last_error.write().await = None;
-
-                    let status = FsmStatus {
-                        connected: true,
-                        x_urad: x,
-                        y_urad: y,
-                        x_min: fsm_state.x_range.0,
-                        x_max: fsm_state.x_range.1,
-                        y_min: fsm_state.y_range.0,
-                        y_max: fsm_state.y_range.1,
-                        last_error: None,
-                    };
-                    let json = serde_json::to_string(&status).unwrap();
-                    Response::builder()
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(json))
-                        .unwrap()
-                }
-                Err(e) => {
-                    let error_msg = format!("FSM move failed: {e}");
-                    tracing::error!("{}", error_msg);
-                    *fsm_state.last_error.write().await = Some(error_msg.clone());
-
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from(error_msg))
-                        .unwrap()
-                }
-            }
-        }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("FSM not available"))
-            .unwrap(),
+/// Dispatch a WebSocket command to the appropriate handler.
+async fn dispatch_command<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    cmd: FgsWsCommand,
+) -> Result<(), CommandError> {
+    match cmd {
+        FgsWsCommand::SetTrackingEnabled(req) => handle_set_tracking_enabled(state, req).await,
+        FgsWsCommand::SetTrackingSettings(s) => handle_set_tracking_settings(state, s).await,
+        FgsWsCommand::SetDetectionSettings(s) => handle_set_detection_settings(state, s).await,
+        FgsWsCommand::SetExportSettings(s) => handle_set_export_settings(state, s).await,
+        FgsWsCommand::MoveFsm(req) => handle_move_fsm(state, req).await,
     }
 }
 
@@ -1139,34 +1140,188 @@ async fn ws_log_endpoint<C: CameraInterface + 'static>(
     ws.on_upgrade(move |socket| ws_log_handler(socket, broadcaster, params.level))
 }
 
+/// Bidirectional WebSocket handler for FGS status streaming and commands.
+///
+/// Sends a snapshot of current state on connect, then streams `FgsWsMessage`
+/// updates while accepting `FgsWsCommand` messages from the client.
+async fn ws_status_handler<C: CameraInterface + 'static>(ws: WebSocket, state: Arc<AppState<C>>) {
+    let (mut sender, mut receiver) = ws.split();
+    let mut rx = state.fgs_status.subscribe();
+
+    // Send initial state snapshot so client has data immediately
+    let snapshot = collect_status_snapshot(&state).await;
+    for msg in snapshot {
+        if let Ok(json) = serde_json::to_string(&msg) {
+            if sender.send(Message::Text(json)).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    loop {
+        tokio::select! {
+            // Broadcast status updates to this client
+            result = rx.recv() => {
+                match result {
+                    Ok(msg) => {
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if sender.send(Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        let lagged = format!("{{\"type\":\"lagged\",\"missed\":{n}}}");
+                        let _ = sender.send(Message::Text(lagged)).await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            // Process incoming commands from this client
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<FgsWsCommand>(&text) {
+                            Ok(cmd) => {
+                                if let Err(err) = dispatch_command(&state, cmd).await {
+                                    if let Ok(json) = serde_json::to_string(
+                                        &FgsWsMessage::CommandError(err),
+                                    ) {
+                                        let _ = sender.send(Message::Text(json)).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("Invalid WS command: {e}");
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(_)) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+}
+
+/// Collect a snapshot of all current state for new WebSocket clients.
+async fn collect_status_snapshot<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+) -> Vec<FgsWsMessage> {
+    let mut msgs = Vec::new();
+
+    // Camera stats
+    let stats = state.stats.lock().await;
+    let avg_fps = if stats.fps_samples.is_empty() {
+        0.0
+    } else {
+        stats.fps_samples.iter().sum::<f32>() / stats.fps_samples.len() as f32
+    };
+    let avg_capture_ms = if stats.capture_timing_ms.is_empty() {
+        0.0
+    } else {
+        stats.capture_timing_ms.iter().sum::<f32>() / stats.capture_timing_ms.len() as f32
+    };
+    let avg_analysis_ms = if stats.analysis_timing_ms.is_empty() {
+        0.0
+    } else {
+        stats.analysis_timing_ms.iter().sum::<f32>() / stats.analysis_timing_ms.len() as f32
+    };
+    let avg_render_ms = if stats.render_timing_ms.is_empty() {
+        0.0
+    } else {
+        stats.render_timing_ms.iter().sum::<f32>() / stats.render_timing_ms.len() as f32
+    };
+    let avg_total_pipeline_ms = if stats.total_pipeline_ms.is_empty() {
+        0.0
+    } else {
+        stats.total_pipeline_ms.iter().sum::<f32>() / stats.total_pipeline_ms.len() as f32
+    };
+    msgs.push(FgsWsMessage::CameraStats(CameraStats {
+        total_frames: stats.total_frames,
+        avg_fps,
+        temperatures: stats.last_temperatures.clone(),
+        histogram: stats.histogram.clone(),
+        histogram_mean: stats.histogram_mean,
+        histogram_max: stats.histogram_max,
+        timing: Some(CameraTimingStats {
+            avg_capture_ms,
+            avg_analysis_ms,
+            avg_render_ms,
+            avg_total_pipeline_ms,
+            capture_samples: stats.capture_timing_ms.len(),
+            analysis_samples: stats.analysis_timing_ms.len(),
+        }),
+        device_name: state.camera_name.clone(),
+        width: state.camera_geometry.width() as u32,
+        height: state.camera_geometry.height() as u32,
+    }));
+    drop(stats);
+
+    // Tracking status + settings + export
+    if let Some(ref tracking) = state.tracking {
+        let status = tracking.status.read().await;
+        msgs.push(FgsWsMessage::TrackingStatus(status.clone()));
+        drop(status);
+
+        let settings = tracking.settings.read().await;
+        msgs.push(FgsWsMessage::TrackingSettings(settings.clone()));
+        drop(settings);
+
+        let export_settings = tracking.export_settings.read().await;
+        msgs.push(FgsWsMessage::ExportStatus(ExportStatus {
+            csv_records_written: tracking.export_csv_records.load(Ordering::SeqCst),
+            frames_exported: tracking.export_frames_written.load(Ordering::SeqCst),
+            settings: export_settings.clone(),
+            last_error: tracking.export_last_error.read().await.clone(),
+        }));
+    }
+
+    // FSM status
+    if let Some(ref fsm) = state.fsm {
+        msgs.push(FgsWsMessage::FsmStatus(FsmStatus {
+            connected: true,
+            x_urad: f64::from_bits(fsm.x_urad.load(Ordering::SeqCst)),
+            y_urad: f64::from_bits(fsm.y_urad.load(Ordering::SeqCst)),
+            x_min: fsm.x_range.0,
+            x_max: fsm.x_range.1,
+            y_min: fsm.y_range.0,
+            y_max: fsm.y_range.1,
+            last_error: fsm.last_error.read().await.clone(),
+        }));
+    }
+
+    // Star detection settings
+    let detection = state.star_detection_settings.read().await;
+    msgs.push(FgsWsMessage::DetectionSettings(detection.clone()));
+
+    msgs
+}
+
+async fn ws_status_endpoint<C: CameraInterface + 'static>(
+    State(state): State<Arc<AppState<C>>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| ws_status_handler(socket, state))
+}
+
 pub fn create_router<C: CameraInterface + 'static>(state: Arc<AppState<C>>) -> Router {
     Router::new()
         .route("/", get(camera_status_page::<C>))
         .route("/jpeg", get(jpeg_frame_endpoint::<C>))
-        .route("/ws-stream", get(ws_stream_endpoint::<C>))
+        .route("/ws/frames", get(ws_frames_endpoint::<C>))
         .route("/raw", get(raw_frame_endpoint::<C>))
         .route("/fits", get(fits_frame_endpoint::<C>))
         .route("/annotated", get(annotated_frame_endpoint::<C>))
         .route("/annotated_raw", get(annotated_raw_endpoint::<C>))
         .route("/overlay-svg", get(overlay_svg_endpoint::<C>))
-        .route("/stats", get(stats_endpoint::<C>))
         .route(
             "/zoom",
             post(set_zoom_endpoint::<C>).get(get_zoom_endpoint::<C>),
         )
-        .route("/tracking/status", get(tracking_status_endpoint::<C>))
         .route("/tracking/events", get(tracking_events_endpoint::<C>))
-        .route("/tracking/enable", post(tracking_enable_endpoint::<C>))
-        .route(
-            "/tracking/settings",
-            get(tracking_settings_get_endpoint::<C>).post(tracking_settings_post_endpoint::<C>),
-        )
-        .route(
-            "/tracking/export",
-            get(export_status_endpoint::<C>).post(export_settings_post_endpoint::<C>),
-        )
-        .route("/fsm/status", get(fsm_status_endpoint::<C>))
-        .route("/fsm/move", post(fsm_move_endpoint::<C>))
+        .route("/ws/status", get(ws_status_endpoint::<C>))
         .route("/logs", get(ws_log_endpoint::<C>))
         .fallback(get(serve_fgs_frontend))
         .with_state(state)
@@ -1238,6 +1393,16 @@ pub fn capture_loop_blocking<C: CameraInterface + Send + 'static>(state: Arc<App
             }
         }
 
+        // Publish zoom frame if subscribers and coordinates are set
+        if state_clone.ws_zoom.subscriber_count() > 0 {
+            let center = { *state_clone.ws_zoom_center.read().unwrap() };
+            if let Some((cx, cy)) = center {
+                if let Some(zoom_frame) = encode_zoom_frame(&frame_owned, cx, cy, frame_num) {
+                    state_clone.ws_zoom.publish(zoom_frame);
+                }
+            }
+        }
+
         true
     });
 
@@ -1292,6 +1457,59 @@ pub async fn analysis_loop<C: CameraInterface + Send + 'static>(state: Arc<AppSt
                     if stats.total_pipeline_ms.len() > 100 {
                         stats.total_pipeline_ms.remove(0);
                     }
+
+                    // Publish CameraStats to WebSocket clients
+                    let avg_fps = if stats.fps_samples.is_empty() {
+                        0.0
+                    } else {
+                        stats.fps_samples.iter().sum::<f32>() / stats.fps_samples.len() as f32
+                    };
+                    let avg_capture_ms = if stats.capture_timing_ms.is_empty() {
+                        0.0
+                    } else {
+                        stats.capture_timing_ms.iter().sum::<f32>()
+                            / stats.capture_timing_ms.len() as f32
+                    };
+                    let avg_analysis_ms = if stats.analysis_timing_ms.is_empty() {
+                        0.0
+                    } else {
+                        stats.analysis_timing_ms.iter().sum::<f32>()
+                            / stats.analysis_timing_ms.len() as f32
+                    };
+                    let avg_render_ms = if stats.render_timing_ms.is_empty() {
+                        0.0
+                    } else {
+                        stats.render_timing_ms.iter().sum::<f32>()
+                            / stats.render_timing_ms.len() as f32
+                    };
+                    let avg_total_pipeline_ms = if stats.total_pipeline_ms.is_empty() {
+                        0.0
+                    } else {
+                        stats.total_pipeline_ms.iter().sum::<f32>()
+                            / stats.total_pipeline_ms.len() as f32
+                    };
+                    state
+                        .fgs_status
+                        .publish(FgsWsMessage::CameraStats(CameraStats {
+                            total_frames: stats.total_frames,
+                            avg_fps,
+                            temperatures: stats.last_temperatures.clone(),
+                            histogram: stats.histogram.clone(),
+                            histogram_mean: stats.histogram_mean,
+                            histogram_max: stats.histogram_max,
+                            timing: Some(CameraTimingStats {
+                                avg_capture_ms,
+                                avg_analysis_ms,
+                                avg_render_ms,
+                                avg_total_pipeline_ms,
+                                capture_samples: stats.capture_timing_ms.len(),
+                                analysis_samples: stats.analysis_timing_ms.len(),
+                            }),
+                            device_name: state.camera_name.clone(),
+                            width: state.camera_geometry.width() as u32,
+                            height: state.camera_geometry.height() as u32,
+                        }));
+
                     drop(stats);
 
                     let mut latest = state.latest_annotated.write().await;
@@ -1389,6 +1607,7 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
     });
 
     let ws_stream = Arc::new(WsBroadcaster::new(4));
+    let ws_zoom = Arc::new(WsBroadcaster::new(4));
 
     let state = Arc::new(AppState {
         camera: Arc::new(Mutex::new(camera)),
@@ -1406,7 +1625,11 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         tracking_config: Some(tracking_config),
         fsm,
         ws_stream,
+        ws_zoom,
+        ws_zoom_center: Arc::new(std::sync::RwLock::new(None)),
         log_broadcaster,
+        fgs_status: Arc::new(FgsStatusBroadcaster::new(64)),
+        star_detection_settings: Arc::new(RwLock::new(StarDetectionSettings::default())),
     });
 
     info!("Starting background capture loop with tracking support...");
@@ -1617,6 +1840,7 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
 
                     // Register callback for tracking updates
                     let tracking_cb = tracking_shared_for_cb.clone();
+                    let fgs_status_cb = state_clone.fgs_status.clone();
                     let csv_for_cb = csv_writer.clone();
                     let frame_writer_for_cb = frame_writer.clone();
                     new_fgs.register_callback(move |event| {
@@ -1644,6 +1868,7 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                                     timestamp_nanos: initial_position.timestamp.nanos,
                                 });
                                 status.num_guide_stars = *num_guide_stars;
+                                fgs_status_cb.publish(FgsWsMessage::TrackingStatus(status.clone()));
 
                                 // Publish to SSE broadcast (ignore if no subscribers)
                                 let msg = TrackingMessage::new(
@@ -1675,6 +1900,7 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                                 });
                                 status.total_updates =
                                     tracking_cb.total_updates.load(Ordering::SeqCst);
+                                fgs_status_cb.publish(FgsWsMessage::TrackingStatus(status.clone()));
 
                                 // Publish to SSE broadcast (ignore if no subscribers)
                                 let msg = TrackingMessage::new(
@@ -1715,6 +1941,7 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                                 let mut status = tracking_cb.status.blocking_write();
                                 status.position = None;
                                 status.num_guide_stars = 0;
+                                fgs_status_cb.publish(FgsWsMessage::TrackingStatus(status.clone()));
                             }
                             FgsCallbackEvent::FrameProcessed {
                                 frame_number,
@@ -1776,6 +2003,7 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                             {
                                 let mut status = tracking_for_loop.status.blocking_write();
                                 status.state = convert_fgs_state_to_shared(fgs_instance.state());
+                                state_clone.fgs_status.publish(FgsWsMessage::TrackingStatus(status.clone()));
                             }
 
                             // Handle camera settings changes (ROI)
@@ -1868,6 +2096,16 @@ pub fn capture_loop_with_tracking<C: CameraInterface + Send + 'static>(state: Ar
                         height: frame_owned.nrows() as u32,
                     });
                     last_mjpeg_publish = std::time::Instant::now();
+                }
+            }
+
+            // Publish zoom frame if subscribers and coordinates are set
+            if state_clone.ws_zoom.subscriber_count() > 0 {
+                let center = { *state_clone.ws_zoom_center.read().unwrap() };
+                if let Some((cx, cy)) = center {
+                    if let Some(zoom_frame) = encode_zoom_frame(&frame_owned, cx, cy, frame_num) {
+                        state_clone.ws_zoom.publish(zoom_frame);
+                    }
                 }
             }
 

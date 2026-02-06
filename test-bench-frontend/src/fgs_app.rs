@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 use yew::prelude::*;
 
 use crate::fgs::{
-    api::{calculate_backoff_delay, FgsError, FgsServerClient},
     histogram::render_histogram,
     views::{FsmView, StarDetectionSettingsView, StatsView, TrackingView, ZoomView},
     LogViewer,
@@ -13,8 +13,9 @@ use crate::ws_image_stream::WsImageStream;
 
 pub use shared_wasm::CameraStats;
 pub use shared_wasm::{
-    ExportSettings, ExportStatus, FsmMoveRequest, FsmStatus, StarDetectionSettings,
-    TrackingEnableRequest, TrackingSettings, TrackingState, TrackingStatus,
+    CommandError, ExportSettings, ExportStatus, FgsWsCommand, FgsWsMessage, FsmMoveRequest,
+    FsmStatus, StarDetectionSettings, TrackingEnableRequest, TrackingSettings, TrackingState,
+    TrackingStatus,
 };
 
 /// Time window for sparkline plots in seconds.
@@ -90,12 +91,11 @@ pub struct FgsFrontend {
     stats: Option<CameraStats>,
     show_annotation: bool,
     log_scale_histogram: bool,
-    stats_refresh_handle: Option<gloo_timers::callback::Interval>,
-    tracking_refresh_handle: Option<gloo_timers::callback::Interval>,
-    stats_failure_count: u32,
+    overlay_refresh_handle: Option<gloo_timers::callback::Interval>,
+    ws_connected: bool,
+    ws_command_tx: Option<futures_channel::mpsc::UnboundedSender<String>>,
     // Zoom state
     zoom_center: Option<(u32, u32)>,
-    zoom_auto_update: bool,
     // Tracking state
     tracking_available: bool,
     tracking_status: Option<TrackingStatus>,
@@ -125,56 +125,48 @@ pub struct FgsFrontend {
 }
 
 pub enum Msg {
-    RefreshStats,
+    // WebSocket status messages
+    FgsWs(FgsWsMessage),
+    WsConnected(bool),
+    WsCommandChannelReady(futures_channel::mpsc::UnboundedSender<String>),
+    RefreshOverlay,
     ToggleAnnotation,
     ToggleLogScale,
-    StatsLoaded(CameraStats),
-    StatsError,
-    ResetStatsInterval,
     // Zoom messages
     ImageClicked(i32, i32),
     ClearZoom,
-    ToggleZoomAutoUpdate,
     // Tracking messages
-    RefreshTracking,
-    TrackingStatusLoaded(TrackingStatus),
-    TrackingNotAvailable,
     ToggleTracking,
-    TrackingToggleComplete(TrackingStatus),
-    TrackingToggleFailed,
     // Tracking settings messages
-    TrackingSettingsLoaded(TrackingSettings),
     ToggleTrackingSettings,
     UpdateTrackingSetting(String, f64),
     SaveTrackingSettings,
-    TrackingSettingsSaved(TrackingSettings),
-    TrackingSettingsSaveFailed,
     // Export settings messages
-    ExportStatusLoaded(ExportStatus),
     ToggleExportSettings,
     UpdateExportSetting(String, String),
     ToggleExportBool(String),
     SaveExportSettings,
-    ExportSettingsSaved(ExportSettings),
-    ExportSettingsSaveFailed,
     // FSM messages
-    FsmStatusLoaded(FsmStatus),
-    FsmNotAvailable,
     UpdateFsmTarget(String, f64),
     MoveFsm,
-    FsmMoveComplete(FsmStatus),
-    FsmMoveFailed,
     // Star detection messages
-    StarDetectionSettingsLoaded(StarDetectionSettings),
     ToggleStarDetectionSettings,
     UpdateStarDetectionSetting(String, String),
     SaveStarDetectionSettings,
-    StarDetectionSettingsSaved(StarDetectionSettings),
-    StarDetectionSettingsSaveFailed,
     // SVG overlay message
     OverlaySvgLoaded(String),
     // WebSocket stream frame size changed
     FrameSizeChanged(u32, u32),
+}
+
+impl FgsFrontend {
+    fn send_command(&self, cmd: FgsWsCommand) {
+        if let Some(ref tx) = self.ws_command_tx {
+            if let Ok(json) = serde_json::to_string(&cmd) {
+                let _ = tx.unbounded_send(json);
+            }
+        }
+    }
 }
 
 impl Component for FgsFrontend {
@@ -182,25 +174,20 @@ impl Component for FgsFrontend {
     type Properties = FgsFrontendProps;
 
     fn create(ctx: &Context<Self>) -> Self {
-        let stats_link = ctx.link().clone();
-        let stats_handle = gloo_timers::callback::Interval::new(1000, move || {
-            stats_link.send_message(Msg::RefreshStats);
-        });
-
-        let tracking_link = ctx.link().clone();
-        let tracking_handle = gloo_timers::callback::Interval::new(500, move || {
-            tracking_link.send_message(Msg::RefreshTracking);
+        // Start WebSocket connection for status updates
+        let link = ctx.link().clone();
+        spawn_local(async move {
+            connect_fgs_status_ws("/ws/status".to_string(), link).await;
         });
 
         Self {
             stats: None,
             show_annotation: false,
             log_scale_histogram: false,
-            stats_refresh_handle: Some(stats_handle),
-            tracking_refresh_handle: Some(tracking_handle),
-            stats_failure_count: 0,
+            overlay_refresh_handle: None,
+            ws_connected: false,
+            ws_command_tx: None,
             zoom_center: None,
-            zoom_auto_update: true,
             tracking_available: false,
             tracking_status: None,
             tracking_toggle_pending: false,
@@ -225,57 +212,134 @@ impl Component for FgsFrontend {
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::RefreshStats => {
-                let link = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    match client.get_camera_stats().await {
-                        Ok(stats) => link.send_message(Msg::StatsLoaded(stats)),
-                        Err(_) => link.send_message(Msg::StatsError),
+            Msg::FgsWs(ws_msg) => match ws_msg {
+                FgsWsMessage::CameraStats(stats) => {
+                    self.stats = Some(stats);
+                    true
+                }
+                FgsWsMessage::TrackingStatus(status) => {
+                    self.tracking_available = true;
+                    self.tracking_toggle_pending = false;
+
+                    // Check if we just left Tracking state - clear history
+                    let was_tracking = matches!(
+                        self.tracking_status.as_ref().map(|s| &s.state),
+                        Some(TrackingState::Tracking { .. })
+                    );
+                    let is_tracking = matches!(&status.state, TrackingState::Tracking { .. });
+
+                    if was_tracking && !is_tracking {
+                        self.tracking_history.clear();
                     }
-                });
+
+                    if let Some(ref pos) = status.position {
+                        self.tracking_history.push(
+                            pos.x,
+                            pos.y,
+                            pos.snr,
+                            pos.timestamp_sec,
+                            pos.timestamp_nanos,
+                        );
+                    }
+                    self.tracking_status = Some(status);
+                    true
+                }
+                FgsWsMessage::TrackingSettings(settings) => {
+                    self.tracking_settings_pending = false;
+                    self.tracking_settings = Some(settings);
+                    true
+                }
+                FgsWsMessage::ExportStatus(status) => {
+                    self.export_settings_pending = false;
+                    self.export_status = Some(status);
+                    true
+                }
+                FgsWsMessage::FsmStatus(status) => {
+                    self.fsm_move_pending = false;
+                    if self.fsm_status.is_none() {
+                        self.fsm_target_x = status.x_urad;
+                        self.fsm_target_y = status.y_urad;
+                    }
+                    self.fsm_status = Some(status);
+                    true
+                }
+                FgsWsMessage::DetectionSettings(settings) => {
+                    self.star_detection_pending = false;
+                    if !settings.enabled {
+                        self.overlay_svg = None;
+                    }
+                    self.star_detection_settings = Some(settings);
+                    true
+                }
+                FgsWsMessage::CommandError(err) => {
+                    match err.command.as_str() {
+                        "SetTrackingEnabled" => self.tracking_toggle_pending = false,
+                        "SetTrackingSettings" => self.tracking_settings_pending = false,
+                        "SetDetectionSettings" => self.star_detection_pending = false,
+                        "SetExportSettings" => self.export_settings_pending = false,
+                        "MoveFsm" => self.fsm_move_pending = false,
+                        _ => {}
+                    }
+                    web_sys::console::error_1(
+                        &format!("Command error ({}): {}", err.command, err.message).into(),
+                    );
+                    true
+                }
+            },
+            Msg::WsConnected(connected) => {
+                self.ws_connected = connected;
+                if !connected {
+                    self.ws_command_tx = None;
+                    // Reconnect after a delay
+                    let link = ctx.link().clone();
+                    gloo_timers::callback::Timeout::new(2000, move || {
+                        spawn_local(async move {
+                            connect_fgs_status_ws("/ws/status".to_string(), link).await;
+                        });
+                    })
+                    .forget();
+                }
                 false
             }
-            Msg::StatsLoaded(stats) => {
-                self.stats = Some(stats);
-                self.stats_failure_count = 0;
-                ctx.link().send_message(Msg::ResetStatsInterval);
-                true
+            Msg::WsCommandChannelReady(tx) => {
+                self.ws_command_tx = Some(tx);
+                false
             }
-            Msg::ToggleAnnotation => {
-                self.show_annotation = !self.show_annotation;
+            Msg::RefreshOverlay => {
                 if self.show_annotation {
-                    // Start polling for SVG overlay
                     let link = ctx.link().clone();
-                    wasm_bindgen_futures::spawn_local(async move {
+                    spawn_local(async move {
                         if let Some(svg) = crate::fgs::api::fetch_text("/overlay-svg").await {
                             link.send_message(Msg::OverlaySvgLoaded(svg));
                         }
                     });
+                }
+                false
+            }
+            Msg::ToggleAnnotation => {
+                self.show_annotation = !self.show_annotation;
+                if self.show_annotation {
+                    // Start overlay polling timer
+                    let link = ctx.link().clone();
+                    spawn_local(async move {
+                        if let Some(svg) = crate::fgs::api::fetch_text("/overlay-svg").await {
+                            link.send_message(Msg::OverlaySvgLoaded(svg));
+                        }
+                    });
+                    let link2 = ctx.link().clone();
+                    self.overlay_refresh_handle =
+                        Some(gloo_timers::callback::Interval::new(500, move || {
+                            link2.send_message(Msg::RefreshOverlay);
+                        }));
                 } else {
-                    // Clear the overlay when disabled
                     self.overlay_svg = None;
+                    self.overlay_refresh_handle = None;
                 }
                 true
             }
             Msg::ToggleLogScale => {
                 self.log_scale_histogram = !self.log_scale_histogram;
                 true
-            }
-            Msg::StatsError => {
-                self.stats_failure_count += 1;
-                ctx.link().send_message(Msg::ResetStatsInterval);
-                false
-            }
-            Msg::ResetStatsInterval => {
-                let delay = calculate_backoff_delay(self.stats_failure_count, 1000, 30000);
-                let link = ctx.link().clone();
-                self.stats_refresh_handle = None;
-                self.stats_refresh_handle =
-                    Some(gloo_timers::callback::Interval::new(delay, move || {
-                        link.send_message(Msg::RefreshStats);
-                    }));
-                false
             }
             Msg::ImageClicked(x, y) => {
                 if let Some(window) = web_sys::window() {
@@ -305,143 +369,19 @@ impl Component for FgsFrontend {
                 self.zoom_center = None;
                 true
             }
-            Msg::ToggleZoomAutoUpdate => {
-                self.zoom_auto_update = !self.zoom_auto_update;
-                true
-            }
-            Msg::RefreshTracking => {
-                let link = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    match client.get_tracking_status().await {
-                        Ok(status) => link.send_message(Msg::TrackingStatusLoaded(status)),
-                        Err(FgsError::ServerError { status: 404, .. }) => {
-                            link.send_message(Msg::TrackingNotAvailable);
-                        }
-                        Err(_) => {}
-                    }
-                });
-
-                // Also fetch settings if we don't have them yet
-                if self.tracking_settings.is_none() {
-                    let link2 = ctx.link().clone();
-                    let client = FgsServerClient::for_web();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Ok(settings) = client.get_tracking_settings().await {
-                            link2.send_message(Msg::TrackingSettingsLoaded(settings));
-                        }
-                    });
-                }
-
-                // Also fetch export status
-                let link3 = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Ok(status) = client.get_export_status().await {
-                        link3.send_message(Msg::ExportStatusLoaded(status));
-                    }
-                });
-
-                // Also fetch FSM status
-                let link4 = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    match client.get_fsm_status().await {
-                        Ok(status) => link4.send_message(Msg::FsmStatusLoaded(status)),
-                        Err(FgsError::ServerError { status: 404, .. }) => {
-                            link4.send_message(Msg::FsmNotAvailable);
-                        }
-                        Err(_) => {}
-                    }
-                });
-
-                // Fetch star detection settings if we don't have them yet
-                if self.star_detection_settings.is_none() {
-                    let link5 = ctx.link().clone();
-                    let client = FgsServerClient::for_web();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Ok(settings) = client.get_star_detection_settings().await {
-                            link5.send_message(Msg::StarDetectionSettingsLoaded(settings));
-                        }
-                    });
-                }
-
-                // Fetch SVG overlay if enabled
-                if self.show_annotation {
-                    let link6 = ctx.link().clone();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Some(svg) = crate::fgs::api::fetch_text("/overlay-svg").await {
-                            link6.send_message(Msg::OverlaySvgLoaded(svg));
-                        }
-                    });
-                }
-                false
-            }
-            Msg::TrackingStatusLoaded(status) => {
-                self.tracking_available = true;
-
-                // Check if we just left the Tracking state - if so, clear history
-                let was_tracking = matches!(
-                    self.tracking_status.as_ref().map(|s| &s.state),
-                    Some(TrackingState::Tracking { .. })
-                );
-                let is_tracking = matches!(&status.state, TrackingState::Tracking { .. });
-
-                if was_tracking && !is_tracking {
-                    self.tracking_history.clear();
-                }
-
-                // Update position and SNR history if we have a position
-                if let Some(ref pos) = status.position {
-                    self.tracking_history.push(
-                        pos.x,
-                        pos.y,
-                        pos.snr,
-                        pos.timestamp_sec,
-                        pos.timestamp_nanos,
-                    );
-                }
-                self.tracking_status = Some(status);
-                true
-            }
-            Msg::TrackingNotAvailable => {
-                self.tracking_available = false;
-                self.tracking_status = None;
-                false
-            }
             Msg::ToggleTracking => {
                 if self.tracking_toggle_pending {
                     return false;
                 }
-                self.tracking_toggle_pending = true;
-
                 let new_enabled = !self
                     .tracking_status
                     .as_ref()
                     .map(|s| s.enabled)
                     .unwrap_or(false);
-
-                let link = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    match client.set_tracking_enabled(new_enabled).await {
-                        Ok(status) => link.send_message(Msg::TrackingToggleComplete(status)),
-                        Err(_) => link.send_message(Msg::TrackingToggleFailed),
-                    }
-                });
-                true
-            }
-            Msg::TrackingToggleComplete(status) => {
-                self.tracking_toggle_pending = false;
-                self.tracking_status = Some(status);
-                true
-            }
-            Msg::TrackingToggleFailed => {
-                self.tracking_toggle_pending = false;
-                true
-            }
-            Msg::TrackingSettingsLoaded(settings) => {
-                self.tracking_settings = Some(settings);
+                self.tracking_toggle_pending = true;
+                self.send_command(FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest {
+                    enabled: new_enabled,
+                }));
                 true
             }
             Msg::ToggleTrackingSettings => {
@@ -467,30 +407,9 @@ impl Component for FgsFrontend {
                     return false;
                 }
                 self.tracking_settings_pending = true;
-
                 if let Some(settings) = self.tracking_settings.clone() {
-                    let link = ctx.link().clone();
-                    let client = FgsServerClient::for_web();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match client.set_tracking_settings(&settings).await {
-                            Ok(()) => link.send_message(Msg::TrackingSettingsSaved(settings)),
-                            Err(_) => link.send_message(Msg::TrackingSettingsSaveFailed),
-                        }
-                    });
+                    self.send_command(FgsWsCommand::SetTrackingSettings(settings));
                 }
-                true
-            }
-            Msg::TrackingSettingsSaved(settings) => {
-                self.tracking_settings_pending = false;
-                self.tracking_settings = Some(settings);
-                true
-            }
-            Msg::TrackingSettingsSaveFailed => {
-                self.tracking_settings_pending = false;
-                true
-            }
-            Msg::ExportStatusLoaded(status) => {
-                self.export_status = Some(status);
                 true
             }
             Msg::ToggleExportSettings => {
@@ -524,43 +443,10 @@ impl Component for FgsFrontend {
                     return false;
                 }
                 self.export_settings_pending = true;
-
                 if let Some(ref status) = self.export_status {
-                    let settings = status.settings.clone();
-                    let link = ctx.link().clone();
-                    let client = FgsServerClient::for_web();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match client.set_export_settings(&settings).await {
-                            Ok(()) => link.send_message(Msg::ExportSettingsSaved(settings)),
-                            Err(_) => link.send_message(Msg::ExportSettingsSaveFailed),
-                        }
-                    });
+                    self.send_command(FgsWsCommand::SetExportSettings(status.settings.clone()));
                 }
                 true
-            }
-            Msg::ExportSettingsSaved(settings) => {
-                self.export_settings_pending = false;
-                if let Some(ref mut status) = self.export_status {
-                    status.settings = settings;
-                }
-                true
-            }
-            Msg::ExportSettingsSaveFailed => {
-                self.export_settings_pending = false;
-                true
-            }
-            Msg::FsmStatusLoaded(status) => {
-                // Initialize target positions if this is first time getting status
-                if self.fsm_status.is_none() {
-                    self.fsm_target_x = status.x_urad;
-                    self.fsm_target_y = status.y_urad;
-                }
-                self.fsm_status = Some(status);
-                true
-            }
-            Msg::FsmNotAvailable => {
-                self.fsm_status = None;
-                false
             }
             Msg::UpdateFsmTarget(axis, value) => {
                 match axis.as_str() {
@@ -575,41 +461,13 @@ impl Component for FgsFrontend {
                     return false;
                 }
                 self.fsm_move_pending = true;
-
-                let x = self.fsm_target_x;
-                let y = self.fsm_target_y;
-
-                let link = ctx.link().clone();
-                let client = FgsServerClient::for_web();
-                wasm_bindgen_futures::spawn_local(async move {
-                    match client.move_fsm(x, y).await {
-                        Ok(()) => {
-                            // Fetch updated status after move
-                            if let Ok(status) = client.get_fsm_status().await {
-                                link.send_message(Msg::FsmMoveComplete(status));
-                            } else {
-                                link.send_message(Msg::FsmMoveFailed);
-                            }
-                        }
-                        Err(_) => link.send_message(Msg::FsmMoveFailed),
-                    }
-                });
-                true
-            }
-            Msg::FsmMoveComplete(status) => {
-                self.fsm_move_pending = false;
-                self.fsm_status = Some(status);
-                true
-            }
-            Msg::FsmMoveFailed => {
-                self.fsm_move_pending = false;
+                self.send_command(FgsWsCommand::MoveFsm(FsmMoveRequest {
+                    x_urad: self.fsm_target_x,
+                    y_urad: self.fsm_target_y,
+                }));
                 true
             }
             // Star detection settings messages
-            Msg::StarDetectionSettingsLoaded(settings) => {
-                self.star_detection_settings = Some(settings);
-                true
-            }
             Msg::ToggleStarDetectionSettings => {
                 self.show_star_detection_settings = !self.show_star_detection_settings;
                 true
@@ -648,30 +506,9 @@ impl Component for FgsFrontend {
                     return false;
                 }
                 self.star_detection_pending = true;
-
                 if let Some(settings) = self.star_detection_settings.clone() {
-                    let link = ctx.link().clone();
-                    let client = FgsServerClient::for_web();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match client.set_star_detection_settings(&settings).await {
-                            Ok(saved) => link.send_message(Msg::StarDetectionSettingsSaved(saved)),
-                            Err(_) => link.send_message(Msg::StarDetectionSettingsSaveFailed),
-                        }
-                    });
+                    self.send_command(FgsWsCommand::SetDetectionSettings(settings));
                 }
-                true
-            }
-            Msg::StarDetectionSettingsSaved(settings) => {
-                self.star_detection_pending = false;
-                // Clear overlay if detection was disabled
-                if !settings.enabled {
-                    self.overlay_svg = None;
-                }
-                self.star_detection_settings = Some(settings);
-                true
-            }
-            Msg::StarDetectionSettingsSaveFailed => {
-                self.star_detection_pending = false;
                 true
             }
             Msg::OverlaySvgLoaded(svg) => {
@@ -806,10 +643,7 @@ impl Component for FgsFrontend {
                     <h2 style="margin-top: 30px;">{"Zoom Region"}</h2>
                     <ZoomView
                         zoom_center={self.zoom_center}
-                        auto_update={self.zoom_auto_update}
                         on_clear={ctx.link().callback(|_| Msg::ClearZoom)}
-                        on_toggle_auto={ctx.link().callback(|_| Msg::ToggleZoomAutoUpdate)}
-                        use_annotated={self.star_detection_settings.as_ref().map(|s| s.enabled).unwrap_or(false)}
                     />
 
                     <h2 style="margin-top: 30px;">{"Histogram"}</h2>
@@ -835,8 +669,7 @@ impl Component for FgsFrontend {
     }
 
     fn destroy(&mut self, _ctx: &Context<Self>) {
-        self.stats_refresh_handle = None;
-        self.tracking_refresh_handle = None;
+        self.overlay_refresh_handle = None;
     }
 
     fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
@@ -849,6 +682,74 @@ impl Component for FgsFrontend {
                 stats.histogram_max,
                 self.log_scale_histogram,
             );
+        }
+    }
+}
+
+/// Connect to the FGS status WebSocket for bidirectional communication.
+///
+/// Reads `FgsWsMessage` status updates from the server and forwards them to
+/// the component. Provides a command channel for sending `FgsWsCommand` messages.
+async fn connect_fgs_status_ws(url: String, link: yew::html::Scope<FgsFrontend>) {
+    use futures_util::{SinkExt, StreamExt};
+    use gloo_net::websocket::{futures::WebSocket, Message};
+
+    let ws_url = if url.starts_with("ws://") || url.starts_with("wss://") {
+        url
+    } else {
+        let window = web_sys::window().expect("no window");
+        let location = window.location();
+        let protocol = if location.protocol().unwrap_or_default() == "https:" {
+            "wss:"
+        } else {
+            "ws:"
+        };
+        let host = location.host().unwrap_or_default();
+        format!("{protocol}//{host}{url}")
+    };
+
+    match WebSocket::open(&ws_url) {
+        Ok(ws) => {
+            link.send_message(Msg::WsConnected(true));
+
+            let (mut write, mut read) = ws.split();
+            let (cmd_tx, mut cmd_rx) = futures_channel::mpsc::unbounded::<String>();
+
+            link.send_message(Msg::WsCommandChannelReady(cmd_tx));
+
+            // Spawn write loop: forwards command channel messages to WebSocket
+            spawn_local(async move {
+                while let Some(text) = cmd_rx.next().await {
+                    if write.send(Message::Text(text)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(fgs_msg) = serde_json::from_str::<FgsWsMessage>(&text) {
+                            link.send_message(Msg::FgsWs(fgs_msg));
+                        }
+                    }
+                    Ok(Message::Bytes(_)) => {}
+                    Err(e) => {
+                        web_sys::console::log_1(
+                            &format!("FGS status WebSocket error: {e:?}").into(),
+                        );
+                        break;
+                    }
+                }
+            }
+
+            link.send_message(Msg::WsConnected(false));
+        }
+        Err(e) => {
+            web_sys::console::log_1(
+                &format!("Failed to connect FGS status WebSocket: {e:?}").into(),
+            );
+            link.send_message(Msg::WsConnected(false));
         }
     }
 }

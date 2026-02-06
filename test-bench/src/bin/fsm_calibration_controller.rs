@@ -9,11 +9,12 @@
 
 use clap::Parser;
 use hardware::pi::FsmArgs;
-use shared_wasm::{CalibrateServerClient, FgsServerClient};
+use shared_wasm::{CalibrateServerClient, FgsWsCommand, TrackingEnableRequest};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
+use test_bench::fgs_ws_client::FgsWsClient;
 use test_bench::fsm_calibration::{
     CalibrationRawData, FsmAxisCalibration, FsmCalibrationConfig, FsmTransform,
     FsmTransformFromCalibration, StaticCalibrationError, StaticStepExecutor,
@@ -187,8 +188,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     info!("");
 
-    // Create FGS client for tracking control
-    let fgs_client = FgsServerClient::new(&args.fgs_server_url);
+    // Build WebSocket URL for FGS status endpoint
+    let ws_status_url = {
+        let base = args.fgs_server_url.trim_end_matches('/');
+        let ws_base = if base.starts_with("https://") {
+            base.replacen("https://", "wss://", 1)
+        } else {
+            base.replacen("http://", "ws://", 1)
+        };
+        format!("{ws_base}/ws/status")
+    };
 
     // Create calibrate client and set up display pattern
     let calibrate_client = CalibrateServerClient::new(&args.calibrate_serve_url);
@@ -200,12 +209,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         e.to_string()
     })?;
 
-    // Enable tracking after setting the pattern
+    // Connect to FGS and enable tracking
+    info!("Connecting to FGS WebSocket at {ws_status_url}...");
+    let mut fgs = FgsWsClient::connect(&ws_status_url)
+        .await
+        .map_err(|e| format!("FGS WS connect: {e}"))?;
+
     info!("Enabling tracking...");
-    fgs_client.set_tracking_enabled(true).await.map_err(|e| {
-        error!("Failed to enable tracking: {e}");
-        e.to_string()
-    })?;
+    fgs.send_command(FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest {
+        enabled: true,
+    }))
+    .await
+    .map_err(|e| format!("Failed to enable tracking: {e}"))?;
 
     // Get display info for logging
     let display_info = calibrate_client.get_display_info().await.map_err(|e| {
@@ -252,8 +267,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Connect to tracking stream using the tracking events URL from fgs_client
-    let tracking_events_url = fgs_client.tracking_events_url();
+    // Connect to tracking stream
+    let tracking_events_url = format!(
+        "{}/tracking/events",
+        args.fgs_server_url.trim_end_matches('/')
+    );
     info!(
         "Connecting to tracking stream at {}...",
         tracking_events_url
@@ -296,7 +314,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run calibration
     let mut executor =
-        StaticStepExecutor::new(fsm, collector, config, fgs_client, calibrate_client.clone());
+        StaticStepExecutor::new(fsm, collector, config, fgs, calibrate_client.clone());
     let calibration_result = executor.run_calibration().await;
 
     // Turn off display when calibration finishes (success or failure)

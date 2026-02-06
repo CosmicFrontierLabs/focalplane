@@ -317,50 +317,25 @@ pub fn stats_view(props: &StatsViewProps) -> Html {
 #[derive(Properties, PartialEq)]
 pub struct ZoomViewProps {
     pub zoom_center: Option<(u32, u32)>,
-    pub auto_update: bool,
     pub on_clear: Callback<()>,
-    pub on_toggle_auto: Callback<()>,
-    #[prop_or_default]
-    pub use_annotated: bool,
 }
 
-/// Render the zoom region panel.
+/// Zoom region view using WsImageStream with query-param coordinates.
+///
+/// When coordinates change, the `ws_path` prop updates (e.g., `/ws/frames?zoom=320,240`)
+/// and `WsImageStream` reconnects to the new URL automatically.
 #[function_component(ZoomView)]
 pub fn zoom_view(props: &ZoomViewProps) -> Html {
-    let zoom_size = 128;
-    let endpoint = if props.use_annotated {
-        "/zoom-annotated"
-    } else {
-        "/zoom"
-    };
-    let zoom_url = if let Some((x, y)) = props.zoom_center {
-        if props.auto_update {
-            format!(
-                "{}?x={}&y={}&size={}&t={}",
-                endpoint,
-                x,
-                y,
-                zoom_size,
-                js_sys::Date::now()
-            )
-        } else {
-            format!("{endpoint}?x={x}&y={y}&size={zoom_size}")
-        }
-    } else {
-        String::new()
-    };
-
     let on_clear = props.on_clear.clone();
-    let on_toggle_auto = props.on_toggle_auto.clone();
 
     html! {
         <div id="zoom-container">
             if let Some((x, y)) = props.zoom_center {
-                <img
-                    id="zoom-canvas"
-                    src={zoom_url}
-                    alt="Zoomed Region"
-                    style="width: 100%; border: 1px solid #00ff00; background: #111; image-rendering: pixelated;"
+                <crate::ws_image_stream::WsImageStream
+                    ws_path={format!("/ws/frames?zoom={x},{y}")}
+                    id={"zoom-canvas".to_string()}
+                    class={"".to_string()}
+                    style={"width: 100%; border: 1px solid #00ff00; background: #111; image-rendering: pixelated;".to_string()}
                 />
                 <div id="zoom-info" style="font-size: 0.7em; color: #00aa00; margin-top: 5px;">
                     {format!("Center: ({}, {})", x, y)}
@@ -372,14 +347,6 @@ pub fn zoom_view(props: &ZoomViewProps) -> Html {
                     >
                         {"Clear Zoom"}
                     </button>
-                    <label style="font-size: 0.8em; margin-left: 10px; cursor: pointer;">
-                        <input
-                            type="checkbox"
-                            checked={props.auto_update}
-                            onchange={Callback::from(move |_| on_toggle_auto.emit(()))}
-                        />
-                        {" Auto-update"}
-                    </label>
                 </div>
             } else {
                 <div style="width: 100%; height: 150px; border: 1px solid #333; background: #111; display: flex; align-items: center; justify-content: center;">

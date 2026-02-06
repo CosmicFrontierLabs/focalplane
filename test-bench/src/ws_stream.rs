@@ -149,8 +149,7 @@ pub async fn ws_stream_handler(ws: WebSocket, broadcaster: Arc<WsBroadcaster>) {
             match msg {
                 Ok(Message::Close(_)) => break,
                 Ok(Message::Ping(data)) => {
-                    // Pong is handled automatically by tungstenite
-                    tracing::debug!("Received ping: {:?}", data);
+                    tracing::trace!("Received ping: {:?}", data);
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -202,7 +201,7 @@ pub async fn ws_stream_handler(ws: WebSocket, broadcaster: Arc<WsBroadcaster>) {
 
 /// Create a WebSocket upgrade handler for the image stream endpoint.
 ///
-/// Use this to create the route handler - use `.route("/ws-stream", get(ws_stream_endpoint))`
+/// Use this to create the route handler - use `.route("/ws/frames", get(ws_stream_endpoint))`
 pub async fn ws_stream_endpoint<T: Send + Sync + 'static>(
     State(broadcaster): State<Arc<WsBroadcaster>>,
     ws: WebSocketUpgrade,

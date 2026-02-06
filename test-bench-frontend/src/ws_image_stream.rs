@@ -4,6 +4,9 @@
 //! over WebSocket with proper connection lifecycle handling. When the connection
 //! closes (e.g., due to frame size change), the component automatically reconnects.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gloo_net::websocket::{futures::WebSocket, Message};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -15,10 +18,10 @@ use futures_util::StreamExt;
 /// Props for the WebSocket image stream component.
 #[derive(Properties, PartialEq)]
 pub struct WsImageStreamProps {
-    /// Base URL for the WebSocket connection (e.g., "ws://localhost:3000")
-    /// If not provided, derives from current page URL
-    #[prop_or_default]
-    pub base_url: Option<String>,
+    /// WebSocket path (e.g., "/ws/frames" or "/ws/frames?zoom=320,240").
+    /// Combined with the current page host to form the full URL.
+    #[prop_or("/ws/frames".into())]
+    pub ws_path: AttrValue,
 
     /// CSS ID for the img element
     #[prop_or("camera-frame".to_string())]
@@ -59,6 +62,8 @@ pub struct WsImageStream {
     connected: bool,
     /// Reconnect attempts
     reconnect_count: u32,
+    /// Shared flag to signal the current WebSocket task to shut down.
+    ws_shutdown: Rc<Cell<bool>>,
 }
 
 pub enum Msg {
@@ -81,15 +86,29 @@ impl Component for WsImageStream {
     type Properties = WsImageStreamProps;
 
     fn create(ctx: &Context<Self>) -> Self {
-        // Start WebSocket connection
-        start_ws_connection(ctx);
+        let shutdown = Rc::new(Cell::new(false));
+        let ws_path = ctx.props().ws_path.to_string();
+        start_ws_connection(ctx.link(), &ws_path, shutdown.clone());
 
         Self {
             current_blob_url: None,
             frame_size: None,
             connected: false,
             reconnect_count: 0,
+            ws_shutdown: shutdown,
         }
+    }
+
+    fn changed(&mut self, ctx: &Context<Self>, old_props: &Self::Properties) -> bool {
+        if ctx.props().ws_path != old_props.ws_path {
+            self.ws_shutdown.set(true);
+            let shutdown = Rc::new(Cell::new(false));
+            self.ws_shutdown = shutdown.clone();
+            self.reconnect_count = 0;
+            let ws_path = ctx.props().ws_path.to_string();
+            start_ws_connection(ctx.link(), &ws_path, shutdown);
+        }
+        true
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -136,17 +155,18 @@ impl Component for WsImageStream {
                 self.reconnect_count += 1;
 
                 let link = ctx.link().clone();
+                let ws_path = ctx.props().ws_path.to_string();
+                let shutdown = self.ws_shutdown.clone();
                 gloo_timers::callback::Timeout::new(delay, move || {
-                    start_ws_connection_with_link(&link);
+                    if !shutdown.get() {
+                        start_ws_connection(&link, &ws_path, shutdown);
+                    }
                 })
                 .forget();
 
                 false
             }
-            Msg::Error(_e) => {
-                // Error logged during connection handling
-                false
-            }
+            Msg::Error(_e) => false,
         }
     }
 
@@ -202,7 +222,7 @@ impl Component for WsImageStream {
     }
 
     fn destroy(&mut self, _ctx: &Context<Self>) {
-        // Clean up blob URL
+        self.ws_shutdown.set(true);
         if let Some(url) = self.current_blob_url.take() {
             let _ = Url::revoke_object_url(&url);
         }
@@ -217,43 +237,33 @@ fn calculate_reconnect_delay(attempt: u32) -> u32 {
     delay.min(max)
 }
 
-/// Get WebSocket URL based on current page location.
-fn get_ws_url(base_url: &Option<String>) -> String {
-    if let Some(base) = base_url {
-        format!("{base}/ws-stream")
-    } else {
-        let window = web_sys::window().unwrap();
-        let location = window.location();
-        let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
-        let host = location
-            .host()
-            .unwrap_or_else(|_| "localhost:3000".to_string());
+/// Build a full WebSocket URL from a path like "/ws/frames".
+fn build_ws_url(ws_path: &str) -> String {
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
+    let host = location
+        .host()
+        .unwrap_or_else(|_| "localhost:3000".to_string());
 
-        let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
-        format!("{ws_protocol}//{host}/ws-stream")
-    }
+    let ws_protocol = if protocol == "https:" { "wss:" } else { "ws:" };
+    format!("{ws_protocol}//{host}{ws_path}")
 }
 
-/// Start WebSocket connection from component context.
-fn start_ws_connection(ctx: &Context<WsImageStream>) {
-    start_ws_connection_with_link(ctx.link());
-}
-
-/// Start WebSocket connection with a link (for reconnection from timeout).
-fn start_ws_connection_with_link(link: &html::Scope<WsImageStream>) {
+/// Start WebSocket connection for receiving binary image frames.
+fn start_ws_connection(link: &html::Scope<WsImageStream>, ws_path: &str, shutdown: Rc<Cell<bool>>) {
     let link = link.clone();
-    let base_url = None; // Could get from link props if needed
+    let url = build_ws_url(ws_path);
 
     spawn_local(async move {
-        let url = get_ws_url(&base_url);
-        // Connecting to WebSocket at url
-
         match WebSocket::open(&url) {
             Ok(mut ws) => {
                 link.send_message(Msg::Connected);
 
-                // Read messages from the WebSocket stream
                 while let Some(msg) = ws.next().await {
+                    if shutdown.get() {
+                        break;
+                    }
                     match msg {
                         Ok(Message::Bytes(data)) => {
                             // Parse binary frame: width(4) + height(4) + frame_num(8) + jpeg
@@ -264,7 +274,6 @@ fn start_ws_connection_with_link(link: &html::Scope<WsImageStream>) {
                                     u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
                                 let jpeg_data = &data[16..];
 
-                                // Create blob URL for the JPEG data
                                 match create_blob_url(jpeg_data) {
                                     Ok(blob_url) => {
                                         link.send_message(Msg::FrameReceived {
@@ -281,9 +290,7 @@ fn start_ws_connection_with_link(link: &html::Scope<WsImageStream>) {
                                 }
                             }
                         }
-                        Ok(Message::Text(_)) => {
-                            // Ignore text messages
-                        }
+                        Ok(Message::Text(_)) => {}
                         Err(e) => {
                             link.send_message(Msg::Error(format!("WebSocket error: {e:?}")));
                             break;
@@ -291,12 +298,15 @@ fn start_ws_connection_with_link(link: &html::Scope<WsImageStream>) {
                     }
                 }
 
-                // Connection closed
-                link.send_message(Msg::Disconnected);
+                if !shutdown.get() {
+                    link.send_message(Msg::Disconnected);
+                }
             }
             Err(e) => {
                 link.send_message(Msg::Error(format!("Failed to connect: {e:?}")));
-                link.send_message(Msg::Disconnected);
+                if !shutdown.get() {
+                    link.send_message(Msg::Disconnected);
+                }
             }
         }
     });

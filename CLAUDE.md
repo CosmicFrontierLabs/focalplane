@@ -145,31 +145,31 @@ gh run view <run-id> --json artifacts
 gh run download <run-id> -n arm64-binaries
 ```
 
-### Remote Build Scripts
-Build on cfl-test-bench (fast ARM64 server) and deploy binaries to target devices:
+### Deploying Servers (Preferred Method)
+**Always use the deploy scripts** — they build the WASM frontend first, then the backend binary, and restart the service. Using `build-remote.sh` directly skips the frontend build and deploys stale WASM.
+
 ```bash
-# Build and run on cfl-test-bench itself
-./scripts/build-remote.sh --package test-bench --binary calibrate_serve --test-bench --features sdl2
+# Deploy fgs_server to NSV (orin-005) — builds frontend + backend + restarts
+./scripts/deploy-fgs.sh
 
-# Build on cfl-test-bench, deploy to Neutralino (orin-005)
-./scripts/build-remote.sh --package test-bench --binary fgs_server --neut
+# Deploy calibrate_serve to cfl-test-bench — builds frontend + backend + restarts
+./scripts/deploy-calibrate-test-bench.sh
 
-# Build on cfl-test-bench, deploy to NSV (orin-005)
-./scripts/build-remote.sh --package test-bench --binary fgs_server --nsv
-
-# Build and deploy, then run immediately
-./scripts/build-remote.sh --package test-bench --binary fgs_server --neut --run './fgs_server'
+# First-time setup (installs systemd service, port redirect)
+./scripts/deploy-fgs.sh --setup
+./scripts/deploy-calibrate-test-bench.sh --setup
 ```
 
-### Deploy Scripts
-```bash
-# Deploy calibrate_serve to cfl-test-bench
-./scripts/deploy-calibrate-test-bench.sh           # Update only
-./scripts/deploy-calibrate-test-bench.sh --setup   # Full setup with systemd service
+### Low-Level Build Script (Backend Only)
+`build-remote.sh` builds the Rust binary on cfl-test-bench and deploys it. **It does NOT build WASM frontends.** Only use this when you know the frontend hasn't changed, or when you've already run `./scripts/build-yew-frontends.sh` manually.
 
-# Deploy fgs_server to Orin or Neutralino
-./scripts/deploy-fgs-orin.sh
-./scripts/deploy-fgs-neut.sh
+```bash
+# Backend-only build+deploy (no frontend rebuild)
+./scripts/build-remote.sh --package test-bench --binary fgs_server --nsv
+./scripts/build-remote.sh --package test-bench --binary calibrate_serve --test-bench --features sdl2
+
+# Build frontend WASM manually (required before build-remote.sh if frontend changed)
+./scripts/build-yew-frontends.sh
 ```
 
 ## Acronyms

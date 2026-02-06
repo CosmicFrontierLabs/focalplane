@@ -17,6 +17,7 @@ path = "src/fgs_main.rs"
 
 [dependencies]
 anyhow = "1.0"
+futures-channel = "0.3"
 futures-util = "0.3"
 gloo-net = { version = "0.6", features = ["websocket"] }
 gloo-timers = { version = "0.3", features = ["futures"] }

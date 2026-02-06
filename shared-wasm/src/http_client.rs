@@ -74,36 +74,6 @@ mod platform {
                 .map_err(|e| HttpClientError::Parse(e.to_string()))
         }
 
-        pub async fn post<T: Serialize, R: DeserializeOwned>(
-            &self,
-            path: &str,
-            body: &T,
-        ) -> Result<R, HttpClientError> {
-            use gloo_net::http::Request;
-
-            let url = format!("{}{}", self.base_url, path);
-            let response = Request::post(&url)
-                .json(body)
-                .map_err(|e| HttpClientError::Parse(e.to_string()))?
-                .send()
-                .await?;
-
-            if !response.ok() {
-                return Err(HttpClientError::ServerError {
-                    status: response.status(),
-                    message: response
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| "Unknown error".to_string()),
-                });
-            }
-
-            response
-                .json::<R>()
-                .await
-                .map_err(|e| HttpClientError::Parse(e.to_string()))
-        }
-
         pub async fn post_no_response<T: Serialize>(
             &self,
             path: &str,
@@ -185,32 +155,6 @@ mod platform {
 
             response
                 .json::<T>()
-                .await
-                .map_err(|e| HttpClientError::Parse(e.to_string()))
-        }
-
-        pub async fn post<T: Serialize, R: DeserializeOwned>(
-            &self,
-            path: &str,
-            body: &T,
-        ) -> Result<R, HttpClientError> {
-            let url = format!("{}{}", self.base_url, path);
-            let response = self.client.post(&url).json(body).send().await?;
-
-            let status = response.status();
-            if !status.is_success() {
-                let message = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(HttpClientError::ServerError {
-                    status: status.as_u16(),
-                    message,
-                });
-            }
-
-            response
-                .json::<R>()
                 .await
                 .map_err(|e| HttpClientError::Parse(e.to_string()))
         }
