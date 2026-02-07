@@ -258,6 +258,9 @@ pub struct DisplayConfig {
     pub size: PixelShape,
     pub display_index: u32,
     pub show_fps: bool,
+    /// When true, ignore keyboard quit shortcuts and window close events.
+    /// The only way to stop the display is via SIGTERM (Ctrl+C).
+    pub lock_display: bool,
 }
 
 impl DisplayConfig {
@@ -363,7 +366,10 @@ pub fn run_display<P: PatternSource>(
                     keycode: Some(Keycode::Escape | Keycode::Q),
                     ..
                 } => {
-                    return Ok(());
+                    if !config.lock_display {
+                        return Ok(());
+                    }
+                    tracing::debug!("Quit event ignored (--lock-display active)");
                 }
                 // Re-assert fullscreen when focus is lost (e.g., system update UI pops up).
                 //

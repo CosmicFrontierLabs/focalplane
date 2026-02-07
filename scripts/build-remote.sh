@@ -149,7 +149,7 @@ fi
 # Get project root
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-PROJECT_NAME="$(basename "$PROJECT_ROOT")"
+PROJECT_NAME="$(basename "$(git -C "$PROJECT_ROOT" remote get-url origin)" .git)"
 
 # Determine if we need to deploy to a separate target
 DEPLOY_TO_TARGET=true

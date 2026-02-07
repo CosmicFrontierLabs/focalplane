@@ -12,7 +12,8 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Configuration
 REMOTE_HOST="meawoppl@cfl-test-bench.tail944341.ts.net"
-REMOTE_BUILD_DIR="rust-builds/meter-sim"
+PROJECT_NAME="$(basename "$(git -C "$PROJECT_ROOT" remote get-url origin)" .git)"
+REMOTE_BUILD_DIR="rust-builds/$PROJECT_NAME"
 SERVICE_NAME="calibrate-serve"
 SETUP_MODE=false
 
@@ -83,7 +84,7 @@ if [ "$SETUP_MODE" = true ]; then
     print_info "Installing systemd service..."
 
     # cfl-test-bench uses X11 on the RTX 4060 (card1 HDMI-A-1 at 2560x2560)
-    SERVICE_FILE=$(cat <<'EOF'
+    SERVICE_FILE=$(cat <<EOF
 [Unit]
 Description=Calibration Pattern Server
 After=network.target graphical.target
@@ -92,11 +93,11 @@ Wants=graphical.target
 [Service]
 Type=simple
 User=meawoppl
-WorkingDirectory=/home/meawoppl/rust-builds/meter-sim
+WorkingDirectory=/home/meawoppl/$REMOTE_BUILD_DIR
 Environment=DISPLAY=:0
 Environment=SDL_VIDEODRIVER=x11
 Environment=RUST_LOG=info
-ExecStart=/home/meawoppl/rust-builds/meter-sim/target/release/calibrate_serve --wait-for-oled --ftdi-device 0
+ExecStart=/home/meawoppl/$REMOTE_BUILD_DIR/target/release/calibrate_serve --wait-for-oled --ftdi-device 0 --lock-display
 Restart=on-failure
 RestartSec=5
 

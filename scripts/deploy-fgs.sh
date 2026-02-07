@@ -48,7 +48,8 @@ CAMERA_TYPE="nsv"
 CAMERA_DESC="NSV455"
 REMOTE_USER="cosmicfrontier"
 FRIENDLY_NAME="nsv"
-REMOTE_BUILD_DIR="rust-builds/meter-sim"
+PROJECT_NAME="$(basename "$(git -C "$PROJECT_ROOT" remote get-url origin)" .git)"
+REMOTE_BUILD_DIR="rust-builds/$PROJECT_NAME"
 SERVICE_NAME="fgs-server"
 
 # Parse arguments

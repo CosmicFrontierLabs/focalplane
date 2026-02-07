@@ -124,6 +124,16 @@ struct Args {
             address byte in the gyro communication protocol. Default: 18."
     )]
     gyro_address: u8,
+
+    #[arg(
+        long,
+        help = "Ignore keyboard quit shortcuts and window close events",
+        long_help = "When enabled, the display window cannot be closed by pressing Escape, Q, \
+            or clicking the window close button. The only way to stop the server is via \
+            Ctrl+C (SIGTERM). Useful for preventing accidental closure during long-running \
+            calibration sessions."
+    )]
+    lock_display: bool,
 }
 
 struct AppState {
@@ -590,6 +600,7 @@ fn main() -> Result<()> {
         size: shared::image_size::PixelShape::new(width as usize, height as usize),
         display_index,
         show_fps: false,
+        lock_display: args.lock_display,
     };
 
     run_display(sdl_context, display_config, dynamic_source)?;
