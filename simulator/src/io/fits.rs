@@ -203,27 +203,38 @@ pub fn write_typed_fits<P: AsRef<Path>>(
 ) -> Result<(), FitsError> {
     use fitsio::{images::ImageDescription, FitsFile};
 
-    let mut fptr = FitsFile::create(&path).overwrite().open()?;
-
-    for (name, fits_data) in data {
-        // Get dimensions and image type
+    if data.len() == 1 {
+        // Single image: write directly to primary HDU so simple readers can find it
+        let (name, fits_data) = data.iter().next().unwrap();
         let (height, width) = fits_data.dimensions();
-        let image_type = fits_data.image_type();
-
-        // Create image description (FITS uses different axis ordering)
-        let image_description = ImageDescription {
-            data_type: image_type,
+        let primary_desc = ImageDescription {
+            data_type: fits_data.image_type(),
             dimensions: &[height, width],
         };
 
-        // Create HDU with the image description
-        let hdu = fptr.create_image(name.clone(), &image_description)?;
+        let mut fptr = FitsFile::create(&path)
+            .overwrite()
+            .with_custom_primary(&primary_desc)
+            .open()?;
 
-        // Write data
+        let hdu = fptr.hdu(0)?;
         fits_data.write_data(&mut fptr, &hdu)?;
-
-        // Set EXTNAME header
         hdu.write_key(&mut fptr, "EXTNAME", name.clone())?;
+    } else {
+        // Multiple images: use extension HDUs with EXTNAME for lookup
+        let mut fptr = FitsFile::create(&path).overwrite().open()?;
+
+        for (name, fits_data) in data {
+            let (height, width) = fits_data.dimensions();
+            let image_description = ImageDescription {
+                data_type: fits_data.image_type(),
+                dimensions: &[height, width],
+            };
+
+            let hdu = fptr.create_image(name.clone(), &image_description)?;
+            fits_data.write_data(&mut fptr, &hdu)?;
+            hdu.write_key(&mut fptr, "EXTNAME", name.clone())?;
+        }
     }
 
     Ok(())

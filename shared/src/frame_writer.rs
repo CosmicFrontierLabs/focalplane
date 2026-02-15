@@ -221,24 +221,19 @@ fn save_as_fits(payload: &ImagePayload, filepath: &Path) -> Result<()> {
         _ => anyhow::bail!("Unsupported payload type for FITS"),
     };
 
-    let mut fptr = FitsFile::create(filepath)
-        .open()
-        .map_err(|e| anyhow::anyhow!("Failed to create FITS file {}: {}", filepath.display(), e))?;
-
     let image_description = fitsio::images::ImageDescription {
         data_type,
         dimensions: &[width, height],
     };
 
-    let hdu = fptr
-        .create_image("PRIMARY".to_string(), &image_description)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to create FITS image HDU {}: {}",
-                filepath.display(),
-                e
-            )
-        })?;
+    let mut fptr = FitsFile::create(filepath)
+        .with_custom_primary(&image_description)
+        .open()
+        .map_err(|e| anyhow::anyhow!("Failed to create FITS file {}: {}", filepath.display(), e))?;
+
+    let hdu = fptr.hdu(0).map_err(|e| {
+        anyhow::anyhow!("Failed to access primary HDU {}: {}", filepath.display(), e)
+    })?;
 
     match payload {
         ImagePayload::U16(frame) => {
