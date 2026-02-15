@@ -24,7 +24,6 @@ float-cmp = "0.9"
 
 # Image processing
 image = "0.25"
-fitsio = { version = "0.21", features = ["array"], optional = true }
 starfield = "0.2.3"
 
 # Scientific computing
@@ -64,6 +63,7 @@ shared-wasm = { version = "0.1.0", path = "../shared-wasm" }
 meter-math = { version = "0.1.0", path = "../meter-math" }
 rand_chacha = "0.9"
 chrono = "0.4.43"
+fitsio = { version = "0.9.2", package = "fitsio-pure", features = ["compat"], optional = true }
 
 [dev-dependencies]
 approx = "0.5"

@@ -1430,24 +1430,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
-name = "fitsio"
-version = "0.21.9"
+name = "fitsio-pure"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a37418b8a2e67655b4717287f3c170945ca5f453355a02274250b69400148f4"
-dependencies = [
- "fitsio-sys",
- "libc",
- "ndarray",
-]
-
-[[package]]
-name = "fitsio-sys"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14929d0b6fa44a87b374a138ea2256c02c1b5beae1dbc98f62a3e132f862fed1"
-dependencies = [
- "pkg-config",
-]
+checksum = "8ef18351b3ef1ff2854becbb0347c7877a3bb0a1b5fc3c0cd161c4586b5eb654"
 
 [[package]]
 name = "fixedbitset"
@@ -5066,7 +5052,7 @@ dependencies = [
  "approx",
  "chrono",
  "crossbeam-channel",
- "fitsio",
+ "fitsio-pure",
  "float-cmp",
  "image 0.25.9",
  "indicatif",
@@ -5197,7 +5183,7 @@ dependencies = [
  "clap",
  "criterion",
  "env_logger",
- "fitsio",
+ "fitsio-pure",
  "float-cmp",
  "image 0.25.9",
  "indicatif",

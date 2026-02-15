@@ -38,7 +38,7 @@ NSV_HOST="${NSV_HOST:-cosmicfrontier@orin-005.tail944341.ts.net}"
 NSV_DEVICE_NAME="orin-005"
 
 # Apt dependencies management (for build server only)
-APT_DEPS_VERSION=5
+APT_DEPS_VERSION=6
 APT_SEMAPHORE_FILE=".meter-sim-apt-deps-installed"
 
 # Docker image for Jetson-compatible builds (Ubuntu 22.04 / glibc 2.35)
@@ -256,7 +256,6 @@ else
     check_package "libusb-1.0-0-dev" || print_warning "libusb-1.0-0-dev not found"
     check_package "libssl-dev" || print_warning "libssl-dev not found"
     check_package "pkg-config" || print_warning "pkg-config not found"
-    check_package "libcfitsio-dev" || print_warning "libcfitsio-dev not found"
     check_package "libclang-dev" || print_warning "libclang-dev not found"
     check_package "clang" || print_warning "clang not found"
     check_package "libsdl2-dev" || print_warning "libsdl2-dev not found"

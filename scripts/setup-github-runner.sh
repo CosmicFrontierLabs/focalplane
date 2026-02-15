@@ -65,7 +65,6 @@ check_package() {
 check_package "libusb-1.0-0-dev"
 check_package "libssl-dev"
 check_package "pkg-config"
-check_package "libcfitsio-dev"
 check_package "libclang-dev"
 check_package "clang"
 check_package "libsdl2-dev"

@@ -18,7 +18,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfontconfig1-dev libcfitsio-dev libudev-dev
+        sudo apt-get install -y libfontconfig1-dev libudev-dev
     
     - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@1.88.0

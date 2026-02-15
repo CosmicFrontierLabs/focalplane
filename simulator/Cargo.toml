@@ -14,7 +14,6 @@ image = "0.25" # Image processing
 ndarray = { version = "0.16", features = [
     "rayon",
 ] } # Multidimensional arrays with parallel computing
-fitsio = { version = "0.21", features = ["array"] } # FITS file I/O with ndarray support
 rayon = "1.7" # Parallel computing
 num-traits = "0.2" # Numeric traits for generic math
 float-cmp = "0.9" # Approximate floating point comparisons
@@ -47,6 +46,7 @@ chrono = "0.4.41"
 uom = "0.37.0"
 meter-math = { version = "0.1.0", path = "../meter-math" }
 shared-wasm = { version = "0.1.0", path = "../shared-wasm" }
+fitsio = { version = "0.9.2", package = "fitsio-pure", features = ["compat"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] } # Benchmarking

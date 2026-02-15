@@ -5,7 +5,8 @@
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{bounded, Sender, TrySendError};
-use fitsio::FitsFile;
+use fitsio::compat::fitsfile::FitsFile;
+use fitsio::compat::images::{ImageDescription, ImageType, WriteImage};
 use image::DynamicImage;
 use ndarray::Array2;
 use std::mem;
@@ -212,37 +213,37 @@ fn save_as_fits(payload: &ImagePayload, filepath: &Path) -> Result<()> {
     let (width, height, data_type) = match payload {
         ImagePayload::U16(frame) => {
             let (h, w) = frame.dim();
-            (w, h, fitsio::images::ImageType::UnsignedShort)
+            (w, h, ImageType::Long)
         }
         ImagePayload::F64(frame) => {
             let (h, w) = frame.dim();
-            (w, h, fitsio::images::ImageType::Double)
+            (w, h, ImageType::Double)
         }
         _ => anyhow::bail!("Unsupported payload type for FITS"),
     };
 
-    let image_description = fitsio::images::ImageDescription {
+    let image_description = ImageDescription {
         data_type,
-        dimensions: &[width, height],
+        dimensions: vec![width, height],
     };
 
     let mut fptr = FitsFile::create(filepath)
-        .with_custom_primary(&image_description)
+        .overwrite()
         .open()
         .map_err(|e| anyhow::anyhow!("Failed to create FITS file {}: {}", filepath.display(), e))?;
 
-    let hdu = fptr.hdu(0).map_err(|e| {
-        anyhow::anyhow!("Failed to access primary HDU {}: {}", filepath.display(), e)
-    })?;
+    let hdu = fptr
+        .create_image("PRIMARY", &image_description)
+        .map_err(|e| anyhow::anyhow!("Failed to create image HDU {}: {}", filepath.display(), e))?;
 
     match payload {
         ImagePayload::U16(frame) => {
-            let data: Vec<u16> = frame.iter().cloned().collect();
-            hdu.write_image(&mut fptr, &data)?;
+            let data: Vec<i32> = frame.iter().map(|&v| v as i32).collect();
+            i32::write_image(&mut fptr, &hdu, &data)?;
         }
         ImagePayload::F64(frame) => {
             let data: Vec<f64> = frame.iter().cloned().collect();
-            hdu.write_image(&mut fptr, &data)?;
+            f64::write_image(&mut fptr, &hdu, &data)?;
         }
         _ => unreachable!(),
     }
