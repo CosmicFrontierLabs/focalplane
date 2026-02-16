@@ -1,14 +1,12 @@
 use shared_wasm::{
-    CameraStats, ExportStatus, FsmStatus, StarDetectionSettings, TrackingSettings, TrackingState,
-    TrackingStatus,
+    CameraStats, FsmStatus, StarDetectionSettings, TrackingSettings, TrackingState, TrackingStatus,
 };
 use yew::prelude::*;
 
 use crate::fgs_app::TrackingHistory;
 
 use super::components::{
-    ApplyButton, Checkbox, ErrorMessage, Select, SelectOption, SettingsButton, SettingsPanel,
-    Slider, SmallCheckbox, StatusCount, TextInput,
+    ApplyButton, Checkbox, Select, SelectOption, SettingsButton, SettingsPanel, Slider,
 };
 
 use crate::fgs_app::TrackingPoint;
@@ -498,103 +496,6 @@ pub fn tracking_settings_view(props: &TrackingSettingsViewProps) -> Html {
     }
 }
 
-/// Props for export settings view.
-#[derive(Properties, PartialEq)]
-pub struct ExportSettingsViewProps {
-    pub show: bool,
-    pub status: Option<ExportStatus>,
-    pub pending: bool,
-    pub on_toggle: Callback<()>,
-    pub on_update_string: Callback<(String, String)>,
-    pub on_toggle_bool: Callback<String>,
-    pub on_save: Callback<()>,
-}
-
-/// Render the export settings panel.
-#[function_component(ExportSettingsView)]
-pub fn export_settings_view(props: &ExportSettingsViewProps) -> Html {
-    if !props.show {
-        return html! {
-            <SettingsButton
-                icon="💾"
-                label="Export"
-                expanded={false}
-                onclick={props.on_toggle.clone()}
-            />
-        };
-    }
-
-    let status = match &props.status {
-        Some(s) => s.clone(),
-        None => return html! { <div>{"Loading export settings..."}</div> },
-    };
-
-    let csv_toggle = {
-        let on_toggle = props.on_toggle_bool.clone();
-        Callback::from(move |_| on_toggle.emit("csv_enabled".to_string()))
-    };
-
-    let frames_toggle = {
-        let on_toggle = props.on_toggle_bool.clone();
-        Callback::from(move |_| on_toggle.emit("frames_enabled".to_string()))
-    };
-
-    let csv_filename_change = {
-        let on_update = props.on_update_string.clone();
-        Callback::from(move |val: String| on_update.emit(("csv_filename".to_string(), val)))
-    };
-
-    let frames_dir_change = {
-        let on_update = props.on_update_string.clone();
-        Callback::from(move |val: String| on_update.emit(("frames_directory".to_string(), val)))
-    };
-
-    html! {
-        <>
-            <SettingsButton
-                icon="💾"
-                label="Export"
-                expanded={true}
-                onclick={props.on_toggle.clone()}
-            />
-            <SettingsPanel>
-                <SmallCheckbox
-                    label="CSV Export"
-                    checked={status.settings.csv_enabled}
-                    onchange={csv_toggle}
-                />
-                <div class="metadata-item" style="margin-top: 3px;">
-                    <TextInput
-                        value={status.settings.csv_filename.clone()}
-                        placeholder="tracking_data.csv"
-                        onchange={csv_filename_change}
-                    />
-                </div>
-                <StatusCount count={status.csv_records_written} label="records written" />
-
-                <div style="margin-top: 10px;">
-                    <SmallCheckbox
-                        label="Frame Export"
-                        checked={status.settings.frames_enabled}
-                        onchange={frames_toggle}
-                    />
-                </div>
-                <div class="metadata-item" style="margin-top: 3px;">
-                    <TextInput
-                        value={status.settings.frames_directory.clone()}
-                        placeholder="frames"
-                        onchange={frames_dir_change}
-                    />
-                </div>
-                <StatusCount count={status.frames_exported} label="frames exported" />
-
-                <ErrorMessage message={status.last_error.clone()} />
-                <ApplyButton pending={props.pending} onclick={props.on_save.clone()} />
-            </SettingsPanel>
-        </>
-    }
-}
-
 /// Props for main tracking view.
 #[derive(Properties, PartialEq)]
 pub struct TrackingViewProps {
@@ -614,14 +515,6 @@ pub struct TrackingViewProps {
     pub on_toggle_settings: Callback<()>,
     pub on_update_setting: Callback<(String, f64)>,
     pub on_save_settings: Callback<()>,
-    // Export settings
-    pub show_export: bool,
-    pub export_status: Option<ExportStatus>,
-    pub export_pending: bool,
-    pub on_toggle_export: Callback<()>,
-    pub on_update_export_string: Callback<(String, String)>,
-    pub on_toggle_export_bool: Callback<String>,
-    pub on_save_export: Callback<()>,
 }
 
 /// Render the main tracking panel with all sub-panels.
@@ -668,18 +561,6 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
         />
     };
 
-    let export_view = html! {
-        <ExportSettingsView
-            show={props.show_export}
-            status={props.export_status.clone()}
-            pending={props.export_pending}
-            on_toggle={props.on_toggle_export.clone()}
-            on_update_string={props.on_update_export_string.clone()}
-            on_toggle_bool={props.on_toggle_export_bool.clone()}
-            on_save={props.on_save_export.clone()}
-        />
-    };
-
     match status.map(|s| &s.state) {
         Some(TrackingState::Acquiring { frames_collected }) => {
             html! {
@@ -691,7 +572,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                         <span style="color: #ffaa00;">{format!("Acquiring... ({} frames)", frames_collected)}</span>
                     </div>
                     { settings_view }
-                    { export_view }
+
                 </>
             }
         }
@@ -710,7 +591,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                     </div>
                     { sparklines }
                     { settings_view }
-                    { export_view }
+
                 </>
             }
         }
@@ -724,7 +605,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                         <span style="color: #ff0000;">{format!("Reacquiring... (attempt {})", attempts)}</span>
                     </div>
                     { settings_view }
-                    { export_view }
+
                 </>
             }
         }
@@ -745,7 +626,7 @@ pub fn tracking_view(props: &TrackingViewProps) -> Html {
                         <span>{state_text}</span>
                     </div>
                     { settings_view }
-                    { export_view }
+
                 </>
             }
         }

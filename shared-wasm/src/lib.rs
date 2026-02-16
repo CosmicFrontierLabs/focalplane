@@ -28,8 +28,7 @@ pub use pattern::{generate_centered_grid, PatternCommand};
 pub use star_detection::{DetectedStar, StarDetectionResult, StarDetectionSettings};
 pub use stats_scan::{StatsError, StatsScan};
 pub use tracking::{
-    ExportSettings, ExportStatus, FrameExportMetadata, TrackingEnableRequest, TrackingPosition,
-    TrackingSettings, TrackingState, TrackingStatus,
+    TrackingEnableRequest, TrackingPosition, TrackingSettings, TrackingState, TrackingStatus,
 };
 pub use types::{HealthInfo, SpotShape, Timestamp};
 
@@ -48,8 +47,6 @@ pub enum FgsWsMessage {
     TrackingStatus(TrackingStatus),
     /// Tracking algorithm settings
     TrackingSettings(TrackingSettings),
-    /// CSV/frame export counters
-    ExportStatus(ExportStatus),
     /// FSM position and connection state
     FsmStatus(FsmStatus),
     /// Star detection algorithm settings
@@ -70,8 +67,6 @@ pub enum FgsWsCommand {
     SetTrackingSettings(TrackingSettings),
     /// Update star detection settings
     SetDetectionSettings(StarDetectionSettings),
-    /// Update export settings
-    SetExportSettings(ExportSettings),
     /// Move FSM to position
     MoveFsm(FsmMoveRequest),
 }

@@ -13,9 +13,8 @@ use crate::ws_image_stream::WsImageStream;
 
 pub use shared_wasm::CameraStats;
 pub use shared_wasm::{
-    CommandError, ExportSettings, ExportStatus, FgsWsCommand, FgsWsMessage, FsmMoveRequest,
-    FsmStatus, StarDetectionSettings, TrackingEnableRequest, TrackingSettings, TrackingState,
-    TrackingStatus,
+    CommandError, FgsWsCommand, FgsWsMessage, FsmMoveRequest, FsmStatus, StarDetectionSettings,
+    TrackingEnableRequest, TrackingSettings, TrackingState, TrackingStatus,
 };
 
 /// Time window for sparkline plots in seconds.
@@ -105,10 +104,6 @@ pub struct FgsFrontend {
     show_tracking_settings: bool,
     // Position and SNR history for plotting
     tracking_history: TrackingHistory,
-    // Export state
-    export_status: Option<ExportStatus>,
-    export_settings_pending: bool,
-    show_export_settings: bool,
     // FSM state
     fsm_status: Option<FsmStatus>,
     fsm_move_pending: bool,
@@ -141,11 +136,6 @@ pub enum Msg {
     ToggleTrackingSettings,
     UpdateTrackingSetting(String, f64),
     SaveTrackingSettings,
-    // Export settings messages
-    ToggleExportSettings,
-    UpdateExportSetting(String, String),
-    ToggleExportBool(String),
-    SaveExportSettings,
     // FSM messages
     UpdateFsmTarget(String, f64),
     MoveFsm,
@@ -195,9 +185,6 @@ impl Component for FgsFrontend {
             tracking_settings_pending: false,
             show_tracking_settings: false,
             tracking_history: TrackingHistory::default(),
-            export_status: None,
-            export_settings_pending: false,
-            show_export_settings: false,
             fsm_status: None,
             fsm_move_pending: false,
             fsm_target_x: 0.0,
@@ -249,11 +236,6 @@ impl Component for FgsFrontend {
                     self.tracking_settings = Some(settings);
                     true
                 }
-                FgsWsMessage::ExportStatus(status) => {
-                    self.export_settings_pending = false;
-                    self.export_status = Some(status);
-                    true
-                }
                 FgsWsMessage::FsmStatus(status) => {
                     self.fsm_move_pending = false;
                     if self.fsm_status.is_none() {
@@ -276,7 +258,6 @@ impl Component for FgsFrontend {
                         "SetTrackingEnabled" => self.tracking_toggle_pending = false,
                         "SetTrackingSettings" => self.tracking_settings_pending = false,
                         "SetDetectionSettings" => self.star_detection_pending = false,
-                        "SetExportSettings" => self.export_settings_pending = false,
                         "MoveFsm" => self.fsm_move_pending = false,
                         _ => {}
                     }
@@ -412,42 +393,6 @@ impl Component for FgsFrontend {
                 }
                 true
             }
-            Msg::ToggleExportSettings => {
-                self.show_export_settings = !self.show_export_settings;
-                true
-            }
-            Msg::UpdateExportSetting(field, value) => {
-                if let Some(ref mut status) = self.export_status {
-                    match field.as_str() {
-                        "csv_filename" => status.settings.csv_filename = value,
-                        "frames_directory" => status.settings.frames_directory = value,
-                        _ => {}
-                    }
-                }
-                true
-            }
-            Msg::ToggleExportBool(field) => {
-                if let Some(ref mut status) = self.export_status {
-                    match field.as_str() {
-                        "csv_enabled" => status.settings.csv_enabled = !status.settings.csv_enabled,
-                        "frames_enabled" => {
-                            status.settings.frames_enabled = !status.settings.frames_enabled
-                        }
-                        _ => {}
-                    }
-                }
-                true
-            }
-            Msg::SaveExportSettings => {
-                if self.export_settings_pending {
-                    return false;
-                }
-                self.export_settings_pending = true;
-                if let Some(ref status) = self.export_status {
-                    self.send_command(FgsWsCommand::SetExportSettings(status.settings.clone()));
-                }
-                true
-            }
             Msg::UpdateFsmTarget(axis, value) => {
                 match axis.as_str() {
                     "x" => self.fsm_target_x = value,
@@ -571,13 +516,6 @@ impl Component for FgsFrontend {
                         on_toggle_settings={ctx.link().callback(|_| Msg::ToggleTrackingSettings)}
                         on_update_setting={ctx.link().callback(|(field, val)| Msg::UpdateTrackingSetting(field, val))}
                         on_save_settings={ctx.link().callback(|_| Msg::SaveTrackingSettings)}
-                        show_export={self.show_export_settings}
-                        export_status={self.export_status.clone()}
-                        export_pending={self.export_settings_pending}
-                        on_toggle_export={ctx.link().callback(|_| Msg::ToggleExportSettings)}
-                        on_update_export_string={ctx.link().callback(|(field, val)| Msg::UpdateExportSetting(field, val))}
-                        on_toggle_export_bool={ctx.link().callback(Msg::ToggleExportBool)}
-                        on_save_export={ctx.link().callback(|_| Msg::SaveExportSettings)}
                     />
 
                     <FsmView
