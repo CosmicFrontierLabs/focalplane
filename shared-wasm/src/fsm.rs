@@ -47,3 +47,10 @@ pub struct FsmMoveRequest {
     /// Target Y position in microradians
     pub y_urad: f64,
 }
+
+/// Request to connect or disconnect the FSM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FsmConnectRequest {
+    /// True to connect, false to disconnect
+    pub connected: bool,
+}

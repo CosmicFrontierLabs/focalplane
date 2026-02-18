@@ -221,6 +221,7 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
     args: CommonServerArgs,
     tracking_config: TrackingConfig,
     fsm: Option<Arc<FsmSharedState>>,
+    fsm_ip: String,
     log_broadcaster: Arc<LogBroadcaster>,
 ) -> anyhow::Result<()> {
     use tracing::info;
@@ -277,7 +278,8 @@ pub async fn run_server<C: CameraInterface + Send + 'static>(
         camera_geometry,
         tracking: Some(tracking_state),
         tracking_config: Some(tracking_config),
-        fsm,
+        fsm: Arc::new(RwLock::new(fsm)),
+        fsm_ip,
         ws_stream,
         ws_zoom,
         ws_zoom_center: Arc::new(std::sync::RwLock::new(None)),

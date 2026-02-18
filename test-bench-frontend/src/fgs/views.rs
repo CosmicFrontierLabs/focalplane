@@ -640,28 +640,18 @@ pub struct FsmViewProps {
     pub target_x: f64,
     pub target_y: f64,
     pub move_pending: bool,
+    pub connect_pending: bool,
     pub on_update_target: Callback<(String, f64)>,
     pub on_move: Callback<()>,
+    pub on_toggle_connection: Callback<()>,
 }
 
 /// Render the FSM control panel with X/Y sliders.
 #[function_component(FsmView)]
 pub fn fsm_view(props: &FsmViewProps) -> Html {
-    let status = match &props.status {
-        Some(s) => s,
-        None => return html! {}, // FSM not available
-    };
+    let connected = props.status.as_ref().map(|s| s.connected).unwrap_or(false);
 
-    if !status.connected {
-        return html! {
-            <>
-                <h2 style="margin-top: 30px;">{"FSM Control"}</h2>
-                <div class="metadata-item" style="color: #ff0000;">
-                    {"FSM disconnected"}
-                </div>
-            </>
-        };
-    }
+    let status = props.status.as_ref();
 
     let x_callback = {
         let on_update = props.on_update_target.clone();
@@ -679,77 +669,91 @@ pub fn fsm_view(props: &FsmViewProps) -> Html {
     html! {
         <>
             <h2 style="margin-top: 30px;">{"FSM Control"}</h2>
-            <div class="metadata-item">
-                <span class="metadata-label">{"Current Position:"}</span><br/>
-                <span style="color: #00ff00;">
-                    {format!("X: {:.1} µrad, Y: {:.1} µrad", status.x_urad, status.y_urad)}
-                </span>
-            </div>
-            <div style="border: 1px solid #333; padding: 10px; margin-top: 10px; background: #0a0a0a;">
-                <div class="metadata-item" style="margin-top: 5px;">
-                    <span style="font-size: 0.8em;">
-                        {format!("X Target: {:.1} µrad", props.target_x)}
-                    </span><br/>
-                    <input
-                        type="range"
-                        min={status.x_min.to_string()}
-                        max={status.x_max.to_string()}
-                        step="1"
-                        value={props.target_x.to_string()}
-                        onchange={Callback::from({
-                            let cb = x_callback.clone();
-                            move |e: Event| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                if let Ok(val) = input.value().parse::<f64>() {
-                                    cb.emit(val);
-                                }
-                            }
-                        })}
-                        style="width: 100%; accent-color: #00aaff;"
-                    />
-                    <div style="font-size: 0.7em; color: #666;">
-                        {format!("Range: {:.0} - {:.0} µrad", status.x_min, status.x_max)}
+            <Checkbox
+                label={if props.connect_pending {
+                    if connected { "Disconnecting..." } else { "Connecting..." }
+                } else {
+                    "Connect FSM"
+                }}
+                checked={connected}
+                disabled={props.connect_pending}
+                onchange={props.on_toggle_connection.clone()}
+            />
+            if connected {
+                if let Some(status) = status {
+                    <div class="metadata-item">
+                        <span class="metadata-label">{"Current Position:"}</span><br/>
+                        <span style="color: #00ff00;">
+                            {format!("X: {:.1} µrad, Y: {:.1} µrad", status.x_urad, status.y_urad)}
+                        </span>
                     </div>
-                </div>
-                <div class="metadata-item" style="margin-top: 10px;">
-                    <span style="font-size: 0.8em;">
-                        {format!("Y Target: {:.1} µrad", props.target_y)}
-                    </span><br/>
-                    <input
-                        type="range"
-                        min={status.y_min.to_string()}
-                        max={status.y_max.to_string()}
-                        step="1"
-                        value={props.target_y.to_string()}
-                        onchange={Callback::from({
-                            let cb = y_callback.clone();
-                            move |e: Event| {
-                                let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-                                if let Ok(val) = input.value().parse::<f64>() {
-                                    cb.emit(val);
-                                }
-                            }
-                        })}
-                        style="width: 100%; accent-color: #ffaa00;"
-                    />
-                    <div style="font-size: 0.7em; color: #666;">
-                        {format!("Range: {:.0} - {:.0} µrad", status.y_min, status.y_max)}
+                    <div style="border: 1px solid #333; padding: 10px; margin-top: 10px; background: #0a0a0a;">
+                        <div class="metadata-item" style="margin-top: 5px;">
+                            <span style="font-size: 0.8em;">
+                                {format!("X Target: {:.1} µrad", props.target_x)}
+                            </span><br/>
+                            <input
+                                type="range"
+                                min={status.x_min.to_string()}
+                                max={status.x_max.to_string()}
+                                step="1"
+                                value={props.target_x.to_string()}
+                                onchange={Callback::from({
+                                    let cb = x_callback.clone();
+                                    move |e: Event| {
+                                        let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                        if let Ok(val) = input.value().parse::<f64>() {
+                                            cb.emit(val);
+                                        }
+                                    }
+                                })}
+                                style="width: 100%; accent-color: #00aaff;"
+                            />
+                            <div style="font-size: 0.7em; color: #666;">
+                                {format!("Range: {:.0} - {:.0} µrad", status.x_min, status.x_max)}
+                            </div>
+                        </div>
+                        <div class="metadata-item" style="margin-top: 10px;">
+                            <span style="font-size: 0.8em;">
+                                {format!("Y Target: {:.1} µrad", props.target_y)}
+                            </span><br/>
+                            <input
+                                type="range"
+                                min={status.y_min.to_string()}
+                                max={status.y_max.to_string()}
+                                step="1"
+                                value={props.target_y.to_string()}
+                                onchange={Callback::from({
+                                    let cb = y_callback.clone();
+                                    move |e: Event| {
+                                        let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+                                        if let Ok(val) = input.value().parse::<f64>() {
+                                            cb.emit(val);
+                                        }
+                                    }
+                                })}
+                                style="width: 100%; accent-color: #ffaa00;"
+                            />
+                            <div style="font-size: 0.7em; color: #666;">
+                                {format!("Range: {:.0} - {:.0} µrad", status.y_min, status.y_max)}
+                            </div>
+                        </div>
+                        <div style="margin-top: 15px; text-align: center;">
+                            <button
+                                onclick={move_handler}
+                                disabled={props.move_pending}
+                                style="background: #00ff00; color: #000; border: none; padding: 8px 20px; cursor: pointer; font-family: 'Courier New', monospace; font-weight: bold;"
+                            >
+                                { if props.move_pending { "Moving..." } else { "Move FSM" } }
+                            </button>
+                        </div>
                     </div>
-                </div>
-                <div style="margin-top: 15px; text-align: center;">
-                    <button
-                        onclick={move_handler}
-                        disabled={props.move_pending}
-                        style="background: #00ff00; color: #000; border: none; padding: 8px 20px; cursor: pointer; font-family: 'Courier New', monospace; font-weight: bold;"
-                    >
-                        { if props.move_pending { "Moving..." } else { "Move FSM" } }
-                    </button>
-                </div>
-            </div>
-            if let Some(ref err) = status.last_error {
-                <div style="font-size: 0.7em; color: #ff0000; margin-top: 5px;">
-                    {format!("Error: {}", err)}
-                </div>
+                    if let Some(ref err) = status.last_error {
+                        <div style="font-size: 0.7em; color: #ff0000; margin-top: 5px;">
+                            {format!("Error: {}", err)}
+                        </div>
+                    }
+                }
             }
         </>
     }

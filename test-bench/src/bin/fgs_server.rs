@@ -8,55 +8,10 @@ use anyhow::Context;
 use clap::Parser;
 use hardware::pi::FsmArgs;
 use shared::config_storage::ConfigStorage;
-use std::sync::Arc;
 use test_bench::camera_init::CalibrationArgs;
 use test_bench::camera_init::{initialize_camera, CameraArgs};
-use test_bench::camera_server::{CommonServerArgs, FsmSharedState, TrackingConfig};
+use test_bench::camera_server::{CommonServerArgs, TrackingConfig};
 use tracing::info;
-
-/// Initialize FSM connection with proper error handling.
-///
-/// Returns None if any step fails, logging warnings for each failure.
-fn initialize_fsm(args: &FsmArgs) -> Option<Arc<FsmSharedState>> {
-    let mut fsm = match args.connect() {
-        Ok(fsm) => fsm,
-        Err(e) => {
-            tracing::warn!("Failed to connect to FSM: {}, FSM disabled", e);
-            return None;
-        }
-    };
-
-    info!("FSM connected, getting travel ranges...");
-    let (x_range, y_range) = match fsm.get_travel_ranges() {
-        Ok(ranges) => ranges,
-        Err(e) => {
-            tracing::warn!("Failed to get FSM travel ranges: {}, FSM disabled", e);
-            return None;
-        }
-    };
-    info!(
-        "FSM travel ranges: X=[{:.1}, {:.1}], Y=[{:.1}, {:.1}] µrad",
-        x_range.0, x_range.1, y_range.0, y_range.1
-    );
-
-    let (x, y) = match fsm.get_position() {
-        Ok(pos) => pos,
-        Err(e) => {
-            tracing::warn!("Failed to get FSM position: {}, FSM disabled for safety", e);
-            return None;
-        }
-    };
-    info!("FSM position: ({:.1}, {:.1}) µrad", x, y);
-
-    Some(Arc::new(FsmSharedState {
-        fsm: std::sync::Mutex::new(fsm),
-        x_urad: std::sync::atomic::AtomicU64::new(x.to_bits()),
-        y_urad: std::sync::atomic::AtomicU64::new(y.to_bits()),
-        x_range,
-        y_range,
-        last_error: tokio::sync::RwLock::new(None),
-    }))
-}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -206,19 +161,16 @@ async fn main() -> anyhow::Result<()> {
         saturation_value: camera.saturation_value(),
     };
 
-    // Initialize FSM connection
-    info!("Connecting to FSM at {}...", args.fsm.fsm_ip);
-    let fsm_state = initialize_fsm(&args.fsm);
-    if fsm_state.is_some() {
-        info!("FSM control enabled");
-    }
+    // FSM starts disconnected — user connects via frontend checkbox
+    info!("FSM available at {} (connect via web UI)", args.fsm.fsm_ip);
 
     info!("Starting unified camera server with tracking support...");
     test_bench::camera_server::run_server(
         camera,
         args.server,
         tracking_config,
-        fsm_state,
+        None,
+        args.fsm.fsm_ip.clone(),
         log_broadcaster,
     )
     .await

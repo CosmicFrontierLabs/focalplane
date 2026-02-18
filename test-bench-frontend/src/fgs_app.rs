@@ -13,8 +13,8 @@ use crate::ws_image_stream::WsImageStream;
 
 pub use shared_wasm::CameraStats;
 pub use shared_wasm::{
-    CommandError, FgsWsCommand, FgsWsMessage, FsmMoveRequest, FsmStatus, StarDetectionSettings,
-    TrackingEnableRequest, TrackingSettings, TrackingState, TrackingStatus,
+    CommandError, FgsWsCommand, FgsWsMessage, FsmConnectRequest, FsmMoveRequest, FsmStatus,
+    StarDetectionSettings, TrackingEnableRequest, TrackingSettings, TrackingState, TrackingStatus,
 };
 
 /// Time window for sparkline plots in seconds.
@@ -106,6 +106,7 @@ pub struct FgsFrontend {
     tracking_history: TrackingHistory,
     // FSM state
     fsm_status: Option<FsmStatus>,
+    fsm_connect_pending: bool,
     fsm_move_pending: bool,
     fsm_target_x: f64,
     fsm_target_y: f64,
@@ -137,6 +138,7 @@ pub enum Msg {
     UpdateTrackingSetting(String, f64),
     SaveTrackingSettings,
     // FSM messages
+    ToggleFsmConnection,
     UpdateFsmTarget(String, f64),
     MoveFsm,
     // Star detection messages
@@ -186,6 +188,7 @@ impl Component for FgsFrontend {
             show_tracking_settings: false,
             tracking_history: TrackingHistory::default(),
             fsm_status: None,
+            fsm_connect_pending: false,
             fsm_move_pending: false,
             fsm_target_x: 0.0,
             fsm_target_y: 0.0,
@@ -237,8 +240,9 @@ impl Component for FgsFrontend {
                     true
                 }
                 FgsWsMessage::FsmStatus(status) => {
+                    self.fsm_connect_pending = false;
                     self.fsm_move_pending = false;
-                    if self.fsm_status.is_none() {
+                    if status.connected {
                         self.fsm_target_x = status.x_urad;
                         self.fsm_target_y = status.y_urad;
                     }
@@ -259,6 +263,7 @@ impl Component for FgsFrontend {
                         "SetTrackingSettings" => self.tracking_settings_pending = false,
                         "SetDetectionSettings" => self.star_detection_pending = false,
                         "MoveFsm" => self.fsm_move_pending = false,
+                        "SetFsmConnected" => self.fsm_connect_pending = false,
                         _ => {}
                     }
                     web_sys::console::error_1(
@@ -393,6 +398,21 @@ impl Component for FgsFrontend {
                 }
                 true
             }
+            Msg::ToggleFsmConnection => {
+                if self.fsm_connect_pending {
+                    return false;
+                }
+                let currently_connected = self
+                    .fsm_status
+                    .as_ref()
+                    .map(|s| s.connected)
+                    .unwrap_or(false);
+                self.fsm_connect_pending = true;
+                self.send_command(FgsWsCommand::SetFsmConnected(FsmConnectRequest {
+                    connected: !currently_connected,
+                }));
+                true
+            }
             Msg::UpdateFsmTarget(axis, value) => {
                 match axis.as_str() {
                     "x" => self.fsm_target_x = value,
@@ -523,8 +543,10 @@ impl Component for FgsFrontend {
                         target_x={self.fsm_target_x}
                         target_y={self.fsm_target_y}
                         move_pending={self.fsm_move_pending}
+                        connect_pending={self.fsm_connect_pending}
                         on_update_target={ctx.link().callback(|(axis, val)| Msg::UpdateFsmTarget(axis, val))}
                         on_move={ctx.link().callback(|_| Msg::MoveFsm)}
+                        on_toggle_connection={ctx.link().callback(|_| Msg::ToggleFsmConnection)}
                     />
 
                     <StarDetectionSettingsView

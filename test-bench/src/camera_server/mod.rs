@@ -23,9 +23,9 @@ use shared::camera_interface::{CameraInterface, FrameMetadata, SensorGeometry};
 use shared::image_proc::u16_to_gray_image;
 use shared::tracking_message::TrackingMessage;
 use shared_wasm::{
-    CameraStats, CameraTimingStats, CommandError, FgsWsCommand, FgsWsMessage, FsmMoveRequest,
-    FsmStatus, RawFrameResponse, StarDetectionSettings, TrackingEnableRequest, TrackingSettings,
-    TrackingState, TrackingStatus,
+    CameraStats, CameraTimingStats, CommandError, FgsWsCommand, FgsWsMessage, FsmConnectRequest,
+    FsmMoveRequest, FsmStatus, RawFrameResponse, StarDetectionSettings, TrackingEnableRequest,
+    TrackingSettings, TrackingState, TrackingStatus,
 };
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -293,8 +293,10 @@ pub struct AppState<C: CameraInterface> {
     pub tracking: Option<Arc<TrackingSharedState>>,
     /// Tracking configuration (None if tracking not available)
     pub tracking_config: Option<TrackingConfig>,
-    /// FSM control state (None if FSM not configured)
-    pub fsm: Option<Arc<FsmSharedState>>,
+    /// FSM control state (None if not connected, swappable at runtime)
+    pub fsm: Arc<RwLock<Option<Arc<FsmSharedState>>>>,
+    /// FSM controller IP address for runtime connect/disconnect
+    pub fsm_ip: String,
     /// WebSocket broadcaster for streaming camera frames (with proper close events)
     pub ws_stream: Arc<WsBroadcaster>,
     /// WebSocket broadcaster for streaming zoom region frames
@@ -976,14 +978,22 @@ async fn tracking_events_endpoint<C: CameraInterface + 'static>(
 
 // ==================== WebSocket Command Handlers ====================
 
+/// Build a `CommandError` from a command name and a displayable error.
+fn cmd_err(command: &str, err: impl std::fmt::Display) -> CommandError {
+    CommandError {
+        command: command.into(),
+        message: err.to_string(),
+    }
+}
+
 async fn handle_set_tracking_enabled<C: CameraInterface + 'static>(
     state: &AppState<C>,
     req: TrackingEnableRequest,
 ) -> Result<(), CommandError> {
-    let tracking = state.tracking.as_ref().ok_or_else(|| CommandError {
-        command: "SetTrackingEnabled".into(),
-        message: "Tracking not available".into(),
-    })?;
+    let tracking = state
+        .tracking
+        .as_ref()
+        .ok_or_else(|| cmd_err("SetTrackingEnabled", "Tracking not available"))?;
 
     let was_enabled = tracking.enabled.swap(req.enabled, Ordering::SeqCst);
     if was_enabled != req.enabled {
@@ -1014,10 +1024,10 @@ async fn handle_set_tracking_settings<C: CameraInterface + 'static>(
     state: &AppState<C>,
     new_settings: TrackingSettings,
 ) -> Result<(), CommandError> {
-    let tracking = state.tracking.as_ref().ok_or_else(|| CommandError {
-        command: "SetTrackingSettings".into(),
-        message: "Tracking not available".into(),
-    })?;
+    let tracking = state
+        .tracking
+        .as_ref()
+        .ok_or_else(|| cmd_err("SetTrackingSettings", "Tracking not available"))?;
 
     {
         let mut settings = tracking.settings.write().await;
@@ -1055,10 +1065,10 @@ async fn handle_move_fsm<C: CameraInterface + 'static>(
     state: &AppState<C>,
     request: FsmMoveRequest,
 ) -> Result<(), CommandError> {
-    let fsm_state = state.fsm.as_ref().ok_or_else(|| CommandError {
-        command: "MoveFsm".into(),
-        message: "FSM not available".into(),
-    })?;
+    let fsm_guard = state.fsm.read().await;
+    let fsm_state = fsm_guard
+        .as_ref()
+        .ok_or_else(|| cmd_err("MoveFsm", "FSM not connected"))?;
 
     let x = request
         .x_urad
@@ -1068,15 +1078,19 @@ async fn handle_move_fsm<C: CameraInterface + 'static>(
         .clamp(fsm_state.y_range.0, fsm_state.y_range.1);
 
     let fsm_arc = Arc::clone(fsm_state);
+    drop(fsm_guard);
+
     let result = tokio::task::spawn_blocking(move || {
         let mut fsm = fsm_arc.fsm.lock().unwrap();
         fsm.move_to(x, y)
     })
     .await
-    .map_err(|e| CommandError {
-        command: "MoveFsm".into(),
-        message: format!("FSM task failed: {e}"),
-    })?;
+    .map_err(|e| cmd_err("MoveFsm", format!("FSM task failed: {e}")))?;
+
+    let fsm_guard = state.fsm.read().await;
+    let fsm_state = fsm_guard
+        .as_ref()
+        .ok_or_else(|| cmd_err("MoveFsm", "FSM disconnected during move"))?;
 
     match result {
         Ok(()) => {
@@ -1101,11 +1115,77 @@ async fn handle_move_fsm<C: CameraInterface + 'static>(
             let error_msg = format!("FSM move failed: {e}");
             tracing::error!("{}", error_msg);
             *fsm_state.last_error.write().await = Some(error_msg.clone());
-            Err(CommandError {
-                command: "MoveFsm".into(),
-                message: error_msg,
-            })
+            Err(cmd_err("MoveFsm", &error_msg))
         }
+    }
+}
+
+async fn handle_set_fsm_connected<C: CameraInterface + 'static>(
+    state: &AppState<C>,
+    request: FsmConnectRequest,
+) -> Result<(), CommandError> {
+    if request.connected {
+        // Connect to FSM
+        let ip = state.fsm_ip.clone();
+        tracing::info!("Connecting to FSM at {ip}...");
+
+        let result = tokio::task::spawn_blocking(move || S330::connect_ip(&ip))
+            .await
+            .map_err(|e| cmd_err("SetFsmConnected", format!("FSM connect task failed: {e}")))?;
+
+        let mut fsm = result.map_err(|e| {
+            tracing::error!("FSM connection failed: {e}");
+            cmd_err("SetFsmConnected", format!("FSM connection failed: {e}"))
+        })?;
+
+        let (x_range, y_range) = fsm.get_travel_ranges().map_err(|e| {
+            tracing::error!("Failed to get FSM travel ranges: {e}");
+            cmd_err(
+                "SetFsmConnected",
+                format!("Failed to get travel ranges: {e}"),
+            )
+        })?;
+
+        let (x, y) = fsm.get_position().map_err(|e| {
+            tracing::error!("Failed to get FSM position: {e}");
+            cmd_err("SetFsmConnected", format!("Failed to get position: {e}"))
+        })?;
+
+        let fsm_state = Arc::new(FsmSharedState {
+            fsm: std::sync::Mutex::new(fsm),
+            x_urad: AtomicU64::new(x.to_bits()),
+            y_urad: AtomicU64::new(y.to_bits()),
+            x_range,
+            y_range,
+            last_error: RwLock::new(None),
+        });
+
+        *state.fsm.write().await = Some(fsm_state);
+
+        let status = FsmStatus {
+            connected: true,
+            x_urad: x,
+            y_urad: y,
+            x_min: x_range.0,
+            x_max: x_range.1,
+            y_min: y_range.0,
+            y_max: y_range.1,
+            last_error: None,
+        };
+        state.fgs_status.publish(FgsWsMessage::FsmStatus(status));
+        tracing::info!("FSM connected at ({x:.1}, {y:.1}) µrad");
+        Ok(())
+    } else {
+        // Disconnect FSM
+        tracing::info!("Disconnecting FSM...");
+        let old = state.fsm.write().await.take();
+        drop(old);
+
+        state
+            .fgs_status
+            .publish(FgsWsMessage::FsmStatus(FsmStatus::default()));
+        tracing::info!("FSM disconnected");
+        Ok(())
     }
 }
 
@@ -1119,6 +1199,7 @@ async fn dispatch_command<C: CameraInterface + 'static>(
         FgsWsCommand::SetTrackingSettings(s) => handle_set_tracking_settings(state, s).await,
         FgsWsCommand::SetDetectionSettings(s) => handle_set_detection_settings(state, s).await,
         FgsWsCommand::MoveFsm(req) => handle_move_fsm(state, req).await,
+        FgsWsCommand::SetFsmConnected(req) => handle_set_fsm_connected(state, req).await,
     }
 }
 
@@ -1152,6 +1233,8 @@ async fn ws_status_handler<C: CameraInterface + 'static>(ws: WebSocket, state: A
         }
     }
 
+    let mut last_lag_log = tokio::time::Instant::now() - tokio::time::Duration::from_secs(2);
+
     loop {
         tokio::select! {
             // Broadcast status updates to this client
@@ -1165,8 +1248,13 @@ async fn ws_status_handler<C: CameraInterface + 'static>(ws: WebSocket, state: A
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        let lagged = format!("{{\"type\":\"lagged\",\"missed\":{n}}}");
-                        let _ = sender.send(Message::Text(lagged)).await;
+                        // Rate-limited: sending a WS message here would make
+                        // slow clients fall further behind, creating a
+                        // feedback loop that floods both the socket and logs.
+                        if last_lag_log.elapsed() >= tokio::time::Duration::from_secs(1) {
+                            tracing::debug!("WebSocket client lagged, skipped {n} messages");
+                            last_lag_log = tokio::time::Instant::now();
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -1239,8 +1327,9 @@ async fn collect_status_snapshot<C: CameraInterface + 'static>(
         drop(settings);
     }
 
-    // FSM status
-    if let Some(ref fsm) = state.fsm {
+    // FSM status (always send, even when disconnected)
+    let fsm_guard = state.fsm.read().await;
+    if let Some(ref fsm) = *fsm_guard {
         msgs.push(FgsWsMessage::FsmStatus(FsmStatus {
             connected: true,
             x_urad: f64::from_bits(fsm.x_urad.load(Ordering::SeqCst)),
@@ -1251,7 +1340,10 @@ async fn collect_status_snapshot<C: CameraInterface + 'static>(
             y_max: fsm.y_range.1,
             last_error: fsm.last_error.read().await.clone(),
         }));
+    } else {
+        msgs.push(FgsWsMessage::FsmStatus(FsmStatus::default()));
     }
+    drop(fsm_guard);
 
     // Star detection settings
     let detection = state.star_detection_settings.read().await;

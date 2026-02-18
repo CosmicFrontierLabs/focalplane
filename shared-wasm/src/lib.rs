@@ -21,7 +21,7 @@ pub use calibration::{
     ControlSpec, DisplayInfo, PatternConfigResponse, PatternSpec, SchemaResponse,
 };
 pub use camera::{CameraStats, CameraTimingStats, RawFrameResponse};
-pub use fsm::{FsmMoveRequest, FsmStatus};
+pub use fsm::{FsmConnectRequest, FsmMoveRequest, FsmStatus};
 pub use http_client::HttpClientError;
 pub use log::{LogEntry, LogLevel};
 pub use pattern::{generate_centered_grid, PatternCommand};
@@ -69,6 +69,8 @@ pub enum FgsWsCommand {
     SetDetectionSettings(StarDetectionSettings),
     /// Move FSM to position
     MoveFsm(FsmMoveRequest),
+    /// Connect or disconnect the FSM
+    SetFsmConnected(FsmConnectRequest),
 }
 
 /// Error from a WebSocket command.
