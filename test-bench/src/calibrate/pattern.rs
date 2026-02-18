@@ -38,6 +38,10 @@ pub enum PatternConfig {
     SiemensStar {
         spokes: u32,
     },
+    RandomPixel {
+        intensity: u8,
+        dwell_secs: f64,
+    },
     #[serde(skip)]
     RemoteControlled {
         state: Arc<Mutex<patterns::remote_controlled::RemotePatternState>>,
@@ -85,6 +89,14 @@ impl std::fmt::Debug for PatternConfig {
                 .debug_struct("SiemensStar")
                 .field("spokes", spokes)
                 .finish(),
+            Self::RandomPixel {
+                intensity,
+                dwell_secs,
+            } => f
+                .debug_struct("RandomPixel")
+                .field("intensity", intensity)
+                .field("dwell_secs", dwell_secs)
+                .finish(),
             Self::RemoteControlled { pattern_size, .. } => f
                 .debug_struct("RemoteControlled")
                 .field("pattern_size", pattern_size)
@@ -112,6 +124,7 @@ impl PatternConfig {
             Self::Static { .. }
                 | Self::CirclingPixel { .. }
                 | Self::WigglingGaussian { .. }
+                | Self::RandomPixel { .. }
                 | Self::RemoteControlled { .. }
         )
     }
@@ -128,6 +141,7 @@ impl PatternConfig {
             Self::WigglingGaussian { .. } => "Wiggling Gaussian",
             Self::PixelGrid { .. } => "Pixel Grid",
             Self::SiemensStar { .. } => "Siemens Star",
+            Self::RandomPixel { .. } => "Random Pixel",
             Self::RemoteControlled { .. } => "Remote Controlled",
         }
     }
@@ -163,6 +177,14 @@ impl PatternConfig {
             )),
             Self::PixelGrid { spacing } => Ok(patterns::pixel_grid::generate(size, *spacing)),
             Self::SiemensStar { spokes } => Ok(patterns::siemens_star::generate(size, *spokes)),
+            Self::RandomPixel {
+                intensity,
+                dwell_secs,
+            } => Ok(patterns::random_pixel::generate(
+                size,
+                *intensity,
+                *dwell_secs,
+            )),
             Self::RemoteControlled {
                 state,
                 pattern_size,
@@ -208,6 +230,12 @@ impl PatternConfig {
                     *wiggle_radius,
                     *intensity,
                 );
+            }
+            Self::RandomPixel {
+                intensity,
+                dwell_secs,
+            } => {
+                patterns::random_pixel::generate_into_buffer(buffer, size, *intensity, *dwell_secs);
             }
             Self::RemoteControlled {
                 state,

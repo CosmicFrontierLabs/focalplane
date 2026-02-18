@@ -130,6 +130,28 @@ pub fn get_pattern_schemas() -> SchemaResponse {
                 }],
             },
             PatternSpec {
+                id: "RandomPixel".into(),
+                name: "Random Pixel".into(),
+                controls: vec![
+                    ControlSpec::IntRange {
+                        id: "intensity".into(),
+                        label: "Intensity".into(),
+                        min: 0,
+                        max: 255,
+                        step: 1,
+                        default: 255,
+                    },
+                    ControlSpec::FloatRange {
+                        id: "dwell_secs".into(),
+                        label: "Dwell Time (s)".into(),
+                        min: 1.0,
+                        max: 300.0,
+                        step: 1.0,
+                        default: 30.0,
+                    },
+                ],
+            },
+            PatternSpec {
                 id: "RemoteControlled".into(),
                 name: "Remote Controlled".into(),
                 controls: vec![],
@@ -201,6 +223,10 @@ pub fn parse_pattern_request(
         "SiemensStar" => Ok(PatternConfig::SiemensStar {
             spokes: get_i64("spokes", 24) as u32,
         }),
+        "RandomPixel" => Ok(PatternConfig::RandomPixel {
+            intensity: get_i64("intensity", 255) as u8,
+            dwell_secs: get_f64("dwell_secs", 30.0),
+        }),
         // RemoteControlled is handled specially in calibrate_serve
         "RemoteControlled" => Err(
             "RemoteControlled pattern should be handled by calibrate_serve directly".to_string(),
@@ -239,6 +265,13 @@ pub fn pattern_to_dynamic(config: &PatternConfig) -> (String, serde_json::Value)
         ),
         PatternConfig::PixelGrid { spacing } => ("PixelGrid".into(), json!({"spacing": spacing})),
         PatternConfig::SiemensStar { spokes } => ("SiemensStar".into(), json!({"spokes": spokes})),
+        PatternConfig::RandomPixel {
+            intensity,
+            dwell_secs,
+        } => (
+            "RandomPixel".into(),
+            json!({"intensity": intensity, "dwell_secs": dwell_secs}),
+        ),
         PatternConfig::RemoteControlled { .. } => ("RemoteControlled".into(), json!({})),
     }
 }

@@ -4,6 +4,7 @@ pub mod circling_pixel;
 pub mod motion;
 pub mod pixel;
 pub mod pixel_grid;
+pub mod random_pixel;
 pub mod remote_controlled;
 pub mod shared;
 pub mod siemens_star;
