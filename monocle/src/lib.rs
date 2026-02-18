@@ -879,6 +879,16 @@ impl FineGuidanceSystem {
             });
         }
 
+        // Log expected vs actual position in ROI coordinates
+        let dx = centroid_result.x - roi_center_x;
+        let dy = centroid_result.y - roi_center_y;
+        log::info!(
+            "ROI tracking: expected ({:.1}, {:.1}), actual ({:.1}, {:.1}), offset ({:+.2}, {:+.2}) px, SNR {:.1}",
+            roi_center_x, roi_center_y,
+            centroid_result.x, centroid_result.y,
+            dx, dy, snr
+        );
+
         // Convert centroid position back to full frame coordinates
         let new_x = roi_min_col as f64 + centroid_result.x;
         let new_y = roi_min_row as f64 + centroid_result.y;
