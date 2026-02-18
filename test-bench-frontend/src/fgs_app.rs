@@ -271,6 +271,12 @@ impl Component for FgsFrontend {
                     );
                     true
                 }
+                FgsWsMessage::Lagged(n) => {
+                    web_sys::console::warn_1(
+                        &format!("WebSocket lagged, missed {n} messages").into(),
+                    );
+                    false
+                }
             },
             Msg::WsConnected(connected) => {
                 self.ws_connected = connected;

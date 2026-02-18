@@ -55,9 +55,8 @@ def plot_2d_sweep_single_axis(
             pos_data["centroid_x"],
             pos_data["centroid_y"],
             c=[color],
-            alpha=0.5,
-            s=20,
-            label=f"{pos:.0f} urad",
+            alpha=0.3,
+            s=2,
         )
 
     # Plot mean positions with larger markers
@@ -72,9 +71,10 @@ def plot_2d_sweep_single_axis(
         means["centroid_x"],
         means["centroid_y"],
         c="red",
-        s=100,
+        alpha=0.6,
+        s=30,
         marker="x",
-        linewidths=2,
+        linewidths=1.5,
         zorder=11,
     )
 

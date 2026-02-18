@@ -53,6 +53,8 @@ pub enum FgsWsMessage {
     DetectionSettings(StarDetectionSettings),
     /// Error response sent only to the commanding client
     CommandError(CommandError),
+    /// Client fell behind the broadcast channel and missed messages
+    Lagged(u64),
 }
 
 /// Client-to-server command sent over `/ws/status` WebSocket.

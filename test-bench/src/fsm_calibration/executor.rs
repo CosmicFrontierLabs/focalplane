@@ -8,9 +8,7 @@ use crate::fgs_ws_client::{FgsWsClient, FgsWsClientError};
 use crate::tracking_collector::TrackingCollector;
 use hardware::FsmInterface;
 use nalgebra::Vector2;
-use shared_wasm::{
-    CalibrateServerClient, FgsWsCommand, StatsScan, TrackingEnableRequest, TrackingState,
-};
+use shared_wasm::{CalibrateServerClient, StatsScan};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::info;
@@ -189,33 +187,6 @@ impl<F: FsmInterface> StaticStepExecutor<F> {
         }
     }
 
-    /// Enable tracking and wait for it to lock on.
-    ///
-    /// Returns Ok(true) if tracking locked on within timeout, Ok(false) if timeout expired.
-    async fn enable_tracking_and_wait(&mut self, axis: u8) -> Result<bool, StaticCalibrationError> {
-        info!("Axis {}: enabling tracking", axis);
-        let cmd = FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest { enabled: true });
-        let target = TrackingState::Tracking {
-            frames_processed: 0,
-        };
-        let timeout = Duration::from_secs_f64(self.config.lock_on_time_secs);
-
-        match self.fgs.send_command_and_wait(cmd, target, timeout).await {
-            Ok(_) => Ok(true),
-            Err(FgsWsClientError::Timeout) => Ok(false),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Disable tracking and wait for idle state.
-    async fn disable_tracking(&mut self) -> Result<(), StaticCalibrationError> {
-        let cmd = FgsWsCommand::SetTrackingEnabled(TrackingEnableRequest { enabled: false });
-        self.fgs
-            .send_command_and_wait(cmd, TrackingState::Idle, Duration::from_secs(5))
-            .await?;
-        Ok(())
-    }
-
     /// Refresh the display pattern to prevent OLED timeout.
     async fn refresh_display(&self) -> Result<(), StaticCalibrationError> {
         self.display
@@ -323,7 +294,7 @@ impl<F: FsmInterface> StaticStepExecutor<F> {
 
             // Disable tracking before move
             info!("Axis {}: disabling tracking", axis);
-            self.disable_tracking().await?;
+            self.fgs.disable_tracking().await?;
 
             // Move to position
             let center = self.config.center_position_urad;
@@ -343,24 +314,23 @@ impl<F: FsmInterface> StaticStepExecutor<F> {
                 .map_err(StaticCalibrationError::FsmError)?;
 
             // Enable tracking and wait for lock
-            let locked = self.enable_tracking_and_wait(axis).await?;
-
-            if !locked {
-                return Err(StaticCalibrationError::TrackingReacquireFailed);
+            info!("Axis {}: enabling tracking", axis);
+            let lock_timeout = Duration::from_secs_f64(self.config.lock_on_time_secs);
+            match self.fgs.enable_tracking(lock_timeout).await {
+                Ok(_) => {}
+                Err(FgsWsClientError::Timeout) => {
+                    return Err(StaticCalibrationError::TrackingReacquireFailed);
+                }
+                Err(e) => return Err(e.into()),
             }
 
-            // Wait for stale messages to arrive, then clear
-            // 200ms at 60Hz = ~12 frames - enough for buffered SSE data to arrive
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            self.collector.clear();
-
-            // Collect samples
+            // Collect samples (discard + keep in one call)
             let measurement = self.collect_samples_at_position(axis, pos)?;
             measurements.push(measurement);
         }
 
         // Disable tracking before returning to center
-        self.disable_tracking().await?;
+        self.fgs.disable_tracking().await?;
 
         // Return to center
         let center = self.config.center_position_urad;
@@ -380,32 +350,33 @@ impl<F: FsmInterface> StaticStepExecutor<F> {
         fsm_command: f64,
     ) -> Result<StepMeasurement, StaticCalibrationError> {
         let start_time = self.calibration_start.unwrap_or_else(Instant::now);
-        let total_samples = self.config.discard_samples + self.config.samples_per_position;
 
-        info!(
-            "Axis {}: collecting {} samples (discarding first {})...",
-            axis, self.config.samples_per_position, self.config.discard_samples
-        );
-
-        // Collect all samples using TrackingCollector
-        let timeout = Duration::from_secs(30); // Generous timeout
-        let messages = self
-            .collector
-            .collect_n(total_samples, timeout)
-            .map_err(|e| StaticCalibrationError::CentroidError(e.to_string()))?;
-
-        if messages.len() < total_samples {
-            return Err(StaticCalibrationError::InsufficientSamples {
-                got: messages.len(),
-                need: total_samples,
-            });
+        // Drain buffered messages for 200ms to flush stale data
+        let drained = self.collector.drain_for(Duration::from_millis(200));
+        if drained > 0 {
+            info!(
+                "Axis {}: drained {} stale messages from buffer",
+                axis, drained
+            );
         }
 
-        // Discard initial transient samples
-        let messages: Vec<_> = messages
-            .into_iter()
-            .skip(self.config.discard_samples)
-            .collect();
+        info!(
+            "Axis {}: collecting {} samples (discarding first {}), connected={}",
+            axis,
+            self.config.samples_per_position,
+            self.config.discard_samples,
+            self.collector.is_connected()
+        );
+
+        let messages = self
+            .collector
+            .collect_with_discard(
+                self.config.discard_samples,
+                self.config.samples_per_position,
+                Duration::from_secs_f64(self.config.lock_on_time_secs),
+                Duration::from_secs(30),
+            )
+            .map_err(|e| StaticCalibrationError::CentroidError(e.to_string()))?;
 
         info!("Axis {}: collected {} samples", axis, messages.len());
 

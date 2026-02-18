@@ -215,6 +215,94 @@ impl TrackingCollector {
         Ok(messages)
     }
 
+    /// Discard initial samples then collect, with two-phase timeouts.
+    ///
+    /// Uses `first_sample_timeout` to bound the wait for the very first
+    /// tracking message (across both discard and keep). Once data starts
+    /// flowing, `collection_timeout` bounds the remaining collection.
+    ///
+    /// Returns only the kept samples (after discarding `discard` messages).
+    ///
+    /// # Errors
+    /// Returns `CollectError::Timeout` if the first sample never arrives or
+    /// if collection doesn't complete within the timeout.
+    pub fn collect_with_discard(
+        &self,
+        discard: usize,
+        keep: usize,
+        first_sample_timeout: Duration,
+        collection_timeout: Duration,
+    ) -> Result<Vec<TrackingMessage>, CollectError> {
+        let total = discard + keep;
+        let mut messages = Vec::with_capacity(total);
+        let start = Instant::now();
+
+        // Phase 1: wait for first sample with its own timeout
+        let first_deadline = start + first_sample_timeout;
+        loop {
+            if Instant::now() > first_deadline {
+                return Err(CollectError::Timeout {
+                    got: 0,
+                    expected: total,
+                    elapsed: start.elapsed(),
+                });
+            }
+            match self.poll() {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        messages.push(msg);
+                        if messages.len() >= total {
+                            messages.drain(..discard);
+                            return Ok(messages);
+                        }
+                    }
+                    if !messages.is_empty() {
+                        break;
+                    }
+                }
+                Err(CollectError::Disconnected { error, .. }) => {
+                    return Err(CollectError::Disconnected { got: 0, error });
+                }
+                Err(e) => return Err(e),
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // Phase 2: collect remaining with collection timeout
+        let collect_deadline = Instant::now() + collection_timeout;
+        while messages.len() < total {
+            if Instant::now() > collect_deadline {
+                let kept = messages.len().saturating_sub(discard);
+                return Err(CollectError::Timeout {
+                    got: kept,
+                    expected: keep,
+                    elapsed: start.elapsed(),
+                });
+            }
+            match self.poll() {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        messages.push(msg);
+                        if messages.len() >= total {
+                            break;
+                        }
+                    }
+                }
+                Err(CollectError::Disconnected { error, .. }) => {
+                    let kept = messages.len().saturating_sub(discard);
+                    return Err(CollectError::Disconnected { got: kept, error });
+                }
+                Err(e) => return Err(e),
+            }
+            if messages.len() < total {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        messages.drain(..discard);
+        Ok(messages)
+    }
+
     /// Wait for at least one message to arrive.
     ///
     /// Returns `Ok(true)` if a message was received within the timeout.
@@ -241,6 +329,26 @@ impl TrackingCollector {
     /// Get the last connection error, if any.
     pub fn last_error(&self) -> Option<String> {
         self.state.lock().unwrap().error.clone()
+    }
+
+    /// Drain all buffered messages for a fixed duration.
+    ///
+    /// Discards every message that arrives within the given window, ensuring
+    /// stale data from previous operations is flushed. Returns the total
+    /// number of messages drained.
+    pub fn drain_for(&self, duration: Duration) -> usize {
+        let start = Instant::now();
+        let mut drained = 0;
+
+        while start.elapsed() < duration {
+            let msgs = self.state.lock().unwrap().buffer.drain(..).count();
+            drained += msgs;
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // Final sweep
+        drained += self.state.lock().unwrap().buffer.drain(..).count();
+        drained
     }
 
     /// Clear all buffered messages.

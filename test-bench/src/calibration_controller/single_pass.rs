@@ -23,6 +23,7 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
     let CalibrationContext {
         pattern_client,
         tracking_collector,
+        mut fgs,
         positions,
         ..
     } = initialize(args, true).await?;
@@ -47,6 +48,9 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
             display_y
         );
 
+        // Disable tracking before moving spot (forces reacquire on new position)
+        fgs.disable_tracking().await?;
+
         // Send spot command via REST
         pattern_client
             .spot(*display_x, *display_y, args.spot_fwhm, args.spot_intensity)
@@ -55,20 +59,28 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
         // Wait for settle
         tokio::time::sleep(settle_duration).await;
 
-        // Discard initial measurements (stale data from previous position)
-        if let Err(e) = tracking_collector.collect_n(args.discard_samples, timeout) {
-            eprintln!("  Discard phase incomplete: {e}");
+        // Enable tracking and wait for lock-on
+        match fgs.enable_tracking(timeout).await {
+            Ok(_) => println!("  Tracking locked on"),
+            Err(e) => {
+                eprintln!("  Tracking failed to lock: {e}, skipping position");
+                continue;
+            }
         }
 
-        // Collect measurements (x, y, diameter)
-        let measurements: Vec<(f64, f64, f64)> =
-            match tracking_collector.collect_n(args.measurements_per_position, timeout) {
-                Ok(msgs) => msgs.iter().map(|m| (m.x, m.y, m.shape.diameter)).collect(),
-                Err(e) => {
-                    eprintln!("  Collection incomplete: {e}");
-                    Vec::new()
-                }
-            };
+        // Discard stale samples from acquisition, then collect measurements
+        let measurements: Vec<(f64, f64, f64)> = match tracking_collector.collect_with_discard(
+            args.discard_samples,
+            args.measurements_per_position,
+            timeout,
+            timeout,
+        ) {
+            Ok(msgs) => msgs.iter().map(|m| (m.x, m.y, m.shape.diameter)).collect(),
+            Err(e) => {
+                eprintln!("  Collection incomplete: {e}");
+                Vec::new()
+            }
+        };
 
         if measurements.is_empty() {
             eprintln!("  No measurements received, skipping position");
@@ -104,6 +116,9 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
             avg_diameter,
         });
     }
+
+    // Disable tracking
+    fgs.disable_tracking().await?;
 
     // Clear display
     println!();
@@ -147,6 +162,15 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
                 "  [{:.6}, {:.6}, {:.6}, {:.6}, {:.2}, {:.2}]",
                 alignment.a, alignment.b, alignment.c, alignment.d, alignment.tx, alignment.ty
             );
+
+            let output_path = args
+                .output_json
+                .clone()
+                .unwrap_or_else(|| "optical_alignment.json".into());
+            match alignment.save_to_file(&output_path) {
+                Ok(()) => println!("\nSaved to {}", output_path.display()),
+                Err(e) => eprintln!("\nFailed to write {}: {e}", output_path.display()),
+            }
         }
         None => {
             eprintln!("Error: Failed to estimate affine transform");

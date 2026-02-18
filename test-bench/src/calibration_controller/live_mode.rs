@@ -50,6 +50,7 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
     let CalibrationContext {
         pattern_client,
         tracking_collector,
+        mut fgs,
         sensor_width,
         sensor_height,
         positions,
@@ -111,6 +112,15 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
                     "Spot [{row},{col}] → display ({display_x:.0}, {display_y:.0})"
                 ));
 
+                // Disable tracking before moving spot
+                if fgs.disable_tracking().await.is_err() {
+                    app.log("  ✗ failed to disable tracking".to_string());
+                    if check_quit() {
+                        return Ok(());
+                    }
+                    continue;
+                }
+
                 // Send spot command via REST
                 if pattern_client
                     .spot(display_x, display_y, args.spot_fwhm, args.spot_intensity)
@@ -129,37 +139,35 @@ pub async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error + Send + S
                     return Ok(());
                 }
 
-                // Discard initial measurements (stale data from previous position)
-                let _ = tracking_collector.collect_n(args.discard_samples, timeout);
-
-                // Collect measurements
-                let mut collected = 0;
-                let collect_start = Instant::now();
-
-                while collected < args.measurements_per_position {
-                    if collect_start.elapsed() > timeout {
-                        break;
-                    }
-
-                    // Check quit during measurement collection
-                    if check_quit() {
-                        return Ok(());
-                    }
-
-                    let msgs = tracking_collector.poll().unwrap_or_default();
-                    for msg in msgs {
-                        buffer.push(Measurement {
-                            sensor_x: msg.x,
-                            sensor_y: msg.y,
-                            diameter: msg.shape.diameter,
-                        });
-                        collected += 1;
-                    }
-
-                    if collected < args.measurements_per_position {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
+                // Enable tracking and wait for lock-on
+                match fgs.enable_tracking(timeout).await {
+                    Ok(_) => app.log("  Tracking locked on".to_string()),
+                    Err(_) => {
+                        app.log("  ✗ tracking failed to lock, skipping".to_string());
+                        continue;
                     }
                 }
+
+                // Discard stale samples, then collect measurements
+                let collected = match tracking_collector.collect_with_discard(
+                    args.discard_samples,
+                    args.measurements_per_position,
+                    timeout,
+                    timeout,
+                ) {
+                    Ok(msgs) => {
+                        let count = msgs.len();
+                        for msg in msgs {
+                            buffer.push(Measurement {
+                                sensor_x: msg.x,
+                                sensor_y: msg.y,
+                                diameter: msg.shape.diameter,
+                            });
+                        }
+                        count
+                    }
+                    Err(_) => 0,
+                };
 
                 // Log measurement result
                 if let Some((sx, sy, dia)) = buffer.average() {

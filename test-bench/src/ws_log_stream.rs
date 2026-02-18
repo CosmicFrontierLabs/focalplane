@@ -192,9 +192,18 @@ pub async fn ws_log_handler(ws: WebSocket, broadcaster: Arc<LogBroadcaster>, min
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        // Send a notification about missed logs
-                        let missed_msg = format!("{{\"type\":\"lagged\",\"missed\":{n}}}");
-                        let _ = sender.send(Message::Text(missed_msg)).await;
+                        let entry = LogEntry {
+                            timestamp_ms: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0),
+                            level: LogLevel::Warn,
+                            target: "ws_log_stream".to_string(),
+                            message: format!("Client lagged, missed {n} log entries"),
+                        };
+                        if let Ok(json) = serde_json::to_string(&entry) {
+                            let _ = sender.send(Message::Text(json)).await;
+                        }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         break;

@@ -22,6 +22,8 @@ pub use grid::generate_centered_grid;
 pub use init::{initialize, CalibrationContext};
 pub use types::{App, CalibrationPoint, Measurement, MeasurementBuffer};
 
+use std::path::PathBuf;
+
 use clap::Parser;
 
 /// Desktop calibration controller for remote optical calibration.
@@ -58,6 +60,16 @@ pub struct Args {
             from fgs_server. Default points to orin-005 (Neutralino) Tailscale hostname."
     )]
     pub tracking_endpoint: String,
+
+    #[arg(
+        long,
+        default_value = "ws://orin-005.tail944341.ts.net:3000/ws/status",
+        help = "WebSocket endpoint for FGS tracking control",
+        long_help = "WebSocket endpoint on fgs_server for enabling/disabling tracking. \
+            Tracking is disabled before moving the calibration spot and re-enabled after \
+            settling to force the tracker to reacquire on the new position."
+    )]
+    pub fgs_ws_endpoint: String,
 
     #[arg(
         long,
@@ -172,6 +184,15 @@ pub struct Args {
             position while the tracker re-acquires the new spot."
     )]
     pub discard_samples: usize,
+
+    #[arg(
+        long,
+        help = "Output JSON file path [default: ./optical_alignment.json]",
+        long_help = "Path for saving the optical alignment transform JSON. Defaults to \
+            ./optical_alignment.json in the current directory. Contains the affine transform \
+            coefficients, timestamp, number of calibration points, and RMS residual error."
+    )]
+    pub output_json: Option<PathBuf>,
 
     #[arg(
         long,

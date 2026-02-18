@@ -1,9 +1,11 @@
 //! Shared initialization logic for calibration modes.
 //!
-//! Sets up pattern client, tracking collector, and discovers sensor info.
+//! Sets up pattern client, tracking collector, FGS WebSocket client,
+//! and discovers sensor info.
 
 use std::time::Duration;
 
+use crate::fgs_ws_client::FgsWsClient;
 use crate::tracking_collector::TrackingCollector;
 use shared_wasm::CalibrateServerClient;
 
@@ -17,6 +19,8 @@ pub struct CalibrationContext {
     pub pattern_client: CalibrateServerClient,
     /// Tracking message collector
     pub tracking_collector: TrackingCollector,
+    /// WebSocket client for FGS tracking control
+    pub fgs: FgsWsClient,
     /// Detected or default sensor width
     pub sensor_width: u32,
     /// Detected or default sensor height
@@ -45,6 +49,17 @@ pub async fn initialize(
 
     // Create pattern client
     let pattern_client = CalibrateServerClient::new(&args.http_endpoint);
+
+    // Connect FGS WebSocket for tracking control
+    if verbose {
+        println!("Connecting to FGS WebSocket: {}", args.fgs_ws_endpoint);
+    }
+    let fgs = FgsWsClient::connect(&args.fgs_ws_endpoint)
+        .await
+        .map_err(|e| format!("Failed to connect FGS WebSocket: {e}"))?;
+    if verbose {
+        println!("Connected to FGS WebSocket");
+    }
 
     // Create tracking collector (waits for connection to establish)
     if verbose {
@@ -118,6 +133,7 @@ pub async fn initialize(
     Ok(CalibrationContext {
         pattern_client,
         tracking_collector,
+        fgs,
         sensor_width,
         sensor_height,
         positions,
