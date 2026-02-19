@@ -99,6 +99,18 @@ impl NSV455Camera {
     pub const SENSOR_HEIGHT: u32 = 6380;
     pub const PIXEL_SIZE_MICRONS: f64 = 3.76;
 
+    /// Empirical vertical offset correction for ROI placement.
+    ///
+    /// The NSV455 negotiates a 9576x6388 readout (8 pixels larger than the
+    /// 9568x6380 active area in each dimension). ROI V-offset controls appear
+    /// to be indexed relative to the active area origin, not the full readout.
+    /// Star coordinates detected in the full frame include the 8-row border,
+    /// so we add 8 to the V-offset to align the ROI with full-frame coordinates.
+    ///
+    /// Measured via random-pixel tracking: without correction the centroid
+    /// lands ~8px below expected position in the ROI.
+    const ROI_V_OFFSET_CORRECTION: usize = 8;
+
     pub fn from_device(device_path: String) -> CameraResult<Self> {
         let device = Device::with_path(&device_path)
             .map_err(|e| CameraError::HardwareError(format!("Failed to open device: {e}")))?;
@@ -271,11 +283,15 @@ impl NSV455Camera {
 
         if let Some(roi) = self.roi {
             let roi_start = std::time::Instant::now();
+            let corrected_v_offset = roi.min_row + Self::ROI_V_OFFSET_CORRECTION;
             control_map.set_control(device, ControlType::ROIHOffset, roi.min_col as i64)?;
-            control_map.set_control(device, ControlType::ROIVOffset, roi.min_row as i64)?;
+            control_map.set_control(device, ControlType::ROIVOffset, corrected_v_offset as i64)?;
             tracing::info!(
-                "ROI offset controls took {:.1}ms",
-                roi_start.elapsed().as_secs_f64() * 1000.0
+                "ROI offset controls took {:.1}ms (v_offset: {} + {} = {})",
+                roi_start.elapsed().as_secs_f64() * 1000.0,
+                roi.min_row,
+                Self::ROI_V_OFFSET_CORRECTION,
+                corrected_v_offset
             );
         }
         tracing::info!(
@@ -355,17 +371,21 @@ impl CameraInterface for NSV455Camera {
             )));
         }
 
-        // Check vertical offset alignment and range
+        // Check vertical offset alignment and range (including V-offset correction)
         if roi.min_row % constraints.v_offset.step != 0 {
             return Err(CameraError::InvalidROI(format!(
                 "ROI vertical offset {} must be aligned to {} pixels",
                 roi.min_row, constraints.v_offset.step
             )));
         }
-        if roi.min_row < constraints.v_offset.min || roi.min_row > constraints.v_offset.max {
+        let corrected_v = roi.min_row + Self::ROI_V_OFFSET_CORRECTION;
+        if corrected_v > constraints.v_offset.max {
             return Err(CameraError::InvalidROI(format!(
-                "ROI vertical offset {} out of range {}-{}",
-                roi.min_row, constraints.v_offset.min, constraints.v_offset.max
+                "ROI vertical offset {} + {} correction = {} exceeds max {}",
+                roi.min_row,
+                Self::ROI_V_OFFSET_CORRECTION,
+                corrected_v,
+                constraints.v_offset.max
             )));
         }
 
