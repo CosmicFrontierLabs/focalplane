@@ -1,0 +1,33 @@
+#!/bin/bash
+# Pre-commit hook to run cargo fmt, check, and clippy
+
+set -e
+
+if git diff --cached --name-only | grep -q '\.rs$'; then
+    echo "Checking if code is properly formatted..."
+    fmt_output=$(cargo fmt --all -- --check 2>&1)
+    if [ $? -ne 0 ]; then
+        echo "❌ Code is not properly formatted!"
+        echo "$fmt_output"
+        echo ""
+        echo "Please run 'cargo fmt --all' before committing."
+        exit 1
+    fi
+    echo "✅ Code formatting is correct."
+
+    echo "Running cargo check..."
+    if ! cargo check --locked --all-targets; then
+        echo "❌ Cargo check failed!"
+        exit 1
+    fi
+    echo "✅ Cargo check passed."
+
+    echo "Running clippy checks..."
+    if ! cargo clippy -- -D warnings; then
+        echo "❌ Clippy found issues!"
+        exit 1
+    fi
+    echo "✅ Clippy checks passed."
+fi
+
+exit 0

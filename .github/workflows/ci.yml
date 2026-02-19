@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup
+
+    - name: Check Cargo.lock is up to date
+      run: cargo check --locked --all-targets
+
+    - name: Run tests
+      run: cargo test --verbose

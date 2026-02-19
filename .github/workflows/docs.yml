@@ -1,0 +1,25 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: ./.github/actions/setup
+
+    - name: Check documentation
+      run: cargo doc --no-deps
+
+    - name: Build documentation
+      run: cargo doc --all-features --no-deps
