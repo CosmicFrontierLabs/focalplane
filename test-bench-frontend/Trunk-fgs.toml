@@ -1,9 +1,0 @@
-[build]
-target = "fgs_index.html"
-dist = "dist/fgs"
-
-[watch]
-ignore = ["dist"]
-
-[serve]
-port = 8082

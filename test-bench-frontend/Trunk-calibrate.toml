@@ -1,9 +1,0 @@
-[build]
-target = "calibrate_index.html"
-dist = "dist/calibrate"
-
-[watch]
-ignore = ["dist"]
-
-[serve]
-port = 8081

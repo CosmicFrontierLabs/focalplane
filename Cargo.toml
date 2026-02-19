@@ -1,14 +1,6 @@
 [workspace]
 members = [
-    "meter-math",
     "simulator",
-    "monocle",
-    "monocle_harness",
-    "shared",
-    "test-bench",
-    "test-bench-frontend",
-    "hardware",
-    "shared-wasm",
 ]
 resolver = "2"
 
@@ -16,7 +8,6 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = []
-description = "Space telescope simulation system"
-repository = "https://github.com/meawoppl/meter-sim"
+description = "Space telescope imaging and sensor simulation"
+repository = "https://github.com/CosmicFrontierLabs/focalplane"
 license = "MIT"
-# Common dependencies will go here
