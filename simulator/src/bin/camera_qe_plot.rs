@@ -1,11 +1,11 @@
-//! Plot QE curves for all known camera sensors
+//! Plot QE curves for all known camera sensors.
 //!
-//! This example generates a PNG plot of quantum efficiency curves
-//! for all predefined camera models.
+//! Generates a PNG plot of quantum efficiency curves for all predefined
+//! camera models. Output is saved to `plots/camera_qe_curves.png`.
 //!
 //! Usage:
 //! ```
-//! cargo run --example camera_qe_plot
+//! cargo run --release --bin camera_qe_plot
 //! ```
 
 use plotters::prelude::*;

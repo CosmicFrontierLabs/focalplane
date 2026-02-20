@@ -1,5 +1,7 @@
 # focalplane
 
+[![codecov](https://codecov.io/gh/CosmicFrontierLabs/focalplane/graph/badge.svg)](https://codecov.io/gh/CosmicFrontierLabs/focalplane)
+
 Space telescope imaging and sensor simulation, written in Rust.
 
 Simulates the full optical path from star catalog to detector output, including:
