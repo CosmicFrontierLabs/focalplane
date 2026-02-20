@@ -727,8 +727,51 @@ mod tests {
     use crate::hardware::sensor::models::HWK4123;
     use crate::hardware::telescope::TelescopeConfig;
     use crate::units::{Length, LengthExt, Temperature, TemperatureExt};
+    use starfield::catalogs::StarData;
     use std::fs;
     use tempfile::TempDir;
+
+    struct MockCatalog {
+        stars: Vec<StarData>,
+    }
+
+    impl StarCatalog for MockCatalog {
+        type Star = StarData;
+
+        fn get_star(&self, id: usize) -> Option<&StarData> {
+            self.stars.get(id)
+        }
+
+        fn stars(&self) -> impl Iterator<Item = &StarData> {
+            self.stars.iter()
+        }
+
+        fn len(&self) -> usize {
+            self.stars.len()
+        }
+
+        fn filter<F>(&self, predicate: F) -> Vec<&StarData>
+        where
+            F: Fn(&StarData) -> bool,
+        {
+            self.stars.iter().filter(|s| predicate(s)).collect()
+        }
+
+        fn star_data(&self) -> impl Iterator<Item = StarData> + '_ {
+            self.stars.iter().cloned()
+        }
+
+        fn filter_star_data<F>(&self, predicate: F) -> Vec<StarData>
+        where
+            F: Fn(&StarData) -> bool,
+        {
+            self.stars
+                .iter()
+                .filter(|s| predicate(s))
+                .cloned()
+                .collect()
+        }
+    }
 
     #[test]
     fn test_csv_writer_creation_and_header() {
@@ -793,18 +836,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_run_experiment_basic() {
-        // Create minimal test setup
         let temp_dir = TempDir::new().unwrap();
         let csv_path = temp_dir.path().join("experiment.csv");
 
-        // Create a simple telescope for testing
         let telescope = TelescopeConfig::new(
             "Test Telescope".to_string(),
-            Length::from_meters(0.2), // 200mm aperture
-            Length::from_meters(2.0), // 2m focal length (f/10)
-            0.9,                      // transmission efficiency
+            Length::from_meters(0.2),
+            Length::from_meters(2.0),
+            0.9,
         );
         let sensor = HWK4123.clone();
         let satellite =
@@ -816,7 +856,7 @@ mod tests {
                 .unwrap(),
             noise_multiple: 3.0,
             output_dir: temp_dir.path().to_str().unwrap().to_string(),
-            save_images: false, // Don't save images in test
+            save_images: false,
             icp_max_iterations: 10,
             icp_convergence_threshold: 0.001,
             star_finder: StarFinder::Naive,
@@ -824,31 +864,33 @@ mod tests {
             aperture_m: telescope.aperture.as_meters(),
         };
 
-        let _params = ExperimentParams {
+        let params = ExperimentParams {
             experiment_num: 0,
             trial_num: 0,
             rng_seed: 42,
-            ra_dec: Equatorial::from_degrees(56.75, 24.12), // Pleiades
+            ra_dec: Equatorial::from_degrees(56.75, 24.12),
             satellites: vec![satellite],
             f_numbers: vec![10.0],
             common_args,
         };
 
-        // See TODO.md: Simulator - Scene Processing - Fix catalog mock
-        // let catalog = TestCatalog { stars: vec![] };
+        let catalog = MockCatalog {
+            stars: vec![
+                StarData::new(1, 56.75, 24.12, 5.0, Some(0.5)),
+                StarData::new(2, 56.80, 24.15, 7.0, Some(1.0)),
+            ],
+        };
 
-        // Run experiment (disabled until catalog mock is fixed)
-        // let results = run_experiment(&params, &catalog, 1.0);
+        let frame_writer = FrameWriterHandle::new(1, 4).unwrap();
+        let results = run_experiment(&params, &catalog, 1.0, &frame_writer);
 
-        // Basic assertions
-        // assert_eq!(results.len(), 1); // One satellite
-        // assert_eq!(results[0].experiment_num, 0);
-        // assert_eq!(results[0].f_number, 10.0);
-        // assert!(!results[0].exposure_results.is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].experiment_num, 0);
+        assert_eq!(results[0].f_number, 10.0);
+        assert!(!results[0].exposure_results.is_empty());
 
-        // Check CSV was written
-        // let csv_contents = fs::read_to_string(&csv_path).unwrap();
-        // assert!(csv_contents.contains("experiment_num"));
-        // assert!(csv_contents.lines().count() >= 2); // At least header + 1 row
+        let csv_contents = fs::read_to_string(&csv_path).unwrap();
+        assert!(csv_contents.contains("experiment_num"));
+        assert!(csv_contents.lines().count() >= 2);
     }
 }
