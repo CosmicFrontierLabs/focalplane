@@ -515,7 +515,7 @@ pub mod models {
             "Weasel",
             Length::from_meters(0.47), // 470mm aperture
             Length::from_meters(3.45), // 3450mm focal length
-            0.70,                      // See TODO.md: Simulator - Hardware
+            0.70,
         )
     });
 }
