@@ -231,7 +231,6 @@ fn main() {
         let exposure_s = args.exposure_ms as f64 / 1000.0;
         let dark_electrons = dark_current * exposure_s;
 
-        // See TODO.md: Simulator - Noise Modeling - Add zodiacal background
         let total_expected_noise = (read_noise.powi(2) + dark_electrons).sqrt();
 
         println!("Expected noise components:");

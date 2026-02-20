@@ -11,12 +11,7 @@ Simulates the full optical path from star catalog to detector output, including:
 
 ## Building
 
-Requires `libcfitsio-dev` for FITS support:
-
 ```bash
-# Ubuntu/Debian
-sudo apt-get install libcfitsio-dev
-
 # Build
 cargo build --release
 
@@ -32,9 +27,6 @@ cargo run --release --bin sensor_shootout -- --experiments 100
 
 # Single-shot debug mode pointing at the Pleiades
 cargo run --release --bin sensor_shootout -- --single-shot-debug "56.75,24.12" --experiments 1
-
-# Estimate detection limits
-cargo run --release --bin sensor_floor_est
 ```
 
 ## Dependencies

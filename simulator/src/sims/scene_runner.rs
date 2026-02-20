@@ -793,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // See TODO.md: Simulator - Scene Processing - Fix catalog mock
+    #[ignore]
     fn test_run_experiment_basic() {
         // Create minimal test setup
         let temp_dir = TempDir::new().unwrap();
