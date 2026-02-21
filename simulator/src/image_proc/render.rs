@@ -15,7 +15,7 @@ use meter_math::Locatable2d;
 use shared::{
     image_proc::noise::apply_poisson_photon_noise,
     star_projector::StarProjector,
-    units::{AngleExt, Area},
+    units::{Area, LengthExt},
 };
 
 #[derive(Clone, Debug)]
@@ -144,23 +144,24 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create a new renderer from a star catalog and satellite configuration
+    /// Create a new renderer from a star catalog and satellite configuration.
     ///
-    /// This method projects stars and creates a base 1-second exposure image
+    /// Projects stars through the focal-plane-mm pipeline and creates a base
+    /// 1-second exposure image. The single sensor is treated as a 1-element array.
     pub fn from_catalog(
         stars: &Vec<&StarData>,
         center: &Equatorial,
         satellite_config: SatelliteConfig,
     ) -> Self {
+        let fp = FocalPlaneConfig::from_satellite(&satellite_config);
         let airy_pix = satellite_config.airy_disk_pixel_space();
+        let pixel_size_mm = satellite_config.sensor.pixel_size().as_millimeters();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
 
-        // NOTE(meawopppl) - Should be erf() based cutoff here
-        let padding = airy_pix.first_zero() * 2.0;
+        let fp_stars = project_stars_to_focal_plane(stars, center, &fp, padding_mm);
+        let mut per_sensor = route_stars_to_sensors(&fp_stars, &fp, padding_mm);
+        let rendered_stars = per_sensor.remove(0);
 
-        // Project stars to pixel coordinates with 1-second flux
-        let rendered_stars = project_stars_to_pixels(stars, center, &satellite_config, padding);
-
-        // Create base star image for 1 second exposure
         let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
         let base_star_image = add_stars_to_image(
             width,
@@ -322,77 +323,6 @@ impl Renderer {
             sensor_config: self.satellite_config.sensor.clone(),
         }
     }
-}
-
-/// Projects stars from catalog coordinates to pixel coordinates with flux calculation
-///
-/// This function handles the complete star screening and projection pipeline:
-/// - Creates coordinate projector for celestial-to-pixel transformation
-/// - Projects each star and filters out-of-bounds stars
-/// - Calculates expected electron flux for each visible star
-/// - Returns list of StarInFrame objects ready for rendering
-///
-/// # Arguments
-///
-/// * `stars` - Vector of star catalog entries to project
-/// * `center` - Central pointing direction in equatorial coordinates
-/// * `satellite` - Satellite configuration for projection parameters
-/// * `exposure` - Exposure duration for flux calculation
-/// * `padding` - Padding around image edges for PSF bleeding
-///
-/// # Returns
-///
-/// Vector of `StarInFrame` objects with pixel coordinates and flux values
-pub fn project_stars_to_pixels(
-    stars: &Vec<&StarData>,
-    center: &Equatorial,
-    satellite: &SatelliteConfig,
-    padding: f64,
-) -> Vec<StarInFrame> {
-    let (image_width, image_height) = satellite.sensor.dimensions.get_pixel_width_height();
-
-    // Create star projector for coordinate transformation using satellite's pixel scale
-    let radians_per_pixel = satellite.plate_scale_per_pixel().as_radians();
-    let projector = StarProjector::new(center, radians_per_pixel, image_width, image_height);
-
-    let mut projected_stars = Vec::new();
-
-    // Project each star to pixel coordinates
-    for &star in stars {
-        // Convert position to pixel coordinates (sub-pixel precision)
-        let (x, y) = match projector.project_unbounded(&star.position) {
-            Some(coords) => coords,
-            None => continue, // Skip stars behind the camera
-        };
-
-        // Check if star is within the image bounds (with padding for PSF)
-        if x < -padding
-            || y < -padding
-            || x >= image_width as f64 + padding
-            || y >= image_height as f64 + padding
-        {
-            continue; // Skip stars outside the image
-        }
-
-        // Create StarInFrame with projected coordinates and flux
-        projected_stars.push(StarInFrame {
-            x,
-            y,
-            spot: star_data_to_fluxes(star, satellite),
-            star: *star,
-        });
-    }
-
-    // Sort by flux for consistent rendering (float addition isn't associative)
-    projected_stars.sort_by(|a, b| {
-        a.spot
-            .electrons
-            .flux
-            .partial_cmp(&b.spot.electrons.flux)
-            .unwrap()
-    });
-
-    projected_stars
 }
 
 pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Array2<u16> {
