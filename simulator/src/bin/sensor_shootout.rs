@@ -260,8 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse exposure durations from range in milliseconds
     let exposure_durations_vec: Vec<Duration> = args
         .exposure_range_ms
-        .to_vec()
-        .expect("Invalid exposure range")
+        .to_vec()?
         .iter()
         .map(|&ms| Duration::from_millis(ms as u64))
         .collect();
@@ -288,7 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse f-number range
     let f_numbers: Vec<f64> = if let Some(f_range) = args.f_number_range {
-        f_range.to_vec().expect("Invalid f-number range")
+        f_range.to_vec()?
     } else {
         // Default to current telescope f-number
         vec![selected_telescope.f_number()]
@@ -352,7 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Load the catalog....this requires some serious RAM
-    let catalog = args.shared.load_catalog().expect("Could not load catalog?");
+    let catalog = args.shared.load_catalog()?;
     info!("Loaded catalog with {} stars", catalog.len());
 
     // Generate timestamp for file/directory naming
@@ -371,7 +370,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure the output directory exists
     let output_path = Path::new(&output_dir_with_timestamp);
     if !output_path.exists() {
-        std::fs::create_dir_all(output_path).expect("Failed to create output directory");
+        std::fs::create_dir_all(output_path)?;
     }
 
     // Create CSV writer
@@ -395,8 +394,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let num_workers = num_cpus::get().max(2);
     let buffer_size = num_workers * 4;
     info!("Initializing frame writer with {num_workers} workers");
-    let frame_writer =
-        FrameWriterHandle::new(num_workers, buffer_size).expect("Failed to create frame writer");
+    let frame_writer = FrameWriterHandle::new(num_workers, buffer_size)?;
 
     // Build all experiment parameters upfront
     info!("Setting up experiments...");
@@ -453,8 +451,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup progress tracking
     let multi_progress = MultiProgress::new();
     let progress_style = ProgressStyle::default_bar()
-        .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-        .unwrap()
+        .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
         .progress_chars("█▉▊▋▌▍▎▏ ");
 
     // Create progress bar
