@@ -86,9 +86,14 @@
 //! - **Performance metrics**: Signal-to-noise, limiting magnitudes
 //! - **Diagnostic data**: Background levels, noise contributions
 
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::hardware::SatelliteConfig;
-use crate::image_proc::render::{project_stars_to_pixels, Renderer, RenderingResult, StarInFrame};
+use crate::image_proc::render::{
+    project_stars_to_focal_plane, project_stars_to_pixels, route_stars_to_sensors, Renderer,
+    RenderingResult, StarInFrame,
+};
 use crate::photometry::zodiacal::SolarAngularCoordinates;
+use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::time::Duration;
@@ -336,5 +341,121 @@ impl Scene {
     /// - **Fresh noise generation**: Maintains statistical independence
     pub fn create_renderer(&self) -> Renderer {
         Renderer::from_stars(&self.stars, self.satellite_config.clone())
+    }
+}
+
+/// Multi-sensor observation scene for focal plane arrays.
+///
+/// Like [`Scene`] but operates across a full sensor array. One catalog query
+/// and one gnomonic projection covers the entire focal plane, then stars are
+/// routed to individual sensors for rendering.
+///
+/// # Architecture
+///
+/// ```text
+/// Catalog → projection to focal plane mm → route to sensors → per-sensor render
+/// ```
+///
+/// Each sensor gets its own `SatelliteConfig` (QE, noise, pixel scale) and
+/// produces an independent `RenderingResult`.
+#[derive(Debug, Clone)]
+pub struct ArrayScene {
+    /// Focal plane array configuration (telescope + sensor array + temperature)
+    pub focal_plane: FocalPlaneConfig,
+
+    /// Stars projected and routed to each sensor's pixel coordinates.
+    /// Indexed by sensor index in the array.
+    pub per_sensor_stars: Vec<Vec<StarInFrame>>,
+
+    /// Celestial pointing center for the observation.
+    pub pointing_center: Equatorial,
+
+    /// Solar angular coordinates for zodiacal light calculation.
+    pub zodiacal_coordinates: SolarAngularCoordinates,
+}
+
+impl ArrayScene {
+    /// Create an array scene from a star catalog.
+    ///
+    /// Projects all catalog stars onto the focal plane with one pass, then
+    /// routes them to individual sensors. PSF padding is computed from the
+    /// telescope's Airy disk at the first sensor's pixel scale.
+    ///
+    /// # Arguments
+    /// * `focal_plane` - Complete focal plane array configuration
+    /// * `catalog_stars` - Star catalog covering the full array field
+    /// * `pointing_center` - Telescope pointing direction
+    /// * `zodiacal_coordinates` - Solar position for background calculation
+    pub fn from_catalog(
+        focal_plane: FocalPlaneConfig,
+        catalog_stars: Vec<StarData>,
+        pointing_center: Equatorial,
+        zodiacal_coordinates: SolarAngularCoordinates,
+    ) -> Self {
+        // Compute PSF padding in mm from the first sensor's Airy disk
+        let first_sat = focal_plane
+            .satellite_for_sensor(0)
+            .expect("Array must have at least one sensor");
+        let airy_pix = first_sat.airy_disk_pixel_space();
+        let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
+
+        let star_refs: Vec<&StarData> = catalog_stars.iter().collect();
+        let fp_stars =
+            project_stars_to_focal_plane(&star_refs, &pointing_center, &focal_plane, padding_mm);
+        let per_sensor_stars = route_stars_to_sensors(&fp_stars, &focal_plane, padding_mm);
+
+        Self {
+            focal_plane,
+            per_sensor_stars,
+            pointing_center,
+            zodiacal_coordinates,
+        }
+    }
+
+    /// Render all sensors and return one `RenderingResult` per sensor.
+    pub fn render(&self, exposure: &Duration) -> Vec<RenderingResult> {
+        self.render_with_seed(exposure, None)
+    }
+
+    /// Render all sensors with an optional base RNG seed.
+    ///
+    /// Each sensor gets a unique seed derived from the base seed offset by
+    /// sensor index, producing reproducible but independent noise.
+    pub fn render_with_seed(
+        &self,
+        exposure: &Duration,
+        base_seed: Option<u64>,
+    ) -> Vec<RenderingResult> {
+        let sensor_count = self.focal_plane.array.sensor_count();
+        let mut results = Vec::with_capacity(sensor_count);
+
+        for sensor_idx in 0..sensor_count {
+            let sat = self
+                .focal_plane
+                .satellite_for_sensor(sensor_idx)
+                .expect("sensor index in range");
+
+            let renderer = Renderer::from_stars(&self.per_sensor_stars[sensor_idx], sat);
+
+            let seed = base_seed.map(|s| s + sensor_idx as u64);
+            let rendered = renderer.render_with_seed(exposure, &self.zodiacal_coordinates, seed);
+
+            results.push(RenderingResult {
+                quantized_image: rendered.quantized_image,
+                star_image: rendered.star_image,
+                zodiacal_image: rendered.zodiacal_image,
+                sensor_noise_image: rendered.sensor_noise_image,
+                rendered_stars: rendered.rendered_stars,
+                sensor_config: self.focal_plane.array.sensors[sensor_idx].sensor.clone(),
+            });
+        }
+
+        results
+    }
+
+    /// Get the number of sensors in the array.
+    pub fn sensor_count(&self) -> usize {
+        self.focal_plane.array.sensor_count()
     }
 }
