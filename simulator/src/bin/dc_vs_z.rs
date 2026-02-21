@@ -1,3 +1,19 @@
+//! Dark current vs zodiacal background analysis tool.
+//!
+//! Compares sensor dark current against zodiacal background flux across a range
+//! of sky positions (from solar exclusion angle to opposition). Helps determine
+//! whether dark current or sky background is the dominant noise source for a
+//! given telescope/sensor combination.
+//!
+//! Outputs a table of zodiacal brightness values and optionally generates a
+//! comparison plot.
+//!
+//! Usage:
+//! ```
+//! cargo run --release --bin dc_vs_z -- -t demo50cm -s imx455 -e 45.0
+//! cargo run --release --bin dc_vs_z -- -t demo50cm -s imx455 -e 45.0 --plot
+//! ```
+
 use clap::Parser;
 use plotters::prelude::*;
 use simulator::photometry::zodiacal::{

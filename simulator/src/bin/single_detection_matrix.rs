@@ -194,8 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup progress tracking
     let multi_progress = MultiProgress::new();
     let progress_style = ProgressStyle::default_bar()
-        .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-        .unwrap()
+        .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
         .progress_chars("█▉▊▋▌▍▎▏ ");
 
     // Create progress bar
@@ -264,44 +263,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Open CSV file for writing
     let csv_path = Path::new(&args.output_csv);
-    let mut csv_file = File::create(csv_path)
-        .unwrap_or_else(|_| panic!("Failed to create CSV file: {}", args.output_csv));
+    let mut csv_file = File::create(csv_path)?;
 
     println!("Writing results to CSV file: {}", args.output_csv);
 
     // Write CSV header
-    writeln!(csv_file, "Sensor Floor Estimation Results").unwrap();
-    writeln!(csv_file, "Parameters:").unwrap();
-    writeln!(csv_file, "Exposure: {} seconds", args.shared.exposure).unwrap();
+    writeln!(csv_file, "Sensor Floor Estimation Results")?;
+    writeln!(csv_file, "Parameters:")?;
+    writeln!(csv_file, "Exposure: {} seconds", args.shared.exposure)?;
     writeln!(
         csv_file,
         "Noise Floor Multiplier: {}",
         args.shared.noise_multiple
-    )
-    .unwrap();
-    writeln!(csv_file, "Telescope: {}", args.shared.telescope).unwrap();
+    )?;
+    writeln!(csv_file, "Telescope: {}", args.shared.telescope)?;
     writeln!(
         csv_file,
         "Aperture diameter: {} m",
         telescope_config.aperture.as_meters()
-    )
-    .unwrap();
+    )?;
     writeln!(
         csv_file,
         "Experiments per configuration: {}",
         args.experiments
-    )
-    .unwrap();
-    writeln!(csv_file, "PSF Disk Range (FWHM units): {}", args.disks).unwrap();
-    writeln!(csv_file, "Star Magnitude Range: {}", args.mags).unwrap();
-    writeln!(csv_file, "Exposure Range (ms): {}", args.exposures).unwrap();
+    )?;
+    writeln!(csv_file, "PSF Disk Range (FWHM units): {}", args.disks)?;
+    writeln!(csv_file, "Star Magnitude Range: {}", args.mags)?;
+    writeln!(csv_file, "Exposure Range (ms): {}", args.exposures)?;
     writeln!(
         csv_file,
         "Domain Size: {}x{} pixels",
         args.domain, args.domain
-    )
-    .unwrap();
-    writeln!(csv_file).unwrap();
+    )?;
+    writeln!(csv_file)?;
 
     // Sort the sensor names for consistent output
     let mut sensors_ordered: Vec<_> = all_satellites
@@ -312,16 +306,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     sensors_ordered.sort();
 
     for sensor_name in sensors_ordered {
-        let results = sensor_results.get(&sensor_name).unwrap();
-        let pixel_results = sensor_pixel_results.get(&sensor_name).unwrap();
-        let detection_rate_array = detection_rates.get(&sensor_name).unwrap();
-        let spurious_rate_array = spurious_rates.get(&sensor_name).unwrap();
+        let results = &sensor_results[&sensor_name];
+        let pixel_results = &sensor_pixel_results[&sensor_name];
+        let detection_rate_array = &detection_rates[&sensor_name];
+        let spurious_rate_array = &spurious_rates[&sensor_name];
 
         println!("\n==== Sensor: {sensor_name} ====");
 
         // Write sensor name to CSV
-        writeln!(csv_file, "SENSOR: {sensor_name}").unwrap();
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file, "SENSOR: {sensor_name}")?;
+        writeln!(csv_file)?;
 
         // Detection Rate Matrix - Console output (simplified, just show first exposure)
         println!(
@@ -353,109 +347,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // CSV Output - Detection Rate Matrix with disk and exposure unrolled
-        writeln!(csv_file, "Detection Rate Matrix (%)").unwrap();
+        writeln!(csv_file, "Detection Rate Matrix (%)")?;
 
         // CSV header: Disk, Exposure, then magnitude columns
-        write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
+        write!(csv_file, "Q_Value,Exposure_ms,")?;
         for mag in &mags {
-            write!(csv_file, "{mag:.2},").unwrap();
+            write!(csv_file, "{mag:.2},")?;
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Write all combinations of exposure and disk (exposure grouped together)
         for (exposure_idx, exposure) in exposures.iter().enumerate() {
             for (disk_idx, disk) in disks.iter().enumerate() {
-                write!(csv_file, "{:.2},{},", disk, exposure.as_millis()).unwrap();
+                write!(csv_file, "{:.2},{},", disk, exposure.as_millis())?;
                 for mag_idx in 0..mags.len() {
                     let rate = detection_rate_array[[disk_idx, exposure_idx, mag_idx]];
-                    write!(csv_file, "{:.1},", rate * 100.0).unwrap();
+                    write!(csv_file, "{:.1},", rate * 100.0)?;
                 }
-                writeln!(csv_file).unwrap();
+                writeln!(csv_file)?;
             }
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Mean Position Error Matrix (mas)
-        writeln!(csv_file, "Mean Position Error Matrix (milliarcseconds)").unwrap();
+        writeln!(csv_file, "Mean Position Error Matrix (milliarcseconds)")?;
 
         // CSV header: Disk, Exposure, then magnitude columns
-        write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
+        write!(csv_file, "Q_Value,Exposure_ms,")?;
         for mag in &mags {
-            write!(csv_file, "{mag:.2},").unwrap();
+            write!(csv_file, "{mag:.2},")?;
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Write all combinations of exposure and disk (exposure grouped together)
         for (exposure_idx, exposure) in exposures.iter().enumerate() {
             for (disk_idx, disk) in disks.iter().enumerate() {
-                write!(csv_file, "{:.2},{},", disk, exposure.as_millis()).unwrap();
+                write!(csv_file, "{:.2},{},", disk, exposure.as_millis())?;
                 for mag_idx in 0..mags.len() {
                     let err = results[[disk_idx, exposure_idx, mag_idx]];
                     if err.is_nan() {
-                        write!(csv_file, ",").unwrap(); // Empty cell for NaN
+                        write!(csv_file, ",")?; // Empty cell for NaN
                     } else {
-                        write!(csv_file, "{err:.4},").unwrap();
+                        write!(csv_file, "{err:.4},")?;
                     }
                 }
-                writeln!(csv_file).unwrap();
+                writeln!(csv_file)?;
             }
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // RMS Position Error Matrix (pixels)
-        writeln!(csv_file, "RMS Position Error Matrix (pixels)").unwrap();
+        writeln!(csv_file, "RMS Position Error Matrix (pixels)")?;
 
         // CSV header: Disk, Exposure, then magnitude columns
-        write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
+        write!(csv_file, "Q_Value,Exposure_ms,")?;
         for mag in &mags {
-            write!(csv_file, "{mag:.2},").unwrap();
+            write!(csv_file, "{mag:.2},")?;
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Write all combinations of exposure and disk (exposure grouped together)
         for (exposure_idx, exposure) in exposures.iter().enumerate() {
             for (disk_idx, disk) in disks.iter().enumerate() {
-                write!(csv_file, "{:.2},{},", disk, exposure.as_millis()).unwrap();
+                write!(csv_file, "{:.2},{},", disk, exposure.as_millis())?;
                 for mag_idx in 0..mags.len() {
                     let err = pixel_results[[disk_idx, exposure_idx, mag_idx]];
                     if err.is_nan() {
-                        write!(csv_file, ",").unwrap(); // Empty cell for NaN
+                        write!(csv_file, ",")?; // Empty cell for NaN
                     } else {
-                        write!(csv_file, "{err:.4},").unwrap();
+                        write!(csv_file, "{err:.4},")?;
                     }
                 }
-                writeln!(csv_file).unwrap();
+                writeln!(csv_file)?;
             }
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Spurious Detection Rate Matrix (%)
-        writeln!(csv_file, "Spurious Detection Rate Matrix (%)").unwrap();
+        writeln!(csv_file, "Spurious Detection Rate Matrix (%)")?;
 
         // CSV header: Disk, Exposure, then magnitude columns
-        write!(csv_file, "Q_Value,Exposure_ms,").unwrap();
+        write!(csv_file, "Q_Value,Exposure_ms,")?;
         for mag in &mags {
-            write!(csv_file, "{mag:.2},").unwrap();
+            write!(csv_file, "{mag:.2},")?;
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Write all combinations of exposure and disk (exposure grouped together)
         for (exposure_idx, exposure) in exposures.iter().enumerate() {
             for (disk_idx, disk) in disks.iter().enumerate() {
-                write!(csv_file, "{:.2},{},", disk, exposure.as_millis()).unwrap();
+                write!(csv_file, "{:.2},{},", disk, exposure.as_millis())?;
                 for mag_idx in 0..mags.len() {
                     let rate = spurious_rate_array[[disk_idx, exposure_idx, mag_idx]];
-                    write!(csv_file, "{:.2},", rate * 100.0).unwrap();
+                    write!(csv_file, "{:.2},", rate * 100.0)?;
                 }
-                writeln!(csv_file).unwrap();
+                writeln!(csv_file)?;
             }
         }
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
 
         // Add separator between sensors
-        writeln!(csv_file).unwrap();
-        writeln!(csv_file, "-----------------------------------------------").unwrap();
-        writeln!(csv_file).unwrap();
+        writeln!(csv_file)?;
+        writeln!(csv_file, "-----------------------------------------------")?;
+        writeln!(csv_file)?;
 
         println!();
     }
