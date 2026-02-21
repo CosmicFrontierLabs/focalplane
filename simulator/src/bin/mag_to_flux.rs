@@ -6,6 +6,7 @@ use shared::image_proc::detection::{detect_stars_unified, StarFinder};
 use shared::image_proc::{save_u8_image, stretch_histogram, u16_to_u8_scaled};
 use shared::range_arg::RangeArg;
 use shared::units::{Temperature, TemperatureExt};
+use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::StarInFrame;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
@@ -242,16 +243,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // Create scene with single star
+            let fp = FocalPlaneConfig::from_satellite(&satellite_config);
             let scene = Scene::from_stars(
-                satellite_config.clone(),
-                vec![star_in_frame],
+                fp,
+                vec![vec![star_in_frame]],
                 Equatorial::from_degrees(0.0, 0.0), // Dummy pointing
                 SolarAngularCoordinates::zodiacal_minimum(),
             );
 
             // Render the scene
             let exposure = Duration::from_secs(1);
-            let render_result = scene.render_with_seed(&exposure, Some(42));
+            let render_result = scene.render_with_seed(&exposure, Some(42)).remove(0);
 
             // Save image if requested
             if args.save_images {
