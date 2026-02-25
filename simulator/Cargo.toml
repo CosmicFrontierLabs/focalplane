@@ -9,7 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-starfield = "0.2.3" # Star catalog functionality
+starfield = "0.9.1" # Star catalog functionality
 image = "0.25" # Image processing
 ndarray = { version = "0.16", features = [
     "rayon",
@@ -25,9 +25,9 @@ log = "0.4"                   # Logging facade
 env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 # Foundation crates from cfl-foundations
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1" }
 
 rand = "0.9"
 rand_distr = "0.5"

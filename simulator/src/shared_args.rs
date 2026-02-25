@@ -91,7 +91,7 @@
 //! Demonstrates how to use the automatic bright star augmentation feature:
 //! - Use SharedSimulationArgs::parse() to parse command-line arguments
 //! - Call args.load_catalog() to load the catalog with embedded bright stars included
-//! - The returned catalog combines the specified binary catalog with additional bright stars
+//! - The returned catalog combines the specified minimal catalog with additional bright stars
 //!
 //! # Error Handling and Validation
 //!
@@ -156,7 +156,7 @@ use crate::hardware::telescope::TelescopeConfig;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
 use clap::{Parser, ValueEnum};
 use log::info;
-use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
+use starfield::catalogs::minimal_catalog::{MinimalCatalog, MinimalStar};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -601,25 +601,25 @@ pub struct SharedSimulationArgs {
 impl SharedSimulationArgs {
     /// Load a binary star catalog from the configured path and union with additional bright stars
     ///
-    /// This method loads a BinaryCatalog and adds additional bright stars from embedded CSV data.
+    /// This method loads a MinimalCatalog and adds additional bright stars from embedded CSV data.
     ///
     /// # Returns
-    /// * `Result<BinaryCatalog, Box<dyn std::error::Error>>` - The loaded catalog with additional stars or error
+    /// * `Result<MinimalCatalog, Box<dyn std::error::Error>>` - The loaded catalog with additional stars or error
     ///
     /// # Usage
     /// Load a catalog with automatic bright star augmentation:
-    /// - Loads the binary catalog from the specified path
+    /// - Loads the minimal catalog from the specified path
     /// - Automatically adds embedded bright stars from CSV data
     /// - Returns a combined catalog with collision-free star IDs
     /// - Reports clear error messages if catalog loading fails
-    pub fn load_catalog(&self) -> Result<BinaryCatalog, Box<dyn std::error::Error>> {
+    pub fn load_catalog(&self) -> Result<MinimalCatalog, Box<dyn std::error::Error>> {
         info!(
             "Loading binary star catalog from: {}",
             self.catalog.display()
         );
         let start_time = Instant::now();
 
-        let mut catalog = BinaryCatalog::load(&self.catalog).map_err(|e| {
+        let mut catalog = MinimalCatalog::load(&self.catalog).map_err(|e| {
             format!(
                 "Failed to load catalog from '{}': {}",
                 self.catalog.display(),
@@ -655,7 +655,7 @@ impl SharedSimulationArgs {
             catalog.description(),
             all_stars.len() - catalog.len()
         );
-        catalog = BinaryCatalog::from_stars(all_stars, &updated_description);
+        catalog = MinimalCatalog::from_stars(all_stars, &updated_description);
 
         Ok(catalog)
     }

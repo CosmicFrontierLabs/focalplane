@@ -31,7 +31,7 @@ use shared::units::{Angle, AngleExt, LengthExt, Temperature, TemperatureExt};
 use simulator::hardware::SatelliteConfig;
 use simulator::shared_args::{parse_additional_stars, SensorModel, TelescopeModel};
 use simulator::star_math::field_diameter;
-use starfield::catalogs::binary_catalog::BinaryCatalog;
+use starfield::catalogs::minimal_catalog::MinimalCatalog;
 use starfield::catalogs::StarPosition;
 use starfield::framelib::random::RandomEquatorial;
 use starfield::Equatorial;
@@ -111,7 +111,7 @@ struct Args {
 
 /// Efficiently process all stars once for all projector configurations
 fn process_all_stars_efficiently(
-    catalog: &BinaryCatalog,
+    catalog: &MinimalCatalog,
     projector_configs: &[ProjectorConfig],
 ) -> Vec<ProjectorResult> {
     let num_configs = projector_configs.len();
@@ -318,7 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Loading binary star catalog from: {}",
         args.catalog.display()
     );
-    let catalog = BinaryCatalog::load(&args.catalog)?;
+    let catalog = MinimalCatalog::load(&args.catalog)?;
 
     let additional_stars = parse_additional_stars()?;
     info!(
@@ -334,7 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         catalog.description(),
         all_stars.len() - catalog.len()
     );
-    let catalog = BinaryCatalog::from_stars(all_stars, &updated_description);
+    let catalog = MinimalCatalog::from_stars(all_stars, &updated_description);
 
     info!("Setting up {} random sky pointings...", args.pointings);
 
