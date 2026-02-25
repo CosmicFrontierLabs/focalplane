@@ -1,13 +1,13 @@
 //! Catalog comparison tool
 //!
-//! Compares bright stars from Hipparcos catalog against a binary catalog
-//! and reports which bright stars are missing from the binary catalog.
+//! Compares bright stars from Hipparcos catalog against a minimal catalog
+//! and reports which bright stars are missing from the minimal catalog.
 
 use clap::Parser;
 use shared::viz::histogram::create_magnitude_histogram;
 use shared_wasm::StatsScan;
-use starfield::catalogs::binary_catalog::{BinaryCatalog, MinimalStar};
 use starfield::catalogs::hipparcos::HipparcosCatalog;
+use starfield::catalogs::minimal_catalog::{MinimalCatalog, MinimalStar};
 use starfield::catalogs::{StarCatalog, StarPosition};
 use starfield::Equatorial;
 use std::f64::consts::PI;
@@ -112,7 +112,7 @@ pub fn convert_epoch(coords: Equatorial, from_epoch: f64, to_epoch: f64) -> Equa
 ///
 /// ```rust
 /// use catalog_stats::MaxMagnitudeCollector;
-/// use starfield::catalogs::binary_catalog::MinimalStar;
+/// use starfield::catalogs::minimal_catalog::MinimalStar;
 ///
 /// let mut collector = MaxMagnitudeCollector::new(100);
 /// // Add stars from catalog - only brightest 100 will be kept
@@ -161,7 +161,7 @@ impl MaxMagnitudeCollector {
     ///
     /// ```rust
     /// # use catalog_stats::MaxMagnitudeCollector;
-    /// # use starfield::catalogs::binary_catalog::MinimalStar;
+    /// # use starfield::catalogs::minimal_catalog::MinimalStar;
     /// let mut collector = MaxMagnitudeCollector::new(3);
     /// collector.add(MinimalStar { magnitude: 5.0, ..Default::default() });
     /// collector.add(MinimalStar { magnitude: 3.0, ..Default::default() });
@@ -224,12 +224,12 @@ impl MaxMagnitudeCollector {
 ///
 /// This structure defines all the parameters needed to compare bright stars
 /// between the Hipparcos catalog and a binary star catalog, finding stars
-/// that are present in Hipparcos but missing from the binary catalog.
+/// that are present in Hipparcos but missing from the minimal catalog.
 #[derive(Parser, Debug)]
 #[command(name = "catalog_stats")]
-#[command(about = "Find bright stars missing from binary catalog compared to Hipparcos")]
+#[command(about = "Find bright stars missing from minimal catalog compared to Hipparcos")]
 struct Args {
-    /// Path to the binary catalog file
+    /// Path to the minimal catalog file
     #[arg(short, long)]
     catalog: PathBuf,
 
@@ -268,16 +268,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hipparcos = HipparcosCatalog::from_dat_file(&hipparcos_path, args.threshold)?;
     println!("Loaded {} stars from Hipparcos", hipparcos.len());
 
-    // Load binary catalog
-    println!("Loading binary catalog from: {}", args.catalog.display());
-    let binary_catalog = BinaryCatalog::load(&args.catalog)?;
-    println!("Loaded {} stars from binary catalog", binary_catalog.len());
+    // Load minimal catalog
+    println!("Loading minimal catalog from: {}", args.catalog.display());
+    let minimal_catalog = MinimalCatalog::load(&args.catalog)?;
+    println!(
+        "Loaded {} stars from minimal catalog",
+        minimal_catalog.len()
+    );
 
-    // Efficiently collect 2000 brightest stars from binary catalog
+    // Efficiently collect 2000 brightest stars from minimal catalog
     let mut collector = MaxMagnitudeCollector::new(2000);
 
     // Process all stars in the catalog, keeping only the brightest
-    for star in binary_catalog.stars().iter() {
+    for star in minimal_catalog.stars().iter() {
         collector.add(*star);
     }
 
@@ -355,21 +358,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.threshold
     );
 
-    // Filter binary catalog stars by brightness threshold
-    let bright_binary: Vec<_> = binary_catalog
+    // Filter minimal catalog stars by brightness threshold
+    let bright_binary: Vec<_> = minimal_catalog
         .stars()
         .iter()
         .filter(|star| star.magnitude <= args.threshold)
         .collect();
 
     println!(
-        "Found {} bright stars (mag <= {:.1}) in binary catalog",
+        "Found {} bright stars (mag <= {:.1}) in minimal catalog",
         bright_binary.len(),
         args.threshold
     );
 
-    // Print magnitude statistics for binary catalog
-    let all_mags: Vec<f64> = binary_catalog.stars().iter().map(|s| s.magnitude).collect();
+    // Print magnitude statistics for minimal catalog
+    let all_mags: Vec<f64> = minimal_catalog
+        .stars()
+        .iter()
+        .map(|s| s.magnitude)
+        .collect();
     if !all_mags.is_empty() {
         let all_mag_scan = StatsScan::new(&all_mags);
         if let Ok((min_mag, max_mag)) = all_mag_scan.min_max() {
@@ -394,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const CLOSEST_MATCH_MAG_TOLERANCE: f64 = 5.0; // magnitude difference for closest match reporting
 
     for hip_star in &bright_hipparcos {
-        // Convert Hipparcos coordinates from its epoch to the binary catalog epoch
+        // Convert Hipparcos coordinates from its epoch to the minimal catalog epoch
         let hip_coords = Equatorial::from_degrees(hip_star.ra(), hip_star.dec());
         let hip_equatorial = convert_epoch(hip_coords, args.hipparcos_epoch, args.binary_epoch);
         let mut found = false;
@@ -431,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Already sorted by magnitude (brightest first)
     println!(
-        "\n{} bright stars missing from binary catalog:",
+        "\n{} bright stars missing from minimal catalog:",
         missing_stars.len()
     );
 
