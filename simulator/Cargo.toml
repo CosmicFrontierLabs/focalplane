@@ -25,9 +25,9 @@ log = "0.4"                   # Logging facade
 env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 # Foundation crates from cfl-foundations
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", branch = "meawoppl/update-starfield-0.9.1" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations" }
 
 rand = "0.9"
 rand_distr = "0.5"

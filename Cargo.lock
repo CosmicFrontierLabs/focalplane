@@ -1837,7 +1837,7 @@ dependencies = [
 [[package]]
 name = "meter-math"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?branch=meawoppl%2Fupdate-starfield-0.9.1#a2288fe4a3f03e801905d463245d46f3478f8deb"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#77e2d2dca8bc15cbd8825fe1a22cf1a1d56cc6a1"
 dependencies = [
  "log",
  "nalgebra",
@@ -2962,7 +2962,7 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?branch=meawoppl%2Fupdate-starfield-0.9.1#a2288fe4a3f03e801905d463245d46f3478f8deb"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#77e2d2dca8bc15cbd8825fe1a22cf1a1d56cc6a1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3003,7 +3003,7 @@ dependencies = [
 [[package]]
 name = "shared-wasm"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?branch=meawoppl%2Fupdate-starfield-0.9.1#a2288fe4a3f03e801905d463245d46f3478f8deb"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#77e2d2dca8bc15cbd8825fe1a22cf1a1d56cc6a1"
 dependencies = [
  "gloo-net",
  "num-traits",
