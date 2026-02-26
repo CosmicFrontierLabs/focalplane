@@ -12,6 +12,7 @@
 //! 3. Running detection algorithms
 //! 4. Measuring detection rates and centroid accuracy
 
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::StarInFrame;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
@@ -151,16 +152,19 @@ pub fn run_single_experiment(params: &ExperimentParams) -> ExperimentResults {
         let star = params.star_at_pos(xpos, ypos);
 
         // Create scene with single star
+        let fp = FocalPlaneConfig::from_satellite(&params.satellite);
         let scene = Scene::from_stars(
-            params.satellite.clone(),
-            vec![star],
+            fp,
+            vec![vec![star]],
             Equatorial::from_degrees(0.0, 0.0), // Dummy pointing (not used for pre-positioned stars)
             params.coordinates,
         );
 
         // Render the scene with a unique seed for this iteration
         let render_seed = rng.random::<u64>();
-        let render_result = scene.render_with_seed(&params.exposure, Some(render_seed));
+        let render_result = scene
+            .render_with_seed(&params.exposure, Some(render_seed))
+            .remove(0);
 
         // Use consistent background RMS calculation
         let background_rms = render_result.background_rms();

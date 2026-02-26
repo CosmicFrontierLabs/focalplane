@@ -1,4 +1,4 @@
-use super::{sensor::SensorConfig, telescope::TelescopeConfig};
+use super::{sensor::SensorConfig, sensor_array::SensorArray, telescope::TelescopeConfig};
 use crate::photometry::QuantumEfficiency;
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::units::{Angle, AngleExt, Length, LengthExt, Temperature};
@@ -218,6 +218,70 @@ impl SatelliteConfig {
             self.telescope.f_number(),
             self.sensor.name
         )
+    }
+}
+
+/// Complete focal plane array configuration.
+///
+/// Combines telescope optics with a multi-sensor array and operating
+/// conditions for simulating mosaic detector systems like SPENCER.
+/// This is the array-level analog of [`SatelliteConfig`], which handles
+/// a single sensor.
+///
+/// # Usage
+///
+/// Use `satellite_for_sensor` to get a per-sensor `SatelliteConfig` for
+/// rendering, flux calculation, and noise generation.
+#[derive(Debug, Clone)]
+pub struct FocalPlaneConfig {
+    /// Telescope optical configuration (shared across all sensors)
+    pub telescope: TelescopeConfig,
+    /// Multi-sensor array with positions
+    pub array: SensorArray,
+    /// Operating temperature (affects dark current for all sensors)
+    pub temperature: Temperature,
+}
+
+impl FocalPlaneConfig {
+    /// Create a new focal plane configuration.
+    pub fn new(telescope: TelescopeConfig, array: SensorArray, temperature: Temperature) -> Self {
+        Self {
+            telescope,
+            array,
+            temperature,
+        }
+    }
+
+    /// Create a FocalPlaneConfig from a single SatelliteConfig.
+    ///
+    /// Wraps the satellite's sensor in a single-element array at the origin.
+    pub fn from_satellite(satellite: &SatelliteConfig) -> Self {
+        Self {
+            telescope: satellite.telescope.clone(),
+            array: SensorArray::single(satellite.sensor.clone()),
+            temperature: satellite.temperature,
+        }
+    }
+
+    /// Build a SatelliteConfig for a specific sensor in the array.
+    ///
+    /// Returns `None` if the sensor index is out of bounds.
+    pub fn satellite_for_sensor(&self, sensor_index: usize) -> Option<SatelliteConfig> {
+        self.array.sensors.get(sensor_index).map(|ps| {
+            SatelliteConfig::new(self.telescope.clone(), ps.sensor.clone(), self.temperature)
+        })
+    }
+
+    /// Plate scale in radians per millimeter at the focal plane.
+    ///
+    /// This is telescope-only and independent of any sensor's pixel size.
+    pub fn plate_scale_rad_per_mm(&self) -> f64 {
+        self.telescope.plate_scale().as_radians() / 1000.0
+    }
+
+    /// Get the total AABB of the sensor array in mm.
+    pub fn total_aabb_mm(&self) -> Option<(f64, f64, f64, f64)> {
+        self.array.total_aabb_mm()
     }
 }
 
@@ -485,5 +549,90 @@ mod tests {
         // Verify the exact format
         let expected = "Test Scope (0.50m f/5.0) + GSENSE4040BSI";
         assert_eq!(description, expected);
+    }
+
+    #[test]
+    fn test_focal_plane_config_creation() {
+        use crate::hardware::sensor_array::SPENCER_ARRAY_PLAN;
+
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SPENCER_ARRAY_PLAN.clone(),
+            Temperature::from_celsius(-20.0),
+        );
+
+        assert_eq!(fp.array.sensor_count(), 4);
+        assert!(fp.total_aabb_mm().is_some());
+    }
+
+    #[test]
+    fn test_focal_plane_satellite_for_sensor() {
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
+        let fp = FocalPlaneConfig::new(
+            telescope.clone(),
+            SensorArray::single(sensor.clone()),
+            Temperature::from_celsius(-10.0),
+        );
+
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        assert_eq!(sat.sensor.name, sensor.name);
+        assert_eq!(sat.telescope.name, telescope.name);
+
+        assert!(fp.satellite_for_sensor(1).is_none());
+    }
+
+    #[test]
+    fn test_focal_plane_from_satellite_roundtrip() {
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
+        let sat = SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(-10.0));
+
+        let fp = FocalPlaneConfig::from_satellite(&sat);
+        assert_eq!(fp.array.sensor_count(), 1);
+
+        let roundtrip = fp.satellite_for_sensor(0).unwrap();
+        assert_eq!(roundtrip.sensor.name, sat.sensor.name);
+        assert_relative_eq!(
+            roundtrip.plate_scale_per_pixel().as_radians(),
+            sat.plate_scale_per_pixel().as_radians(),
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn test_focal_plane_plate_scale_rad_per_mm() {
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.1),
+            Length::from_meters(1.0),
+            0.8,
+        );
+        let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(sensor),
+            Temperature::from_celsius(-10.0),
+        );
+
+        // plate_scale = 1/focal_length_m = 1.0 rad/m
+        // rad_per_mm = 1.0 / 1000 = 0.001
+        assert_relative_eq!(fp.plate_scale_rad_per_mm(), 0.001, epsilon = 1e-10);
     }
 }

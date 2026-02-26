@@ -10,6 +10,7 @@ use plotters::prelude::*;
 use rayon::prelude::*;
 use shared::image_proc::detection::{detect_stars_unified, StarFinder};
 use shared::units::{Temperature, TemperatureExt};
+use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor::models::IMX455;
 use simulator::hardware::telescope::models::IDEAL_50CM;
 use simulator::hardware::SatelliteConfig;
@@ -90,14 +91,16 @@ fn run_bias_experiment(params: &BiasExperimentParams) -> BiasExperimentResults {
         let star = create_star_at_position(true_x, true_y, params.magnitude, &params.satellite);
 
         // Create scene and render
+        let fp = FocalPlaneConfig::from_satellite(&params.satellite);
         let scene = Scene::from_stars(
-            params.satellite.clone(),
-            vec![star],
+            fp,
+            vec![vec![star]],
             Equatorial::from_degrees(0.0, 0.0), // Dummy pointing
             params.coordinates,
         );
-        let render_result =
-            scene.render_with_seed(&params.exposure, Some(params.seed + trial as u64));
+        let render_result = scene
+            .render_with_seed(&params.exposure, Some(params.seed + trial as u64))
+            .remove(0);
 
         // Calculate background RMS
         let background_rms = render_result.background_rms();
