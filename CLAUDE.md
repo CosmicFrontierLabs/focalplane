@@ -36,7 +36,7 @@ scripts/install-hooks.sh
 
 ## Workspace Structure
 - **simulator**: Space telescope focal plane imaging simulation
-  - Sensor models (IMX455, KAF-16803, etc.) with noise, dark current, read noise
+  - Sensor models (IMX455, GSENSE4040BSI, etc.) with noise, dark current, read noise
   - Photometry engine: stellar spectra, quantum efficiency, zodiacal background
   - Scene rendering: star fields, satellite tracks, PSF convolution
   - FITS I/O for output images
