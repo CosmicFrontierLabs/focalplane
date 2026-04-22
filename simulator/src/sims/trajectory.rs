@@ -2,23 +2,20 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-use image::{ImageBuffer, Luma};
-use log::info;
 use nalgebra::UnitQuaternion;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use thiserror::Error;
 
 use crate::hardware::satellite::FocalPlaneConfig;
-use crate::image_proc::render::{
-    project_stars_to_focal_plane_oriented, StarInFocalPlane, StarInFrame,
-};
+use crate::image_proc::render::{StarInFocalPlane, StarInFrame};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
-use crate::scene::Scene;
+use crate::sims::motion_blur::{
+    render_motion_trajectory, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_SAMPLE_PX,
+};
 use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
-use shared::units::LengthExt;
 
 #[derive(Debug, Error)]
 pub enum TrajectoryError {
@@ -256,9 +253,10 @@ pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, 
 /// Route focal-plane stars to sensors with a flux cache to avoid redundant computation.
 ///
 /// Identical to `route_stars_to_sensors` in render.rs but caches `star_data_to_fluxes()`
-/// results keyed by (star_id, sensor_index). For trajectory rendering where the same
-/// stars appear across many frames on the same sensors, this eliminates repeated
-/// Simpson's rule integration.
+/// results keyed by `(star_id, sensor_index)`. Retained as a public helper for
+/// external consumers that still want the single-orientation scene-style
+/// routing; the new motion-blur renderer uses its own cache-carrying tile
+/// worker instead.
 pub fn route_stars_to_sensors_cached(
     fp_stars: &[StarInFocalPlane],
     focal_plane: &FocalPlaneConfig,
@@ -305,18 +303,11 @@ pub fn route_stars_to_sensors_cached(
     per_sensor_stars
 }
 
-/// Save a single-sensor u16 image as 16-bit grayscale PNG.
-fn save_u16_png(image: &ndarray::Array2<u16>, path: &Path) -> Result<(), TrajectoryError> {
-    let (height, width) = image.dim();
-    let raw: Vec<u16> = image.iter().copied().collect();
-    let img: ImageBuffer<Luma<u16>, Vec<u16>> =
-        ImageBuffer::from_raw(width as u32, height as u32, raw)
-            .ok_or_else(|| TrajectoryError::ImageWrite("buffer size mismatch".into()))?;
-    img.save(path)
-        .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))
-}
-
 /// Configuration for rendering a trajectory sequence.
+///
+/// Thin compatibility wrapper over [`MotionBlurConfig`]. Existing call sites
+/// continue to use this type; internally `render_trajectory` delegates to
+/// the motion-blur path with the adaptive subsample scheduler.
 pub struct TrajectoryRenderConfig<'a> {
     /// Trajectory defining the pointing over time.
     pub trajectory: &'a Trajectory,
@@ -334,97 +325,41 @@ pub struct TrajectoryRenderConfig<'a> {
     pub output_dir: &'a Path,
     /// Optional RNG seed for reproducible noise.
     pub base_seed: Option<u64>,
+    /// Optional override for the per-subsample drift budget (pixels).
+    /// Defaults to [`crate::sims::motion_blur::DEFAULT_MAX_DRIFT_PER_SAMPLE_PX`].
+    pub max_drift_per_sample_px: Option<f64>,
+    /// Force a single sub-orientation per frame regardless of drift.
+    pub force_static: bool,
 }
 
 /// Render a sequence of frames along a trajectory, writing 16-bit PNG files.
 ///
-/// Queries the star catalog conceptually "once" (caller provides pre-fetched stars),
-/// then for each frame along the trajectory: re-projects, routes to sensors, renders,
-/// and writes 16-bit PNG output.
+/// Delegates to [`render_motion_trajectory`], which integrates an adaptive
+/// number of sub-orientations across each frame's exposure. When the drift
+/// budget yields `N = 1` (static or near-static trajectory), the output is
+/// equivalent to a single-orientation render, except that the photon, zodi,
+/// and dark-current means share a single unified Poisson draw rather than
+/// three separate ones.
 ///
 /// Returns the total number of frames rendered.
 pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, TrajectoryError> {
-    let TrajectoryRenderConfig {
-        trajectory,
-        timestep,
-        exposure,
-        focal_plane,
-        catalog_stars,
-        zodiacal,
-        output_dir,
-        base_seed,
-    } = config;
-    let sensor_count = focal_plane.array.sensor_count();
-    if sensor_count == 0 {
-        return Err(TrajectoryError::NoSensors);
-    }
-
-    let first_sat = focal_plane
-        .satellite_for_sensor(0)
-        .ok_or(TrajectoryError::NoSensors)?;
-    let airy_pix = first_sat.airy_disk_pixel_space();
-    let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
-    let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
-
-    let star_refs: Vec<&StarData> = catalog_stars.iter().collect();
-    let frame_times = trajectory.frame_times(*timestep);
-    let total_frames = frame_times.len();
-
-    info!("Rendering {total_frames} frames across {sensor_count} sensors");
-
-    let mut flux_cache: HashMap<(u64, usize), SourceFlux> = HashMap::new();
-    let single_sensor = sensor_count == 1;
-
-    for (frame_idx, &t) in frame_times.iter().enumerate() {
-        let orientation = trajectory.orientation_at(t)?;
-        let pointing = boresight_of(&orientation);
-
-        let fp_stars = project_stars_to_focal_plane_oriented(
-            &star_refs,
-            &orientation,
-            focal_plane,
-            padding_mm,
-        );
-        let per_sensor_stars =
-            route_stars_to_sensors_cached(&fp_stars, focal_plane, padding_mm, &mut flux_cache);
-
-        let scene = Scene::from_stars(
-            (*focal_plane).clone(),
-            per_sensor_stars,
-            pointing,
-            *zodiacal,
-        );
-
-        let seed = base_seed.map(|s| s + frame_idx as u64);
-        let results = scene.render_with_seed(exposure, seed);
-
-        for (sensor_idx, result) in results.iter().enumerate() {
-            let filename = if single_sensor {
-                format!("frame_{frame_idx:06}.png")
-            } else {
-                format!("frame_{frame_idx:06}_sensor_{sensor_idx:02}.png")
-            };
-            let path = output_dir.join(&filename);
-            save_u16_png(&result.quantized_image, &path)?;
-        }
-
-        if (frame_idx + 1) % 10 == 0 || frame_idx + 1 == total_frames {
-            info!(
-                "Rendered frame {}/{} (t={:.3}s)",
-                frame_idx + 1,
-                total_frames,
-                t.as_secs_f64()
-            );
-        }
-    }
-
-    info!(
-        "Flux cache: {} entries ({} cache-eligible lookups saved)",
-        flux_cache.len(),
-        flux_cache.len()
-    );
-
-    Ok(total_frames)
+    let motion_cfg = MotionBlurConfig {
+        timestep: config.timestep,
+        exposure: config.exposure,
+        max_drift_per_sample_px: config
+            .max_drift_per_sample_px
+            .unwrap_or(DEFAULT_MAX_DRIFT_PER_SAMPLE_PX),
+        base_seed: config.base_seed,
+        force_static: config.force_static,
+    };
+    render_motion_trajectory(
+        config.trajectory,
+        config.catalog_stars,
+        config.focal_plane,
+        config.zodiacal,
+        &motion_cfg,
+        config.output_dir,
+    )
 }
 
 #[cfg(test)]

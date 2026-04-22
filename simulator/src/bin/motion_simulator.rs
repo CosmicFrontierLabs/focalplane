@@ -111,6 +111,20 @@ struct Args {
 
     #[arg(long, default_value_t = 42, help = "Random seed for noise generation")]
     seed: u64,
+
+    #[arg(
+        long,
+        default_value_t = 0.1,
+        help = "Per-subsample drift budget in pixels for adaptive motion-blur scheduling"
+    )]
+    max_drift_per_sample_px: f64,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force N=1 subsample per frame (disables motion blur; for debugging)"
+    )]
+    force_static: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -198,6 +212,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         zodiacal: args.shared.coordinates,
         output_dir: output_path,
         base_seed: Some(args.seed),
+        max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
+        force_static: args.force_static,
     };
     let frame_count = render_trajectory(&render_config)?;
 
