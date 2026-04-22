@@ -45,7 +45,10 @@ fn parse_ra_dec(s: &str) -> Result<Equatorial, String> {
         a specified duration. The star catalog is queried once with a broad \
         field of view encompassing the entire trajectory, then each frame \
         is rendered by re-projecting cached stars at the interpolated pointing.\n\n\
-        Output is a sequence of 16-bit grayscale PNG files, one per sensor per frame."
+        Output layout under --output-dir:\n  \
+        - metadata.json at the root describing the run,\n  \
+        - one sensor_NN/ subdirectory per sensor, each containing \
+          frame_NNNNNN.png files (16-bit grayscale PNG)."
 )]
 struct Args {
     #[command(flatten)]
@@ -222,6 +225,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
         force_static: args.force_static,
         quiet: args.quiet,
+        telescope_name: telescope.name.clone(),
+        catalog_path: args.shared.catalog.clone(),
+        temperature_c: args.shared.temperature,
     };
     let frame_count = render_trajectory(&render_config)?;
 
@@ -232,7 +238,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         elapsed.as_secs_f64(),
         frame_count as f64 / elapsed.as_secs_f64()
     );
-    info!("Output: {}", args.output_dir);
+    info!(
+        "Output: {} (metadata.json + sensor_NN/frame_NNNNNN.png layout)",
+        args.output_dir
+    );
 
     Ok(())
 }

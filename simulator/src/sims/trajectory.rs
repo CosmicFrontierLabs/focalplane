@@ -332,6 +332,13 @@ pub struct TrajectoryRenderConfig<'a> {
     pub force_static: bool,
     /// Suppress the indicatif progress bar during rendering.
     pub quiet: bool,
+    /// Telescope display name recorded in `metadata.json`. Metadata-only.
+    pub telescope_name: String,
+    /// Catalog path recorded in `metadata.json`. Metadata-only.
+    pub catalog_path: std::path::PathBuf,
+    /// Operating temperature (Celsius) recorded in `metadata.json`.
+    /// Metadata-only.
+    pub temperature_c: f64,
 }
 
 /// Render a sequence of frames along a trajectory, writing 16-bit PNG files.
@@ -354,6 +361,9 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
         base_seed: config.base_seed,
         force_static: config.force_static,
         quiet: config.quiet,
+        telescope_name: config.telescope_name.clone(),
+        catalog_path: config.catalog_path.clone(),
+        temperature_c: config.temperature_c,
     };
     render_motion_trajectory(
         config.trajectory,

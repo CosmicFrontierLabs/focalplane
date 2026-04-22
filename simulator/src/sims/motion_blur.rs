@@ -29,11 +29,12 @@
 //! draws noise, quantizes, and writes its PNG. Nothing is reduced
 //! across tiles.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::SecondsFormat;
 use image::{ImageBuffer, Luma};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
@@ -53,7 +54,12 @@ use crate::image_proc::render::quantize_image;
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
-use crate::sims::orientation::boresight_of;
+use crate::sims::motion_blur_metadata::{
+    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, HardwareMeta,
+    RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
+    ZodiacalMeta,
+};
+use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::trajectory::{Trajectory, TrajectoryError};
 use crate::star_math::star_data_to_fluxes;
 
@@ -217,6 +223,17 @@ pub struct MotionBlurConfig {
     /// If true, suppress the indicatif progress bar (INFO logs still emit).
     /// Intended for non-interactive runs where the bar adds noise.
     pub quiet: bool,
+    /// Telescope display name copied into `metadata.json` under
+    /// `hardware.telescope`. Metadata-only; ignored by the render math.
+    pub telescope_name: String,
+    /// Catalog path recorded in `metadata.json` under
+    /// `render_config.catalog_path`. Metadata-only.
+    pub catalog_path: PathBuf,
+    /// Operating temperature (Celsius) recorded in `metadata.json` under
+    /// `hardware.temperature_c`. Metadata-only — the per-tile renderer reads
+    /// the temperature off the per-sensor `SatelliteConfig` built from
+    /// [`FocalPlaneConfig`].
+    pub temperature_c: f64,
 }
 
 impl Default for MotionBlurConfig {
@@ -228,6 +245,9 @@ impl Default for MotionBlurConfig {
             base_seed: None,
             force_static: false,
             quiet: false,
+            telescope_name: String::new(),
+            catalog_path: PathBuf::new(),
+            temperature_c: 0.0,
         }
     }
 }
@@ -569,7 +589,6 @@ pub fn render_motion_trajectory(
     );
 
     // Build (frame, sensor) tile list.
-    let single_sensor = sensor_count == 1;
     let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
 
     #[derive(Clone, Copy)]
@@ -598,16 +617,19 @@ pub fn render_motion_trajectory(
         })
         .collect();
 
+    // Pre-create per-sensor output directories (`<output_dir>/sensor_NN/`).
+    // Tile workers write 16-bit PNGs directly into these subdirs.
+    for sensor_idx in 0..sensor_count {
+        let sensor_dir = output_dir.join(sensor_dir_name(sensor_idx));
+        std::fs::create_dir_all(&sensor_dir)
+            .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))?;
+    }
+
     let output_paths: Vec<PathBuf> = tiles
         .iter()
         .map(|tile| {
             let plan = &plans[tile.frame_plan_idx];
-            let name = if single_sensor {
-                format!("frame_{:06}.png", plan.idx)
-            } else {
-                format!("frame_{:06}_sensor_{:02}.png", plan.idx, tile.sensor_idx)
-            };
-            output_dir.join(name)
+            output_dir.join(sensor_relative_png_path(tile.sensor_idx, plan.idx))
         })
         .collect();
 
@@ -678,8 +700,164 @@ pub fn render_motion_trajectory(
         render_elapsed.as_secs_f64(),
         tiles_per_s,
     );
+    drop(cache);
+
+    // Assemble and write metadata.json describing the render. Every PNG path
+    // recorded here is relative (forward-slash) to `output_dir`.
+    let metadata = build_render_metadata(
+        trajectory,
+        catalog_stars,
+        fp,
+        &satellites,
+        &zodiacal,
+        config,
+        &plans
+            .iter()
+            .map(|p| (p.idx, p.schedule))
+            .collect::<Vec<_>>(),
+        sensor_count,
+    )?;
+    let metadata_path = output_dir.join("metadata.json");
+    let file = std::fs::File::create(&metadata_path)
+        .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))?;
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, &metadata)
+        .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))?;
+    use std::io::Write;
+    writer
+        .flush()
+        .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))?;
+    info!("Wrote render metadata to {}", metadata_path.display());
 
     Ok(total_frames)
+}
+
+/// Build the [`RenderMetadata`] descriptor from the finalized render plan.
+///
+/// Consumes the per-frame `(frame_idx, schedule)` pairs produced during the
+/// serial planning pass plus the static inputs (catalog, hardware, render
+/// config, zodiacal coords). The `stars` list mirrors `catalog_stars`
+/// verbatim — the caller queries the catalog once for the trajectory
+/// envelope and passes that slice through.
+#[allow(clippy::too_many_arguments)]
+fn build_render_metadata(
+    trajectory: &Trajectory,
+    catalog_stars: &[StarData],
+    fp: &FocalPlaneConfig,
+    satellites: &[SatelliteConfig],
+    zodiacal: &SolarAngularCoordinates,
+    config: &MotionBlurConfig,
+    frame_plans: &[(usize, SubsampleSchedule)],
+    sensor_count: usize,
+) -> Result<RenderMetadata, TrajectoryError> {
+    let rendered_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    let start = trajectory.start_time();
+    let end = trajectory.end_time();
+    let trajectory_meta = TrajectoryMeta {
+        duration_s: (end - start).as_secs_f64(),
+        start_time_s: start.as_secs_f64(),
+        end_time_s: end.as_secs_f64(),
+        waypoints: trajectory
+            .waypoints()
+            .iter()
+            .map(|wp| {
+                let q = wp.orientation;
+                let bore = boresight_of(&q);
+                WaypointMeta {
+                    time_s: wp.time.as_secs_f64(),
+                    quat: [q.w, q.i, q.j, q.k],
+                    boresight: EquatorialMeta {
+                        ra_deg: bore.ra_degrees(),
+                        dec_deg: bore.dec_degrees(),
+                    },
+                    roll_deg: roll_of(&q).to_degrees(),
+                }
+            })
+            .collect(),
+    };
+
+    let mut frames: Vec<FrameMeta> = Vec::with_capacity(frame_plans.len());
+    for (frame_idx, schedule) in frame_plans {
+        let mid_t = (schedule.frame_start + schedule.exposure / 2)
+            .min(trajectory.end_time())
+            .max(trajectory.start_time());
+        let q = trajectory.orientation_at(mid_t)?;
+        let bore = boresight_of(&q);
+        let mut paths: BTreeMap<String, String> = BTreeMap::new();
+        for sensor_idx in 0..sensor_count {
+            paths.insert(
+                sensor_dir_name(sensor_idx),
+                sensor_relative_png_path(sensor_idx, *frame_idx),
+            );
+        }
+        frames.push(FrameMeta {
+            idx: *frame_idx,
+            t_s: schedule.frame_start.as_secs_f64(),
+            exposure_s: schedule.exposure.as_secs_f64(),
+            quat: [q.w, q.i, q.j, q.k],
+            boresight: EquatorialMeta {
+                ra_deg: bore.ra_degrees(),
+                dec_deg: bore.dec_degrees(),
+            },
+            roll_deg: roll_of(&q).to_degrees(),
+            n_subsamples: schedule.n,
+            paths,
+        });
+    }
+
+    let stars: Vec<StarMeta> = catalog_stars
+        .iter()
+        .map(|s| StarMeta {
+            id: s.id,
+            ra_deg: s.position.ra_degrees(),
+            dec_deg: s.position.dec_degrees(),
+            magnitude: s.magnitude,
+            color_index: s.b_v,
+        })
+        .collect();
+
+    let sensors: Vec<SensorMeta> = (0..sensor_count)
+        .map(|i| {
+            let ps = &fp.array.sensors[i];
+            let (width, height) = ps.sensor.dimensions.get_pixel_width_height();
+            SensorMeta {
+                idx: i,
+                name: satellites[i].sensor.name.clone(),
+                dimensions_px: [width, height],
+                position_mm: [ps.position.x_mm, ps.position.y_mm],
+            }
+        })
+        .collect();
+
+    let hardware = HardwareMeta {
+        telescope: config.telescope_name.clone(),
+        temperature_c: config.temperature_c,
+        sensors,
+    };
+
+    let render_config = RenderConfigMeta {
+        exposure_s: config.exposure.as_secs_f64(),
+        timestep_s: config.timestep.as_secs_f64(),
+        max_drift_per_sample_px: config.max_drift_per_sample_px,
+        seed: config.base_seed.unwrap_or(0),
+        force_static: config.force_static,
+        catalog_path: config.catalog_path.to_string_lossy().into_owned(),
+        zodiacal: ZodiacalMeta {
+            elongation_deg: zodiacal.elongation(),
+            latitude_deg: zodiacal.latitude(),
+        },
+    };
+
+    Ok(RenderMetadata {
+        version: "1.0".to_string(),
+        rendered_at,
+        trajectory: trajectory_meta,
+        frames,
+        stars,
+        hardware,
+        render_config,
+    })
 }
 
 /// Per-pixel-per-second zodiacal electron rate at a given boresight for a
@@ -868,6 +1046,7 @@ mod tests {
             base_seed: Some(7),
             force_static,
             quiet: true,
+            ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         let frames = render_motion_trajectory(
@@ -910,6 +1089,7 @@ mod tests {
             base_seed: Some(3),
             force_static: true,
             quiet: true,
+            ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         let frames = render_motion_trajectory(
@@ -950,6 +1130,7 @@ mod tests {
             base_seed: Some(11),
             force_static: true,
             quiet: true,
+            ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         // Render normally to exercise the cache.
@@ -1009,6 +1190,7 @@ mod tests {
             base_seed: Some(101),
             force_static: false,
             quiet: true,
+            ..Default::default()
         };
         let cfg_moving = cfg_static.clone();
 
@@ -1110,6 +1292,7 @@ mod tests {
             base_seed: Some(0),
             force_static: true,
             quiet: true,
+            ..Default::default()
         };
         let acc = simulate_tile_accumulator(&traj, &star, &fp, &cfg);
 
@@ -1159,6 +1342,7 @@ mod tests {
             base_seed: Some(1337),
             force_static: false,
             quiet: true,
+            ..Default::default()
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
@@ -1181,10 +1365,233 @@ mod tests {
         )
         .unwrap();
 
-        // Compare the PNG bytes of one frame.
-        let name = "frame_000000.png";
+        // Compare the PNG bytes of one frame. The new layout routes frame 0
+        // of sensor 0 to `sensor_00/frame_000000.png`.
+        let name = "sensor_00/frame_000000.png";
         let a = std::fs::read(tmp_a.path().join(name)).unwrap();
         let b = std::fs::read(tmp_b.path().join(name)).unwrap();
         assert_eq!(a, b);
+    }
+
+    // -----------------------------------------------------------------------
+    // Output layout and metadata.json coverage.
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal motion-blur config shaped for the layout/metadata
+    /// tests below. Kept local to tests so production does not carry a
+    /// test-only constructor.
+    fn minimal_metadata_cfg(seed: u64) -> MotionBlurConfig {
+        MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_sample_px: 0.1,
+            base_seed: Some(seed),
+            force_static: true,
+            quiet: true,
+            telescope_name: "Test".to_string(),
+            catalog_path: std::path::PathBuf::from("fake_catalog.bin"),
+            temperature_c: -10.0,
+        }
+    }
+
+    #[test]
+    fn test_output_structure_creates_per_sensor_dirs() {
+        // Render two frames on a single-sensor focal plane. Assert that the
+        // per-sensor directory is created, that both frame files land inside
+        // it, and that metadata.json is written at the output root.
+        let fp = tiny_fp();
+        let traj = static_trajectory();
+        let cfg = minimal_metadata_cfg(5);
+        let tmp = tempfile::tempdir().unwrap();
+        let frames = render_motion_trajectory(
+            &traj,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+        assert!(frames >= 2, "expected at least 2 frames, got {}", frames);
+
+        let sensor_dir = tmp.path().join("sensor_00");
+        assert!(sensor_dir.is_dir(), "sensor_00 directory must exist");
+        assert!(sensor_dir.join("frame_000000.png").is_file());
+        assert!(sensor_dir.join("frame_000001.png").is_file());
+
+        let metadata_path = tmp.path().join("metadata.json");
+        assert!(metadata_path.is_file(), "metadata.json must exist");
+
+        // The legacy flat-layout file must not be produced any more.
+        assert!(!tmp.path().join("frame_000000.png").exists());
+        assert!(!tmp.path().join("frame_000000_sensor_00.png").exists());
+    }
+
+    #[test]
+    fn test_metadata_json_round_trip() {
+        // Render a tiny sequence, parse metadata.json back as a generic
+        // serde_json::Value, and spot-check the shape-level invariants.
+        let fp = tiny_fp();
+        let traj = static_trajectory();
+        let cfg = minimal_metadata_cfg(17);
+        let tmp = tempfile::tempdir().unwrap();
+        let frames = render_motion_trajectory(
+            &traj,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(v["version"], "1.0");
+        let frames_arr = v["frames"].as_array().unwrap();
+        assert_eq!(frames_arr.len(), frames);
+        assert!(frames_arr[0]["paths"]
+            .as_object()
+            .unwrap()
+            .contains_key("sensor_00"));
+        assert_eq!(
+            frames_arr[0]["paths"]["sensor_00"], "sensor_00/frame_000000.png",
+            "relative PNG path should use forward slashes and match layout"
+        );
+
+        let waypoints = v["trajectory"]["waypoints"].as_array().unwrap();
+        assert!(
+            waypoints.len() >= 2,
+            "trajectory must expose >= 2 waypoints"
+        );
+        // quat is [w, x, y, z] — 4 elements.
+        assert_eq!(waypoints[0]["quat"].as_array().unwrap().len(), 4);
+
+        assert!(v["stars"].is_array());
+
+        let sensors = v["hardware"]["sensors"].as_array().unwrap();
+        let dims = sensors[0]["dimensions_px"].as_array().unwrap();
+        assert_eq!(dims.len(), 2);
+        assert!(dims[0].as_u64().unwrap() > 0);
+        assert!(dims[1].as_u64().unwrap() > 0);
+
+        let zodi = &v["render_config"]["zodiacal"];
+        assert!(zodi["elongation_deg"].is_number());
+        assert!(zodi["latitude_deg"].is_number());
+    }
+
+    #[test]
+    fn test_metadata_frame_boresight_matches_trajectory() {
+        // The mid-frame boresight recorded in metadata.json must match the
+        // one computed from `trajectory.orientation_at(mid_t)` to within
+        // numerical noise.
+        let fp = tiny_fp();
+        let traj = static_trajectory();
+        let cfg = minimal_metadata_cfg(23);
+        let tmp = tempfile::tempdir().unwrap();
+        render_motion_trajectory(
+            &traj,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
+        let meta: crate::sims::motion_blur_metadata::RenderMetadata =
+            serde_json::from_str(&raw).unwrap();
+
+        for frame in &meta.frames {
+            // Mid-frame orientation: same clamping as the renderer.
+            let frame_start = Duration::from_secs_f64(frame.t_s);
+            let exposure = Duration::from_secs_f64(frame.exposure_s);
+            let mid_t = (frame_start + exposure / 2)
+                .min(traj.end_time())
+                .max(traj.start_time());
+            let q = traj.orientation_at(mid_t).unwrap();
+            let expected = boresight_of(&q);
+            assert!(
+                (frame.boresight.ra_deg - expected.ra_degrees()).abs() < 1e-9,
+                "frame {} RA mismatch: meta={} expected={}",
+                frame.idx,
+                frame.boresight.ra_deg,
+                expected.ra_degrees()
+            );
+            assert!(
+                (frame.boresight.dec_deg - expected.dec_degrees()).abs() < 1e-9,
+                "frame {} Dec mismatch: meta={} expected={}",
+                frame.idx,
+                frame.boresight.dec_deg,
+                expected.dec_degrees()
+            );
+        }
+    }
+
+    #[test]
+    fn test_metadata_quat_is_wxyz_order() {
+        // Build a trajectory whose first waypoint has a known roll about the
+        // boresight. The UnitQuaternion for a rotation of angle θ about a
+        // unit axis has w = cos(θ/2). We emit quat = [w, x, y, z], so
+        // meta.waypoints[0].quat[0] must match cos(θ/2) under the composed
+        // orientation.
+        use crate::sims::orientation::orientation_from_pointing;
+
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let roll = 0.7_f64; // radians
+        let traj = Trajectory::from_endpoints_with_roll(
+            pointing,
+            roll,
+            pointing,
+            roll,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        let fp = tiny_fp();
+        let cfg = minimal_metadata_cfg(31);
+        let tmp = tempfile::tempdir().unwrap();
+        render_motion_trajectory(
+            &traj,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
+        let meta: crate::sims::motion_blur_metadata::RenderMetadata =
+            serde_json::from_str(&raw).unwrap();
+
+        // Expected quat comes directly from nalgebra's constructor to avoid
+        // re-deriving the half-angle formula under roll composition.
+        let q_expected = orientation_from_pointing(&pointing, roll);
+        let wp0 = &meta.trajectory.waypoints[0];
+        assert!(
+            (wp0.quat[0] - q_expected.w).abs() < 1e-12,
+            "quat[0] (w) = {} vs nalgebra w = {}",
+            wp0.quat[0],
+            q_expected.w
+        );
+        assert!((wp0.quat[1] - q_expected.i).abs() < 1e-12);
+        assert!((wp0.quat[2] - q_expected.j).abs() < 1e-12);
+        assert!((wp0.quat[3] - q_expected.k).abs() < 1e-12);
+
+        // Round-trip: reconstruct a UnitQuaternion from [w, x, y, z] and
+        // check that roll_of recovers the original roll.
+        let q_round = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            wp0.quat[0],
+            wp0.quat[1],
+            wp0.quat[2],
+            wp0.quat[3],
+        ));
+        let recovered = roll_of(&q_round);
+        assert!(
+            (recovered - roll).abs() < 1e-9,
+            "roll_of(reconstructed quat) = {} expected {}",
+            recovered,
+            roll
+        );
     }
 }

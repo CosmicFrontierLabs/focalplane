@@ -2827,6 +2827,8 @@ dependencies = [
  "rand",
  "rand_distr",
  "rayon",
+ "serde",
+ "serde_json",
  "shared",
  "shared-wasm",
  "starfield",
