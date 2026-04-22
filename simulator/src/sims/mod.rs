@@ -2,3 +2,4 @@
 
 pub mod scene_runner;
 pub mod single_detection;
+pub mod trajectory;

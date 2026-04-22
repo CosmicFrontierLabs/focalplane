@@ -89,7 +89,7 @@ pub use photometry::spectrum::{Spectrum, CGS};
 pub use photometry::trapezoid::trap_integrate;
 pub use scene::Scene;
 pub use shared::image_proc::histogram_stretch::stretch_histogram;
-pub use star_math::{field_diameter, pixel_scale, star_data_to_fluxes};
+pub use star_math::{field_diameter, field_diameter_for_array, pixel_scale, star_data_to_fluxes};
 pub use starfield::catalogs::StarPosition;
 
 #[cfg(test)]

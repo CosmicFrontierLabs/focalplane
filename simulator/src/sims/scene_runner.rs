@@ -3,6 +3,7 @@
 //! This module provides functionality for running imaging experiments with star field simulation,
 //! including star detection, ICP matching, and CSV result logging.
 
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::{RenderingResult, StarInFrame};
 use crate::photometry::zodiacal::SolarAngularCoordinates;
@@ -291,8 +292,9 @@ pub fn run_experiment<T: StarCatalog>(
             );
 
             // Create scene with star projection for this satellite and f-number
+            let fp = FocalPlaneConfig::from_satellite(&modified_satellite);
             let scene = Scene::from_catalog(
-                modified_satellite.clone(),
+                fp,
                 stars.clone(),
                 params.ra_dec,
                 params.common_args.coordinates,
@@ -316,8 +318,9 @@ pub fn run_experiment<T: StarCatalog>(
                 );
 
                 // Render the scene with unique seed for this trial
-                let render_result =
-                    scene.render_with_seed(exposure_duration, Some(params.rng_seed));
+                let render_result = scene
+                    .render_with_seed(exposure_duration, Some(params.rng_seed))
+                    .remove(0);
 
                 let exposure_ms = exposure_duration.as_millis();
                 let prefix = format!(
@@ -364,8 +367,8 @@ pub fn run_experiment<T: StarCatalog>(
                 }
 
                 // Now we take our detected stars and match them against the sources
-                // Get projected stars from scene instead of render_result
-                let projected_stars: Vec<StarInFrame> = scene.stars.clone();
+                // Get projected stars from scene (sensor 0 for single-sensor case)
+                let projected_stars: Vec<StarInFrame> = scene.per_sensor_stars[0].clone();
                 // Wrap detected stars for ICP matching
                 let wrapped_detected: Vec<LocatableStellarSource> = detected_stars
                     .iter()
