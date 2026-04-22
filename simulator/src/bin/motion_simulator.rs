@@ -81,6 +81,22 @@ struct Args {
 
     #[arg(
         long,
+        default_value = "0",
+        allow_hyphen_values = true,
+        help = "Roll angle (degrees) at the start waypoint"
+    )]
+    start_roll: f64,
+
+    #[arg(
+        long,
+        default_value = "0",
+        allow_hyphen_values = true,
+        help = "Roll angle (degrees) at the end waypoint"
+    )]
+    end_roll: f64,
+
+    #[arg(
+        long,
         default_value = "1s",
         help = "Time between frames (e.g., '1s', '500ms')"
     )]
@@ -121,7 +137,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let focal_plane = FocalPlaneConfig::from_satellite(&satellite);
 
-    let trajectory = Trajectory::from_endpoints(args.start, args.end, args.duration.0)?;
+    let trajectory = if args.start_roll == 0.0 && args.end_roll == 0.0 {
+        Trajectory::from_endpoints(args.start, args.end, args.duration.0)?
+    } else {
+        Trajectory::from_endpoints_with_roll(
+            args.start,
+            args.start_roll.to_radians(),
+            args.end,
+            args.end_roll.to_radians(),
+            args.duration.0,
+        )?
+    };
 
     let base_fov_deg = field_diameter_for_array(&focal_plane)
         .map(|a| a.as_degrees())
@@ -136,6 +162,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.end.ra_degrees(),
         args.end.dec_degrees(),
         args.duration.0.as_secs_f64()
+    );
+    info!(
+        "Roll: start {:.3}° → end {:.3}°",
+        args.start_roll, args.end_roll
     );
     info!(
         "FOV envelope: center RA {:.4}° Dec {:.4}°, diameter {:.4}°",
