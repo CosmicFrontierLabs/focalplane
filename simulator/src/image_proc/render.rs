@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use nalgebra::UnitQuaternion;
 use ndarray::Array2;
 use starfield::{catalogs::StarData, Equatorial};
 
@@ -9,6 +10,7 @@ use crate::{
         SensorConfig,
     },
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
+    sims::orientation::{boresight_of, orientation_from_pointing, roll_of},
     star_math::star_data_to_fluxes,
 };
 use meter_math::Locatable2d;
@@ -423,19 +425,36 @@ pub struct StarInFocalPlane {
 
 /// Project stars from celestial coordinates to focal plane mm coordinates.
 ///
-/// Uses `StarProjector` in mm-space mode (radians_per_pixel = radians_per_mm)
+/// Thin backwards-compatible wrapper around
+/// [`project_stars_to_focal_plane_oriented`] using zero roll. Uses
+/// `StarProjector` in mm-space mode (radians_per_pixel = radians_per_mm)
 /// to project all catalog stars onto the focal plane. Stars outside the padded
 /// AABB are filtered out.
 ///
 /// # Arguments
 /// * `stars` - Catalog stars to project
 /// * `center` - Telescope pointing direction
-/// * `telescope` - Telescope config (for plate scale / focal length)
-/// * `aabb_mm` - Total sensor array bounding box (min_x, min_y, max_x, max_y) in mm
+/// * `focal_plane` - Focal plane / telescope config (for plate scale / focal length)
 /// * `padding_mm` - PSF bleed padding around the AABB in mm
 pub fn project_stars_to_focal_plane(
     stars: &[&StarData],
     center: &Equatorial,
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<StarInFocalPlane> {
+    let orientation = orientation_from_pointing(center, 0.0);
+    project_stars_to_focal_plane_oriented(stars, &orientation, focal_plane, padding_mm)
+}
+
+/// Orientation-aware variant of [`project_stars_to_focal_plane`] that applies
+/// the waypoint roll as a 2D rotation in mm-space about the focal-plane AABB
+/// center before bounds-checking.
+///
+/// Motion-blur and multi-frame renderers should prefer this entry point so
+/// that roll participates end-to-end in the mm-space pipeline.
+pub fn project_stars_to_focal_plane_oriented(
+    stars: &[&StarData],
+    orientation: &UnitQuaternion<f64>,
     focal_plane: &FocalPlaneConfig,
     padding_mm: f64,
 ) -> Vec<StarInFocalPlane> {
@@ -458,9 +477,13 @@ pub fn project_stars_to_focal_plane(
     let center_x_mm = (min_x + max_x) / 2.0;
     let center_y_mm = (min_y + max_y) / 2.0;
 
+    let pointing = boresight_of(orientation);
+    let roll_rad = roll_of(orientation);
+    let (sin_roll, cos_roll) = roll_rad.sin_cos();
+
     // Configure projector: each "pixel" = mm_per_virt_pixel mm
     let rad_per_virt_pixel = focal_plane.plate_scale_rad_per_mm() * mm_per_virt_pixel;
-    let projector = StarProjector::new(center, rad_per_virt_pixel, virt_width, virt_height);
+    let projector = StarProjector::new(&pointing, rad_per_virt_pixel, virt_width, virt_height);
 
     let mut result = Vec::new();
     for &star in stars {
@@ -469,9 +492,18 @@ pub fn project_stars_to_focal_plane(
             None => continue,
         };
 
-        // Convert virtual pixel coords back to mm in array space
-        let x_mm = (vx - virt_width as f64 / 2.0) * mm_per_virt_pixel + center_x_mm;
-        let y_mm = (virt_height as f64 / 2.0 - vy) * mm_per_virt_pixel + center_y_mm;
+        // Convert virtual pixel coords back to mm in array space.
+        let x_mm_raw = (vx - virt_width as f64 / 2.0) * mm_per_virt_pixel + center_x_mm;
+        let y_mm_raw = (virt_height as f64 / 2.0 - vy) * mm_per_virt_pixel + center_y_mm;
+
+        // Apply roll as a 2D rotation about the AABB center. The body +Z axis
+        // points out of the focal plane toward the sky, so a positive roll
+        // (right-hand rule about +Z) rotates the star pattern on the focal
+        // plane in the same sense in the (x, y) plane.
+        let dx = x_mm_raw - center_x_mm;
+        let dy = y_mm_raw - center_y_mm;
+        let x_mm = center_x_mm + cos_roll * dx - sin_roll * dy;
+        let y_mm = center_y_mm + sin_roll * dx + cos_roll * dy;
 
         // Bounds check against padded AABB
         if x_mm < min_x - padding_mm
@@ -489,6 +521,75 @@ pub fn project_stars_to_focal_plane(
         });
     }
     result
+}
+
+/// Per-sensor projection interface for orientation-aware rendering.
+///
+/// Given a full spacecraft orientation (boresight + roll), this trait
+/// projects a star into a specific sensor's pixel coordinate frame.
+/// Motion-blur and parallel renderers are intended to target this interface
+/// so that different projection backends (e.g. GPU, analytic, mm-space) can
+/// be swapped in without disturbing the calling pipeline.
+pub trait FocalPlaneProjector {
+    /// Returns `Some((pixel_x, pixel_y))` if the star lands on the specified
+    /// sensor (including the padded PSF bleed region), `None` otherwise.
+    /// Pixel coordinates may be sub-pixel.
+    fn project_to_sensor(
+        &self,
+        star: &StarData,
+        orientation: &UnitQuaternion<f64>,
+        sensor_idx: usize,
+    ) -> Option<(f64, f64)>;
+
+    /// Number of sensors addressable by this projector.
+    fn sensor_count(&self) -> usize;
+}
+
+/// Reference implementation of [`FocalPlaneProjector`] backed by the existing
+/// mm-space pipeline. Per-star queries go through a full
+/// [`project_stars_to_focal_plane_oriented`] call before filtering to the
+/// requested sensor; for batch per-frame rendering the free-function
+/// [`project_stars_to_focal_plane_oriented`] plus `route_stars_to_sensors`
+/// remain the efficient path.
+pub struct MmSpaceProjector<'a> {
+    /// Focal plane / telescope configuration.
+    pub focal_plane: &'a FocalPlaneConfig,
+    /// PSF bleed padding around each sensor, in millimeters.
+    pub padding_mm: f64,
+}
+
+impl<'a> FocalPlaneProjector for MmSpaceProjector<'a> {
+    fn project_to_sensor(
+        &self,
+        star: &StarData,
+        orientation: &UnitQuaternion<f64>,
+        sensor_idx: usize,
+    ) -> Option<(f64, f64)> {
+        let stars = [star];
+        let star_refs: Vec<&StarData> = stars.to_vec();
+        let fp_stars = project_stars_to_focal_plane_oriented(
+            &star_refs,
+            orientation,
+            self.focal_plane,
+            self.padding_mm,
+        );
+        let fp_star = fp_stars.first()?;
+        let hits =
+            self.focal_plane
+                .array
+                .mm_to_pixels_padded(fp_star.x_mm, fp_star.y_mm, self.padding_mm);
+        hits.into_iter().find_map(|(px, py, idx)| {
+            if idx == sensor_idx {
+                Some((px, py))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn sensor_count(&self) -> usize {
+        self.focal_plane.array.sensor_count()
+    }
 }
 
 /// Route focal-plane stars to individual sensors with pixel coordinates and flux.
@@ -1071,5 +1172,163 @@ mod tests {
         let (w, h) = GSENSE4040BSI.dimensions.get_pixel_width_height();
         assert_relative_eq!(routed[0][0].x, w as f64 / 2.0, epsilon = 1.0);
         assert_relative_eq!(routed[0][0].y, h as f64 / 2.0, epsilon = 1.0);
+    }
+
+    #[test]
+    fn test_zero_roll_matches_unoriented_path() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        let pointing = Equatorial::from_degrees(123.0, 15.0);
+        // Place a small catalog of offset stars around the pointing.
+        let offsets_deg = [(0.0, 0.0), (0.1, 0.05), (-0.2, 0.15), (0.05, -0.12)];
+        let stars: Vec<StarData> = offsets_deg
+            .iter()
+            .enumerate()
+            .map(|(i, (dra, ddec))| StarData {
+                id: i as u64,
+                magnitude: 10.0,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + dra,
+                    pointing.dec_degrees() + ddec,
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let refs: Vec<&StarData> = stars.iter().collect();
+
+        let padding_mm = 2.0;
+        let legacy = project_stars_to_focal_plane(&refs, &pointing, &fp, padding_mm);
+        let oriented = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, 0.0),
+            &fp,
+            padding_mm,
+        );
+
+        assert_eq!(legacy.len(), oriented.len());
+        for (a, b) in legacy.iter().zip(oriented.iter()) {
+            assert_relative_eq!(a.x_mm, b.x_mm, epsilon = 1e-12);
+            assert_relative_eq!(a.y_mm, b.y_mm, epsilon = 1e-12);
+            assert_eq!(a.star.id, b.star.id);
+        }
+    }
+
+    #[test]
+    fn test_focal_plane_roll_rotates_star_position() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Single-sensor array at the origin -> AABB is centered on (0, 0)
+        // in mm, so the 2D roll rotation pivots about (0, 0).
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        // Small RA offset gives a star at roughly (r_mm, 0) relative to the
+        // AABB center at zero roll.
+        let offset_star = StarData {
+            id: 1,
+            magnitude: 10.0,
+            position: Equatorial::from_degrees(pointing.ra_degrees() + 0.1, pointing.dec_degrees()),
+            b_v: Some(0.6),
+        };
+        let refs = vec![&offset_star];
+        let padding_mm = 5.0;
+
+        let unrolled = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, 0.0),
+            &fp,
+            padding_mm,
+        );
+        assert_eq!(unrolled.len(), 1);
+        let (x0, y0) = (unrolled[0].x_mm, unrolled[0].y_mm);
+        assert!(x0.abs() > 0.05, "expected meaningful x offset, got {x0}");
+        assert!(y0.abs() < 0.05, "expected near-zero y offset, got {y0}");
+
+        // Roll by +pi/2 -> right-hand rule about +Z sends (x, 0) to (0, x).
+        let rolled = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, std::f64::consts::FRAC_PI_2),
+            &fp,
+            padding_mm,
+        );
+        assert_eq!(rolled.len(), 1);
+        let (x1, y1) = (rolled[0].x_mm, rolled[0].y_mm);
+        assert_relative_eq!(x1, -y0, epsilon = 1e-9);
+        assert_relative_eq!(y1, x0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_mm_space_projector_matches_batch_oriented() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let star = StarData {
+            id: 7,
+            magnitude: 10.0,
+            position: Equatorial::from_degrees(
+                pointing.ra_degrees() + 0.05,
+                pointing.dec_degrees() - 0.02,
+            ),
+            b_v: Some(0.6),
+        };
+        let orientation = orientation_from_pointing(&pointing, 0.3);
+        let padding_mm = 3.0;
+
+        let projector = MmSpaceProjector {
+            focal_plane: &fp,
+            padding_mm,
+        };
+        assert_eq!(projector.sensor_count(), 1);
+        let hit = projector.project_to_sensor(&star, &orientation, 0).unwrap();
+
+        // Compare against the batch path routed to the same sensor.
+        let refs = vec![&star];
+        let fp_stars = project_stars_to_focal_plane_oriented(&refs, &orientation, &fp, padding_mm);
+        let routed = route_stars_to_sensors(&fp_stars, &fp, padding_mm);
+        assert_eq!(routed[0].len(), 1);
+        assert_relative_eq!(hit.0, routed[0][0].x, epsilon = 1e-9);
+        assert_relative_eq!(hit.1, routed[0][0].y, epsilon = 1e-9);
     }
 }

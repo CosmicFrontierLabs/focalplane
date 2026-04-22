@@ -2853,6 +2853,7 @@ dependencies = [
  "indicatif",
  "log",
  "meter-math",
+ "nalgebra",
  "ndarray",
  "num_cpus",
  "once_cell",

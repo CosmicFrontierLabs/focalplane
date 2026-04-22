@@ -4,15 +4,19 @@ use std::time::Duration;
 
 use image::{ImageBuffer, Luma};
 use log::info;
+use nalgebra::UnitQuaternion;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use thiserror::Error;
 
 use crate::hardware::satellite::FocalPlaneConfig;
-use crate::image_proc::render::{project_stars_to_focal_plane, StarInFocalPlane, StarInFrame};
+use crate::image_proc::render::{
+    project_stars_to_focal_plane_oriented, StarInFocalPlane, StarInFrame,
+};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::scene::Scene;
+use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
 use shared::units::LengthExt;
 
@@ -41,7 +45,30 @@ pub enum TrajectoryError {
 #[derive(Debug, Clone)]
 pub struct Waypoint {
     pub time: Duration,
-    pub pointing: Equatorial,
+    pub orientation: UnitQuaternion<f64>,
+}
+
+impl Waypoint {
+    /// Construct a waypoint from an explicit orientation.
+    pub fn new(time: Duration, orientation: UnitQuaternion<f64>) -> Self {
+        Self { time, orientation }
+    }
+
+    /// Construct a waypoint from a pointing with zero roll.
+    pub fn from_pointing(time: Duration, pointing: Equatorial) -> Self {
+        Self {
+            time,
+            orientation: orientation_from_pointing(&pointing, 0.0),
+        }
+    }
+
+    /// Construct a waypoint from a pointing and an explicit roll angle (radians).
+    pub fn from_pointing_and_roll(time: Duration, pointing: Equatorial, roll_rad: f64) -> Self {
+        Self {
+            time,
+            orientation: orientation_from_pointing(&pointing, roll_rad),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,20 +93,30 @@ impl Trajectory {
         Ok(Self { waypoints })
     }
 
+    /// Build a two-waypoint trajectory between two pointings, both with zero roll.
     pub fn from_endpoints(
         start: Equatorial,
         end: Equatorial,
         duration: Duration,
     ) -> Result<Self, TrajectoryError> {
         Self::new(vec![
-            Waypoint {
-                time: Duration::ZERO,
-                pointing: start,
-            },
-            Waypoint {
-                time: duration,
-                pointing: end,
-            },
+            Waypoint::from_pointing(Duration::ZERO, start),
+            Waypoint::from_pointing(duration, end),
+        ])
+    }
+
+    /// Build a two-waypoint trajectory between two pointings with explicit
+    /// start/end roll angles (radians).
+    pub fn from_endpoints_with_roll(
+        start: Equatorial,
+        start_roll_rad: f64,
+        end: Equatorial,
+        end_roll_rad: f64,
+        duration: Duration,
+    ) -> Result<Self, TrajectoryError> {
+        Self::new(vec![
+            Waypoint::from_pointing_and_roll(Duration::ZERO, start, start_roll_rad),
+            Waypoint::from_pointing_and_roll(duration, end, end_roll_rad),
         ])
     }
 
@@ -95,15 +132,15 @@ impl Trajectory {
         &self.waypoints
     }
 
-    /// Interpolate pointing at a given time using SLERP on the celestial sphere.
-    pub fn pointing_at(&self, t: Duration) -> Result<Equatorial, TrajectoryError> {
+    /// Interpolate the spacecraft orientation at a given time using
+    /// quaternion SLERP between bracketing waypoints.
+    pub fn orientation_at(&self, t: Duration) -> Result<UnitQuaternion<f64>, TrajectoryError> {
         let start = self.start_time();
         let end = self.end_time();
         if t < start || t > end {
             return Err(TrajectoryError::TimeOutOfRange(t, start, end));
         }
 
-        // Find bracketing segment
         let seg_idx = self
             .waypoints
             .windows(2)
@@ -115,11 +152,20 @@ impl Trajectory {
 
         let seg_duration = (w1.time - w0.time).as_secs_f64();
         if seg_duration == 0.0 {
-            return Ok(w0.pointing);
+            return Ok(w0.orientation);
         }
         let frac = (t - w0.time).as_secs_f64() / seg_duration;
 
-        Ok(slerp_equatorial(&w0.pointing, &w1.pointing, frac))
+        Ok(w0.orientation.slerp(&w1.orientation, frac))
+    }
+
+    /// Interpolate the boresight pointing at a given time.
+    ///
+    /// Convenience wrapper around [`Trajectory::orientation_at`] that
+    /// extracts the boresight direction from the interpolated orientation.
+    pub fn pointing_at(&self, t: Duration) -> Result<Equatorial, TrajectoryError> {
+        let q = self.orientation_at(t)?;
+        Ok(boresight_of(&q))
     }
 
     /// Generate evenly spaced frame times from start to end (inclusive of start).
@@ -155,31 +201,6 @@ fn xyz_to_equatorial(xyz: [f64; 3]) -> Equatorial {
     Equatorial::new(ra, dec)
 }
 
-/// Spherical linear interpolation between two Equatorial pointings.
-fn slerp_equatorial(a: &Equatorial, b: &Equatorial, t: f64) -> Equatorial {
-    let va = equatorial_to_xyz(a);
-    let vb = equatorial_to_xyz(b);
-
-    let dot = (va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]).clamp(-1.0, 1.0);
-    let omega = dot.acos();
-
-    if omega.abs() < 1e-12 {
-        return *a;
-    }
-
-    let sin_omega = omega.sin();
-    let sa = ((1.0 - t) * omega).sin() / sin_omega;
-    let sb = (t * omega).sin() / sin_omega;
-
-    let result = [
-        sa * va[0] + sb * vb[0],
-        sa * va[1] + sb * vb[1],
-        sa * va[2] + sb * vb[2],
-    ];
-
-    xyz_to_equatorial(result)
-}
-
 /// Angular distance in degrees between two Equatorial pointings (haversine).
 fn angular_distance_deg(a: &Equatorial, b: &Equatorial) -> f64 {
     let va = equatorial_to_xyz(a);
@@ -196,8 +217,13 @@ pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, 
     let mut cy = 0.0;
     let mut cz = 0.0;
     let n = trajectory.waypoints.len() as f64;
-    for wp in &trajectory.waypoints {
-        let [x, y, z] = equatorial_to_xyz(&wp.pointing);
+    let pointings: Vec<Equatorial> = trajectory
+        .waypoints
+        .iter()
+        .map(|wp| boresight_of(&wp.orientation))
+        .collect();
+    for p in &pointings {
+        let [x, y, z] = equatorial_to_xyz(p);
         cx += x;
         cy += y;
         cz += z;
@@ -210,20 +236,18 @@ pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, 
     let mag = (cx * cx + cy * cy + cz * cz).sqrt();
     if mag < 1e-15 {
         // Degenerate: pointings span a half-sphere. Use first waypoint as center.
-        let center = trajectory.waypoints[0].pointing;
-        let max_dist = trajectory
-            .waypoints
+        let center = pointings[0];
+        let max_dist = pointings
             .iter()
-            .map(|wp| angular_distance_deg(&center, &wp.pointing))
+            .map(|p| angular_distance_deg(&center, p))
             .fold(0.0f64, f64::max);
         return (center, 2.0 * max_dist + base_fov_deg);
     }
 
     let center = xyz_to_equatorial([cx / mag, cy / mag, cz / mag]);
-    let max_dist = trajectory
-        .waypoints
+    let max_dist = pointings
         .iter()
-        .map(|wp| angular_distance_deg(&center, &wp.pointing))
+        .map(|p| angular_distance_deg(&center, p))
         .fold(0.0f64, f64::max);
 
     (center, 2.0 * max_dist + base_fov_deg)
@@ -352,9 +376,15 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
     let single_sensor = sensor_count == 1;
 
     for (frame_idx, &t) in frame_times.iter().enumerate() {
-        let pointing = trajectory.pointing_at(t)?;
+        let orientation = trajectory.orientation_at(t)?;
+        let pointing = boresight_of(&orientation);
 
-        let fp_stars = project_stars_to_focal_plane(&star_refs, &pointing, focal_plane, padding_mm);
+        let fp_stars = project_stars_to_focal_plane_oriented(
+            &star_refs,
+            &orientation,
+            focal_plane,
+            padding_mm,
+        );
         let per_sensor_stars =
             route_stars_to_sensors_cached(&fp_stars, focal_plane, padding_mm, &mut flux_cache);
 
@@ -400,6 +430,7 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sims::orientation::roll_of;
     use std::time::Duration;
 
     fn make_pointing(ra_deg: f64, dec_deg: f64) -> Equatorial {
@@ -408,50 +439,20 @@ mod tests {
 
     #[test]
     fn test_trajectory_requires_two_waypoints() {
-        let result = Trajectory::new(vec![Waypoint {
-            time: Duration::ZERO,
-            pointing: make_pointing(0.0, 0.0),
-        }]);
+        let result = Trajectory::new(vec![Waypoint::from_pointing(
+            Duration::ZERO,
+            make_pointing(0.0, 0.0),
+        )]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_trajectory_rejects_non_monotonic() {
         let result = Trajectory::new(vec![
-            Waypoint {
-                time: Duration::from_secs(5),
-                pointing: make_pointing(0.0, 0.0),
-            },
-            Waypoint {
-                time: Duration::from_secs(3),
-                pointing: make_pointing(10.0, 10.0),
-            },
+            Waypoint::from_pointing(Duration::from_secs(5), make_pointing(0.0, 0.0)),
+            Waypoint::from_pointing(Duration::from_secs(3), make_pointing(10.0, 10.0)),
         ]);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_slerp_endpoints() {
-        let a = make_pointing(10.0, 20.0);
-        let b = make_pointing(20.0, 30.0);
-
-        let at_start = slerp_equatorial(&a, &b, 0.0);
-        let at_end = slerp_equatorial(&a, &b, 1.0);
-
-        assert!((at_start.ra_degrees() - a.ra_degrees()).abs() < 1e-10);
-        assert!((at_start.dec_degrees() - a.dec_degrees()).abs() < 1e-10);
-        assert!((at_end.ra_degrees() - b.ra_degrees()).abs() < 1e-10);
-        assert!((at_end.dec_degrees() - b.dec_degrees()).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_slerp_midpoint_is_between() {
-        let a = make_pointing(10.0, 20.0);
-        let b = make_pointing(20.0, 20.0);
-        let mid = slerp_equatorial(&a, &b, 0.5);
-
-        assert!(mid.ra_degrees() > 10.0 && mid.ra_degrees() < 20.0);
-        assert!((mid.dec_degrees() - 20.0).abs() < 0.5);
     }
 
     #[test]
@@ -464,10 +465,26 @@ mod tests {
         .unwrap();
 
         let start = traj.pointing_at(Duration::ZERO).unwrap();
-        assert!((start.ra_degrees() - 10.0).abs() < 1e-10);
+        assert!((start.ra_degrees() - 10.0).abs() < 1e-9);
+        assert!((start.dec_degrees() - 20.0).abs() < 1e-9);
 
         let end = traj.pointing_at(Duration::from_secs(10)).unwrap();
-        assert!((end.ra_degrees() - 20.0).abs() < 1e-10);
+        assert!((end.ra_degrees() - 20.0).abs() < 1e-9);
+        assert!((end.dec_degrees() - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_pointing_at_midpoint_is_between() {
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 20.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let mid = traj.pointing_at(Duration::from_secs(5)).unwrap();
+
+        assert!(mid.ra_degrees() > 10.0 && mid.ra_degrees() < 20.0);
+        assert!((mid.dec_degrees() - 20.0).abs() < 0.5);
     }
 
     #[test]
@@ -530,5 +547,40 @@ mod tests {
         let a = make_pointing(45.0, 30.0);
         let dist = angular_distance_deg(&a, &a);
         assert!(dist.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_slerp_with_roll_midpoint() {
+        // Hold the pointing fixed so SLERP reduces to a pure roll rotation
+        // about the boresight; the midpoint roll must then be exactly
+        // halfway between the endpoint rolls.
+        let pointing = make_pointing(10.0, 20.0);
+        let start_roll: f64 = 0.2;
+        let end_roll: f64 = 0.8;
+
+        let traj = Trajectory::from_endpoints_with_roll(
+            pointing,
+            start_roll,
+            pointing,
+            end_roll,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        // Start/end orientations preserve their constructed rolls.
+        let q0 = traj.orientation_at(Duration::ZERO).unwrap();
+        assert!((roll_of(&q0) - start_roll).abs() < 1e-9);
+        let q1 = traj.orientation_at(Duration::from_secs(10)).unwrap();
+        assert!((roll_of(&q1) - end_roll).abs() < 1e-9);
+
+        // Midpoint roll is exactly halfway.
+        let qm = traj.orientation_at(Duration::from_secs(5)).unwrap();
+        let expected_roll = 0.5 * (start_roll + end_roll);
+        assert!(
+            (roll_of(&qm) - expected_roll).abs() < 1e-9,
+            "midpoint roll {:.9} != expected {:.9}",
+            roll_of(&qm),
+            expected_roll
+        );
     }
 }
