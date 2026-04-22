@@ -35,7 +35,7 @@ pub mod sensor_noise;
 pub mod telescope;
 
 pub use gyro::GyroModel;
-pub use satellite::{FocalPlaneConfig, SatelliteConfig};
+pub use satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
 pub use sensor::SensorConfig;
 pub use sensor_array::SensorArray;
 pub use telescope::TelescopeConfig;

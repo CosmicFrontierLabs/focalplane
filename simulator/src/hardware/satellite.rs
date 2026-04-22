@@ -1,6 +1,11 @@
+use nalgebra::UnitQuaternion;
+use starfield::{catalogs::StarData, Equatorial};
+
 use super::{sensor::SensorConfig, sensor_array::SensorArray, telescope::TelescopeConfig};
 use crate::photometry::QuantumEfficiency;
+use crate::sims::orientation::{boresight_of, roll_of};
 use shared::image_proc::airy::PixelScaledAiryDisk;
+use shared::star_projector::StarProjector;
 use shared::units::{Angle, AngleExt, Length, LengthExt, Temperature};
 
 /// Complete satellite configuration combining telescope optics and sensor.
@@ -282,6 +287,130 @@ impl FocalPlaneConfig {
     /// Get the total AABB of the sensor array in mm.
     pub fn total_aabb_mm(&self) -> Option<(f64, f64, f64, f64)> {
         self.array.total_aabb_mm()
+    }
+
+    /// Project a sky direction into focal-plane mm coordinates, applying roll
+    /// about the AABB center.
+    ///
+    /// The transform chain is:
+    /// 1. Use the orientation's boresight to build a virtual mm-scale
+    ///    [`StarProjector`] that samples at 0.1 mm per virtual pixel.
+    /// 2. Project the star's celestial position and convert the virtual pixel
+    ///    coordinate back to mm, recentering on the array AABB.
+    /// 3. Apply the orientation's roll as a 2D rotation in mm-space about the
+    ///    AABB center.
+    ///
+    /// Returns `None` when the array has no AABB (no sensors) or when the
+    /// projector rejects the direction.
+    pub fn sky_to_mm(
+        &self,
+        star_eq: &Equatorial,
+        orientation: &UnitQuaternion<f64>,
+    ) -> Option<(f64, f64)> {
+        let (min_x, min_y, max_x, max_y) = self.total_aabb_mm()?;
+
+        // Virtual canvas large enough to comfortably contain the AABB. The
+        // canvas does not know about padding because rendering padding is a
+        // render-side concern that is re-applied downstream.
+        let mm_per_virt_pixel = 0.1;
+        let padded_width_mm = max_x - min_x;
+        let padded_height_mm = max_y - min_y;
+        let virt_width = (padded_width_mm / mm_per_virt_pixel).ceil() as usize + 2;
+        let virt_height = (padded_height_mm / mm_per_virt_pixel).ceil() as usize + 2;
+
+        let center_x_mm = (min_x + max_x) / 2.0;
+        let center_y_mm = (min_y + max_y) / 2.0;
+
+        let pointing = boresight_of(orientation);
+        let roll_rad = roll_of(orientation);
+        let (sin_roll, cos_roll) = roll_rad.sin_cos();
+
+        let rad_per_virt_pixel = self.plate_scale_rad_per_mm() * mm_per_virt_pixel;
+        let projector = StarProjector::new(&pointing, rad_per_virt_pixel, virt_width, virt_height);
+        let (vx, vy) = projector.project_unbounded(star_eq)?;
+
+        let x_mm_raw = (vx - virt_width as f64 / 2.0) * mm_per_virt_pixel + center_x_mm;
+        let y_mm_raw = (virt_height as f64 / 2.0 - vy) * mm_per_virt_pixel + center_y_mm;
+
+        // Apply roll as a 2D rotation about the AABB center. The body +Z axis
+        // points out of the focal plane toward the sky, so a positive roll
+        // (right-hand rule about +Z) rotates the star pattern on the focal
+        // plane in the same sense in the (x, y) plane.
+        let dx = x_mm_raw - center_x_mm;
+        let dy = y_mm_raw - center_y_mm;
+        let x_mm = center_x_mm + cos_roll * dx - sin_roll * dy;
+        let y_mm = center_y_mm + sin_roll * dx + cos_roll * dy;
+
+        Some((x_mm, y_mm))
+    }
+
+    /// Translate focal-plane mm coordinates into pixel coordinates on a
+    /// specific sensor.
+    ///
+    /// `padding_mm` allows stars outside the sensor's nominal edge to still
+    /// report a hit when their PSF can bleed into the sensor. Returns `None`
+    /// if the padded sensor does not contain the point.
+    pub fn mm_to_sensor_pixels(
+        &self,
+        x_mm: f64,
+        y_mm: f64,
+        sensor_idx: usize,
+        padding_mm: f64,
+    ) -> Option<(f64, f64)> {
+        self.array
+            .mm_to_pixels_padded(x_mm, y_mm, padding_mm)
+            .into_iter()
+            .find_map(|(px, py, idx)| {
+                if idx == sensor_idx {
+                    Some((px, py))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+/// Per-sensor projection interface for orientation-aware rendering.
+///
+/// Given a full spacecraft orientation (boresight + roll), this trait
+/// projects a star into a specific sensor's pixel coordinate frame.
+/// Motion-blur and parallel renderers are intended to target this interface
+/// so that different projection backends (e.g. GPU, analytic, mm-space) can
+/// be swapped in without disturbing the calling pipeline.
+pub trait FocalPlaneProjector {
+    /// Returns `Some((pixel_x, pixel_y))` if the star lands on the specified
+    /// sensor (including the padded PSF bleed region), `None` otherwise.
+    /// Pixel coordinates may be sub-pixel.
+    ///
+    /// `padding_mm` is a render-side concern — how far beyond the nominal
+    /// sensor edge a star can still contribute flux via PSF bleed — not a
+    /// property of the focal plane itself, so it is supplied per call.
+    fn project_to_sensor(
+        &self,
+        star: &StarData,
+        orientation: &UnitQuaternion<f64>,
+        sensor_idx: usize,
+        padding_mm: f64,
+    ) -> Option<(f64, f64)>;
+
+    /// Number of sensors addressable by this projector.
+    fn sensor_count(&self) -> usize;
+}
+
+impl FocalPlaneProjector for FocalPlaneConfig {
+    fn project_to_sensor(
+        &self,
+        star: &StarData,
+        orientation: &UnitQuaternion<f64>,
+        sensor_idx: usize,
+        padding_mm: f64,
+    ) -> Option<(f64, f64)> {
+        let (x_mm, y_mm) = self.sky_to_mm(&star.position, orientation)?;
+        self.mm_to_sensor_pixels(x_mm, y_mm, sensor_idx, padding_mm)
+    }
+
+    fn sensor_count(&self) -> usize {
+        self.array.sensor_count()
     }
 }
 
@@ -634,5 +763,91 @@ mod tests {
         // plate_scale = 1/focal_length_m = 1.0 rad/m
         // rad_per_mm = 1.0 / 1000 = 0.001
         assert_relative_eq!(fp.plate_scale_rad_per_mm(), 0.001, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_sky_to_mm_roundtrips_boresight() {
+        use crate::sims::orientation::orientation_from_pointing;
+
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(sensor),
+            Temperature::from_celsius(-10.0),
+        );
+
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let orientation = orientation_from_pointing(&pointing, 0.0);
+
+        let (x_mm, y_mm) = fp.sky_to_mm(&pointing, &orientation).unwrap();
+        assert_relative_eq!(x_mm, 0.0, epsilon = 1e-9);
+        assert_relative_eq!(y_mm, 0.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_mm_to_sensor_pixels_delegates() {
+        use crate::hardware::sensor_array::{PositionedSensor, SensorPosition};
+
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = crate::hardware::sensor::models::GSENSE4040BSI.clone();
+        let (width, height) = sensor.dimensions.get_width_height();
+        let width_mm = width.as_millimeters();
+        let height_mm = height.as_millimeters();
+        let pixel_size_mm = sensor.dimensions.pixel_size().as_millimeters();
+
+        // Two-sensor array offset along +/- X. Sensor 1 is centered at
+        // (+offset_mm, 0), so feeding its center coord should return the
+        // pixel center of sensor 1 and miss sensor 0 without padding.
+        let offset_mm = width_mm + 5.0;
+        let array = SensorArray::new(vec![
+            PositionedSensor {
+                sensor: sensor.clone(),
+                position: SensorPosition {
+                    x_mm: -offset_mm,
+                    y_mm: 0.0,
+                },
+            },
+            PositionedSensor {
+                sensor: sensor.clone(),
+                position: SensorPosition {
+                    x_mm: offset_mm,
+                    y_mm: 0.0,
+                },
+            },
+        ]);
+        let fp = FocalPlaneConfig::new(telescope, array, Temperature::from_celsius(-10.0));
+
+        // Sensor 1 center maps to its pixel center.
+        let hit = fp.mm_to_sensor_pixels(offset_mm, 0.0, 1, 0.0).unwrap();
+        let (w_px, h_px) = sensor.dimensions.get_pixel_width_height();
+        assert_relative_eq!(hit.0, w_px as f64 / 2.0, epsilon = 1e-9);
+        assert_relative_eq!(hit.1, h_px as f64 / 2.0, epsilon = 1e-9);
+
+        // Same coord should miss sensor 0 (no padding); the sensors are far apart.
+        assert!(fp.mm_to_sensor_pixels(offset_mm, 0.0, 0, 0.0).is_none());
+
+        // A point offset by one pixel from sensor 0's right edge still lands on
+        // sensor 0 when padding_mm is enough; verify the pixel coord matches
+        // the underlying padded converter for non-zero padding.
+        let edge_mm = -offset_mm + width_mm / 2.0 + pixel_size_mm;
+        let padding_mm = 2.0 * pixel_size_mm;
+        let hit0 = fp.mm_to_sensor_pixels(edge_mm, 0.0, 0, padding_mm).unwrap();
+        assert_relative_eq!(
+            hit0.0,
+            (width_mm + pixel_size_mm) / pixel_size_mm,
+            epsilon = 1e-9
+        );
+        assert_relative_eq!(hit0.1, height_mm / 2.0 / pixel_size_mm, epsilon = 1e-9);
     }
 }
