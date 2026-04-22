@@ -16,6 +16,7 @@ use simulator::photometry::{
     stellar::{temperature_from_bv, BlackbodyStellarSpectrum},
     QuantumEfficiency,
 };
+use simulator::plotting::save_plot_png;
 use simulator::star_math::DEFAULT_BV;
 use simulator::units::{Area, AreaExt, LengthExt, Wavelength};
 use std::error::Error;
@@ -185,103 +186,98 @@ fn create_sensor_plot(
 
     let mono_color = RGBColor(0, 255, 0); // Laser green for monochromatic
 
-    // Create plot
     let filename = format!("plots/chromatic_airy_{}.png", sensor_name.to_lowercase());
-    let root = BitMapBackend::new(&filename, (2048, 1536)).into_drawing_area();
-    root.fill(&BLACK)?;
+    save_plot_png(&filename, (2048, 1536), |root| {
+        root.fill(&BLACK)?;
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(
-            format!("{sensor_name}: Chromatic vs Monochromatic Airy Disk Profiles"),
-            ("sans-serif", 50).into_font().color(&WHITE),
-        )
-        .margin(40)
-        .x_label_area_size(80)
-        .y_label_area_size(100)
-        .build_cartesian_2d(0.0..max_radius, 0.0001f64..1.1f64)?;
-
-    chart
-        .configure_mesh()
-        .x_desc("Radius (normalized units)")
-        .y_desc("Normalized Intensity")
-        .y_label_formatter(&|y| {
-            if *y >= 0.1 {
-                format!("{y:.1}")
-            } else {
-                format!("{y:.0e}")
-            }
-        })
-        .y_labels(11)
-        .label_style(("sans-serif", 24).into_font().color(&WHITE))
-        .axis_style(WHITE)
-        .draw()?;
-
-    // Plot monochromatic profiles
-    chart
-        .draw_series(LineSeries::new(
-            radii.iter().cloned().zip(mono_profile.iter().cloned()),
-            ShapeStyle::from(&mono_color).stroke_width(2),
-        ))?
-        .label("Monochromatic (550nm)")
-        .legend(move |(x, y)| {
-            PathElement::new(
-                vec![(x, y), (x + 20, y)],
-                ShapeStyle::from(&mono_color).stroke_width(2),
+        let mut chart = ChartBuilder::on(root)
+            .caption(
+                format!("{sensor_name}: Chromatic vs Monochromatic Airy Disk Profiles"),
+                ("sans-serif", 50).into_font().color(&WHITE),
             )
-        });
+            .margin(40)
+            .x_label_area_size(80)
+            .y_label_area_size(100)
+            .build_cartesian_2d(0.0..max_radius, 0.0001f64..1.1f64)?;
 
-    chart
-        .draw_series(
-            LineSeries::new(
-                radii
-                    .iter()
-                    .cloned()
-                    .zip(mono_gauss_profile.iter().cloned()),
-                ShapeStyle::from(&mono_color).stroke_width(1),
-            )
-            .point_size(0),
-        )?
-        .label("Mono Gaussian approx")
-        .legend(move |(x, y)| {
-            PathElement::new(
-                vec![(x, y), (x + 20, y)],
-                ShapeStyle::from(&mono_color).stroke_width(1),
-            )
-        });
-
-    // Plot star profiles
-    for (i, ((_, star_type, temp), profile)) in stars.iter().zip(star_profiles.iter()).enumerate() {
-        let color = &star_colors[i];
-        let eff_wavelength = star_psfs[i].disk.reference_wavelength.as_nanometers();
-        let label = if star_type.contains("B-V") {
-            format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)")
-        } else {
-            format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)")
-        };
+        chart
+            .configure_mesh()
+            .x_desc("Radius (normalized units)")
+            .y_desc("Normalized Intensity")
+            .y_label_formatter(&|y| {
+                if *y >= 0.1 {
+                    format!("{y:.1}")
+                } else {
+                    format!("{y:.0e}")
+                }
+            })
+            .y_labels(11)
+            .label_style(("sans-serif", 24).into_font().color(&WHITE))
+            .axis_style(WHITE)
+            .draw()?;
 
         chart
             .draw_series(LineSeries::new(
-                radii.iter().cloned().zip(profile.iter().cloned()),
-                ShapeStyle::from(color).stroke_width(1),
+                radii.iter().cloned().zip(mono_profile.iter().cloned()),
+                ShapeStyle::from(&mono_color).stroke_width(2),
             ))?
-            .label(&label)
+            .label("Monochromatic (550nm)")
             .legend(move |(x, y)| {
                 PathElement::new(
                     vec![(x, y), (x + 20, y)],
-                    ShapeStyle::from(color).stroke_width(1),
+                    ShapeStyle::from(&mono_color).stroke_width(2),
                 )
             });
-    }
 
-    chart
-        .configure_series_labels()
-        .background_style(BLACK.mix(0.8))
-        .border_style(WHITE)
-        .label_font(("sans-serif", 20).into_font().color(&WHITE))
-        .draw()?;
+        chart
+            .draw_series(
+                LineSeries::new(
+                    radii
+                        .iter()
+                        .cloned()
+                        .zip(mono_gauss_profile.iter().cloned()),
+                    ShapeStyle::from(&mono_color).stroke_width(1),
+                )
+                .point_size(0),
+            )?
+            .label("Mono Gaussian approx")
+            .legend(move |(x, y)| {
+                PathElement::new(
+                    vec![(x, y), (x + 20, y)],
+                    ShapeStyle::from(&mono_color).stroke_width(1),
+                )
+            });
 
-    root.present()?;
-    Ok(())
+        for (i, ((_, star_type, temp), profile)) in
+            stars.iter().zip(star_profiles.iter()).enumerate()
+        {
+            let color = &star_colors[i];
+            let eff_wavelength = star_psfs[i].disk.reference_wavelength.as_nanometers();
+            let label = format!("{star_type} ({temp:.0}K, {eff_wavelength:.0}nm)");
+
+            chart
+                .draw_series(LineSeries::new(
+                    radii.iter().cloned().zip(profile.iter().cloned()),
+                    ShapeStyle::from(color).stroke_width(1),
+                ))?
+                .label(&label)
+                .legend(move |(x, y)| {
+                    PathElement::new(
+                        vec![(x, y), (x + 20, y)],
+                        ShapeStyle::from(color).stroke_width(1),
+                    )
+                });
+        }
+
+        chart
+            .configure_series_labels()
+            .background_style(BLACK.mix(0.8))
+            .border_style(WHITE)
+            .label_font(("sans-serif", 20).into_font().color(&WHITE))
+            .draw()?;
+
+        Ok(())
+    })
 }
 
 /// Creates 2D PSF comparison images showing monochromatic vs chromatic PSFs.
@@ -351,43 +347,40 @@ fn create_2d_psf_comparison(
         }
     };
 
-    // Save 2D PSF comparison
-    let root2d = BitMapBackend::new("plots/chromatic_psf_2d.png", (768, 384)).into_drawing_area();
-    root2d.fill(&WHITE)?;
+    save_plot_png("plots/chromatic_psf_2d.png", (768, 384), |root2d| {
+        root2d.fill(&WHITE)?;
 
-    let (left, right) = root2d.split_horizontally(384);
+        let (left, right) = root2d.split_horizontally(384);
 
-    // Plot monochromatic PSF
-    let mut mono_chart = ChartBuilder::on(&left)
-        .caption("Monochromatic PSF", ("sans-serif", 20))
-        .margin(10)
-        .build_cartesian_2d(0..image_size, 0..image_size)?;
+        let mut mono_chart = ChartBuilder::on(&left)
+            .caption("Monochromatic PSF", ("sans-serif", 20))
+            .margin(10)
+            .build_cartesian_2d(0..image_size, 0..image_size)?;
 
-    mono_chart.draw_series(mono_image.indexed_iter().map(|((y, x), &v)| {
-        Rectangle::new(
-            [(x, y), (x + 1, y + 1)],
-            HSLColor(0.0, 0.0, 1.0 - log_scale(v)).filled(),
-        )
-    }))?;
+        mono_chart.draw_series(mono_image.indexed_iter().map(|((y, x), &v)| {
+            Rectangle::new(
+                [(x, y), (x + 1, y + 1)],
+                HSLColor(0.0, 0.0, 1.0 - log_scale(v)).filled(),
+            )
+        }))?;
 
-    // Plot chromatic PSF
-    let mut chrom_chart = ChartBuilder::on(&right)
-        .caption(
-            format!("Chromatic PSF (Sun-like star, {sensor_name})"),
-            ("sans-serif", 20),
-        )
-        .margin(10)
-        .build_cartesian_2d(0..image_size, 0..image_size)?;
+        let mut chrom_chart = ChartBuilder::on(&right)
+            .caption(
+                format!("Chromatic PSF (Sun-like star, {sensor_name})"),
+                ("sans-serif", 20),
+            )
+            .margin(10)
+            .build_cartesian_2d(0..image_size, 0..image_size)?;
 
-    chrom_chart.draw_series(sun_image.indexed_iter().map(|((y, x), &v)| {
-        Rectangle::new(
-            [(x, y), (x + 1, y + 1)],
-            HSLColor(0.0, 0.0, 1.0 - log_scale(v)).filled(),
-        )
-    }))?;
+        chrom_chart.draw_series(sun_image.indexed_iter().map(|((y, x), &v)| {
+            Rectangle::new(
+                [(x, y), (x + 1, y + 1)],
+                HSLColor(0.0, 0.0, 1.0 - log_scale(v)).filled(),
+            )
+        }))?;
 
-    root2d.present()?;
-    Ok(())
+        Ok(())
+    })
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

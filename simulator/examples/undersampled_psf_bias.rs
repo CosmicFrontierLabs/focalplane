@@ -16,6 +16,7 @@ use simulator::hardware::telescope::models::IDEAL_50CM;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::StarInFrame;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
+use simulator::plotting::save_plot_png;
 use simulator::scene::Scene;
 use simulator::star_data_to_fluxes;
 use starfield::catalogs::StarData;
@@ -335,83 +336,77 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create visualization
     println!("Creating visualization...");
 
-    let root =
-        BitMapBackend::new("plots/undersampled_psf_bias.png", (1200, 800)).into_drawing_area();
-    root.fill(&WHITE)?;
+    save_plot_png("plots/undersampled_psf_bias.png", (1200, 800), |root| {
+        root.fill(&WHITE)?;
 
-    // Find maximum error across all results for Y-axis scaling
-    let max_error = all_results
-        .iter()
-        .flat_map(|(_, results, _, _)| results.iter())
-        .cloned()
-        .fold(0.0f64, f64::max);
+        let max_error = all_results
+            .iter()
+            .flat_map(|(_, results, _, _)| results.iter())
+            .cloned()
+            .fold(0.0f64, f64::max);
 
-    let y_max = max_error + 0.01; // Pad by 0.01 above maximum
+        let y_max = max_error + 0.01;
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(
-            "Centroid Error vs Sub-pixel Position for Different PSF Sampling",
-            ("sans-serif", 30),
-        )
-        .margin(20)
-        .x_label_area_size(40)
-        .y_label_area_size(50)
-        .build_cartesian_2d(0.0..1.0, 0.0..y_max)?;
+        let mut chart = ChartBuilder::on(root)
+            .caption(
+                "Centroid Error vs Sub-pixel Position for Different PSF Sampling",
+                ("sans-serif", 30),
+            )
+            .margin(20)
+            .x_label_area_size(40)
+            .y_label_area_size(50)
+            .build_cartesian_2d(0.0..1.0, 0.0..y_max)?;
 
-    chart
-        .configure_mesh()
-        .x_desc("Sub-pixel X Position")
-        .y_desc("Mean Centroid Error (pixels)")
-        .draw()?;
+        chart
+            .configure_mesh()
+            .x_desc("Sub-pixel X Position")
+            .y_desc("Mean Centroid Error (pixels)")
+            .draw()?;
 
-    // Plot results for different sampling values
-    // Create color interpolation from red (undersampled) to green (well-sampled)
-    let mut colors = Vec::new();
-    for i in 0..psf_sampling_values.len() {
-        let t = i as f64 / (psf_sampling_values.len() - 1) as f64;
-        // Interpolate from red to green
-        let r = (255.0 * (1.0 - t)) as u8;
-        let g = (255.0 * t) as u8;
-        let b = 0u8;
-        colors.push(RGBColor(r, g, b));
-    }
-
-    for (idx, &(psf_sampling, ref results, _, _)) in all_results.iter().enumerate() {
-        let color = &colors[idx];
-
-        // Extract center row for plotting
-        let center_row = grid_size / 2;
-        let mut plot_data = Vec::new();
-
-        for x in 0..grid_size {
-            let x_pos = x as f64 / (grid_size - 1) as f64;
-            let error = results[[center_row, x]];
-            plot_data.push((x_pos, error));
+        let mut colors = Vec::new();
+        for i in 0..psf_sampling_values.len() {
+            let t = i as f64 / (psf_sampling_values.len() - 1) as f64;
+            let r = (255.0 * (1.0 - t)) as u8;
+            let g = (255.0 * t) as u8;
+            let b = 0u8;
+            colors.push(RGBColor(r, g, b));
         }
 
-        let color_clone = *color;
+        for (idx, &(psf_sampling, ref results, _, _)) in all_results.iter().enumerate() {
+            let color = &colors[idx];
+
+            let center_row = grid_size / 2;
+            let mut plot_data = Vec::new();
+
+            for x in 0..grid_size {
+                let x_pos = x as f64 / (grid_size - 1) as f64;
+                let error = results[[center_row, x]];
+                plot_data.push((x_pos, error));
+            }
+
+            let color_clone = *color;
+            chart
+                .draw_series(LineSeries::new(plot_data.clone(), *color))?
+                .label(format!("PSF = {psf_sampling:.2} FWHM/px"))
+                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], color_clone));
+
+            chart.draw_series(PointSeries::of_element(
+                plot_data,
+                3,
+                color.filled(),
+                &|c, s, st| EmptyElement::at(c) + Circle::new((0, 0), s, st),
+            ))?;
+        }
+
         chart
-            .draw_series(LineSeries::new(plot_data.clone(), *color))?
-            .label(format!("PSF = {psf_sampling:.2} FWHM/px"))
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], color_clone));
+            .configure_series_labels()
+            .position(SeriesLabelPosition::UpperRight)
+            .background_style(WHITE.mix(0.8))
+            .border_style(BLACK)
+            .draw()?;
 
-        // Add points
-        chart.draw_series(PointSeries::of_element(
-            plot_data,
-            3,
-            color.filled(),
-            &|c, s, st| EmptyElement::at(c) + Circle::new((0, 0), s, st),
-        ))?;
-    }
-
-    chart
-        .configure_series_labels()
-        .position(SeriesLabelPosition::UpperRight)
-        .background_style(WHITE.mix(0.8))
-        .border_style(BLACK)
-        .draw()?;
-
-    root.present()?;
+        Ok(())
+    })?;
 
     println!("\nVisualization saved to 'plots/undersampled_psf_bias.png'");
 
@@ -421,88 +416,83 @@ fn main() -> Result<(), Box<dyn Error>> {
     for (psf_sampling, _, x_bias, y_bias) in all_results.iter() {
         let filename = format!("plots/psf_bias_heatmap_{psf_sampling:.2}_fwhm_per_pixel.png");
 
-        let root_heatmap = BitMapBackend::new(&filename, (1000, 400)).into_drawing_area();
-        root_heatmap.fill(&WHITE)?;
+        save_plot_png(&filename, (1000, 400), |root_heatmap| {
+            root_heatmap.fill(&WHITE)?;
 
-        let areas = root_heatmap.split_evenly((1, 2));
-        let areas_x = &areas[0];
-        let areas_y = &areas[1];
+            let areas = root_heatmap.split_evenly((1, 2));
+            let areas_x = &areas[0];
+            let areas_y = &areas[1];
 
-        // X bias heatmap
-        let mut chart_x = ChartBuilder::on(areas_x)
-            .caption(
-                format!("X Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
-                ("sans-serif", 20),
-            )
-            .margin(10)
-            .x_label_area_size(30)
-            .y_label_area_size(30)
-            .build_cartesian_2d(0..grid_size, 0..grid_size)?;
+            let mut chart_x = ChartBuilder::on(areas_x)
+                .caption(
+                    format!("X Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
+                    ("sans-serif", 20),
+                )
+                .margin(10)
+                .x_label_area_size(30)
+                .y_label_area_size(30)
+                .build_cartesian_2d(0..grid_size, 0..grid_size)?;
 
-        chart_x
-            .configure_mesh()
-            .x_desc("Sub-pixel X (grid)")
-            .y_desc("Sub-pixel Y (grid)")
-            .draw()?;
+            chart_x
+                .configure_mesh()
+                .x_desc("Sub-pixel X (grid)")
+                .y_desc("Sub-pixel Y (grid)")
+                .draw()?;
 
-        // Find max bias for adaptive scaling, but keep minimum scale for visibility
-        let max_abs_bias = x_bias.iter().cloned().map(f64::abs).fold(0.0f64, f64::max);
-        let scale_limit = max_abs_bias.max(0.05); // Minimum scale of 0.05 for visibility
+            let max_abs_bias = x_bias.iter().cloned().map(f64::abs).fold(0.0f64, f64::max);
+            let scale_limit = max_abs_bias.max(0.05);
 
-        chart_x.draw_series(x_bias.indexed_iter().map(|((y, x), &value)| {
-            // Blue for negative, red for positive, white at zero
-            let color = if value < 0.0 {
-                let intensity = (value.abs() / scale_limit).min(1.0);
-                let blue_val = (intensity * 200.0 + 55.0) as u8; // Range 55-255 for better visibility
-                RGBColor(255 - blue_val, 255 - blue_val, 255)
-            } else if value > 0.0 {
-                let intensity = (value.abs() / scale_limit).min(1.0);
-                let red_val = (intensity * 200.0 + 55.0) as u8; // Range 55-255 for better visibility
-                RGBColor(255, 255 - red_val, 255 - red_val)
-            } else {
-                RGBColor(255, 255, 255) // White for zero
-            };
-            Rectangle::new([(x, y), (x + 1, y + 1)], color.filled())
-        }))?;
+            chart_x.draw_series(x_bias.indexed_iter().map(|((y, x), &value)| {
+                let color = if value < 0.0 {
+                    let intensity = (value.abs() / scale_limit).min(1.0);
+                    let blue_val = (intensity * 200.0 + 55.0) as u8;
+                    RGBColor(255 - blue_val, 255 - blue_val, 255)
+                } else if value > 0.0 {
+                    let intensity = (value.abs() / scale_limit).min(1.0);
+                    let red_val = (intensity * 200.0 + 55.0) as u8;
+                    RGBColor(255, 255 - red_val, 255 - red_val)
+                } else {
+                    RGBColor(255, 255, 255)
+                };
+                Rectangle::new([(x, y), (x + 1, y + 1)], color.filled())
+            }))?;
 
-        // Y bias heatmap
-        let mut chart_y = ChartBuilder::on(areas_y)
-            .caption(
-                format!("Y Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
-                ("sans-serif", 20),
-            )
-            .margin(10)
-            .x_label_area_size(30)
-            .y_label_area_size(30)
-            .build_cartesian_2d(0..grid_size, 0..grid_size)?;
+            let mut chart_y = ChartBuilder::on(areas_y)
+                .caption(
+                    format!("Y Centroid Bias (PSF = {psf_sampling:.2} FWHM/px)"),
+                    ("sans-serif", 20),
+                )
+                .margin(10)
+                .x_label_area_size(30)
+                .y_label_area_size(30)
+                .build_cartesian_2d(0..grid_size, 0..grid_size)?;
 
-        chart_y
-            .configure_mesh()
-            .x_desc("Sub-pixel X (grid)")
-            .y_desc("Sub-pixel Y (grid)")
-            .draw()?;
+            chart_y
+                .configure_mesh()
+                .x_desc("Sub-pixel X (grid)")
+                .y_desc("Sub-pixel Y (grid)")
+                .draw()?;
 
-        // Find max bias for Y adaptive scaling
-        let max_abs_bias_y = y_bias.iter().cloned().map(f64::abs).fold(0.0f64, f64::max);
-        let scale_limit_y = max_abs_bias_y.max(0.05); // Minimum scale of 0.05 for visibility
+            let max_abs_bias_y = y_bias.iter().cloned().map(f64::abs).fold(0.0f64, f64::max);
+            let scale_limit_y = max_abs_bias_y.max(0.05);
 
-        chart_y.draw_series(y_bias.indexed_iter().map(|((y, x), &value)| {
-            // Blue for negative, red for positive, white at zero
-            let color = if value < 0.0 {
-                let intensity = (value.abs() / scale_limit_y).min(1.0);
-                let blue_val = (intensity * 200.0 + 55.0) as u8; // Range 55-255 for better visibility
-                RGBColor(255 - blue_val, 255 - blue_val, 255)
-            } else if value > 0.0 {
-                let intensity = (value.abs() / scale_limit_y).min(1.0);
-                let red_val = (intensity * 200.0 + 55.0) as u8; // Range 55-255 for better visibility
-                RGBColor(255, 255 - red_val, 255 - red_val)
-            } else {
-                RGBColor(255, 255, 255) // White for zero
-            };
-            Rectangle::new([(x, y), (x + 1, y + 1)], color.filled())
-        }))?;
+            chart_y.draw_series(y_bias.indexed_iter().map(|((y, x), &value)| {
+                let color = if value < 0.0 {
+                    let intensity = (value.abs() / scale_limit_y).min(1.0);
+                    let blue_val = (intensity * 200.0 + 55.0) as u8;
+                    RGBColor(255 - blue_val, 255 - blue_val, 255)
+                } else if value > 0.0 {
+                    let intensity = (value.abs() / scale_limit_y).min(1.0);
+                    let red_val = (intensity * 200.0 + 55.0) as u8;
+                    RGBColor(255, 255 - red_val, 255 - red_val)
+                } else {
+                    RGBColor(255, 255, 255)
+                };
+                Rectangle::new([(x, y), (x + 1, y + 1)], color.filled())
+            }))?;
 
-        root_heatmap.present()?;
+            Ok(())
+        })?;
 
         println!("  Saved heatmap: {filename}");
     }

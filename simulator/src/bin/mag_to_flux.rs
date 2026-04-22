@@ -10,6 +10,7 @@ use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::StarInFrame;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
+use simulator::plotting::save_plot_png;
 use simulator::shared_args::{SensorModel, TelescopeModel};
 use simulator::star_data_to_fluxes;
 use simulator::Scene;
@@ -75,119 +76,112 @@ fn create_plot(
     all_results: &[DetectorResults],
     output_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Create plots directory if it doesn't exist
     std::fs::create_dir_all("plots")?;
 
-    // Create plot with 2x resolution
-    let root = BitMapBackend::new(output_path, (1600, 1200)).into_drawing_area();
-    root.fill(&WHITE)?;
+    save_plot_png(output_path, (1600, 1200), |root| {
+        root.fill(&WHITE)?;
 
-    // Find min/max for scaling across all detectors
-    let min_mag = all_results
-        .iter()
-        .flat_map(|r| r.data_points.iter())
-        .map(|&(m, _)| m)
-        .fold(f64::INFINITY, f64::min);
-    let max_mag = all_results
-        .iter()
-        .flat_map(|r| r.data_points.iter())
-        .map(|&(m, _)| m)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let min_flux = all_results
-        .iter()
-        .flat_map(|r| r.data_points.iter())
-        .map(|&(_, f)| f)
-        .fold(f64::INFINITY, f64::min)
-        .max(1.0);
-    let max_flux = all_results
-        .iter()
-        .flat_map(|r| r.data_points.iter())
-        .map(|&(_, f)| f)
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    let mut chart = ChartBuilder::on(&root)
-        .caption("Magnitude vs Flux (DN)", ("sans-serif", 40))
-        .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(60)
-        .build_cartesian_2d(min_mag..max_mag, (min_flux..max_flux).log_scale())?;
-
-    chart
-        .configure_mesh()
-        .x_desc("Magnitude")
-        .y_desc("Flux (DN) - Log Scale")
-        .draw()?;
-
-    // Define colors for each detector
-    let detector_colors = [("Dao", &BLUE), ("Iraf", &GREEN), ("Naive", &RED)];
-
-    // Plot data and fits for each detector
-    for (idx, results) in all_results.iter().enumerate() {
-        let color = detector_colors[idx].1;
-
-        // Plot measured data points
-        chart
-            .draw_series(PointSeries::of_element(
-                results.data_points.iter().map(|&(m, f)| (m, f)),
-                5,
-                color,
-                &|c, s, st| Circle::new(c, s, st.filled()),
-            ))?
-            .label(&results.detector_name)
-            .legend(move |(x, y)| Circle::new((x + 5, y), 3, color.filled()));
-
-        // Calculate linear fit for this detector
-        let fit_points: Vec<(f64, f64)> = results
-            .data_points
+        let min_mag = all_results
             .iter()
-            .filter(|&&(m, f)| m >= results.fit_range.0 && m <= results.fit_range.1 && f > 0.0)
-            .copied()
-            .collect();
+            .flat_map(|r| r.data_points.iter())
+            .map(|&(m, _)| m)
+            .fold(f64::INFINITY, f64::min);
+        let max_mag = all_results
+            .iter()
+            .flat_map(|r| r.data_points.iter())
+            .map(|&(m, _)| m)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_flux = all_results
+            .iter()
+            .flat_map(|r| r.data_points.iter())
+            .map(|&(_, f)| f)
+            .fold(f64::INFINITY, f64::min)
+            .max(1.0);
+        let max_flux = all_results
+            .iter()
+            .flat_map(|r| r.data_points.iter())
+            .map(|&(_, f)| f)
+            .fold(f64::NEG_INFINITY, f64::max);
 
-        if !fit_points.is_empty() {
-            // Calculate linear regression in log space
-            let n = fit_points.len() as f64;
-            let sum_x: f64 = fit_points.iter().map(|(m, _)| m).sum();
-            let sum_y: f64 = fit_points.iter().map(|(_, f)| f.log10()).sum();
-            let sum_xy: f64 = fit_points.iter().map(|(m, f)| m * f.log10()).sum();
-            let sum_x2: f64 = fit_points.iter().map(|(m, _)| m * m).sum();
+        let mut chart = ChartBuilder::on(root)
+            .caption("Magnitude vs Flux (DN)", ("sans-serif", 40))
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(min_mag..max_mag, (min_flux..max_flux).log_scale())?;
 
-            // Linear regression formulas
-            let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
-            let intercept = (sum_y - slope * sum_x) / n;
+        chart
+            .configure_mesh()
+            .x_desc("Magnitude")
+            .y_desc("Flux (DN) - Log Scale")
+            .draw()?;
 
-            // Create fitted line endpoints
-            let fit_min_mag = fit_points
-                .iter()
-                .map(|(m, _)| *m)
-                .fold(f64::INFINITY, f64::min);
-            let fit_max_mag = fit_points
-                .iter()
-                .map(|(m, _)| *m)
-                .fold(f64::NEG_INFINITY, f64::max);
+        let detector_colors = [("Dao", &BLUE), ("Iraf", &GREEN), ("Naive", &RED)];
 
-            let pogson_points = vec![
-                (fit_min_mag, 10_f64.powf(slope * fit_min_mag + intercept)),
-                (fit_max_mag, 10_f64.powf(slope * fit_max_mag + intercept)),
-            ];
+        for (idx, results) in all_results.iter().enumerate() {
+            let color = detector_colors[idx].1;
 
             chart
-                .draw_series(LineSeries::new(pogson_points, &color.mix(0.7)))?
-                .label(format!(
-                    "{} fit (slope={:.3})",
-                    results.detector_name, slope
-                ))
-                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 10, y)], color.mix(0.7)));
+                .draw_series(PointSeries::of_element(
+                    results.data_points.iter().map(|&(m, f)| (m, f)),
+                    5,
+                    color,
+                    &|c, s, st| Circle::new(c, s, st.filled()),
+                ))?
+                .label(&results.detector_name)
+                .legend(move |(x, y)| Circle::new((x + 5, y), 3, color.filled()));
+
+            let fit_points: Vec<(f64, f64)> = results
+                .data_points
+                .iter()
+                .filter(|&&(m, f)| m >= results.fit_range.0 && m <= results.fit_range.1 && f > 0.0)
+                .copied()
+                .collect();
+
+            if !fit_points.is_empty() {
+                let n = fit_points.len() as f64;
+                let sum_x: f64 = fit_points.iter().map(|(m, _)| m).sum();
+                let sum_y: f64 = fit_points.iter().map(|(_, f)| f.log10()).sum();
+                let sum_xy: f64 = fit_points.iter().map(|(m, f)| m * f.log10()).sum();
+                let sum_x2: f64 = fit_points.iter().map(|(m, _)| m * m).sum();
+
+                let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x);
+                let intercept = (sum_y - slope * sum_x) / n;
+
+                let fit_min_mag = fit_points
+                    .iter()
+                    .map(|(m, _)| *m)
+                    .fold(f64::INFINITY, f64::min);
+                let fit_max_mag = fit_points
+                    .iter()
+                    .map(|(m, _)| *m)
+                    .fold(f64::NEG_INFINITY, f64::max);
+
+                let pogson_points = vec![
+                    (fit_min_mag, 10_f64.powf(slope * fit_min_mag + intercept)),
+                    (fit_max_mag, 10_f64.powf(slope * fit_max_mag + intercept)),
+                ];
+
+                chart
+                    .draw_series(LineSeries::new(pogson_points, &color.mix(0.7)))?
+                    .label(format!(
+                        "{} fit (slope={:.3})",
+                        results.detector_name, slope
+                    ))
+                    .legend(move |(x, y)| {
+                        PathElement::new(vec![(x, y), (x + 10, y)], color.mix(0.7))
+                    });
+            }
         }
-    }
 
-    chart
-        .configure_series_labels()
-        .background_style(WHITE.mix(0.8))
-        .border_style(BLACK)
-        .draw()?;
+        chart
+            .configure_series_labels()
+            .background_style(WHITE.mix(0.8))
+            .border_style(BLACK)
+            .draw()?;
 
-    root.present()?;
+        Ok(())
+    })?;
     println!("\nPlot saved to {output_path}");
 
     Ok(())

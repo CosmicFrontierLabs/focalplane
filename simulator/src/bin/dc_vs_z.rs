@@ -20,6 +20,7 @@ use simulator::photometry::zodiacal::{
     SolarAngularCoordinates, ZodiacalLight, ELONG_OF_MIN, LAT_OF_MIN,
 };
 use simulator::photometry::{photoconversion, QuantumEfficiency};
+use simulator::plotting::save_plot_png;
 use simulator::shared_args::{SensorModel, TelescopeModel};
 use simulator::units::{AreaExt, LengthExt, TemperatureExt};
 use std::time::Duration;
@@ -207,131 +208,122 @@ fn create_comparison_plot(
         min_ratios.push(min_ratio);
     }
 
-    // Create the plot
-    let root = BitMapBackend::new(output_path, (1024, 768)).into_drawing_area();
-    root.fill(&WHITE)?;
+    save_plot_png(output_path, (1024, 768), |root| {
+        root.fill(&WHITE)?;
 
-    let title = format!(
-        "Dark Current vs Zodiacal Light Ratio - {} + {} ({}° solar exclusion)",
-        telescope_config.name, sensor_config.name, solar_exclusion
-    );
+        let title = format!(
+            "Dark Current vs Zodiacal Light Ratio - {} + {} ({}° solar exclusion)",
+            telescope_config.name, sensor_config.name, solar_exclusion
+        );
 
-    // Find plot bounds
-    let min_temp = temperatures.iter().cloned().fold(f64::INFINITY, f64::min);
-    let max_temp = temperatures
-        .iter()
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
-    let min_ratio = max_ratios
-        .iter()
-        .chain(min_ratios.iter())
-        .cloned()
-        .fold(f64::INFINITY, f64::min);
-    let max_ratio = max_ratios
-        .iter()
-        .chain(min_ratios.iter())
-        .cloned()
-        .fold(f64::NEG_INFINITY, f64::max);
+        let min_temp = temperatures.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_temp = temperatures
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_ratio = max_ratios
+            .iter()
+            .chain(min_ratios.iter())
+            .cloned()
+            .fold(f64::INFINITY, f64::min);
+        let max_ratio = max_ratios
+            .iter()
+            .chain(min_ratios.iter())
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(&title, ("sans-serif", 20).into_font())
-        .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(80)
-        .build_cartesian_2d(
-            min_temp..max_temp,
-            ((min_ratio * 0.5).max(0.001)..(max_ratio * 2.0)).log_scale(),
-        )?;
+        let mut chart = ChartBuilder::on(root)
+            .caption(&title, ("sans-serif", 20).into_font())
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(80)
+            .build_cartesian_2d(
+                min_temp..max_temp,
+                ((min_ratio * 0.5).max(0.001)..(max_ratio * 2.0)).log_scale(),
+            )?;
 
-    chart
-        .configure_mesh()
-        .x_labels(11)
-        .x_label_formatter(&|x| format!("{x:.0}°C"))
-        .y_labels(8)
-        .y_label_formatter(&|y| {
-            if *y >= 1.0 {
-                format!("{y:.1}")
-            } else {
-                format!("{y:.2}")
-            }
-        })
-        .x_desc("Temperature (°C)")
-        .y_desc("Dark Current / Zodiacal Light Ratio (log scale)")
-        .axis_desc_style(("sans-serif", 18))
-        .draw()?;
+        chart
+            .configure_mesh()
+            .x_labels(11)
+            .x_label_formatter(&|x| format!("{x:.0}°C"))
+            .y_labels(8)
+            .y_label_formatter(&|y| {
+                if *y >= 1.0 {
+                    format!("{y:.1}")
+                } else {
+                    format!("{y:.2}")
+                }
+            })
+            .x_desc("Temperature (°C)")
+            .y_desc("Dark Current / Zodiacal Light Ratio (log scale)")
+            .axis_desc_style(("sans-serif", 18))
+            .draw()?;
 
-    // Add horizontal line at ratio = 1 (crossover point)
-    chart.draw_series(std::iter::once(Rectangle::new(
-        [(min_temp, 1.0), (max_temp, 1.0)],
-        BLACK.stroke_width(2),
-    )))?;
+        chart.draw_series(std::iter::once(Rectangle::new(
+            [(min_temp, 1.0), (max_temp, 1.0)],
+            BLACK.stroke_width(2),
+        )))?;
 
-    // Plot max zodiacal ratio
-    let max_data: Vec<(f64, f64)> = temperatures
-        .iter()
-        .zip(max_ratios.iter())
-        .map(|(&t, &r)| (t, r))
-        .collect();
-    chart.draw_series(LineSeries::new(max_data, RED.stroke_width(3)))?;
+        let max_data: Vec<(f64, f64)> = temperatures
+            .iter()
+            .zip(max_ratios.iter())
+            .map(|(&t, &r)| (t, r))
+            .collect();
+        chart.draw_series(LineSeries::new(max_data, RED.stroke_width(3)))?;
 
-    // Plot min zodiacal ratio
-    let min_data: Vec<(f64, f64)> = temperatures
-        .iter()
-        .zip(min_ratios.iter())
-        .map(|(&t, &r)| (t, r))
-        .collect();
-    chart.draw_series(LineSeries::new(min_data, BLUE.stroke_width(3)))?;
+        let min_data: Vec<(f64, f64)> = temperatures
+            .iter()
+            .zip(min_ratios.iter())
+            .map(|(&t, &r)| (t, r))
+            .collect();
+        chart.draw_series(LineSeries::new(min_data, BLUE.stroke_width(3)))?;
 
-    // Add text annotations for key insights
-    chart.draw_series(std::iter::once(Text::new(
-        "Dark current dominates above line",
-        (min_temp + 2.0, 1.2),
-        ("sans-serif", 14).into_font(),
-    )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            "Dark current dominates above line",
+            (min_temp + 2.0, 1.2),
+            ("sans-serif", 14).into_font(),
+        )))?;
 
-    chart.draw_series(std::iter::once(Text::new(
-        "Zodiacal dominates below line",
-        (max_temp - 15.0, 0.8),
-        ("sans-serif", 14).into_font(),
-    )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            "Zodiacal dominates below line",
+            (max_temp - 15.0, 0.8),
+            ("sans-serif", 14).into_font(),
+        )))?;
 
-    // Draw legend in top-left corner manually
-    let legend_x = min_temp + 2.0;
-    let legend_y_base = max_ratio * 0.7;
+        let legend_x = min_temp + 2.0;
+        let legend_y_base = max_ratio * 0.7;
 
-    // Draw legend background
-    chart.draw_series(std::iter::once(Rectangle::new(
-        [
-            (legend_x - 1.0, legend_y_base * 1.5),
-            (legend_x + 12.0, legend_y_base * 0.3),
-        ],
-        WHITE.mix(0.9).filled().stroke_width(1),
-    )))?;
+        chart.draw_series(std::iter::once(Rectangle::new(
+            [
+                (legend_x - 1.0, legend_y_base * 1.5),
+                (legend_x + 12.0, legend_y_base * 0.3),
+            ],
+            WHITE.mix(0.9).filled().stroke_width(1),
+        )))?;
 
-    // Draw legend lines and text
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![(legend_x, legend_y_base), (legend_x + 3.0, legend_y_base)],
-        RED.stroke_width(3),
-    )))?;
-    chart.draw_series(std::iter::once(Text::new(
-        format!("vs Max Zodiacal ({solar_exclusion}° from Sun)"),
-        (legend_x + 3.5, legend_y_base),
-        ("sans-serif", 12).into_font(),
-    )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(legend_x, legend_y_base), (legend_x + 3.0, legend_y_base)],
+            RED.stroke_width(3),
+        )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            format!("vs Max Zodiacal ({solar_exclusion}° from Sun)"),
+            (legend_x + 3.5, legend_y_base),
+            ("sans-serif", 12).into_font(),
+        )))?;
 
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![
-            (legend_x, legend_y_base * 0.7),
-            (legend_x + 3.0, legend_y_base * 0.7),
-        ],
-        BLUE.stroke_width(3),
-    )))?;
-    chart.draw_series(std::iter::once(Text::new(
-        "vs Min Zodiacal (165°, 75°)",
-        (legend_x + 3.5, legend_y_base * 0.7),
-        ("sans-serif", 12).into_font(),
-    )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![
+                (legend_x, legend_y_base * 0.7),
+                (legend_x + 3.0, legend_y_base * 0.7),
+            ],
+            BLUE.stroke_width(3),
+        )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            "vs Min Zodiacal (165°, 75°)",
+            (legend_x + 3.5, legend_y_base * 0.7),
+            ("sans-serif", 12).into_font(),
+        )))?;
 
-    root.present()?;
-    Ok(())
+        Ok(())
+    })
 }

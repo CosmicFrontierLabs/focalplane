@@ -531,7 +531,6 @@ dependencies = [
  "num-traits",
  "once_cell",
  "oorandom",
- "plotters",
  "rayon",
  "regex",
  "serde",
@@ -1035,16 +1034,6 @@ dependencies = [
 
 [[package]]
 name = "gif"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80792593675e051cf94a4b111980da2ba60d4a83e43e0048c5693baab3977045"
-dependencies = [
- "color_quant",
- "weezl",
-]
-
-[[package]]
-name = "gif"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
@@ -1358,20 +1347,6 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.24.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
-dependencies = [
- "bytemuck",
- "byteorder",
- "color_quant",
- "jpeg-decoder",
- "num-traits",
- "png 0.17.16",
-]
-
-[[package]]
-name = "image"
 version = "0.25.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6506c6c10786659413faa717ceebcb8f70731c0a60cbae39795fdf114519c1a"
@@ -1549,12 +1524,6 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
 ]
-
-[[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "js-sys"
@@ -2089,7 +2058,6 @@ checksum = "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747"
 dependencies = [
  "chrono",
  "font-kit",
- "image 0.24.9",
  "lazy_static",
  "num-traits",
  "pathfinder_geometry",
@@ -2113,8 +2081,6 @@ version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72ce181e3f6bf82d6c1dc569103ca7b1bd964c60ba03d7e6cdfbb3e3eb7f7405"
 dependencies = [
- "gif 0.12.0",
- "image 0.24.9",
  "plotters-backend",
 ]
 
@@ -2754,7 +2720,7 @@ dependencies = [
  "crossbeam-channel",
  "fitsio-pure",
  "float-cmp",
- "image 0.25.9",
+ "image",
  "indicatif",
  "itertools 0.11.0",
  "log",
@@ -2849,7 +2815,7 @@ dependencies = [
  "env_logger",
  "fitsio-pure",
  "float-cmp",
- "image 0.25.9",
+ "image",
  "indicatif",
  "log",
  "meter-math",
@@ -2922,7 +2888,7 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
- "image 0.25.9",
+ "image",
  "indicatif",
  "lazy_static",
  "log",

@@ -18,6 +18,7 @@
 
 use plotters::prelude::*;
 use shared::image_proc::AiryDisk;
+use simulator::plotting::save_plot_png;
 use std::path::Path;
 
 /// Type of Airy disk approximation to render in 2D images.
@@ -258,126 +259,111 @@ fn create_airy_comparison_plot(
     let max_r_normalized = 2.0;
     let normalized_radii: Vec<f64> = radii.iter().map(|&r| r / airy_disk.first_zero).collect();
 
-    // Set up the plot with 4:3 aspect ratio
-    let root = BitMapBackend::new(save_path, (1200, 900)).into_drawing_area();
-    root.fill(&WHITE)?;
-    let root = root.margin(20, 20, 20, 20);
+    save_plot_png(save_path, (1200, 900), |root| {
+        root.fill(&WHITE)?;
+        let root = root.margin(20, 20, 20, 20);
 
-    // Single panel: Function comparison
-    let mut chart = ChartBuilder::on(&root)
-        .caption(
-            "Airy Disk vs Approximations",
-            ("sans-serif", 32).into_font().color(&BLACK),
-        )
-        .margin(15)
-        .x_label_area_size(50)
-        .y_label_area_size(80)
-        .build_cartesian_2d(-max_r_normalized..max_r_normalized, 0.0..1.0)?;
+        let mut chart = ChartBuilder::on(&root)
+            .caption(
+                "Airy Disk vs Approximations",
+                ("sans-serif", 32).into_font().color(&BLACK),
+            )
+            .margin(15)
+            .x_label_area_size(50)
+            .y_label_area_size(80)
+            .build_cartesian_2d(-max_r_normalized..max_r_normalized, 0.0..1.0)?;
 
-    chart
-        .configure_mesh()
-        .x_desc("Normalized Radius (r/r₀)")
-        .y_desc("Normalized Intensity")
-        .axis_desc_style(("sans-serif", 20))
-        .label_style(("sans-serif", 16))
-        .y_max_light_lines(10)
-        .draw()?;
+        chart
+            .configure_mesh()
+            .x_desc("Normalized Radius (r/r₀)")
+            .y_desc("Normalized Intensity")
+            .axis_desc_style(("sans-serif", 20))
+            .label_style(("sans-serif", 16))
+            .y_max_light_lines(10)
+            .draw()?;
 
-    // Create symmetric data points (positive and negative r)
-    let symmetric_points = |data: &[f64]| {
-        let mut points = Vec::new();
-        // Add negative side (reversed order for proper line drawing)
-        for (i, &r) in normalized_radii.iter().enumerate().rev() {
-            if r > 0.0 {
-                points.push((-r, data[i]));
+        let symmetric_points = |data: &[f64]| {
+            let mut points = Vec::new();
+            for (i, &r) in normalized_radii.iter().enumerate().rev() {
+                if r > 0.0 {
+                    points.push((-r, data[i]));
+                }
             }
-        }
-        // Add positive side
-        for (i, &r) in normalized_radii.iter().enumerate() {
-            points.push((r, data[i]));
-        }
-        points
-    };
+            for (i, &r) in normalized_radii.iter().enumerate() {
+                points.push((r, data[i]));
+            }
+            points
+        };
 
-    // Plot the exact Airy disk function
-    chart
-        .draw_series(LineSeries::new(symmetric_points(exact), BLUE))?
-        .label("Exact Airy Disk")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE.stroke_width(2)));
+        chart
+            .draw_series(LineSeries::new(symmetric_points(exact), BLUE))?
+            .label("Exact Airy Disk")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE.stroke_width(2)));
 
-    // Plot the Gaussian approximation
-    chart
-        .draw_series(LineSeries::new(symmetric_points(gaussian), RED))?
-        .label("Gaussian Approximation")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], RED.stroke_width(2)));
+        chart
+            .draw_series(LineSeries::new(symmetric_points(gaussian), RED))?
+            .label("Gaussian Approximation")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], RED.stroke_width(2)));
 
-    // Plot the Triangle approximation
-    chart
-        .draw_series(LineSeries::new(symmetric_points(triangle), GREEN))?
-        .label("Triangle Approximation")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], GREEN.stroke_width(2)));
+        chart
+            .draw_series(LineSeries::new(symmetric_points(triangle), GREEN))?
+            .label("Triangle Approximation")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], GREEN.stroke_width(2)));
 
-    // Add dotted vertical lines at first zero (r₀) - light blue to match 2D rings
-    let first_zero_color = RGBColor(173, 216, 230); // Light blue
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![(1.0, 0.0), (1.0, 1.0)],
-        first_zero_color.stroke_width(2),
-    )))?;
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![(-1.0, 0.0), (-1.0, 1.0)],
-        first_zero_color.stroke_width(2),
-    )))?;
+        let first_zero_color = RGBColor(173, 216, 230);
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(1.0, 0.0), (1.0, 1.0)],
+            first_zero_color.stroke_width(2),
+        )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(-1.0, 0.0), (-1.0, 1.0)],
+            first_zero_color.stroke_width(2),
+        )))?;
 
-    // Add FWHM annotation lines and axvlines
-    let fwhm_half_normalized = airy_disk.fwhm / 2.0 / airy_disk.first_zero;
-    let fwhm_intensity = 0.5; // Half maximum by definition
-    let fwhm_color = RGBColor(255, 182, 193); // Light pink/red to match 2D rings
+        let fwhm_half_normalized = airy_disk.fwhm / 2.0 / airy_disk.first_zero;
+        let fwhm_intensity = 0.5;
+        let fwhm_color = RGBColor(255, 182, 193);
 
-    // Keep the grey spanning bar (horizontal line across full FWHM)
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![
-            (-fwhm_half_normalized, fwhm_intensity),
-            (fwhm_half_normalized, fwhm_intensity),
-        ],
-        RGBColor(128, 128, 128).stroke_width(2),
-    )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![
+                (-fwhm_half_normalized, fwhm_intensity),
+                (fwhm_half_normalized, fwhm_intensity),
+            ],
+            RGBColor(128, 128, 128).stroke_width(2),
+        )))?;
 
-    // Add dotted vertical axvlines at FWHM points - light red to match 2D rings
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![(fwhm_half_normalized, 0.0), (fwhm_half_normalized, 1.0)],
-        fwhm_color.stroke_width(2),
-    )))?;
-    chart.draw_series(std::iter::once(PathElement::new(
-        vec![(-fwhm_half_normalized, 0.0), (-fwhm_half_normalized, 1.0)],
-        fwhm_color.stroke_width(2),
-    )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(fwhm_half_normalized, 0.0), (fwhm_half_normalized, 1.0)],
+            fwhm_color.stroke_width(2),
+        )))?;
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(-fwhm_half_normalized, 0.0), (-fwhm_half_normalized, 1.0)],
+            fwhm_color.stroke_width(2),
+        )))?;
 
-    // Add text annotation for first zero
-    chart.draw_series(std::iter::once(Text::new(
-        format!("r₀ = {:.3}", airy_disk.first_zero),
-        (1.05, 0.9),
-        ("sans-serif", 18).into_font().color(&BLACK),
-    )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            format!("r₀ = {:.3}", airy_disk.first_zero),
+            (1.05, 0.9),
+            ("sans-serif", 18).into_font().color(&BLACK),
+        )))?;
 
-    // Add text annotation for FWHM
-    chart.draw_series(std::iter::once(Text::new(
-        "FWHM",
-        (0.05, 0.55),
-        ("sans-serif", 18)
-            .into_font()
-            .color(&RGBColor(128, 128, 128)),
-    )))?;
+        chart.draw_series(std::iter::once(Text::new(
+            "FWHM",
+            (0.05, 0.55),
+            ("sans-serif", 18)
+                .into_font()
+                .color(&RGBColor(128, 128, 128)),
+        )))?;
 
-    chart
-        .configure_series_labels()
-        .background_style(WHITE.mix(0.9))
-        .border_style(BLACK)
-        .label_font(("sans-serif", 18))
-        .draw()?;
+        chart
+            .configure_series_labels()
+            .background_style(WHITE.mix(0.9))
+            .border_style(BLACK)
+            .label_font(("sans-serif", 18))
+            .draw()?;
 
-    root.present()?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Creates a 512×512 grayscale 2D image of an Airy disk pattern with colored rings.
@@ -426,48 +412,40 @@ fn create_airy_disk_image(
     let first_zero_radius = airy_disk.first_zero / scale_factor;
     let fwhm_radius = (airy_disk.fwhm / 2.0) / scale_factor;
 
-    let root = BitMapBackend::new(save_path, (size as u32, size as u32)).into_drawing_area();
-    root.fill(&WHITE)?;
+    save_plot_png(save_path, (size as u32, size as u32), |root| {
+        root.fill(&WHITE)?;
 
-    // Create pixel buffer
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f64 - center;
-            let dy = y as f64 - center;
-            let pixel_radius = (dx * dx + dy * dy).sqrt();
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f64 - center;
+                let dy = y as f64 - center;
+                let pixel_radius = (dx * dx + dy * dy).sqrt();
 
-            // Convert pixel radius to angular radius
-            let angular_radius = pixel_radius * scale_factor;
+                let angular_radius = pixel_radius * scale_factor;
 
-            // Calculate intensity based on image type (0 to 1)
-            let intensity = match image_type {
-                ImageType::Exact => airy_disk.intensity(angular_radius),
-                ImageType::Gaussian => airy_disk.gaussian_approximation(angular_radius),
-                ImageType::Triangle => airy_disk.triangle_approximation(angular_radius),
-            };
+                let intensity = match image_type {
+                    ImageType::Exact => airy_disk.intensity(angular_radius),
+                    ImageType::Gaussian => airy_disk.gaussian_approximation(angular_radius),
+                    ImageType::Triangle => airy_disk.triangle_approximation(angular_radius),
+                };
 
-            // Convert to greyscale (0-255)
-            let grey_value = (intensity * 255.0) as u8;
+                let grey_value = (intensity * 255.0) as u8;
 
-            // Check if we're near the ring positions
-            let is_first_zero_ring = (pixel_radius - first_zero_radius).abs() < 0.8;
-            let is_fwhm_ring = (pixel_radius - fwhm_radius).abs() < 0.8;
+                let is_first_zero_ring = (pixel_radius - first_zero_radius).abs() < 0.8;
+                let is_fwhm_ring = (pixel_radius - fwhm_radius).abs() < 0.8;
 
-            let color = if is_first_zero_ring {
-                // Light blue ring at first zero
-                RGBColor(173, 216, 230) // Light blue
-            } else if is_fwhm_ring {
-                // Light red ring at FWHM
-                RGBColor(255, 182, 193) // Light pink/red
-            } else {
-                // Greyscale based on intensity
-                RGBColor(grey_value, grey_value, grey_value)
-            };
+                let color = if is_first_zero_ring {
+                    RGBColor(173, 216, 230)
+                } else if is_fwhm_ring {
+                    RGBColor(255, 182, 193)
+                } else {
+                    RGBColor(grey_value, grey_value, grey_value)
+                };
 
-            root.draw_pixel((x, y), &color)?;
+                root.draw_pixel((x, y), &color)?;
+            }
         }
-    }
 
-    root.present()?;
-    Ok(())
+        Ok(())
+    })
 }
