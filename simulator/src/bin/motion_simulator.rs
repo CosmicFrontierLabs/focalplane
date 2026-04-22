@@ -1,75 +1,51 @@
-//! Motion simulation for space telescope tracking and attitude control
-//!
-//! This simulator models spacecraft motion, attitude dynamics, and star tracking
-//! for space telescope applications. It provides functionality for:
-//!
-//! 1. Spacecraft attitude propagation and control
-//! 2. Star tracker simulation with realistic noise and errors
-//! 3. Pointing stability analysis
-//! 4. Tracking performance evaluation
-//!
-//! Usage:
-//! ```
-//! cargo run --bin motion_simulator -- [OPTIONS]
-//! ```
-//!
-//! See --help for detailed options.
-
-use clap::{Parser, ValueEnum};
-use log::debug;
-use shared::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
-use simulator::hardware::telescope::{models, TelescopeConfig};
+use clap::Parser;
+use log::info;
+use simulator::hardware::satellite::FocalPlaneConfig;
+use simulator::hardware::SatelliteConfig;
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
+use simulator::sims::trajectory::{
+    fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig,
+};
+use simulator::star_math::field_diameter_for_array;
+use simulator::units::{AngleExt, LengthExt, TemperatureExt};
+use starfield::catalogs::StarCatalog;
+use starfield::Equatorial;
+use std::path::Path;
+use std::time::Instant;
 
-/// Available telescope models for selection
-#[derive(Debug, Clone, ValueEnum)]
-enum TelescopeModel {
-    /// Small 50mm telescope (f/10)
-    Small50mm,
-    /// 50cm Demo telescope (f/20) - Default
-    Demo50cm,
-    /// 1m Final telescope (f/10)
-    Final1m,
-    /// Weasel telescope (f/7.3)
-    Weasel,
-}
-
-impl std::fmt::Display for TelescopeModel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TelescopeModel::Small50mm => write!(f, "small50mm"),
-            TelescopeModel::Demo50cm => write!(f, "demo50cm"),
-            TelescopeModel::Final1m => write!(f, "final1m"),
-            TelescopeModel::Weasel => write!(f, "weasel"),
-        }
+/// Parse coordinates string in format "ra,dec" (degrees)
+fn parse_ra_dec(s: &str) -> Result<Equatorial, String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err("Coordinates must be in format 'ra,dec' (degrees)".to_string());
     }
-}
-
-impl TelescopeModel {
-    /// Get the corresponding TelescopeConfig for the selected model
-    fn to_config(&self) -> &'static TelescopeConfig {
-        match self {
-            TelescopeModel::Small50mm => &models::SMALL_50MM,
-            TelescopeModel::Demo50cm => &models::IDEAL_50CM,
-            TelescopeModel::Final1m => &models::IDEAL_100CM,
-            TelescopeModel::Weasel => &models::WEASEL,
-        }
+    let ra = parts[0]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "Invalid RA value".to_string())?;
+    let dec = parts[1]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "Invalid Dec value".to_string())?;
+    if !(0.0..360.0).contains(&ra) {
+        return Err("RA must be in range [0, 360) degrees".to_string());
     }
+    if !(-90.0..=90.0).contains(&dec) {
+        return Err("Dec must be in range [-90, 90] degrees".to_string());
+    }
+    Ok(Equatorial::from_degrees(ra, dec))
 }
 
-/// Command line arguments for motion simulation
 #[derive(Parser, Debug)]
 #[command(
     name = "Motion Simulator",
-    about = "Simulates spacecraft motion and star tracking dynamics",
-    long_about = "Motion simulation for space telescope tracking and attitude control.\n\n\
-        This simulator models spacecraft motion, attitude dynamics, and star tracking \
-        for space telescope applications. It provides functionality for:\n  \
-        - Spacecraft attitude propagation and control\n  \
-        - Star tracker simulation with realistic noise and errors\n  \
-        - Pointing stability analysis\n  \
-        - Tracking performance evaluation\n\n\
-        Note: This is currently a stub with planned future implementation."
+    about = "Render a sequence of 16-bit PNG frames along a trajectory",
+    long_about = "Renders a moving image stream for a focal plane sensor array.\n\n\
+        The telescope sweeps from a start pointing to an end pointing over \
+        a specified duration. The star catalog is queried once with a broad \
+        field of view encompassing the entire trajectory, then each frame \
+        is rendered by re-projecting cached stars at the interpolated pointing.\n\n\
+        Output is a sequence of 16-bit grayscale PNG files, one per sensor per frame."
 )]
 struct Args {
     #[command(flatten)]
@@ -77,142 +53,132 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = TelescopeModel::Demo50cm,
-        help = "Telescope model to use for simulation",
-        long_help = "Telescope optical configuration for the simulation. Available models:\n  \
-            - small50mm: Small 50mm aperture telescope (f/10)\n  \
-            - demo50cm: 50cm demo telescope (f/20) - default\n  \
-            - final1m: 1m final telescope design (f/10)\n  \
-            - weasel: Weasel telescope (f/7.3)"
-    )]
-    telescope: TelescopeModel,
-
-    #[arg(
-        long,
-        default_value_t = SensorModel::Gsense6510bsi,
-        help = "Sensor model to use for simulation",
-        long_help = "Camera sensor model defining pixel size, read noise, dark current, \
-            and other characteristics. The sensor choice affects detection limits and \
-            noise floor calculations."
+        default_value_t = SensorModel::Imx455,
+        help = "Sensor model for the focal plane"
     )]
     sensor: SensorModel,
 
     #[arg(
         long,
-        default_value = "60s",
-        help = "Simulation duration (e.g., \"60s\", \"1.5m\", \"2000ms\")",
-        long_help = "Total duration to run the motion simulation. Accepts human-readable \
-            duration strings like \"60s\" (60 seconds), \"1.5m\" (1.5 minutes), or \
-            \"2000ms\" (2000 milliseconds)."
+        value_parser = parse_ra_dec,
+        help = "Start pointing in 'ra,dec' degrees (e.g., '56.75,24.12')"
+    )]
+    start: Equatorial,
+
+    #[arg(
+        long,
+        value_parser = parse_ra_dec,
+        help = "End pointing in 'ra,dec' degrees (e.g., '57.0,24.5')"
+    )]
+    end: Equatorial,
+
+    #[arg(
+        long,
+        default_value = "10s",
+        help = "Total trajectory duration (e.g., '10s', '1m')"
     )]
     duration: DurationArg,
 
     #[arg(
         long,
-        default_value = "100ms",
-        help = "Simulation time step (e.g., \"100ms\", \"0.1s\")",
-        long_help = "Time step for the simulation integration. Smaller steps provide \
-            higher accuracy but increase computation time. Accepts human-readable \
-            duration strings."
+        default_value = "1s",
+        help = "Time between frames (e.g., '1s', '500ms')"
     )]
     timestep: DurationArg,
 
     #[arg(
         long,
-        default_value = "motion_results.csv",
-        help = "Output CSV file for motion data",
-        long_help = "Path to the output CSV file containing motion simulation results. \
-            The file will contain timestamped attitude and position data."
+        default_value = "trajectory_output",
+        help = "Output directory for PNG frame sequence"
     )]
-    output_csv: String,
+    output_dir: String,
+
+    #[arg(long, default_value_t = 42, help = "Random seed for noise generation")]
+    seed: u64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging from environment variables
     env_logger::init();
 
     let args = Args::parse();
+    let wallclock = Instant::now();
 
-    let telescope = args.telescope.to_config();
+    let telescope = args.shared.telescope.to_config();
     let sensor = args.sensor.to_config();
 
-    println!("Motion Simulator");
-    println!("================");
-    println!("Shared parameters:");
-    println!("  Exposure: {}", args.shared.exposure);
-    println!("  Temperature: {} °C", args.shared.temperature);
-    println!(
-        "  Coordinates: {:.1}°,{:.1}°",
-        args.shared.coordinates.elongation(),
-        args.shared.coordinates.latitude()
+    info!(
+        "Telescope: {} (aperture={:.3}m, f/{:.1})",
+        telescope.name,
+        telescope.aperture.as_meters(),
+        telescope.f_number()
     );
-    println!("  Catalog: {}", args.shared.catalog.display());
-    println!();
-    println!("Telescope configuration:");
-    println!("  Model: {:?}", args.telescope);
-    println!("  Name: {}", telescope.name);
-    println!("  Aperture: {:.1} m", telescope.aperture.as_meters());
-    println!(
-        "  Focal length: {:.1} m",
-        telescope.focal_length.as_meters()
-    );
-    println!(
-        "  Light efficiency: {:.1}%",
-        telescope
-            .quantum_efficiency
-            .at(Wavelength::from_nanometers(550.0))
-            * 100.0
-    );
-    println!();
-    println!("Sensor configuration:");
-    println!("  Model: {:?}", args.sensor);
-    println!("  Name: {}", sensor.name);
-    println!("  Dimensions: {}", sensor.dimensions);
-    // Get read noise estimate at operating temperature with exposure time
-    let read_noise = sensor
-        .read_noise_estimator
-        .estimate(
-            Temperature::from_celsius(args.shared.temperature).as_celsius(),
-            args.shared.exposure.0,
-        )
-        .unwrap_or(0.0);
-    println!(
-        "  Read noise: {:.1} e⁻ @ {}°C",
-        read_noise, args.shared.temperature
-    );
-    println!(
-        "  Dark current: {:.3} e⁻/px/s @ {}°C",
-        sensor.dark_current_at_temperature(Temperature::from_celsius(args.shared.temperature)),
-        args.shared.temperature
-    );
-    println!("  Max frame rate: {:.1} fps", sensor.max_frame_rate_fps);
-    println!();
-    println!("Motion parameters:");
-    println!("  Duration: {}", args.duration);
-    println!("  Timestep: {}", args.timestep);
-    println!("  Output file: {}", args.output_csv);
+    info!("Sensor: {}", sensor.name);
 
-    let timestep = args.timestep.0;
-    let duration = args.duration.0;
-    let total_steps = (duration.as_millis() / timestep.as_millis()) as usize;
+    let satellite = SatelliteConfig::new(
+        telescope.clone(),
+        sensor.clone(),
+        simulator::units::Temperature::from_celsius(args.shared.temperature),
+    );
+    let focal_plane = FocalPlaneConfig::from_satellite(&satellite);
 
-    println!("\nSimulation will run for {total_steps} steps");
-    println!("Each step represents {}", args.timestep);
+    let trajectory = Trajectory::from_endpoints(args.start, args.end, args.duration.0)?;
 
-    // Example of loading catalog using shared helper function
-    debug!("Attempting to load catalog for demonstration...");
-    match args.shared.load_catalog() {
-        Ok(catalog) => {
-            debug!("Successfully loaded catalog with {} stars", catalog.len());
-        }
-        Err(e) => {
-            debug!("Note: Could not load catalog ({e})");
-            debug!("This is not required for motion simulation");
-        }
+    let base_fov_deg = field_diameter_for_array(&focal_plane)
+        .map(|a| a.as_degrees())
+        .ok_or("Empty focal plane")?;
+
+    let (envelope_center, envelope_diameter) = fov_envelope(&trajectory, base_fov_deg);
+
+    info!(
+        "Trajectory: RA {:.4}° Dec {:.4}° → RA {:.4}° Dec {:.4}° over {:.1}s",
+        args.start.ra_degrees(),
+        args.start.dec_degrees(),
+        args.end.ra_degrees(),
+        args.end.dec_degrees(),
+        args.duration.0.as_secs_f64()
+    );
+    info!(
+        "FOV envelope: center RA {:.4}° Dec {:.4}°, diameter {:.4}°",
+        envelope_center.ra_degrees(),
+        envelope_center.dec_degrees(),
+        envelope_diameter
+    );
+
+    info!("Loading catalog...");
+    let catalog = args.shared.load_catalog()?;
+
+    let stars = catalog.stars_in_field(
+        envelope_center.ra_degrees(),
+        envelope_center.dec_degrees(),
+        envelope_diameter,
+    );
+    info!("Cached {} stars for trajectory envelope", stars.len());
+
+    let output_path = Path::new(&args.output_dir);
+    if !output_path.exists() {
+        std::fs::create_dir_all(output_path)?;
     }
 
-    println!("\n[STUB] Motion simulation not yet implemented");
-    println!("This is a placeholder for future development");
+    let render_config = TrajectoryRenderConfig {
+        trajectory: &trajectory,
+        timestep: args.timestep.0,
+        exposure: args.shared.exposure.0,
+        focal_plane: &focal_plane,
+        catalog_stars: &stars,
+        zodiacal: args.shared.coordinates,
+        output_dir: output_path,
+        base_seed: Some(args.seed),
+    };
+    let frame_count = render_trajectory(&render_config)?;
+
+    let elapsed = wallclock.elapsed();
+    info!(
+        "Rendered {} frames in {:.2}s ({:.1} fps)",
+        frame_count,
+        elapsed.as_secs_f64(),
+        frame_count as f64 / elapsed.as_secs_f64()
+    );
+    info!("Output: {}", args.output_dir);
 
     Ok(())
 }
