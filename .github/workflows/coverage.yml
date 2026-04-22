@@ -20,7 +20,9 @@ jobs:
       uses: ./.github/actions/setup
 
     - name: Install cargo-tarpaulin
-      run: cargo install cargo-tarpaulin
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-tarpaulin
 
     - name: Generate coverage
       run: cargo tarpaulin --out xml --output-dir coverage/
