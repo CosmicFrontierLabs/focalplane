@@ -16,6 +16,7 @@ use shared_wasm::StatsScan;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::quantize_image;
 use simulator::photometry::{spectrum::Spectrum, zodiacal::SolarAngularCoordinates, ZodiacalLight};
+use simulator::plotting::save_plot_png;
 use simulator::shared_args::{DurationArg, SensorModel, TelescopeModel};
 use simulator::units::{LengthExt, TemperatureExt, Wavelength};
 
@@ -179,69 +180,61 @@ fn create_spectrum_plot(
     let min_wavelength = *wavelengths.first().unwrap();
     let max_wavelength = *wavelengths.last().unwrap();
 
-    // Create a new drawing area
-    let root = BitMapBackend::new(output_path, (1024, 768)).into_drawing_area();
+    save_plot_png(output_path, (1024, 768), |root| {
+        root.fill(&WHITE)?;
 
-    // Fill the background with white
-    root.fill(&WHITE)?;
+        let title = format!(
+            "Zodiacal Light Spectrum at {:.1}° elongation, {:.1}° latitude",
+            coords.elongation(),
+            coords.latitude()
+        );
 
-    // Create chart with title including coordinates
-    let title = format!(
-        "Zodiacal Light Spectrum at {:.1}° elongation, {:.1}° latitude",
-        coords.elongation(),
-        coords.latitude()
-    );
+        let mut chart = ChartBuilder::on(root)
+            .caption(&title, ("sans-serif", 30).into_font())
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(80)
+            .build_cartesian_2d(
+                min_wavelength..max_wavelength,
+                min_irradiance..max_irradiance,
+            )?;
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(&title, ("sans-serif", 30).into_font())
-        .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(80)
-        .build_cartesian_2d(
-            min_wavelength..max_wavelength,
-            min_irradiance..max_irradiance,
-        )?;
+        chart
+            .configure_mesh()
+            .x_labels(11)
+            .x_label_formatter(&|x| format!("{x:.0}"))
+            .y_labels(6)
+            .y_label_formatter(&|y| format!("{y:.2e}"))
+            .x_desc("Wavelength (nm)")
+            .y_desc("Spectral Irradiance (erg/(cm²·arcsec²·Hz))")
+            .axis_desc_style(("sans-serif", 18))
+            .draw()?;
 
-    // Configure the mesh
-    chart
-        .configure_mesh()
-        .x_labels(11)
-        .x_label_formatter(&|x| format!("{x:.0}"))
-        .y_labels(6)
-        .y_label_formatter(&|y| format!("{y:.2e}"))
-        .x_desc("Wavelength (nm)")
-        .y_desc("Spectral Irradiance (erg/(cm²·arcsec²·Hz))")
-        .axis_desc_style(("sans-serif", 18))
-        .draw()?;
+        let data_points: Vec<(f64, f64)> = wavelengths
+            .iter()
+            .zip(irradiances.iter())
+            .filter_map(|(&wavelength, &irradiance)| {
+                if irradiance > 0.0 && irradiance.is_finite() {
+                    Some((wavelength, irradiance))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-    // Create data points for plotting
-    let data_points: Vec<(f64, f64)> = wavelengths
-        .iter()
-        .zip(irradiances.iter())
-        .filter_map(|(&wavelength, &irradiance)| {
-            if irradiance > 0.0 && irradiance.is_finite() {
-                Some((wavelength, irradiance))
-            } else {
-                None
-            }
-        })
-        .collect();
+        chart
+            .draw_series(LineSeries::new(data_points, &BLUE))?
+            .label("Zodiacal Light Spectrum")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE));
 
-    // Draw the spectrum curve
-    chart
-        .draw_series(LineSeries::new(data_points, &BLUE))?
-        .label("Zodiacal Light Spectrum")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE));
+        chart
+            .configure_series_labels()
+            .background_style(WHITE.mix(0.8))
+            .border_style(BLACK)
+            .draw()?;
 
-    // Draw the legend
-    chart
-        .configure_series_labels()
-        .background_style(WHITE.mix(0.8))
-        .border_style(BLACK)
-        .draw()?;
-
-    // Save the plot
-    root.present()?;
+        Ok(())
+    })?;
 
     println!("Zodiacal spectrum plot saved to: {output_path}");
 

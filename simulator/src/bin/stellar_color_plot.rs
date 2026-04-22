@@ -21,6 +21,7 @@ use simulator::photometry::stellar::BlackbodyStellarSpectrum;
 use simulator::photometry::{
     generate_temperature_sequence, spectrum_to_rgb_values, temperature_to_spectral_class,
 };
+use simulator::plotting::save_plot_png;
 use std::error::Error;
 
 /// Command line arguments for stellar spectrum plotting
@@ -225,106 +226,92 @@ fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
     // Generate spectral info including human-perceived colors
     let stellar_info = create_stellar_spectra(args);
 
-    // Create drawing area for the plot
-    let root = BitMapBackend::new(&args.output, (1024, 768)).into_drawing_area();
+    save_plot_png(&args.output, (1024, 768), |root| {
+        root.fill(&BLACK)?;
 
-    // Fill the background with black
-    root.fill(&BLACK)?;
+        let mut chart = ChartBuilder::on(root)
+            .caption(
+                "Stellar Spectra by Temperature",
+                ("sans-serif", 30).into_font().color(&WHITE),
+            )
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(args.wavelength_min..args.wavelength_max, 0.0f64..1.0f64)?;
 
-    // Create chart with specified wavelength range
-    let mut chart = ChartBuilder::on(&root)
-        .caption(
-            "Stellar Spectra by Temperature",
-            ("sans-serif", 30).into_font().color(&WHITE),
-        )
-        .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(60)
-        .build_cartesian_2d(args.wavelength_min..args.wavelength_max, 0.0f64..1.0f64)?;
+        let x_grid_spacing = 500.0;
+        let y_grid_spacing = 0.25;
 
-    // Configure grid and labels
-    // Calculate grid spacing based on input parameters - much sparser
-    let x_grid_spacing = 500.0; // nm - much wider spacing
-    let y_grid_spacing = 0.25; // normalized irradiance - 4 grid lines total
+        fn ceil_div(a: f64, b: f64) -> usize {
+            (a / b).ceil() as usize
+        }
 
-    // Use explicit function to resolve ambiguous float type
-    fn ceil_div(a: f64, b: f64) -> usize {
-        (a / b).ceil() as usize
-    }
+        let x_label_count = ceil_div(args.wavelength_max - args.wavelength_min, x_grid_spacing) + 1;
+        let y_label_count = ceil_div(1.0, y_grid_spacing) + 1;
 
-    let x_label_count = ceil_div(args.wavelength_max - args.wavelength_min, x_grid_spacing) + 1;
-    let y_label_count = ceil_div(1.0, y_grid_spacing) + 1;
+        chart
+            .configure_mesh()
+            .x_labels(x_label_count)
+            .y_labels(y_label_count)
+            .x_label_formatter(&|x| format!("{}", *x as i32))
+            .y_label_formatter(&|y| format!("{y:.1}"))
+            .axis_desc_style(("sans-serif", 18).into_font().color(&WHITE))
+            .label_style(("sans-serif", 14).into_font().color(&WHITE))
+            .x_desc("Wavelength (nm)")
+            .y_desc("Normalized Spectral Irradiance")
+            .light_line_style(WHITE.mix(0.4))
+            .draw()?;
 
-    chart
-        .configure_mesh()
-        .x_labels(x_label_count) // Compute from wavelength range and desired spacing
-        .y_labels(y_label_count) // Will show 0.0, 0.1, 0.2, ... 1.0
-        .x_label_formatter(&|x| format!("{}", *x as i32)) // Integer labels
-        .y_label_formatter(&|y| format!("{y:.1}")) // One decimal point for y-axis labels
-        .axis_desc_style(("sans-serif", 18).into_font().color(&WHITE))
-        .label_style(("sans-serif", 14).into_font().color(&WHITE))
-        .x_desc("Wavelength (nm)")
-        .y_desc("Normalized Spectral Irradiance")
-        .light_line_style(WHITE.mix(0.4)) // More visible grey grid lines
-        .draw()?;
-
-    // Sample wavelengths for the plot
-    let wavelengths: Vec<f64> = (0..args.sample_points)
-        .map(|i| {
-            args.wavelength_min
-                + (args.wavelength_max - args.wavelength_min) * (i as f64)
-                    / (args.sample_points as f64 - 1.0)
-        })
-        .collect();
-
-    // Get the maximum irradiance value across all spectra for normalization
-    let all_irradiances: Vec<f64> = stellar_info
-        .iter()
-        .flat_map(|info| {
-            wavelengths.iter().map(|&wl| {
-                info.spectrum
-                    .spectral_irradiance(Wavelength::from_nanometers(wl))
-            })
-        })
-        .collect();
-    let irr_scan = StatsScan::new(&all_irradiances);
-    let max_irr = irr_scan.max().unwrap_or(1.0);
-
-    // Draw each spectrum
-    for star in &stellar_info {
-        // Generate normalized data points
-        let data_points: Vec<(f64, f64)> = wavelengths
-            .iter()
-            .map(|&wavelength| {
-                let irradiance = star
-                    .spectrum
-                    .spectral_irradiance(Wavelength::from_nanometers(wavelength));
-                (wavelength, irradiance / max_irr)
+        let wavelengths: Vec<f64> = (0..args.sample_points)
+            .map(|i| {
+                args.wavelength_min
+                    + (args.wavelength_max - args.wavelength_min) * (i as f64)
+                        / (args.sample_points as f64 - 1.0)
             })
             .collect();
 
-        // Create label with temperature and spectral class
-        let label = format!(
-            "{}K (Class {})",
-            star.temperature as u32, star.spectral_class
-        );
+        let all_irradiances: Vec<f64> = stellar_info
+            .iter()
+            .flat_map(|info| {
+                wavelengths.iter().map(|&wl| {
+                    info.spectrum
+                        .spectral_irradiance(Wavelength::from_nanometers(wl))
+                })
+            })
+            .collect();
+        let irr_scan = StatsScan::new(&all_irradiances);
+        let max_irr = irr_scan.max().unwrap_or(1.0);
 
-        // Draw the spectrum with its perceived color
+        for star in &stellar_info {
+            let data_points: Vec<(f64, f64)> = wavelengths
+                .iter()
+                .map(|&wavelength| {
+                    let irradiance = star
+                        .spectrum
+                        .spectral_irradiance(Wavelength::from_nanometers(wavelength));
+                    (wavelength, irradiance / max_irr)
+                })
+                .collect();
+
+            let label = format!(
+                "{}K (Class {})",
+                star.temperature as u32, star.spectral_class
+            );
+
+            chart
+                .draw_series(LineSeries::new(data_points, &star.color))?
+                .label(label)
+                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], star.color));
+        }
+
         chart
-            .draw_series(LineSeries::new(data_points, &star.color))?
-            .label(label)
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], star.color));
-    }
+            .configure_series_labels()
+            .background_style(BLACK.mix(0.7))
+            .border_style(WHITE)
+            .label_font(("sans-serif", 14).into_font().color(&WHITE))
+            .position(SeriesLabelPosition::UpperRight)
+            .draw()?;
 
-    // Draw the legend with black background for visibility
-    chart
-        .configure_series_labels()
-        .background_style(BLACK.mix(0.7))
-        .border_style(WHITE)
-        .label_font(("sans-serif", 14).into_font().color(&WHITE))
-        .position(SeriesLabelPosition::UpperRight)
-        .draw()?;
-
-    root.present()?;
-    Ok(())
+        Ok(())
+    })
 }
