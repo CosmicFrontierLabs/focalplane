@@ -330,6 +330,8 @@ pub struct TrajectoryRenderConfig<'a> {
     pub max_drift_per_sample_px: Option<f64>,
     /// Force a single sub-orientation per frame regardless of drift.
     pub force_static: bool,
+    /// Suppress the indicatif progress bar during rendering.
+    pub quiet: bool,
 }
 
 /// Render a sequence of frames along a trajectory, writing 16-bit PNG files.
@@ -351,6 +353,7 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
             .unwrap_or(DEFAULT_MAX_DRIFT_PER_SAMPLE_PX),
         base_seed: config.base_seed,
         force_static: config.force_static,
+        quiet: config.quiet,
     };
     render_motion_trajectory(
         config.trajectory,
