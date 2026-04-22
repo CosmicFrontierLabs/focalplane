@@ -125,6 +125,13 @@ struct Args {
         help = "Force N=1 subsample per frame (disables motion blur; for debugging)"
     )]
     force_static: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Suppress the indicatif progress bar; INFO logs still emit"
+    )]
+    quiet: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -214,6 +221,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_seed: Some(args.seed),
         max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
         force_static: args.force_static,
+        quiet: args.quiet,
     };
     let frame_count = render_trajectory(&render_config)?;
 

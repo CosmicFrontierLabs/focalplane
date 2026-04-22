@@ -32,10 +32,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use image::{ImageBuffer, Luma};
-use log::info;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use log::{debug, info};
 use nalgebra::UnitQuaternion;
 use ndarray::Array2;
 use rand::{rngs::StdRng, SeedableRng};
@@ -213,6 +214,9 @@ pub struct MotionBlurConfig {
     /// If true, force `N = 1` per frame regardless of the adaptive budget.
     /// Useful for debugging and performance comparisons.
     pub force_static: bool,
+    /// If true, suppress the indicatif progress bar (INFO logs still emit).
+    /// Intended for non-interactive runs where the bar adds noise.
+    pub quiet: bool,
 }
 
 impl Default for MotionBlurConfig {
@@ -223,6 +227,7 @@ impl Default for MotionBlurConfig {
             max_drift_per_sample_px: DEFAULT_MAX_DRIFT_PER_SAMPLE_PX,
             base_seed: None,
             force_static: false,
+            quiet: false,
         }
     }
 }
@@ -459,7 +464,14 @@ pub fn render_motion_trajectory(
 
     let frame_times = trajectory.frame_times(config.timestep);
     let total_frames = frame_times.len();
-    info!("Motion-blur render: {total_frames} frames across {sensor_count} sensors");
+    let total_tiles = total_frames * sensor_count;
+    info!(
+        "Rendering trajectory: {total_frames} frames × {sensor_count} sensors = {total_tiles} \
+         tiles, exposure={:.3}s, timestep={:.3}s, max_drift_per_sample_px={:.3}",
+        config.exposure.as_secs_f64(),
+        config.timestep.as_secs_f64(),
+        config.max_drift_per_sample_px,
+    );
 
     // Per-frame schedule + star prefilter (serial). Prefilter here so that
     // the parallel workload carries only the stars that could contribute.
@@ -469,6 +481,23 @@ pub fn render_motion_trajectory(
         zodiacal_per_px_per_s: f64,
         stars: Vec<&'a StarData>,
     }
+
+    // Progress bar over all (frame, sensor) tiles. `.inc(1)` is called by
+    // each worker after the tile's PNG is written. Non-TTY stdout is detected
+    // automatically by indicatif; `quiet` mode forces a hidden draw target.
+    let pb = if config.quiet {
+        ProgressBar::with_draw_target(Some(total_tiles as u64), ProgressDrawTarget::hidden())
+    } else {
+        ProgressBar::new(total_tiles as u64)
+    };
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] \
+             {pos}/{len} tiles ({eta})",
+        )
+        .expect("progress bar template is valid")
+        .progress_chars("=>-"),
+    );
 
     let zlight = ZodiacalLight::new();
     let mut plans: Vec<FramePlan> = Vec::with_capacity(total_frames);
@@ -511,6 +540,18 @@ pub fn render_motion_trajectory(
             zodiacal_per_px_per_s_at(&zlight, &first_sat, &zodiacal, &mid_bore);
 
         let stars = envelope_prefilter(trajectory, catalog_stars, &schedule, fp, padding_mm)?;
+        // Per-frame summary routed through the bar so it coexists with the
+        // live progress line without scrambled output.
+        pb.println(format!(
+            "frame {:06} at t={:.3}s: N={} subsamples, boresight=(ra={:.4}°, dec={:.4}°), \
+             stars={}",
+            frame_idx,
+            t.as_secs_f64(),
+            schedule.n,
+            mid_bore.ra_degrees(),
+            mid_bore.dec_degrees(),
+            stars.len(),
+        ));
         plans.push(FramePlan {
             idx: frame_idx,
             schedule,
@@ -570,6 +611,7 @@ pub fn render_motion_trajectory(
         })
         .collect();
 
+    let render_started = Instant::now();
     let results: Vec<Result<(), TrajectoryError>> = tiles
         .par_iter()
         .zip(output_paths.par_iter())
@@ -581,7 +623,8 @@ pub fn render_motion_trajectory(
                 * per_sensor_pixel_solid_angle_ratio(&satellites[0], sat)
                 * plan.schedule.exposure.as_secs_f64();
             let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
-            render_tile(
+            let tile_started = Instant::now();
+            let result = render_tile(
                 trajectory,
                 &plan.stars,
                 fp,
@@ -593,7 +636,17 @@ pub fn render_motion_trajectory(
                 sat,
                 seed,
                 out_path,
-            )
+            );
+            debug!(
+                "tile frame={} sensor={} N={} stars={} elapsed={}ms",
+                plan.idx,
+                tile.sensor_idx,
+                plan.schedule.n,
+                plan.stars.len(),
+                tile_started.elapsed().as_millis(),
+            );
+            pb.inc(1);
+            result
         })
         .collect();
 
@@ -601,11 +654,29 @@ pub fn render_motion_trajectory(
         r?;
     }
 
+    let render_elapsed = render_started.elapsed();
+    let tiles_per_s = if render_elapsed.as_secs_f64() > 0.0 {
+        total_tiles as f64 / render_elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
+    pb.finish_with_message(format!(
+        "rendered {} tiles in {:.2}s",
+        total_tiles,
+        render_elapsed.as_secs_f64(),
+    ));
+
     let cache = flux_cache.lock().expect("flux cache mutex poisoned");
     info!(
         "Flux cache: {} entries across {} sensors",
         cache.len(),
         sensor_count
+    );
+    info!(
+        "Rendered {} tiles in {:.2}s ({:.1} tiles/s)",
+        total_tiles,
+        render_elapsed.as_secs_f64(),
+        tiles_per_s,
     );
 
     Ok(total_frames)
@@ -796,6 +867,7 @@ mod tests {
             max_drift_per_sample_px: 0.1,
             base_seed: Some(7),
             force_static,
+            quiet: true,
         };
         let tmp = tempfile::tempdir().unwrap();
         let frames = render_motion_trajectory(
@@ -825,6 +897,34 @@ mod tests {
     }
 
     #[test]
+    fn test_render_motion_trajectory_with_quiet_progress() {
+        // Trivial single-frame render with the progress bar hidden. Guards the
+        // indicatif wiring: the render must complete cleanly when `quiet` is
+        // set, regardless of whether stdout is a TTY.
+        let fp = tiny_fp();
+        let traj = static_trajectory();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(10),
+            exposure: Duration::from_secs(1),
+            max_drift_per_sample_px: 0.1,
+            base_seed: Some(3),
+            force_static: true,
+            quiet: true,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let frames = render_motion_trajectory(
+            &traj,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+        assert!(frames >= 1);
+    }
+
+    #[test]
     fn test_flux_cache_is_reused_across_frames() {
         // Render 3 frames of a static trajectory with a few stars in-field;
         // after rendering the cache should hold at most `num_stars * sensors`
@@ -849,6 +949,7 @@ mod tests {
             max_drift_per_sample_px: 0.1,
             base_seed: Some(11),
             force_static: true,
+            quiet: true,
         };
         let tmp = tempfile::tempdir().unwrap();
         // Render normally to exercise the cache.
@@ -907,6 +1008,7 @@ mod tests {
             max_drift_per_sample_px: 0.1,
             base_seed: Some(101),
             force_static: false,
+            quiet: true,
         };
         let cfg_moving = cfg_static.clone();
 
@@ -1007,6 +1109,7 @@ mod tests {
             max_drift_per_sample_px: 0.1,
             base_seed: Some(0),
             force_static: true,
+            quiet: true,
         };
         let acc = simulate_tile_accumulator(&traj, &star, &fp, &cfg);
 
@@ -1055,6 +1158,7 @@ mod tests {
             max_drift_per_sample_px: 0.1,
             base_seed: Some(1337),
             force_static: false,
+            quiet: true,
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
