@@ -4,7 +4,10 @@ use ndarray::Array2;
 use starfield::{catalogs::StarData, Equatorial};
 
 use crate::{
-    hardware::{sensor_noise::generate_sensor_noise, SatelliteConfig, SensorConfig},
+    hardware::{
+        satellite::FocalPlaneConfig, sensor_noise::generate_sensor_noise, SatelliteConfig,
+        SensorConfig,
+    },
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
     star_math::star_data_to_fluxes,
 };
@@ -473,6 +476,142 @@ pub fn add_stars_to_image(
     image
 }
 
+/// A star projected to focal plane millimeter coordinates.
+///
+/// Intermediate representation between celestial coordinates and per-sensor
+/// pixel coordinates. Used when projecting stars across an entire sensor array
+/// before routing to individual sensors.
+#[derive(Clone, Debug)]
+pub struct StarInFocalPlane {
+    /// X position in focal plane array coordinates (millimeters)
+    pub x_mm: f64,
+    /// Y position in focal plane array coordinates (millimeters)
+    pub y_mm: f64,
+    /// Original catalog star data
+    pub star: StarData,
+}
+
+/// Project stars from celestial coordinates to focal plane mm coordinates.
+///
+/// Uses `StarProjector` in mm-space mode (radians_per_pixel = radians_per_mm)
+/// to project all catalog stars onto the focal plane. Stars outside the padded
+/// AABB are filtered out.
+///
+/// # Arguments
+/// * `stars` - Catalog stars to project
+/// * `center` - Telescope pointing direction
+/// * `telescope` - Telescope config (for plate scale / focal length)
+/// * `aabb_mm` - Total sensor array bounding box (min_x, min_y, max_x, max_y) in mm
+/// * `padding_mm` - PSF bleed padding around the AABB in mm
+pub fn project_stars_to_focal_plane(
+    stars: &[&StarData],
+    center: &Equatorial,
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<StarInFocalPlane> {
+    let aabb_mm = match focal_plane.total_aabb_mm() {
+        Some(aabb) => aabb,
+        None => return Vec::new(),
+    };
+
+    let (min_x, min_y, max_x, max_y) = aabb_mm;
+
+    // Compute virtual canvas covering the padded AABB
+    // Use 0.1mm per virtual pixel for sub-mm coverage
+    let mm_per_virt_pixel = 0.1;
+    let padded_width_mm = (max_x - min_x) + 2.0 * padding_mm;
+    let padded_height_mm = (max_y - min_y) + 2.0 * padding_mm;
+    let virt_width = (padded_width_mm / mm_per_virt_pixel).ceil() as usize + 2;
+    let virt_height = (padded_height_mm / mm_per_virt_pixel).ceil() as usize + 2;
+
+    // Center of the AABB in array coordinates
+    let center_x_mm = (min_x + max_x) / 2.0;
+    let center_y_mm = (min_y + max_y) / 2.0;
+
+    // Configure projector: each "pixel" = mm_per_virt_pixel mm
+    let rad_per_virt_pixel = focal_plane.plate_scale_rad_per_mm() * mm_per_virt_pixel;
+    let projector = StarProjector::new(center, rad_per_virt_pixel, virt_width, virt_height);
+
+    let mut result = Vec::new();
+    for &star in stars {
+        let (vx, vy) = match projector.project_unbounded(&star.position) {
+            Some(coords) => coords,
+            None => continue,
+        };
+
+        // Convert virtual pixel coords back to mm in array space
+        let x_mm = (vx - virt_width as f64 / 2.0) * mm_per_virt_pixel + center_x_mm;
+        let y_mm = (virt_height as f64 / 2.0 - vy) * mm_per_virt_pixel + center_y_mm;
+
+        // Bounds check against padded AABB
+        if x_mm < min_x - padding_mm
+            || x_mm > max_x + padding_mm
+            || y_mm < min_y - padding_mm
+            || y_mm > max_y + padding_mm
+        {
+            continue;
+        }
+
+        result.push(StarInFocalPlane {
+            x_mm,
+            y_mm,
+            star: *star,
+        });
+    }
+    result
+}
+
+/// Route focal-plane stars to individual sensors with pixel coordinates and flux.
+///
+/// For each star in focal plane mm coordinates, determines which sensor(s) it
+/// falls on (with PSF padding), computes the flux using that sensor's QE curve,
+/// and returns per-sensor lists of `StarInFrame` ready for rendering.
+///
+/// # Returns
+/// A `Vec<Vec<StarInFrame>>` indexed by sensor index in the array.
+pub fn route_stars_to_sensors(
+    fp_stars: &[StarInFocalPlane],
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<Vec<StarInFrame>> {
+    let sensor_count = focal_plane.array.sensor_count();
+    let mut per_sensor_stars: Vec<Vec<StarInFrame>> =
+        (0..sensor_count).map(|_| Vec::new()).collect();
+
+    // Pre-build SatelliteConfig for each sensor (for flux calculation)
+    let satellites: Vec<SatelliteConfig> = (0..sensor_count)
+        .filter_map(|i| focal_plane.satellite_for_sensor(i))
+        .collect();
+
+    for fp_star in fp_stars {
+        let hits = focal_plane
+            .array
+            .mm_to_pixels_padded(fp_star.x_mm, fp_star.y_mm, padding_mm);
+        for (pixel_x, pixel_y, sensor_idx) in hits {
+            let flux = star_data_to_fluxes(&fp_star.star, &satellites[sensor_idx]);
+            per_sensor_stars[sensor_idx].push(StarInFrame {
+                x: pixel_x,
+                y: pixel_y,
+                spot: flux,
+                star: fp_star.star,
+            });
+        }
+    }
+
+    // Sort each sensor's stars by flux for consistent rendering
+    for stars in &mut per_sensor_stars {
+        stars.sort_by(|a, b| {
+            a.spot
+                .electrons
+                .flux
+                .partial_cmp(&b.spot.electrons.flux)
+                .unwrap()
+        });
+    }
+
+    per_sensor_stars
+}
+
 #[cfg(test)]
 mod tests {
     use approx::assert_relative_eq;
@@ -924,5 +1063,80 @@ mod tests {
             (sensor_std.powf(2.0) + zodical_std.powf(2.0)).sqrt(),
             epsilon = 0.1
         );
+    }
+
+    #[test]
+    fn test_project_stars_to_focal_plane_center() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Star at the pointing center should project to (0, 0) mm
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let center_star = StarData {
+            id: 1,
+            magnitude: 10.0,
+            position: pointing,
+            b_v: Some(0.6),
+        };
+        let stars = vec![&center_star];
+        let fp_stars = project_stars_to_focal_plane(&stars, &pointing, &fp, 5.0);
+
+        assert_eq!(fp_stars.len(), 1);
+        assert_relative_eq!(fp_stars[0].x_mm, 0.0, epsilon = 0.2);
+        assert_relative_eq!(fp_stars[0].y_mm, 0.0, epsilon = 0.2);
+    }
+
+    #[test]
+    fn test_route_stars_to_single_sensor() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Star at array center should route to sensor 0 at its pixel center
+        let fp_stars = vec![StarInFocalPlane {
+            x_mm: 0.0,
+            y_mm: 0.0,
+            star: StarData {
+                id: 1,
+                magnitude: 10.0,
+                position: Equatorial::from_degrees(0.0, 0.0),
+                b_v: Some(0.6),
+            },
+        }];
+
+        let routed = route_stars_to_sensors(&fp_stars, &fp, 0.0);
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].len(), 1);
+
+        let (w, h) = GSENSE4040BSI.dimensions.get_pixel_width_height();
+        assert_relative_eq!(routed[0][0].x, w as f64 / 2.0, epsilon = 1.0);
+        assert_relative_eq!(routed[0][0].y, h as f64 / 2.0, epsilon = 1.0);
     }
 }

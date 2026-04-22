@@ -163,6 +163,39 @@ impl SensorArray {
         }
         None
     }
+
+    /// Convert a point from array space (mm) to sensor pixel space with padding.
+    ///
+    /// Like `mm_to_pixel` but expands each sensor's bounds by `padding_mm` to
+    /// account for PSF bleed at sensor edges. Returns all sensors the point falls
+    /// on (with padding), since a star near a gap could contribute to multiple sensors.
+    pub fn mm_to_pixels_padded(
+        &self,
+        x_mm: f64,
+        y_mm: f64,
+        padding_mm: f64,
+    ) -> Vec<(f64, f64, usize)> {
+        let mut results = Vec::new();
+        for (index, ps) in self.sensors.iter().enumerate() {
+            let (width, height) = ps.sensor.dimensions.get_width_height();
+            let width_mm = width.as_millimeters();
+            let height_mm = height.as_millimeters();
+            let pixel_size_mm = ps.sensor.dimensions.pixel_size().as_millimeters();
+
+            let rel_x = x_mm - ps.position.x_mm;
+            let rel_y = y_mm - ps.position.y_mm;
+
+            let half_w = width_mm / 2.0 + padding_mm;
+            let half_h = height_mm / 2.0 + padding_mm;
+
+            if rel_x.abs() <= half_w && rel_y.abs() <= half_h {
+                let pixel_x = (rel_x + width_mm / 2.0) / pixel_size_mm;
+                let pixel_y = (height_mm / 2.0 - rel_y) / pixel_size_mm;
+                results.push((pixel_x, pixel_y, index));
+            }
+        }
+        results
+    }
 }
 
 pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
@@ -330,5 +363,81 @@ mod tests {
         assert_eq!(array.mm_to_pixel(offset, offset).unwrap().2, 1); // Top-right
         assert_eq!(array.mm_to_pixel(-offset, -offset).unwrap().2, 2); // Bottom-left
         assert_eq!(array.mm_to_pixel(offset, -offset).unwrap().2, 3); // Bottom-right
+    }
+
+    #[test]
+    fn test_mm_to_pixels_padded_no_padding() {
+        let sensor = GSENSE4040BSI.clone();
+        let array = SensorArray::single(sensor);
+
+        // Point at origin with zero padding should behave like mm_to_pixel
+        let results = array.mm_to_pixels_padded(0.0, 0.0, 0.0);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].2, 0);
+    }
+
+    #[test]
+    fn test_mm_to_pixels_padded_outside_without_padding() {
+        let sensor = GSENSE4040BSI.clone();
+        let array = SensorArray::single(sensor);
+
+        // Point far outside should return empty
+        let results = array.mm_to_pixels_padded(1000.0, 1000.0, 0.0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_mm_to_pixels_padded_outside_with_padding() {
+        let sensor = GSENSE4040BSI.clone();
+        let (width, _) = sensor.dimensions.get_width_height();
+        let half_w_mm = width.as_millimeters() / 2.0;
+        let array = SensorArray::single(sensor);
+
+        // Point 1mm outside the sensor edge
+        let x_outside = half_w_mm + 1.0;
+
+        // Without enough padding, should miss
+        let results = array.mm_to_pixels_padded(x_outside, 0.0, 0.5);
+        assert!(results.is_empty());
+
+        // With 2mm padding, should hit
+        let results = array.mm_to_pixels_padded(x_outside, 0.0, 2.0);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].2, 0);
+    }
+
+    #[test]
+    fn test_mm_to_pixels_padded_gap_between_sensors() {
+        let sensor = GSENSE4040BSI.clone();
+        let (width, _) = sensor.dimensions.get_width_height();
+        let half_w_mm = width.as_millimeters() / 2.0;
+
+        // Two sensors with a 2mm gap between them
+        let gap_mm = 2.0;
+        let offset = half_w_mm + gap_mm / 2.0;
+        let array = SensorArray::new(vec![
+            PositionedSensor {
+                sensor: sensor.clone(),
+                position: SensorPosition {
+                    x_mm: -offset,
+                    y_mm: 0.0,
+                },
+            },
+            PositionedSensor {
+                sensor: sensor.clone(),
+                position: SensorPosition {
+                    x_mm: offset,
+                    y_mm: 0.0,
+                },
+            },
+        ]);
+
+        // Point in the gap center (0,0) should miss without padding
+        let results = array.mm_to_pixels_padded(0.0, 0.0, 0.0);
+        assert!(results.is_empty());
+
+        // With padding > gap/2, should hit both sensors
+        let results = array.mm_to_pixels_padded(0.0, 0.0, gap_mm);
+        assert_eq!(results.len(), 2);
     }
 }

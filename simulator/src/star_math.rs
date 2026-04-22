@@ -128,6 +128,7 @@
 
 use starfield::catalogs::StarData;
 
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::hardware::{SatelliteConfig, SensorConfig, TelescopeConfig};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::photon_electron_fluxes;
@@ -182,6 +183,26 @@ pub fn field_diameter(telescope: &TelescopeConfig, sensor: &SensorConfig) -> Ang
 /// Calculate the circular field of view diameter in degrees (backward compatibility)
 pub fn field_diameter_degrees(telescope: &TelescopeConfig, sensor: &SensorConfig) -> f64 {
     field_diameter(telescope, sensor).as_degrees()
+}
+
+/// Calculate the circular field diameter that encloses an entire sensor array.
+///
+/// Computes the angular diameter of the smallest circle that completely
+/// encompasses all sensors in the array. This is the value callers should
+/// use when querying a star catalog to ensure coverage of the full focal plane.
+///
+/// # Arguments
+/// * `focal_plane` - Focal plane array configuration with telescope and sensor positions
+///
+/// # Returns
+/// Field of view diameter as an `Angle`, or `None` if the array is empty
+pub fn field_diameter_for_array(focal_plane: &FocalPlaneConfig) -> Option<Angle> {
+    let (min_x, min_y, max_x, max_y) = focal_plane.total_aabb_mm()?;
+    let width_m = (max_x - min_x) / 1000.0;
+    let height_m = (max_y - min_y) / 1000.0;
+    let diagonal_m = (width_m.powi(2) + height_m.powi(2)).sqrt();
+    let angle_rad = diagonal_m / focal_plane.telescope.focal_length.as_meters();
+    Some(Angle::from_radians(angle_rad))
 }
 
 /// Calculate the angular size subtended by one pixel
