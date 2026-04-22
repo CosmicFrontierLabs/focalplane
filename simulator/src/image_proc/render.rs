@@ -589,17 +589,20 @@ mod tests {
         max_well_depth_e: f64,
     ) -> SensorConfig {
         let geometry = SensorGeometry::of_width_height(1024, 1024, Length::from_micrometers(5.5));
-        SensorConfig::new(
-            "Test",
-            create_flat_qe(0.5),
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
+        SensorConfig {
+            name: "Test".into(),
+            quantum_efficiency: create_flat_qe(0.5),
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
             bit_depth,
             dn_per_electron,
             max_well_depth_e,
-            30.0,
-        )
+            max_frame_rate_fps: 30.0,
+        }
     }
 
     #[test]
