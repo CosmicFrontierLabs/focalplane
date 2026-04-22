@@ -165,32 +165,6 @@ pub struct SensorConfig {
 }
 
 impl SensorConfig {
-    /// Create a new sensor configuration
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        name: impl Into<String>,
-        quantum_efficiency: QuantumEfficiency,
-        geometry: SensorGeometry,
-        read_noise_estimator: ReadNoiseEstimator,
-        dark_current_estimator: DarkCurrentEstimator,
-        bit_depth: u8,
-        dn_per_electron: f64,
-        max_well_depth_e: f64,
-        max_frame_rate_fps: f64,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            quantum_efficiency,
-            dimensions: geometry,
-            read_noise_estimator,
-            dark_current_estimator,
-            bit_depth,
-            dn_per_electron,
-            max_well_depth_e,
-            max_frame_rate_fps,
-        }
-    }
-
     /// Create a duplicate sensor configuration with new dimensions
     pub fn with_dimensions(&self, width_px: usize, height_px: usize) -> Self {
         let mut clone = self.clone();
@@ -244,17 +218,20 @@ mod tests {
         let qe = QuantumEfficiency::from_table(wavelengths, efficiencies).unwrap();
 
         let geometry = SensorGeometry::of_width_height(1024, 1024, Length::from_micrometers(5.5));
-        let sensor = SensorConfig::new(
-            "Test",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
-            8,
-            3.0,
-            1e20,
-            30.0,
-        );
+        let sensor = SensorConfig {
+            name: "Test".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth: 8,
+            dn_per_electron: 3.0,
+            max_well_depth_e: 1e20,
+            max_frame_rate_fps: 30.0,
+        };
 
         // Exact matches (use approximate comparison for float values)
         assert_relative_eq!(sensor.qe_at_wavelength(400), 0.4, epsilon = 1e-5);
@@ -274,17 +251,20 @@ mod tests {
     fn test_sensor_dimensions() {
         let qe = create_flat_qe(0.5);
         let geometry = SensorGeometry::of_width_height(1024, 768, Length::from_micrometers(5.5));
-        let sensor = SensorConfig::new(
-            "Test",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
-            8,
-            3.0,
-            1e20,
-            30.0,
-        );
+        let sensor = SensorConfig {
+            name: "Test".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth: 8,
+            dn_per_electron: 3.0,
+            max_well_depth_e: 1e20,
+            max_frame_rate_fps: 30.0,
+        };
         let (width, height) = sensor.dimensions.get_width_height();
 
         assert_relative_eq!(width.as_micrometers(), 1024.0 * 5.5, epsilon = 1e-10);
@@ -407,17 +387,20 @@ mod tests {
         use std::time::Duration;
         let qe = create_flat_qe(0.5);
         let geometry = SensorGeometry::of_width_height(1024, 768, Length::from_micrometers(5.5));
-        let original = SensorConfig::new(
-            "Test",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
-            8,
-            3.0,
-            1e20,
-            30.0,
-        );
+        let original = SensorConfig {
+            name: "Test".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth: 8,
+            dn_per_electron: 3.0,
+            max_well_depth_e: 1e20,
+            max_frame_rate_fps: 30.0,
+        };
 
         // Create resized sensor
         let resized = original.with_dimensions(2048, 1536);
@@ -462,34 +445,40 @@ mod tests {
         let qe = create_flat_qe(0.5);
         let geometry = SensorGeometry::of_width_height(1024, 768, Length::from_micrometers(5.5));
 
-        let sensor_well_limited = SensorConfig::new(
-            "Test Well Limited",
-            qe.clone(),
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
-            16,
-            0.5,
-            10_000.0,
-            30.0,
-        );
+        let sensor_well_limited = SensorConfig {
+            name: "Test Well Limited".into(),
+            quantum_efficiency: qe.clone(),
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth: 16,
+            dn_per_electron: 0.5,
+            max_well_depth_e: 10_000.0,
+            max_frame_rate_fps: 30.0,
+        };
         assert_relative_eq!(
             sensor_well_limited.saturating_reading(),
             5000.0,
             epsilon = 1e-10
         );
 
-        let sensor_adc_limited = SensorConfig::new(
-            "Test ADC Limited",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(2.0),
-            DarkCurrentEstimator::from_reference_point(0.01, Temperature::from_celsius(20.0)),
-            12,
-            1.0,
-            10_000.0,
-            30.0,
-        );
+        let sensor_adc_limited = SensorConfig {
+            name: "Test ADC Limited".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth: 12,
+            dn_per_electron: 1.0,
+            max_well_depth_e: 10_000.0,
+            max_frame_rate_fps: 30.0,
+        };
         assert_relative_eq!(
             sensor_adc_limited.saturating_reading(),
             4095.0,
@@ -561,17 +550,20 @@ pub mod models {
             .expect("Failed to create GSENSE4040BSI QE curve");
 
         let geometry = SensorGeometry::of_width_height(4096, 4096, Length::from_micrometers(9.0));
-        SensorConfig::new(
-            "GSENSE4040BSI",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(2.3),
-            DarkCurrentEstimator::from_reference_point(0.04, Temperature::from_celsius(-40.0)), // 0.04 e-/px/s at -40°C
-            12,
-            0.35,
-            39_200.0,
-            24.0,
-        )
+        SensorConfig {
+            name: "GSENSE4040BSI".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.3),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.04,
+                Temperature::from_celsius(-40.0),
+            ),
+            bit_depth: 12,
+            dn_per_electron: 0.35,
+            max_well_depth_e: 39_200.0,
+            max_frame_rate_fps: 24.0,
+        }
     });
 
     /// GSENSE6510BSI CMOS sensor with detailed QE curve from manufacturer chart found here
@@ -602,17 +594,20 @@ pub mod models {
             .expect("Failed to create GSENSE6510BSI QE curve");
 
         let geometry = SensorGeometry::of_width_height(3200, 3200, Length::from_micrometers(6.5));
-        SensorConfig::new(
-            "GSENSE6510BSI",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(0.7),
-            DarkCurrentEstimator::from_reference_point(0.2, Temperature::from_celsius(-10.0)), // 0.2 e-/px/s at -10°C
-            12,
-            0.35,
-            21_000.0,
-            88.0,
-        )
+        SensorConfig {
+            name: "GSENSE6510BSI".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(0.7),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.2,
+                Temperature::from_celsius(-10.0),
+            ),
+            bit_depth: 12,
+            dn_per_electron: 0.35,
+            max_well_depth_e: 21_000.0,
+            max_frame_rate_fps: 88.0,
+        }
     });
 
     /// HWK4123 CMOS sensor with detailed QE curve
@@ -643,22 +638,22 @@ pub mod models {
         // 7.42 DN/e- at 32x gain
         // 0.242 DN/e- at 1x gain (using 1x gain here)
         let geometry = SensorGeometry::of_width_height(4096, 2300, Length::from_micrometers(4.6));
-        SensorConfig::new(
-            "HWK4123",
-            qe,
-            geometry,
-            ReadNoiseEstimator::hwk4123(),
-            DarkCurrentEstimator::from_two_points(
+        SensorConfig {
+            name: "HWK4123".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::hwk4123(),
+            dark_current_estimator: DarkCurrentEstimator::from_two_points(
                 Temperature::from_celsius(-20.0),
                 0.0198,
                 Temperature::from_celsius(0.0),
                 0.1,
-            ), // 0.0198 e-/px/s at -20°C, 0.1 e-/px/s at 0°C
-            12,
-            7.42,
-            7_500.0,
-            120.0,
-        )
+            ),
+            bit_depth: 12,
+            dn_per_electron: 7.42,
+            max_well_depth_e: 7_500.0,
+            max_frame_rate_fps: 120.0,
+        }
     });
 
     /// Sony IMX455 Full-frame BSI CMOS sensor
@@ -697,22 +692,22 @@ pub mod models {
         // https://player-one-astronomy.com/product/zeus-455m-pro-imx455-usb3-0-mono-cooled-camera/
 
         let geometry = SensorGeometry::of_width_height(9568, 6380, Length::from_micrometers(3.76));
-        SensorConfig::new(
-            "IMX455",
-            qe,
-            geometry,
-            ReadNoiseEstimator::constant(1.58),
-            DarkCurrentEstimator::from_curve(
+        SensorConfig {
+            name: "IMX455".into(),
+            quantum_efficiency: qe,
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(1.58),
+            dark_current_estimator: DarkCurrentEstimator::from_curve(
                 vec![-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0],
                 vec![
                     0.0022, 0.0032, 0.0046, 0.0068, 0.0105, 0.0357, 0.0675, 0.1231, 0.2208,
                 ],
-            ), // Measured dark current data for IMX455
-            16,
-            1.0 / 0.4,
-            26_000.0,
-            21.33,
-        )
+            ),
+            bit_depth: 16,
+            dn_per_electron: 1.0 / 0.4,
+            max_well_depth_e: 26_000.0,
+            max_frame_rate_fps: 21.33,
+        }
     });
 
     /// Collection of all available sensor models
