@@ -155,6 +155,7 @@ use crate::hardware::sensor::SensorConfig;
 use crate::hardware::telescope::TelescopeConfig;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
 use clap::{Parser, ValueEnum};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use starfield::catalogs::minimal_catalog::{MinimalCatalog, MinimalStar};
 use std::path::PathBuf;
@@ -613,19 +614,56 @@ impl SharedSimulationArgs {
     /// - Returns a combined catalog with collision-free star IDs
     /// - Reports clear error messages if catalog loading fails
     pub fn load_catalog(&self) -> Result<MinimalCatalog, Box<dyn std::error::Error>> {
+        self.load_catalog_with_progress(true)
+    }
+
+    /// Load the catalog, optionally rendering an indicatif progress bar driven
+    /// by starfield's load-time progress callbacks.
+    ///
+    /// # Arguments
+    /// * `quiet` - When `true`, suppress the progress bar (INFO logs still fire).
+    pub fn load_catalog_with_progress(
+        &self,
+        quiet: bool,
+    ) -> Result<MinimalCatalog, Box<dyn std::error::Error>> {
         info!(
             "Loading binary star catalog from: {}",
             self.catalog.display()
         );
         let start_time = Instant::now();
 
-        let mut catalog = MinimalCatalog::load(&self.catalog).map_err(|e| {
+        let progress_bar = (!quiet).then(|| {
+            let pb = ProgressBar::new(0);
+            pb.set_style(
+                ProgressStyle::with_template(
+                    "  catalog {bar:30.cyan/blue} {human_pos}/{human_len} stars ({percent}%) [{elapsed_precise}]",
+                )
+                .expect("valid template")
+                .progress_chars("##-"),
+            );
+            pb.set_message("loading catalog");
+            pb
+        });
+
+        let mut catalog = MinimalCatalog::load_with_progress(&self.catalog, |update| {
+            if let Some(pb) = progress_bar.as_ref() {
+                if pb.length() != Some(update.stars_total as u64) {
+                    pb.set_length(update.stars_total as u64);
+                }
+                pb.set_position(update.stars_loaded as u64);
+            }
+        })
+        .map_err(|e| {
             format!(
                 "Failed to load catalog from '{}': {}",
                 self.catalog.display(),
                 e
             )
         })?;
+
+        if let Some(pb) = progress_bar {
+            pb.finish_and_clear();
+        }
 
         let load_duration = start_time.elapsed();
         let stars_per_second = catalog.len() as f64 / load_duration.as_secs_f64();

@@ -232,7 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     info!("Loading catalog...");
-    let catalog = args.shared.load_catalog()?;
+    let catalog = args.shared.load_catalog_with_progress(args.quiet)?;
 
     let stars = catalog.stars_in_field(
         envelope_center.ra_degrees(),
