@@ -1,7 +1,7 @@
-use clap::Parser;
-use log::info;
+use clap::{Parser, ValueEnum};
+use log::{info, warn};
 use simulator::hardware::satellite::FocalPlaneConfig;
-use simulator::hardware::SatelliteConfig;
+use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::trajectory::{
     fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig,
@@ -12,6 +12,17 @@ use starfield::catalogs::StarCatalog;
 use starfield::Equatorial;
 use std::path::Path;
 use std::time::Instant;
+
+/// Focal-plane array layout. `Single` is the default (one sensor at
+/// boresight); `Spencer` is the hard-coded four-IMX455 mosaic defined
+/// in `hardware::sensor_array::SPENCER_ARRAY_PLAN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ArrayFormat {
+    /// Single sensor centered on the telescope boresight. Uses `--sensor`.
+    Single,
+    /// Four-IMX455 mosaic. `--sensor` is ignored when this is selected.
+    Spencer,
+}
 
 /// Parse coordinates string in format "ra,dec" (degrees)
 fn parse_ra_dec(s: &str) -> Result<Equatorial, String> {
@@ -57,9 +68,17 @@ struct Args {
     #[arg(
         long,
         default_value_t = SensorModel::Imx455,
-        help = "Sensor model for the focal plane"
+        help = "Sensor model for the focal plane (ignored when --array-format is not 'single')"
     )]
     sensor: SensorModel,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ArrayFormat::Single,
+        help = "Focal-plane array layout"
+    )]
+    array_format: ArrayFormat,
 
     #[arg(
         long,
@@ -144,7 +163,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallclock = Instant::now();
 
     let telescope = args.shared.telescope.to_config();
-    let sensor = args.sensor.to_config();
 
     info!(
         "Telescope: {} (aperture={:.3}m, f/{:.1})",
@@ -152,14 +170,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         telescope.aperture.as_meters(),
         telescope.f_number()
     );
-    info!("Sensor: {}", sensor.name);
 
-    let satellite = SatelliteConfig::new(
+    let array = match args.array_format {
+        ArrayFormat::Single => {
+            let sensor = args.sensor.to_config();
+            info!("Array: single-sensor, boresight-centered ({})", sensor.name);
+            SensorArray::single(sensor.clone())
+        }
+        ArrayFormat::Spencer => {
+            if !matches!(args.sensor, SensorModel::Imx455) {
+                warn!(
+                    "--array-format=spencer is IMX455-only; ignoring --sensor={:?}",
+                    args.sensor
+                );
+            }
+            info!("Array: Spencer (4x IMX455)");
+            SPENCER_ARRAY_PLAN.clone()
+        }
+    };
+    let focal_plane = FocalPlaneConfig::new(
         telescope.clone(),
-        sensor.clone(),
+        array,
         simulator::units::Temperature::from_celsius(args.shared.temperature),
     );
-    let focal_plane = FocalPlaneConfig::from_satellite(&satellite);
 
     let trajectory = if args.start_roll == 0.0 && args.end_roll == 0.0 {
         Trajectory::from_endpoints(args.start, args.end, args.duration.0)?
