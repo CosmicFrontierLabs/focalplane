@@ -379,6 +379,7 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
 mod tests {
     use super::*;
     use crate::sims::orientation::roll_of;
+    use approx::assert_abs_diff_eq;
     use std::time::Duration;
 
     fn make_pointing(ra_deg: f64, dec_deg: f64) -> Equatorial {
@@ -413,12 +414,12 @@ mod tests {
         .unwrap();
 
         let start = traj.pointing_at(Duration::ZERO).unwrap();
-        assert!((start.ra_degrees() - 10.0).abs() < 1e-9);
-        assert!((start.dec_degrees() - 20.0).abs() < 1e-9);
+        assert_abs_diff_eq!(start.ra_degrees(), 10.0, epsilon = 1e-9);
+        assert_abs_diff_eq!(start.dec_degrees(), 20.0, epsilon = 1e-9);
 
         let end = traj.pointing_at(Duration::from_secs(10)).unwrap();
-        assert!((end.ra_degrees() - 20.0).abs() < 1e-9);
-        assert!((end.dec_degrees() - 30.0).abs() < 1e-9);
+        assert_abs_diff_eq!(end.ra_degrees(), 20.0, epsilon = 1e-9);
+        assert_abs_diff_eq!(end.dec_degrees(), 30.0, epsilon = 1e-9);
     }
 
     #[test]
@@ -432,7 +433,7 @@ mod tests {
         let mid = traj.pointing_at(Duration::from_secs(5)).unwrap();
 
         assert!(mid.ra_degrees() > 10.0 && mid.ra_degrees() < 20.0);
-        assert!((mid.dec_degrees() - 20.0).abs() < 0.5);
+        assert_abs_diff_eq!(mid.dec_degrees(), 20.0, epsilon = 0.5);
     }
 
     #[test]
@@ -475,7 +476,7 @@ mod tests {
         let (center, diameter) = fov_envelope(&traj, base_fov);
 
         // Center should be near RA=15, Dec=0
-        assert!((center.ra_degrees() - 15.0).abs() < 1.0);
+        assert_abs_diff_eq!(center.ra_degrees(), 15.0, epsilon = 1.0);
         assert!(center.dec_degrees().abs() < 1.0);
 
         // Diameter should cover the 10 degree span plus the base FOV
@@ -487,7 +488,7 @@ mod tests {
         let a = make_pointing(0.0, 0.0);
         let b = make_pointing(90.0, 0.0);
         let dist = angular_distance_deg(&a, &b);
-        assert!((dist - 90.0).abs() < 0.01);
+        assert_abs_diff_eq!(dist, 90.0, epsilon = 0.01);
     }
 
     #[test]
@@ -517,18 +518,13 @@ mod tests {
 
         // Start/end orientations preserve their constructed rolls.
         let q0 = traj.orientation_at(Duration::ZERO).unwrap();
-        assert!((roll_of(&q0) - start_roll).abs() < 1e-9);
+        assert_abs_diff_eq!(roll_of(&q0), start_roll, epsilon = 1e-9);
         let q1 = traj.orientation_at(Duration::from_secs(10)).unwrap();
-        assert!((roll_of(&q1) - end_roll).abs() < 1e-9);
+        assert_abs_diff_eq!(roll_of(&q1), end_roll, epsilon = 1e-9);
 
         // Midpoint roll is exactly halfway.
         let qm = traj.orientation_at(Duration::from_secs(5)).unwrap();
         let expected_roll = 0.5 * (start_roll + end_roll);
-        assert!(
-            (roll_of(&qm) - expected_roll).abs() < 1e-9,
-            "midpoint roll {:.9} != expected {:.9}",
-            roll_of(&qm),
-            expected_roll
-        );
+        assert_abs_diff_eq!(roll_of(&qm), expected_roll, epsilon = 1e-9);
     }
 }

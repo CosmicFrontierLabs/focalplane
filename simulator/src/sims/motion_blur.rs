@@ -942,6 +942,7 @@ mod tests {
     use crate::hardware::telescope::TelescopeConfig;
     use crate::sims::orientation::orientation_from_pointing;
     use crate::sims::trajectory::Waypoint;
+    use approx::assert_abs_diff_eq;
     use shared::units::{Length, LengthExt, Temperature, TemperatureExt};
     use std::f64::consts::PI;
 
@@ -1008,10 +1009,10 @@ mod tests {
             .map(|d| d.as_secs_f64())
             .collect();
         // midpoints: 10 + (0.5, 1.5, 2.5, 3.5) = 10.5, 11.5, 12.5, 13.5
-        assert!((times[0] - 10.5).abs() < 1e-12);
-        assert!((times[1] - 11.5).abs() < 1e-12);
-        assert!((times[2] - 12.5).abs() < 1e-12);
-        assert!((times[3] - 13.5).abs() < 1e-12);
+        assert_abs_diff_eq!(times[0], 10.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(times[1], 11.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(times[2], 12.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(times[3], 13.5, epsilon = 1e-12);
     }
 
     #[test]
@@ -1059,7 +1060,7 @@ mod tests {
         let traj = Trajectory::from_endpoints(start, end, Duration::from_secs(10)).unwrap();
         let full = max_drift_over_window(&traj, Duration::ZERO, Duration::from_secs(10)).unwrap();
         let half = max_drift_over_window(&traj, Duration::ZERO, Duration::from_secs(5)).unwrap();
-        assert!((full - 2.0 * half).abs() < 1e-9);
+        assert_abs_diff_eq!(full, 2.0 * half, epsilon = 1e-9);
         // About 1 degree total (cos(30)~0.866 but angle_to is proper 3D angle).
         assert!(full > 0.5_f64.to_radians());
         assert!(full < 1.5_f64.to_radians());
@@ -1596,15 +1597,10 @@ mod tests {
         // re-deriving the half-angle formula under roll composition.
         let q_expected = orientation_from_pointing(&pointing, roll);
         let wp0 = &meta.trajectory.waypoints[0];
-        assert!(
-            (wp0.quat[0] - q_expected.w).abs() < 1e-12,
-            "quat[0] (w) = {} vs nalgebra w = {}",
-            wp0.quat[0],
-            q_expected.w
-        );
-        assert!((wp0.quat[1] - q_expected.i).abs() < 1e-12);
-        assert!((wp0.quat[2] - q_expected.j).abs() < 1e-12);
-        assert!((wp0.quat[3] - q_expected.k).abs() < 1e-12);
+        assert_abs_diff_eq!(wp0.quat[0], q_expected.w, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[1], q_expected.i, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[2], q_expected.j, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[3], q_expected.k, epsilon = 1e-12);
 
         // Round-trip: reconstruct a UnitQuaternion from [w, x, y, z] and
         // check that roll_of recovers the original roll.
@@ -1615,11 +1611,6 @@ mod tests {
             wp0.quat[3],
         ));
         let recovered = roll_of(&q_round);
-        assert!(
-            (recovered - roll).abs() < 1e-9,
-            "roll_of(reconstructed quat) = {} expected {}",
-            recovered,
-            roll
-        );
+        assert_abs_diff_eq!(recovered, roll, epsilon = 1e-9);
     }
 }
