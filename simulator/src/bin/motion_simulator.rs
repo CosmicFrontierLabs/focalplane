@@ -6,7 +6,7 @@ use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
 use simulator::sims::trajectory::{
-    fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig,
+    fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig, Waypoint,
 };
 use simulator::star_math::field_diameter_for_array;
 use simulator::units::{AngleExt, LengthExt, TemperatureExt};
@@ -24,6 +24,25 @@ enum ArrayFormat {
     Single,
     /// Four-IMX455 mosaic. `--sensor` is ignored when this is selected.
     Spencer,
+}
+
+/// Parse a "WxH" size string into a `(width, height)` pair.
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected format 'WxH' (e.g. '3840x2160'), got '{s}'"))?;
+    let width: u32 = w
+        .trim()
+        .parse()
+        .map_err(|e| format!("invalid width '{w}': {e}"))?;
+    let height: u32 = h
+        .trim()
+        .parse()
+        .map_err(|e| format!("invalid height '{h}': {e}"))?;
+    if width == 0 || height == 0 {
+        return Err("width and height must be > 0".into());
+    }
+    Ok((width, height))
 }
 
 /// Parse coordinates string in format "ra,dec" (degrees)
@@ -121,6 +140,17 @@ struct Args {
 
     #[arg(
         long,
+        default_value_t = 0.0,
+        allow_hyphen_values = true,
+        help = "Extra full roll rotations (in addition to end_roll - start_roll). \
+                Nonzero values automatically subdivide the trajectory into \
+                multiple waypoints so the roll sweeps through smoothly rather \
+                than collapsing to the shortest quaternion path."
+    )]
+    roll_turns: f64,
+
+    #[arg(
+        long,
         default_value = "1s",
         help = "Time between frames (e.g., '1s', '500ms')"
     )]
@@ -166,10 +196,26 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 4096,
-        help = "Context view image size in pixels (square)"
+        value_parser = parse_size,
+        default_value = "3840x2160",
+        help = "Context view image dimensions, formatted 'WxH' in pixels"
     )]
-    context_size: u32,
+    context_size: (u32, u32),
+
+    #[arg(
+        long,
+        default_value_t = 0.05,
+        help = "Per-edge padding fraction for the context view (0.05 = 5% on each side)"
+    )]
+    context_padding: f64,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Skip the per-sensor render and only emit context-view frames \
+                (implies --context-view)"
+    )]
+    context_only: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -210,7 +256,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         simulator::units::Temperature::from_celsius(args.shared.temperature),
     );
 
-    let trajectory = if args.start_roll == 0.0 && args.end_roll == 0.0 {
+    let total_roll_deg = (args.end_roll - args.start_roll) + 360.0 * args.roll_turns;
+    let trajectory = if args.roll_turns.abs() > f64::EPSILON {
+        // Multi-waypoint trajectory: subdivide so each SLERP segment sweeps
+        // at most 90° of roll. Necessary because a two-waypoint trajectory
+        // cannot represent a > 180° quaternion path — SLERP collapses to
+        // the shortest arc, losing whole rotations.
+        let segments = ((total_roll_deg.abs() / 90.0).ceil() as usize).max(1);
+        let duration_s = args.duration.0.as_secs_f64();
+        let waypoints: Vec<Waypoint> = (0..=segments)
+            .map(|i| {
+                let frac = i as f64 / segments as f64;
+                let t = std::time::Duration::from_secs_f64(duration_s * frac);
+                let ra = args.start.ra_degrees()
+                    + frac * (args.end.ra_degrees() - args.start.ra_degrees());
+                let dec = args.start.dec_degrees()
+                    + frac * (args.end.dec_degrees() - args.start.dec_degrees());
+                let eq = Equatorial::from_degrees(ra, dec);
+                let roll_deg = args.start_roll + frac * total_roll_deg;
+                Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+            })
+            .collect();
+        Trajectory::new(waypoints)?
+    } else if args.start_roll == 0.0 && args.end_roll == 0.0 {
         Trajectory::from_endpoints(args.start, args.end, args.duration.0)?
     } else {
         Trajectory::from_endpoints_with_roll(
@@ -262,49 +330,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(output_path)?;
     }
 
-    let render_config = TrajectoryRenderConfig {
-        trajectory: &trajectory,
-        timestep: args.timestep.0,
-        exposure: args.shared.exposure.0,
-        focal_plane: &focal_plane,
-        catalog_stars: &stars,
-        zodiacal: args.shared.coordinates,
-        output_dir: output_path,
-        base_seed: Some(args.seed),
-        max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
-        force_static: args.force_static,
-        quiet: args.quiet,
-        telescope_name: telescope.name.clone(),
-        catalog_path: args.shared.catalog.clone(),
-        temperature_c: args.shared.temperature,
-    };
-    let frame_count = render_trajectory(&render_config)?;
+    if !args.context_only {
+        let render_config = TrajectoryRenderConfig {
+            trajectory: &trajectory,
+            timestep: args.timestep.0,
+            exposure: args.shared.exposure.0,
+            focal_plane: &focal_plane,
+            catalog_stars: &stars,
+            zodiacal: args.shared.coordinates,
+            output_dir: output_path,
+            base_seed: Some(args.seed),
+            max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
+            force_static: args.force_static,
+            quiet: args.quiet,
+            telescope_name: telescope.name.clone(),
+            catalog_path: args.shared.catalog.clone(),
+            temperature_c: args.shared.temperature,
+        };
+        let frame_count = render_trajectory(&render_config)?;
 
-    let elapsed = wallclock.elapsed();
-    info!(
-        "Rendered {} frames in {:.2}s ({:.1} fps)",
-        frame_count,
-        elapsed.as_secs_f64(),
-        frame_count as f64 / elapsed.as_secs_f64()
-    );
-    info!(
-        "Output: {} (metadata.json + sensor_NN/frame_NNNNNN.png layout)",
-        args.output_dir
-    );
+        let elapsed = wallclock.elapsed();
+        info!(
+            "Rendered {} frames in {:.2}s ({:.1} fps)",
+            frame_count,
+            elapsed.as_secs_f64(),
+            frame_count as f64 / elapsed.as_secs_f64()
+        );
+        info!(
+            "Output: {} (metadata.json + sensor_NN/frame_NNNNNN.png layout)",
+            args.output_dir
+        );
+    } else {
+        info!("--context-only set; skipping sensor tile render");
+    }
 
-    if args.context_view {
+    if args.context_view || args.context_only {
         let context_dir = output_path.join("context");
         std::fs::create_dir_all(&context_dir)?;
+        let (ctx_w, ctx_h) = args.context_size;
         let ctx_cfg = ContextRenderConfig {
-            size: args.context_size,
+            width: ctx_w,
+            height: ctx_h,
+            padding_fraction: args.context_padding,
             ..Default::default()
         };
         let frame_times = trajectory.frame_times(args.timestep.0);
         info!(
             "Rendering {} context-view frames at {}x{} into {}/",
             frame_times.len(),
-            ctx_cfg.size,
-            ctx_cfg.size,
+            ctx_cfg.width,
+            ctx_cfg.height,
             context_dir.display()
         );
         let context_started = Instant::now();

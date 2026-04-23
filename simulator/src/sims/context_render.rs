@@ -36,11 +36,13 @@ static FONT: Lazy<FontRef<'static>> =
 /// Configuration for the context-view renderer.
 #[derive(Debug, Clone)]
 pub struct ContextRenderConfig {
-    /// Output image size (square), pixels.
-    pub size: u32,
-    /// Full view width/height in focal-plane millimeters. `None` picks
-    /// 1.5x the focal-plane AABB extent.
-    pub fov_mm: Option<f64>,
+    /// Output image width in pixels.
+    pub width: u32,
+    /// Output image height in pixels.
+    pub height: u32,
+    /// Fraction of each edge reserved as empty margin. A value of `0.05`
+    /// keeps the focal-plane AABB in the inner 90% of the canvas.
+    pub padding_fraction: f64,
     /// Star Gaussian radius (pixels) at the dim end.
     pub star_radius_min_px: f64,
     /// Star Gaussian radius (pixels) at the bright end.
@@ -66,8 +68,9 @@ pub struct ContextRenderConfig {
 impl Default for ContextRenderConfig {
     fn default() -> Self {
         Self {
-            size: 4096,
-            fov_mm: None,
+            width: 3840,
+            height: 2160,
+            padding_fraction: 0.05,
             star_radius_min_px: 0.6,
             star_radius_max_px: 7.0,
             mag_bright: 2.0,
@@ -88,24 +91,28 @@ pub fn render_context_frame(
     config: &ContextRenderConfig,
     output_path: &Path,
 ) -> Result<(), TrajectoryError> {
-    let size = config.size;
-    if size == 0 {
+    let (width, height) = (config.width, config.height);
+    if width == 0 || height == 0 {
         return Err(TrajectoryError::ImageWrite(
-            "context size must be > 0".into(),
+            "context width/height must be > 0".into(),
         ));
     }
-    let mut img: RgbImage = ImageBuffer::from_pixel(size, size, Rgb([0, 0, 0]));
+    let mut img: RgbImage = ImageBuffer::from_pixel(width, height, Rgb([0, 0, 0]));
 
     let (aabb_min_x, aabb_min_y, aabb_max_x, aabb_max_y) =
         fp.total_aabb_mm().unwrap_or((-10.0, -10.0, 10.0, 10.0));
-    let fov_mm = config.fov_mm.unwrap_or_else(|| {
-        // Fill the image with the focal-plane AABB, leaving a 10% total
-        // margin (5% on each side) so corners don't get clipped.
-        let span = (aabb_max_x - aabb_min_x).max(aabb_max_y - aabb_min_y);
-        (span / 0.9).max(20.0)
-    });
-    let mm_per_px = fov_mm / size as f64;
-    let center_px = size as f64 / 2.0;
+    // Pick one mm_per_px that keeps both AABB dimensions inside the padded
+    // interior of the frame. Taking the larger ratio is what guarantees the
+    // whole focal plane fits — the other axis ends up with extra breathing
+    // room on both sides.
+    let pad = config.padding_fraction.clamp(0.0, 0.45);
+    let usable_w_px = (width as f64) * (1.0 - 2.0 * pad);
+    let usable_h_px = (height as f64) * (1.0 - 2.0 * pad);
+    let aabb_w_mm = (aabb_max_x - aabb_min_x).max(f64::EPSILON);
+    let aabb_h_mm = (aabb_max_y - aabb_min_y).max(f64::EPSILON);
+    let mm_per_px = (aabb_w_mm / usable_w_px).max(aabb_h_mm / usable_h_px);
+    let center_x_px = width as f64 / 2.0;
+    let center_y_px = height as f64 / 2.0;
 
     // `sky_to_mm` returns coordinates anchored so that the boresight lands
     // at the AABB center. Subtract it so image center == boresight.
@@ -118,8 +125,8 @@ pub fn render_context_frame(
         let dx = x_mm - abc_x;
         let dy = y_mm - abc_y;
         // Image Y axis points down; focal-plane Y points up.
-        let px = center_px + dx / mm_per_px;
-        let py = center_px - dy / mm_per_px;
+        let px = center_x_px + dx / mm_per_px;
+        let py = center_y_px - dy / mm_per_px;
         (px, py)
     };
 
@@ -130,7 +137,7 @@ pub fn render_context_frame(
         let (px, py) = mm_to_px(x_mm, y_mm);
         // Skip stars comfortably outside the canvas. The 20 px slack covers
         // the Gaussian tail so a star just off-canvas still paints its halo.
-        if px < -20.0 || px > size as f64 + 20.0 || py < -20.0 || py > size as f64 + 20.0 {
+        if px < -20.0 || px > width as f64 + 20.0 || py < -20.0 || py > height as f64 + 20.0 {
             continue;
         }
         let radius = mag_to_radius(Some(star.magnitude), config);
@@ -179,22 +186,20 @@ pub fn render_context_frame(
 
     // Reticle at image center. Since we render in body frame, the reticle
     // arms naturally align with the instrument axes and rotate with the
-    // star field as the telescope rolls.
+    // star field as the telescope rolls. Base the arm length on the
+    // shorter image dimension so aspect-ratio changes don't inflate it.
     let red = Rgb([255, 90, 90]);
-    let arm_len = (size as i32) / 40;
-    let gap = (size as i32) / 200;
-    draw_reticle(
-        &mut img,
-        (center_px as i32, center_px as i32),
-        arm_len.max(8),
-        gap.max(2),
-        red,
-    );
+    let short_side = width.min(height) as i32;
+    let arm_len = short_side / 40;
+    let gap = short_side / 200;
+    let cx_i = center_x_px as i32;
+    let cy_i = center_y_px as i32;
+    draw_reticle(&mut img, (cx_i, cy_i), arm_len.max(8), gap.max(2), red);
 
     // Reticle labels — stacked above the right-shooting horizontal arm,
     // both starting where the arm starts (just past the center gap).
     // Top line: "NON-ANALYTIC". Bottom line: current boresight RA/Dec.
-    let label_scale = PxScale::from((size as f32 / 80.0).max(14.0));
+    let label_scale = PxScale::from((short_side as f32 / 80.0).max(14.0));
     let tag_text = "NON-ANALYTIC";
     let (_tag_w, tag_h) = text_size(label_scale, &*FONT, tag_text);
     let bore = boresight_of(orientation);
@@ -203,8 +208,8 @@ pub fn render_context_frame(
         bore.ra_degrees(),
         bore.dec_degrees()
     );
-    let label_x = (center_px as i32) + gap;
-    let radec_y = (center_px as i32) - tag_h as i32 - 8;
+    let label_x = cx_i + gap;
+    let radec_y = cy_i - tag_h as i32 - 8;
     let tag_y = radec_y - tag_h as i32 - 2;
     draw_text_mut(&mut img, red, label_x, tag_y, label_scale, &*FONT, tag_text);
     draw_text_mut(
@@ -481,7 +486,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ctx.png");
         let cfg = ContextRenderConfig {
-            size: 256,
+            width: 256,
+            height: 256,
             ..Default::default()
         };
         render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
@@ -501,7 +507,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ctx.png");
         let cfg = ContextRenderConfig {
-            size: 256,
+            width: 256,
+            height: 256,
             ..Default::default()
         };
         render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
