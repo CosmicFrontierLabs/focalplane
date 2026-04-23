@@ -1,5 +1,6 @@
 //! Simulation modules for various experiments
 
+pub mod context_render;
 pub mod motion_blur;
 pub mod motion_blur_metadata;
 pub mod orientation;

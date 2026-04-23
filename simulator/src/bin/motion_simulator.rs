@@ -1,8 +1,10 @@
 use clap::{Parser, ValueEnum};
 use log::{info, warn};
+use rayon::prelude::*;
 use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
+use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
 use simulator::sims::trajectory::{
     fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig,
 };
@@ -154,6 +156,20 @@ struct Args {
         help = "Suppress the indicatif progress bar; INFO logs still emit"
     )]
     quiet: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Also render a context-view PNG per frame (under <output-dir>/context/)"
+    )]
+    context_view: bool,
+
+    #[arg(
+        long,
+        default_value_t = 4096,
+        help = "Context view image size in pixels (square)"
+    )]
+    context_size: u32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -275,6 +291,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Output: {} (metadata.json + sensor_NN/frame_NNNNNN.png layout)",
         args.output_dir
     );
+
+    if args.context_view {
+        let context_dir = output_path.join("context");
+        std::fs::create_dir_all(&context_dir)?;
+        let ctx_cfg = ContextRenderConfig {
+            size: args.context_size,
+            ..Default::default()
+        };
+        let frame_times = trajectory.frame_times(args.timestep.0);
+        info!(
+            "Rendering {} context-view frames at {}x{} into {}/",
+            frame_times.len(),
+            ctx_cfg.size,
+            ctx_cfg.size,
+            context_dir.display()
+        );
+        let context_started = Instant::now();
+        let results: Vec<Result<(), String>> = frame_times
+            .par_iter()
+            .enumerate()
+            .map(|(idx, t)| -> Result<(), String> {
+                let orientation = trajectory.orientation_at(*t).map_err(|e| e.to_string())?;
+                let path = context_dir.join(format!("frame_{idx:06}.png"));
+                render_context_frame(&orientation, &stars, &focal_plane, &ctx_cfg, &path)
+                    .map_err(|e| e.to_string())
+            })
+            .collect();
+        for r in results {
+            r.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        }
+        info!(
+            "Context views rendered in {:.2}s",
+            context_started.elapsed().as_secs_f64()
+        );
+    }
 
     Ok(())
 }
