@@ -406,6 +406,145 @@ fn tile_seed(base_seed: u64, frame_idx: usize, sensor_idx: usize) -> u64 {
     h
 }
 
+/// Output region on a sensor. The full-tile path uses
+/// [`SensorRegion::full_sensor`] and writes the entire detector;
+/// narrower callers (the ROI zoom panel in `sims::roi_render`) use
+/// [`SensorRegion::from_offset`] to render just a small window.
+#[derive(Debug, Clone, Copy)]
+pub struct SensorRegion {
+    /// Which sensor in the focal-plane array this region belongs to.
+    pub sensor_idx: usize,
+    /// Top-left corner of the region in sensor-pixel space.
+    pub offset_px: (i32, i32),
+    /// Width of the output array in pixels.
+    pub width: usize,
+    /// Height of the output array in pixels.
+    pub height: usize,
+}
+
+impl SensorRegion {
+    /// Build a region that covers the entire sensor.
+    pub fn full_sensor(satellite: &SatelliteConfig, sensor_idx: usize) -> Self {
+        let (w, h) = satellite.sensor.dimensions.get_pixel_width_height();
+        Self {
+            sensor_idx,
+            offset_px: (0, 0),
+            width: w,
+            height: h,
+        }
+    }
+
+    /// Build a region from a sensor-pixel top-left corner + size.
+    pub fn from_offset(
+        sensor_idx: usize,
+        offset_px: (i32, i32),
+        width: usize,
+        height: usize,
+    ) -> Self {
+        Self {
+            sensor_idx,
+            offset_px,
+            width,
+            height,
+        }
+    }
+}
+
+/// Run the adaptive-subsample photon-integration + Poisson + read-noise
+/// + quantize pipeline for a chosen region of a sensor. Used by the
+/// full-tile render path as well as the ROI zoom renderer, so both
+/// share the exact motion-blur behavior.
+///
+/// `stars` should already be filtered to the set that could contribute
+/// to this region (the caller decides); `flux_cache` is optional —
+/// pass `None` for one-off renders that don't benefit from sharing the
+/// flux table.
+/// Bundle of borrowed inputs describing the scene side of a region
+/// render: trajectory, candidate stars, focal-plane hardware, and the
+/// satellite backing the chosen sensor. Keeps [`render_region`] at a
+/// sane argument count by grouping things that travel together.
+pub struct RegionRenderInputs<'a> {
+    pub trajectory: &'a Trajectory,
+    pub stars: &'a [&'a StarData],
+    pub fp: &'a FocalPlaneConfig,
+    pub satellite: &'a SatelliteConfig,
+}
+
+pub fn render_region(
+    inputs: &RegionRenderInputs,
+    region: &SensorRegion,
+    schedule: &SubsampleSchedule,
+    padding_mm: f64,
+    zodiacal_per_px: f64,
+    flux_cache: Option<&Arc<Mutex<FluxCache>>>,
+    seed: u64,
+) -> Result<Array2<u16>, TrajectoryError> {
+    let RegionRenderInputs {
+        trajectory,
+        stars,
+        fp,
+        satellite,
+    } = inputs;
+
+    let mut accumulator = SensorAccumulator::zero(region.width, region.height);
+    let aperture = satellite.telescope.clear_aperture_area();
+    let (x0, y0) = region.offset_px;
+
+    let dt = schedule.dt();
+    for t in schedule.sample_times() {
+        let t_clamped = t.min(trajectory.end_time()).max(trajectory.start_time());
+        let orientation = trajectory.orientation_at(t_clamped)?;
+        for star in *stars {
+            let hit = match fp.project_to_sensor(star, &orientation, region.sensor_idx, padding_mm)
+            {
+                Some(px) => px,
+                None => continue,
+            };
+            let flux = match flux_cache {
+                Some(cache) => {
+                    let mut cache = cache.lock().expect("flux cache mutex poisoned");
+                    cache
+                        .entry((star.id, region.sensor_idx))
+                        .or_insert_with(|| star_data_to_fluxes(star, satellite))
+                        .clone()
+                }
+                None => star_data_to_fluxes(star, satellite),
+            };
+            let total_electrons = flux.electrons.integrated_over(&dt, aperture);
+            // Offset into the region's local pixel grid.
+            let local_x = hit.0 - x0 as f64;
+            let local_y = hit.1 - y0 as f64;
+            accumulator.splat_psf(local_x, local_y, total_electrons, &flux.electrons.disk);
+        }
+    }
+
+    // Dark current: rate × full exposure, uniform over pixels.
+    let dark_rate = satellite
+        .sensor
+        .dark_current_at_temperature(satellite.temperature);
+    let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
+
+    let mean_image = accumulator.combined_mean(zodiacal_per_px, dark_mean);
+    let poisson_image = apply_poisson_photon_noise(&mean_image, Some(seed));
+
+    let read_noise_rms = satellite
+        .sensor
+        .read_noise_estimator
+        .estimate(satellite.temperature.as_celsius(), schedule.exposure)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let final_electrons = if read_noise_rms > 0.0 {
+        let mut rng = StdRng::seed_from_u64(seed ^ 0xA5A5_5A5A_A5A5_5A5A);
+        let normal =
+            Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
+        poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
+    } else {
+        poisson_image
+    };
+
+    Ok(quantize_image(&final_electrons, &satellite.sensor))
+}
+
 /// Render a single `(frame, sensor)` tile.
 ///
 /// Runs the adaptive subsample loop, composes the unified Poisson lambda,
@@ -419,70 +558,23 @@ fn render_tile(
     tile_seed: u64,
     output_path: &Path,
 ) -> Result<(), TrajectoryError> {
-    let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
-    let mut accumulator = SensorAccumulator::zero(width, height);
-    let aperture = satellite.telescope.clear_aperture_area();
-
-    let schedule = &plan.schedule;
-    let dt = schedule.dt();
-    let sample_times = schedule.sample_times();
-
-    for &t in &sample_times {
-        let t_clamped = t
-            .min(scene.trajectory.end_time())
-            .max(scene.trajectory.start_time());
-        let orientation = scene.trajectory.orientation_at(t_clamped)?;
-        for star in &plan.stars {
-            let hit =
-                match scene
-                    .fp
-                    .project_to_sensor(star, &orientation, sensor_idx, plan.padding_mm)
-                {
-                    Some(px) => px,
-                    None => continue,
-                };
-            let flux = {
-                let mut cache = flux_cache.lock().expect("flux cache mutex poisoned");
-                cache
-                    .entry((star.id, sensor_idx))
-                    .or_insert_with(|| star_data_to_fluxes(star, satellite))
-                    .clone()
-            };
-            // Per-subsample electron contribution for this star at this pixel
-            // position: flux.electrons is a rate (e-/s/cm^2), integrate over
-            // the subsample duration and telescope aperture.
-            let total_electrons = flux.electrons.integrated_over(&dt, aperture);
-            accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
-        }
-    }
-
-    // Dark current: rate × full exposure, uniform over pixels.
-    let dark_rate = satellite
-        .sensor
-        .dark_current_at_temperature(satellite.temperature);
-    let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
-
-    // Build unified Poisson mean image and draw.
-    let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
-    let poisson_image = apply_poisson_photon_noise(&mean_image, Some(tile_seed));
-
-    // Gaussian read noise (electronics, not shot noise) applied afterwards.
-    let read_noise_rms = satellite
-        .sensor
-        .read_noise_estimator
-        .estimate(satellite.temperature.as_celsius(), schedule.exposure)
-        .unwrap_or(0.0)
-        .max(0.0);
-    let final_electrons = if read_noise_rms > 0.0 {
-        let mut rng = StdRng::seed_from_u64(tile_seed ^ 0xA5A5_5A5A_A5A5_5A5A);
-        let normal =
-            Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
-        poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
-    } else {
-        poisson_image
+    let region = SensorRegion::full_sensor(satellite, sensor_idx);
+    let star_refs: Vec<&StarData> = plan.stars.to_vec();
+    let inputs = RegionRenderInputs {
+        trajectory: scene.trajectory,
+        stars: &star_refs,
+        fp: scene.fp,
+        satellite,
     };
-
-    let quantized = quantize_image(&final_electrons, &satellite.sensor);
+    let quantized = render_region(
+        &inputs,
+        &region,
+        &plan.schedule,
+        plan.padding_mm,
+        plan.zodiacal_per_px[sensor_idx],
+        Some(flux_cache),
+        tile_seed,
+    )?;
     save_u16_png(&quantized, output_path)
 }
 

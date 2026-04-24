@@ -6,7 +6,8 @@ use rayon::prelude::*;
 use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
-use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
+use simulator::sims::context_render::{render_context_frame, ContextRenderConfig, RoiOverlay};
+use simulator::sims::roi_render::{pick_roi_anchor, render_roi_patch};
 use simulator::sims::trajectory::{
     fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig, Waypoint,
 };
@@ -667,6 +668,25 @@ struct Args {
                 (implies --context-view)"
     )]
     context_only: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Overlay an oversampled, physics-rendered region of interest \
+                panel on each context frame (anchored on the brightest \
+                in-bounds star of the first frame)"
+    )]
+    roi: bool,
+
+    #[arg(long, default_value_t = 128, help = "ROI source size in sensor pixels")]
+    roi_size: usize,
+
+    #[arg(
+        long,
+        default_value_t = 4,
+        help = "Nearest-neighbor zoom factor for the ROI display panel"
+    )]
+    roi_zoom: u32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -846,23 +866,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             padding_fraction: args.context_padding,
             ..Default::default()
         };
-        let frame_times = trajectory.frame_times(args.timestep.0);
+        // Preview is always 24 fps regardless of the sensor-tile
+        // cadence. Sensor rendering keeps --timestep; the preview runs
+        // at the fixed 24 Hz frame rate.
+        let preview_timestep = std::time::Duration::from_secs_f64(1.0 / 24.0);
+        let frame_times = trajectory.frame_times(preview_timestep);
+
+        // ROI anchor: picked once per run from the first frame so the
+        // zoom panel stays stationary across the whole preview.
+        let roi_anchor = if args.roi {
+            let first_q = trajectory
+                .orientation_at(trajectory.start_time())
+                .map_err(|e| format!("first-frame orientation: {e}"))?;
+            match pick_roi_anchor(&stars, &focal_plane, &first_q, args.roi_size) {
+                Some(a) => {
+                    info!(
+                        "ROI anchor: sensor {} px ({:.1}, {:.1}) size {}",
+                        a.sensor_idx, a.center_px.0, a.center_px.1, a.size_px
+                    );
+                    Some(a)
+                }
+                None => {
+                    warn!("No star satisfies ROI placement constraints; rendering without ROI");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         info!(
-            "Rendering {} context-view frames at {}x{} into {}/",
+            "Rendering {} context-view frames at {}x{} into {}/{}",
             frame_times.len(),
             ctx_cfg.width,
             ctx_cfg.height,
-            context_dir.display()
+            context_dir.display(),
+            if roi_anchor.is_some() {
+                " (with ROI overlay)"
+            } else {
+                ""
+            },
         );
         let context_started = Instant::now();
+        let exposure = args.shared.exposure.0;
+        let drift_budget = args.max_drift_per_sample_px;
+        let base_seed = args.seed;
         let results: Vec<Result<(), String>> = frame_times
             .par_iter()
             .enumerate()
             .map(|(idx, t)| -> Result<(), String> {
                 let orientation = trajectory.orientation_at(*t).map_err(|e| e.to_string())?;
+                let overlay = if let Some(anchor) = roi_anchor {
+                    let plan = simulator::sims::roi_render::RoiFramePlan {
+                        frame_start: *t,
+                        exposure,
+                        max_drift_per_sample_px: drift_budget,
+                        seed: base_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ idx as u64,
+                    };
+                    render_roi_patch(&trajectory, &stars, &focal_plane, anchor, &plan).map(
+                        |patch| RoiOverlay {
+                            anchor,
+                            patch,
+                            zoom: args.roi_zoom,
+                            display_range: None,
+                        },
+                    )
+                } else {
+                    None
+                };
                 let path = context_dir.join(format!("frame_{idx:06}.png"));
-                render_context_frame(&orientation, &stars, &focal_plane, &ctx_cfg, &path)
-                    .map_err(|e| e.to_string())
+                render_context_frame(
+                    &orientation,
+                    &stars,
+                    &focal_plane,
+                    &ctx_cfg,
+                    overlay.as_ref(),
+                    &path,
+                )
+                .map_err(|e| e.to_string())
             })
             .collect();
         for r in results {
