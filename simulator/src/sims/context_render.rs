@@ -17,12 +17,14 @@ use ab_glyph::{FontRef, PxScale};
 use image::{ImageBuffer, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use nalgebra::UnitQuaternion;
+use ndarray::Array2;
 use once_cell::sync::Lazy;
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 
 use crate::hardware::satellite::FocalPlaneConfig;
 use crate::sims::orientation::boresight_of;
+use crate::sims::roi_render::RoiAnchor;
 use crate::sims::trajectory::TrajectoryError;
 
 type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
@@ -65,6 +67,29 @@ pub struct ContextRenderConfig {
     pub astrometry_ring_radius_px: i32,
 }
 
+/// Per-call inputs for rendering a zoom-panel "region of interest"
+/// onto the context view. The panel is physically rendered via
+/// [`crate::sims::roi_render::render_roi_patch`] and composited as a
+/// nearest-neighbor upsample framed in red, with a matching red box
+/// drawn on the parent sensor's outline to show the source location.
+pub struct RoiOverlay {
+    /// Sensor-pixel anchor selected once per run (see
+    /// [`crate::sims::roi_render::pick_roi_anchor`]).
+    pub anchor: RoiAnchor,
+    /// Pre-rendered u16 patch (shape `(size_px, size_px)`), typically
+    /// the output of [`crate::sims::roi_render::render_roi_patch`] for
+    /// this frame.
+    pub patch: Array2<u16>,
+    /// Nearest-neighbor zoom factor: the panel is drawn at
+    /// `anchor.size_px * zoom` pixels on each side.
+    pub zoom: u32,
+    /// Fixed `(black, white)` stretch for the u16 patch. If `None`,
+    /// the overlay autoscales per-frame; pin the value (typically
+    /// taken from the first frame) to keep intensity changes between
+    /// frames visible rather than re-normalized away.
+    pub display_range: Option<(u16, u16)>,
+}
+
 impl Default for ContextRenderConfig {
     fn default() -> Self {
         Self {
@@ -84,11 +109,17 @@ impl Default for ContextRenderConfig {
 }
 
 /// Render a single context-view frame to `output_path`.
+///
+/// `roi_overlay`, if `Some`, also renders a physically correct zoom
+/// panel for the chosen sensor anchor and composites it onto the
+/// output, along with a matching red source-region box on the
+/// sensor's outline.
 pub fn render_context_frame(
     orientation: &UnitQuaternion<f64>,
     stars: &[StarData],
     fp: &FocalPlaneConfig,
     config: &ContextRenderConfig,
+    roi_overlay: Option<&RoiOverlay>,
     output_path: &Path,
 ) -> Result<(), TrajectoryError> {
     let (width, height) = (config.width, config.height);
@@ -203,28 +234,169 @@ pub fn render_context_frame(
     let tag_text = "NON-ANALYTIC";
     let (_tag_w, tag_h) = text_size(label_scale, &*FONT, tag_text);
     let bore = boresight_of(orientation);
-    let radec_text = format!(
-        "RA {:7.3}  DEC {:+7.3}",
-        bore.ra_degrees(),
-        bore.dec_degrees()
-    );
+    let ra_text = format!("RA:  {:10.2}", bore.ra_degrees());
+    let dec_text = format!("DEC: {:+10.2}", bore.dec_degrees());
     let label_x = cx_i + gap;
-    let radec_y = cy_i - tag_h as i32 - 8;
-    let tag_y = radec_y - tag_h as i32 - 2;
+    // Stack, top-to-bottom:
+    //   NON-ANALYTIC
+    //   RA:  <value>
+    //   DEC: <value>
+    // each line separated from the next by 2 px, with the bottom of
+    // the DEC line sitting a few px above the right reticle arm.
+    let dec_y = cy_i - tag_h as i32 - 8;
+    let ra_y = dec_y - tag_h as i32 - 2;
+    let tag_y = ra_y - tag_h as i32 - 2;
     draw_text_mut(&mut img, red, label_x, tag_y, label_scale, &*FONT, tag_text);
+    draw_text_mut(&mut img, red, label_x, ra_y, label_scale, &*FONT, &ra_text);
     draw_text_mut(
         &mut img,
         red,
         label_x,
-        radec_y,
+        dec_y,
         label_scale,
         &*FONT,
-        &radec_text,
+        &dec_text,
     );
+
+    // Optional ROI zoom panel: draws a physically correct oversampled
+    // patch of a chosen sensor region in an auto-picked empty corner,
+    // along with a red rectangle on the parent sensor outline marking
+    // where the ROI was sampled from.
+    if let Some(overlay) = roi_overlay {
+        composite_roi_overlay(&mut img, fp, overlay, &mm_to_px)?;
+    }
 
     img.save(output_path)
         .map_err(|e| TrajectoryError::ImageWrite(e.to_string()))?;
     Ok(())
+}
+
+/// Paint the ROI zoom panel and its source-location marker onto the
+/// context image.
+fn composite_roi_overlay(
+    img: &mut RgbImage,
+    fp: &FocalPlaneConfig,
+    overlay: &RoiOverlay,
+    mm_to_px: &dyn Fn(f64, f64) -> (f64, f64),
+) -> Result<(), TrajectoryError> {
+    let red = Rgb([255, 80, 80]);
+
+    // Draw the source-region box on the sensor outline. We convert the
+    // ROI's sensor-pixel bbox into sensor-local mm (pixel_size × px),
+    // add the sensor's mm-space offset, and map to context image pixels.
+    let sensor_idx = overlay.anchor.sensor_idx;
+    if let Some(ps) = fp.array.sensors.get(sensor_idx) {
+        let pixel_size_mm = ps.sensor.dimensions.pixel_size().as_millimeters();
+        let (sensor_w_len, sensor_h_len) = ps.sensor.dimensions.get_width_height();
+        let half_w = sensor_w_len.as_millimeters() / 2.0;
+        let half_h = sensor_h_len.as_millimeters() / 2.0;
+        let size_px = overlay.anchor.size_px as f64;
+        let (cx_px, cy_px) = overlay.anchor.center_px;
+        let (w_px, h_px) = ps.sensor.dimensions.get_pixel_width_height();
+        // Sensor-pixel (0,0) is top-left; focal-plane mm +y is up. Invert y.
+        let mm_from_pixel = |px: f64, py: f64| -> (f64, f64) {
+            let x_mm = ps.position.x_mm - half_w + px * pixel_size_mm;
+            let y_mm = ps.position.y_mm + half_h - py * pixel_size_mm;
+            (x_mm, y_mm)
+        };
+        let (lo_x_mm, lo_y_mm) = mm_from_pixel(cx_px - size_px / 2.0, cy_px + size_px / 2.0);
+        let (hi_x_mm, hi_y_mm) = mm_from_pixel(cx_px + size_px / 2.0, cy_px - size_px / 2.0);
+        let (x0_px, y0_px) = mm_to_px(lo_x_mm, lo_y_mm);
+        let (x1_px, y1_px) = mm_to_px(hi_x_mm, hi_y_mm);
+        // Axis-aligned rectangle in image pixels.
+        draw_rect_outline(
+            img,
+            (x0_px.min(x1_px) as i32, y0_px.min(y1_px) as i32),
+            (x0_px.max(x1_px) as i32, y0_px.max(y1_px) as i32),
+            red,
+        );
+        let _ = (w_px, h_px);
+    }
+
+    // Upsample the patch nearest-neighbor to zoom × size on each side.
+    let panel_side = overlay.anchor.size_px as u32 * overlay.zoom.max(1);
+    let (width_f, height_f) = (img.width() as f64, img.height() as f64);
+    // Auto-pick: prefer the corner whose 5%-margin rectangle fits the
+    // panel entirely. Try bottom-right, bottom-left, top-right,
+    // top-left in order.
+    let margin = ((img.width().min(img.height()) as f64) * 0.02).round() as i32;
+    let candidates: &[(i32, i32)] = &[
+        (
+            img.width() as i32 - panel_side as i32 - margin,
+            img.height() as i32 - panel_side as i32 - margin,
+        ),
+        (margin, img.height() as i32 - panel_side as i32 - margin),
+        (img.width() as i32 - panel_side as i32 - margin, margin),
+        (margin, margin),
+    ];
+    let (panel_x, panel_y) = *candidates.first().unwrap_or(&(0, 0));
+    let (width_i, height_i) = (img.width() as i32, img.height() as i32);
+    // Clamp so even on tiny test canvases we don't try to draw off-image.
+    let panel_x = panel_x.max(0).min(width_i - panel_side as i32 - 1);
+    let panel_y = panel_y.max(0).min(height_i - panel_side as i32 - 1);
+
+    // Normalize the u16 patch to 0..=255 for display.
+    let (lo, hi) = overlay
+        .display_range
+        .unwrap_or_else(|| autoscale_range(&overlay.patch));
+    let span = (hi as f64 - lo as f64).max(1.0);
+    let (patch_w, patch_h) = overlay.patch.dim();
+    let zoom = overlay.zoom.max(1) as i32;
+    for py in 0..(patch_h as i32) {
+        for px in 0..(patch_w as i32) {
+            let v = overlay.patch[[py as usize, px as usize]] as f64;
+            let gray = (((v - lo as f64).clamp(0.0, span)) / span * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            let color = Rgb([gray, gray, gray]);
+            for dy in 0..zoom {
+                for dx in 0..zoom {
+                    let x = panel_x + px * zoom + dx;
+                    let y = panel_y + py * zoom + dy;
+                    if x >= 0 && x < width_i && y >= 0 && y < height_i {
+                        img.put_pixel(x as u32, y as u32, color);
+                    }
+                }
+            }
+        }
+    }
+
+    // Red frame around the panel.
+    draw_rect_outline(
+        img,
+        (panel_x, panel_y),
+        (
+            panel_x + panel_side as i32 - 1,
+            panel_y + panel_side as i32 - 1,
+        ),
+        red,
+    );
+
+    let _ = (width_f, height_f);
+    Ok(())
+}
+
+/// Draw a 1-pixel-thick rectangle outline between two opposite corners.
+fn draw_rect_outline(img: &mut RgbImage, a: (i32, i32), b: (i32, i32), color: Rgb<u8>) {
+    let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
+    let (x1, y1) = (a.0.max(b.0), a.1.max(b.1));
+    draw_line(img, (x0, y0), (x1, y0), color);
+    draw_line(img, (x1, y0), (x1, y1), color);
+    draw_line(img, (x1, y1), (x0, y1), color);
+    draw_line(img, (x0, y1), (x0, y0), color);
+}
+
+/// Cheap 1st-percentile / 99th-percentile autoscale for the ROI patch
+/// when the caller hasn't pinned a display range.
+fn autoscale_range(patch: &Array2<u16>) -> (u16, u16) {
+    let mut vals: Vec<u16> = patch.iter().copied().collect();
+    if vals.is_empty() {
+        return (0, u16::MAX);
+    }
+    vals.sort_unstable();
+    let lo_idx = vals.len() / 100;
+    let hi_idx = vals.len() - 1 - vals.len() / 100;
+    (vals[lo_idx], vals[hi_idx])
 }
 
 /// Linear position between `mag_bright` (t = 1.0) and `mag_dim` (t = 0.0),
@@ -490,7 +662,7 @@ mod tests {
             height: 256,
             ..Default::default()
         };
-        render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
+        render_context_frame(&orient, &[], &fp, &cfg, None, &path).unwrap();
         assert!(path.is_file(), "context PNG must exist");
         let meta = std::fs::metadata(&path).unwrap();
         assert!(meta.len() > 100, "context PNG is suspiciously small");
@@ -511,7 +683,7 @@ mod tests {
             height: 256,
             ..Default::default()
         };
-        render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
+        render_context_frame(&orient, &[], &fp, &cfg, None, &path).unwrap();
         let img = image::open(&path).unwrap().into_rgb8();
         let non_black = img.pixels().filter(|p| p.0 != [0, 0, 0]).count();
         assert!(
