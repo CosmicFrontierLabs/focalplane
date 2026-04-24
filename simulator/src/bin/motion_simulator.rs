@@ -1,5 +1,7 @@
 use clap::{Parser, ValueEnum};
 use log::{info, warn};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand_distr::StandardNormal;
 use rayon::prelude::*;
 use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
@@ -15,6 +17,257 @@ use starfield::Equatorial;
 use std::path::Path;
 use std::time::Instant;
 
+/// Generate `n` samples of pink (1/f) noise via Paul Kellett's 7-pole
+/// filter. Good approximation across about three decades of frequency.
+fn pink_noise_series(n: usize, rng: &mut impl Rng) -> Vec<f64> {
+    let mut b = [0.0_f64; 7];
+    let mut out = Vec::with_capacity(n);
+    // Warm the filter so the first samples aren't transient-heavy.
+    for _ in 0..256 {
+        let white: f64 = rng.sample(StandardNormal);
+        b[0] = 0.99886 * b[0] + white * 0.0555179;
+        b[1] = 0.99332 * b[1] + white * 0.0750759;
+        b[2] = 0.96900 * b[2] + white * 0.1538520;
+        b[3] = 0.86650 * b[3] + white * 0.3104856;
+        b[4] = 0.55000 * b[4] + white * 0.5329522;
+        b[5] = -0.7616 * b[5] - white * 0.0168980;
+        let _ = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + white * 0.5362;
+        b[6] = white * 0.115926;
+    }
+    for _ in 0..n {
+        let white: f64 = rng.sample(StandardNormal);
+        b[0] = 0.99886 * b[0] + white * 0.0555179;
+        b[1] = 0.99332 * b[1] + white * 0.0750759;
+        b[2] = 0.96900 * b[2] + white * 0.1538520;
+        b[3] = 0.86650 * b[3] + white * 0.3104856;
+        b[4] = 0.55000 * b[4] + white * 0.5329522;
+        b[5] = -0.7616 * b[5] - white * 0.0168980;
+        let pink = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + white * 0.5362;
+        b[6] = white * 0.115926;
+        out.push(pink);
+    }
+    out
+}
+
+/// Build a circular-sweep trajectory of radius `radius_deg` around
+/// `pointing`, tracing `turns` full loops over `duration` at
+/// `waypoints_per_turn` waypoints per turn. RA offsets are scaled by
+/// `1/cos(dec)` so the motion is geometric on the sky.
+fn build_circle_trajectory(
+    pointing: Equatorial,
+    radius_deg: f64,
+    turns: f64,
+    waypoints_per_turn: usize,
+    duration: std::time::Duration,
+    start_roll_deg: f64,
+    total_roll_deg: f64,
+) -> Result<Trajectory, Box<dyn std::error::Error>> {
+    let turns = turns.max(f64::EPSILON);
+    let segments = ((waypoints_per_turn as f64 * turns).ceil() as usize).max(8);
+    let duration_s = duration.as_secs_f64();
+    let ra0 = pointing.ra_degrees();
+    let dec0 = pointing.dec_degrees();
+    let cos_dec0 = dec0.to_radians().cos().max(1e-6);
+    let waypoints: Vec<Waypoint> = (0..=segments)
+        .map(|i| {
+            let frac = i as f64 / segments as f64;
+            let t = std::time::Duration::from_secs_f64(duration_s * frac);
+            let theta = 2.0 * std::f64::consts::PI * turns * frac;
+            let ra = ra0 + (radius_deg * theta.cos()) / cos_dec0;
+            let dec = dec0 + radius_deg * theta.sin();
+            let eq = Equatorial::from_degrees(ra, dec);
+            let roll_deg = start_roll_deg + frac * total_roll_deg;
+            Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+        })
+        .collect();
+    Ok(Trajectory::new(waypoints)?)
+}
+
+/// Build a linear-sweep trajectory from `start` to `end` over
+/// `duration`. When `total_roll_deg.abs() > 0`, subdivides into
+/// multiple waypoints so SLERP sweeps through every 90° of roll rather
+/// than collapsing to the shortest-arc quaternion path.
+fn build_line_trajectory(
+    start: Equatorial,
+    end: Equatorial,
+    duration: std::time::Duration,
+    start_roll_deg: f64,
+    end_roll_deg: f64,
+    total_roll_deg: f64,
+) -> Result<Trajectory, Box<dyn std::error::Error>> {
+    if total_roll_deg.abs() > f64::EPSILON {
+        let segments = ((total_roll_deg.abs() / 90.0).ceil() as usize).max(1);
+        let duration_s = duration.as_secs_f64();
+        let waypoints: Vec<Waypoint> = (0..=segments)
+            .map(|i| {
+                let frac = i as f64 / segments as f64;
+                let t = std::time::Duration::from_secs_f64(duration_s * frac);
+                let ra = start.ra_degrees() + frac * (end.ra_degrees() - start.ra_degrees());
+                let dec = start.dec_degrees() + frac * (end.dec_degrees() - start.dec_degrees());
+                let eq = Equatorial::from_degrees(ra, dec);
+                let roll_deg = start_roll_deg + frac * total_roll_deg;
+                Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+            })
+            .collect();
+        return Ok(Trajectory::new(waypoints)?);
+    }
+    if start_roll_deg == 0.0 && end_roll_deg == 0.0 {
+        Ok(Trajectory::from_endpoints(start, end, duration)?)
+    } else {
+        Ok(Trajectory::from_endpoints_with_roll(
+            start,
+            start_roll_deg.to_radians(),
+            end,
+            end_roll_deg.to_radians(),
+            duration,
+        )?)
+    }
+}
+
+/// Build a pink-spectrum residual trajectory centered on `pointing`,
+/// scaled so the mean pointing offset magnitude equals
+/// `mean_arcsec`. The residual is spread over `segments` waypoints
+/// across `duration`, with roll interpolated linearly from
+/// `start_roll_deg` to `start_roll_deg + total_roll_deg`.
+fn build_pink_trajectory(
+    pointing: Equatorial,
+    mean_arcsec: f64,
+    segments: usize,
+    seed: u64,
+    duration: std::time::Duration,
+    start_roll_deg: f64,
+    total_roll_deg: f64,
+) -> Result<Trajectory, Box<dyn std::error::Error>> {
+    let segments = segments.max(8);
+    let (ra_offset_arcsec, dec_offset_arcsec) =
+        pink_noise_2d_arcsec(segments + 1, mean_arcsec, seed);
+    let ra0 = pointing.ra_degrees();
+    let dec0 = pointing.dec_degrees();
+    let cos_dec0 = dec0.to_radians().cos().max(1e-6);
+    let duration_s = duration.as_secs_f64();
+    let waypoints: Vec<Waypoint> = (0..=segments)
+        .map(|i| {
+            let frac = i as f64 / segments as f64;
+            let t = std::time::Duration::from_secs_f64(duration_s * frac);
+            let ra = ra0 + (ra_offset_arcsec[i] / 3600.0) / cos_dec0;
+            let dec = dec0 + dec_offset_arcsec[i] / 3600.0;
+            let eq = Equatorial::from_degrees(ra, dec);
+            let roll_deg = start_roll_deg + frac * total_roll_deg;
+            Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+        })
+        .collect();
+    Ok(Trajectory::new(waypoints)?)
+}
+
+/// Load a trajectory from a simple CSV of absolute orientations.
+/// Expected columns (by header, case-sensitive): `time_s`, `qw`, `qx`,
+/// `qy`, `qz`. Extra columns are ignored. Quaternions are normalized on
+/// load; non-monotonic `time_s` is rejected.
+fn build_csv_trajectory(path: &std::path::Path) -> Result<Trajectory, Box<dyn std::error::Error>> {
+    use nalgebra::{Quaternion, UnitQuaternion};
+    use std::io::{BufRead, BufReader};
+
+    let file = std::fs::File::open(path).map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let mut lines = BufReader::new(file).lines();
+
+    let header = lines
+        .next()
+        .ok_or_else(|| format!("{} is empty", path.display()))?
+        .map_err(|e| e.to_string())?;
+    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
+    let idx = |name: &str| -> Result<usize, String> {
+        columns
+            .iter()
+            .position(|c| *c == name)
+            .ok_or_else(|| format!("{} is missing column `{name}`", path.display()))
+    };
+    let (i_t, i_qw, i_qx, i_qy, i_qz) = (
+        idx("time_s")?,
+        idx("qw")?,
+        idx("qx")?,
+        idx("qy")?,
+        idx("qz")?,
+    );
+
+    let mut waypoints: Vec<Waypoint> = Vec::new();
+    let mut last_t = f64::NEG_INFINITY;
+    for (line_no, line) in lines.enumerate() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cells: Vec<&str> = line.split(',').map(str::trim).collect();
+        let parse = |i: usize, name: &str| -> Result<f64, String> {
+            cells
+                .get(i)
+                .ok_or_else(|| format!("line {}: missing `{name}` cell", line_no + 2))?
+                .parse::<f64>()
+                .map_err(|e| format!("line {}: bad `{name}` value: {e}", line_no + 2))
+        };
+        let t_s = parse(i_t, "time_s")?;
+        if t_s <= last_t {
+            return Err(format!(
+                "{}: `time_s` must be strictly increasing (line {} has {} ≤ previous {})",
+                path.display(),
+                line_no + 2,
+                t_s,
+                last_t,
+            )
+            .into());
+        }
+        last_t = t_s;
+
+        let q = UnitQuaternion::from_quaternion(Quaternion::new(
+            parse(i_qw, "qw")?,
+            parse(i_qx, "qx")?,
+            parse(i_qy, "qy")?,
+            parse(i_qz, "qz")?,
+        ));
+        waypoints.push(Waypoint::new(
+            std::time::Duration::from_secs_f64(t_s.max(0.0)),
+            q,
+        ));
+    }
+
+    if waypoints.len() < 2 {
+        return Err(format!(
+            "{}: need at least 2 rows, found {}",
+            path.display(),
+            waypoints.len()
+        )
+        .into());
+    }
+    Ok(Trajectory::new(waypoints)?)
+}
+
+/// Generate a 2-D pink-noise offset series (RA, Dec) in arcseconds,
+/// scaled so the mean magnitude `mean(|offset|)` equals
+/// `target_mean_arcsec`. Centered at zero after generation.
+fn pink_noise_2d_arcsec(n: usize, target_mean_arcsec: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let ra = pink_noise_series(n, &mut rng);
+    let dec = pink_noise_series(n, &mut rng);
+    let ra_mean = ra.iter().sum::<f64>() / n as f64;
+    let dec_mean = dec.iter().sum::<f64>() / n as f64;
+    let ra: Vec<f64> = ra.iter().map(|v| v - ra_mean).collect();
+    let dec: Vec<f64> = dec.iter().map(|v| v - dec_mean).collect();
+    let raw_mean_mag: f64 = ra
+        .iter()
+        .zip(&dec)
+        .map(|(a, b)| (a * a + b * b).sqrt())
+        .sum::<f64>()
+        / n as f64;
+    let scale = if raw_mean_mag > 1e-12 {
+        target_mean_arcsec / raw_mean_mag
+    } else {
+        0.0
+    };
+    (
+        ra.into_iter().map(|v| v * scale).collect(),
+        dec.into_iter().map(|v| v * scale).collect(),
+    )
+}
+
 /// Focal-plane array layout. `Single` is the default (one sensor at
 /// boresight); `Spencer` is the hard-coded four-IMX455 mosaic defined
 /// in `hardware::sensor_array::SPENCER_ARRAY_PLAN`.
@@ -24,6 +277,145 @@ enum ArrayFormat {
     Single,
     /// Four-IMX455 mosaic. `--sensor` is ignored when this is selected.
     Spencer,
+}
+
+/// CLI-facing value enum for `--mode`. Must be unit variants because
+/// clap's `ValueEnum` only supports that shape; see [`TrajectoryKind`]
+/// for the resolved, data-carrying counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TrajectoryMode {
+    /// Linear sweep from `--start` to `--end`.
+    Line,
+    /// Circle in RA/Dec around `--start`; uses `--circle-radius-deg`,
+    /// `--circle-turns`, `--circle-waypoints`.
+    Circle,
+    /// Pink-spectrum pointing residual around `--start`; uses
+    /// `--pink-mean-arcsec`, `--pink-waypoints`, `--pink-seed`.
+    Pink,
+    /// Trajectory loaded from a CSV of (time_s, qw, qx, qy, qz) rows
+    /// via `--trajectory-csv`. `--start` is not required; the CSV
+    /// supplies absolute orientations.
+    Csv,
+}
+
+/// Resolved trajectory description with mode-specific parameters
+/// already pulled out of the flat CLI [`Args`]. Produced by
+/// [`TrajectoryKind::from_args`] and consumed by [`TrajectoryKind::build`]
+/// so the dispatch in `main` has a single `match`.
+#[derive(Debug, Clone)]
+enum TrajectoryKind {
+    Line {
+        start: Equatorial,
+        end: Equatorial,
+    },
+    Circle {
+        start: Equatorial,
+        radius_deg: f64,
+        turns: f64,
+        waypoints_per_turn: usize,
+    },
+    Pink {
+        start: Equatorial,
+        mean_arcsec: f64,
+        waypoints: usize,
+        seed: u64,
+    },
+    Csv {
+        path: std::path::PathBuf,
+    },
+}
+
+impl TrajectoryKind {
+    /// Pull the mode-specific params out of the flat `Args`. clap's
+    /// `required_if_eq` guarantees the relevant `Option`s are `Some`
+    /// by the time we get here, so the `expect` messages just describe
+    /// the invariant rather than running in practice.
+    fn from_args(args: &Args) -> Self {
+        let start = || {
+            args.start.expect(
+                "clap required_unless_present guarantees --start for line/circle/pink modes",
+            )
+        };
+        match args.mode {
+            TrajectoryMode::Line => TrajectoryKind::Line {
+                start: start(),
+                end: args
+                    .end
+                    .expect("clap required_if_eq guarantees --end when --mode=line"),
+            },
+            TrajectoryMode::Circle => TrajectoryKind::Circle {
+                start: start(),
+                radius_deg: args.circle_radius_deg.expect(
+                    "clap required_if_eq guarantees --circle-radius-deg when --mode=circle",
+                ),
+                turns: args.circle_turns,
+                waypoints_per_turn: args.circle_waypoints,
+            },
+            TrajectoryMode::Pink => TrajectoryKind::Pink {
+                start: start(),
+                mean_arcsec: args
+                    .pink_mean_arcsec
+                    .expect("clap required_if_eq guarantees --pink-mean-arcsec when --mode=pink"),
+                waypoints: args.pink_waypoints,
+                seed: args.pink_seed,
+            },
+            TrajectoryMode::Csv => TrajectoryKind::Csv {
+                path: args
+                    .trajectory_csv
+                    .clone()
+                    .expect("clap required_if_eq guarantees --trajectory-csv when --mode=csv"),
+            },
+        }
+    }
+
+    /// Dispatch to the matching builder.
+    fn build(
+        &self,
+        duration: std::time::Duration,
+        start_roll_deg: f64,
+        end_roll_deg: f64,
+        total_roll_deg: f64,
+    ) -> Result<Trajectory, Box<dyn std::error::Error>> {
+        match self {
+            TrajectoryKind::Line { start, end } => build_line_trajectory(
+                *start,
+                *end,
+                duration,
+                start_roll_deg,
+                end_roll_deg,
+                total_roll_deg,
+            ),
+            TrajectoryKind::Circle {
+                start,
+                radius_deg,
+                turns,
+                waypoints_per_turn,
+            } => build_circle_trajectory(
+                *start,
+                *radius_deg,
+                *turns,
+                *waypoints_per_turn,
+                duration,
+                start_roll_deg,
+                total_roll_deg,
+            ),
+            TrajectoryKind::Pink {
+                start,
+                mean_arcsec,
+                waypoints,
+                seed,
+            } => build_pink_trajectory(
+                *start,
+                *mean_arcsec,
+                *waypoints,
+                *seed,
+                duration,
+                start_roll_deg,
+                total_roll_deg,
+            ),
+            TrajectoryKind::Csv { path } => build_csv_trajectory(path),
+        }
+    }
 }
 
 /// Parse a "WxH" size string into a `(width, height)` pair.
@@ -103,26 +495,36 @@ struct Args {
 
     #[arg(
         long,
-        value_parser = parse_ra_dec,
-        help = "Start pointing in 'ra,dec' degrees (e.g., '56.75,24.12')"
+        value_enum,
+        help = "Trajectory shape: line | circle | pink (no default — clap's \
+                `required_if_eq` won't fire on defaulted values, so the \
+                caller must pick explicitly)"
     )]
-    start: Equatorial,
+    mode: TrajectoryMode,
 
     #[arg(
         long,
         value_parser = parse_ra_dec,
-        required_unless_present = "circle_radius_deg",
-        help = "End pointing in 'ra,dec' degrees (ignored when --circle-radius-deg is set)"
+        required_unless_present = "trajectory_csv",
+        help = "Start pointing in 'ra,dec' degrees (e.g., '56.75,24.12'); \
+                not required when --mode=csv"
+    )]
+    start: Option<Equatorial>,
+
+    #[arg(
+        long,
+        value_parser = parse_ra_dec,
+        required_if_eq("mode", "line"),
+        help = "End pointing in 'ra,dec' degrees (required when --mode=line)"
     )]
     end: Option<Equatorial>,
 
     #[arg(
         long,
-        default_value_t = 0.0,
-        help = "If > 0, ignore --end and trace a circle of this radius (degrees) \
-                around --start, subdivided into --circle-waypoints steps"
+        required_if_eq("mode", "circle"),
+        help = "Circle radius in degrees (required when --mode=circle)"
     )]
-    circle_radius_deg: f64,
+    circle_radius_deg: Option<f64>,
 
     #[arg(
         long,
@@ -138,6 +540,31 @@ struct Args {
         help = "Number of full circle loops over the trajectory duration"
     )]
     circle_turns: f64,
+
+    #[arg(
+        long,
+        required_if_eq("mode", "pink"),
+        help = "Mean pointing-residual magnitude in arcseconds (required when --mode=pink)"
+    )]
+    pink_mean_arcsec: Option<f64>,
+
+    #[arg(
+        long,
+        default_value_t = 1024,
+        help = "Waypoint count for pink-noise trajectory (higher = more high-frequency content captured)"
+    )]
+    pink_waypoints: usize,
+
+    #[arg(long, default_value_t = 0, help = "RNG seed for pink-noise trajectory")]
+    pink_seed: u64,
+
+    #[arg(
+        long,
+        required_if_eq("mode", "csv"),
+        help = "Path to a CSV file with columns time_s, qw, qx, qy, qz \
+                (required when --mode=csv)"
+    )]
+    trajectory_csv: Option<std::path::PathBuf>,
 
     #[arg(
         long,
@@ -281,74 +708,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let total_roll_deg = (args.end_roll - args.start_roll) + 360.0 * args.roll_turns;
-    let circle_mode = args.circle_radius_deg > 0.0;
-    let trajectory = if circle_mode {
-        // Trace a circle in RA/Dec centered on --start. Subdivide into
-        // `circle_waypoints` steps per full turn so SLERP stays close to
-        // the intended ring (a two-waypoint loop degenerates to no motion).
-        let turns = args.circle_turns.max(f64::EPSILON);
-        let segments = (args.circle_waypoints as f64 * turns).ceil() as usize;
-        let segments = segments.max(8);
-        let duration_s = args.duration.0.as_secs_f64();
-        let r = args.circle_radius_deg;
-        let ra0 = args.start.ra_degrees();
-        let dec0 = args.start.dec_degrees();
-        let cos_dec0 = dec0.to_radians().cos().max(1e-6);
-        let waypoints: Vec<Waypoint> = (0..=segments)
-            .map(|i| {
-                let frac = i as f64 / segments as f64;
-                let t = std::time::Duration::from_secs_f64(duration_s * frac);
-                let theta = 2.0 * std::f64::consts::PI * turns * frac;
-                // Scale RA offset by 1/cos(dec) so the motion traces a
-                // geometric circle on the sky (small-angle approximation).
-                let ra = ra0 + (r * theta.cos()) / cos_dec0;
-                let dec = dec0 + r * theta.sin();
-                let eq = Equatorial::from_degrees(ra, dec);
-                let roll_deg = args.start_roll + frac * total_roll_deg;
-                Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
-            })
-            .collect();
-        Trajectory::new(waypoints)?
-    } else if args.roll_turns.abs() > f64::EPSILON {
-        // Multi-waypoint trajectory: subdivide so each SLERP segment sweeps
-        // at most 90° of roll. Necessary because a two-waypoint trajectory
-        // cannot represent a > 180° quaternion path — SLERP collapses to
-        // the shortest arc, losing whole rotations.
-        let end = args
-            .end
-            .ok_or("--end is required unless --circle-radius-deg is set")?;
-        let segments = ((total_roll_deg.abs() / 90.0).ceil() as usize).max(1);
-        let duration_s = args.duration.0.as_secs_f64();
-        let waypoints: Vec<Waypoint> = (0..=segments)
-            .map(|i| {
-                let frac = i as f64 / segments as f64;
-                let t = std::time::Duration::from_secs_f64(duration_s * frac);
-                let ra =
-                    args.start.ra_degrees() + frac * (end.ra_degrees() - args.start.ra_degrees());
-                let dec = args.start.dec_degrees()
-                    + frac * (end.dec_degrees() - args.start.dec_degrees());
-                let eq = Equatorial::from_degrees(ra, dec);
-                let roll_deg = args.start_roll + frac * total_roll_deg;
-                Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
-            })
-            .collect();
-        Trajectory::new(waypoints)?
-    } else {
-        let end = args
-            .end
-            .ok_or("--end is required unless --circle-radius-deg is set")?;
-        if args.start_roll == 0.0 && args.end_roll == 0.0 {
-            Trajectory::from_endpoints(args.start, end, args.duration.0)?
-        } else {
-            Trajectory::from_endpoints_with_roll(
-                args.start,
-                args.start_roll.to_radians(),
-                end,
-                args.end_roll.to_radians(),
-                args.duration.0,
-            )?
-        }
-    };
+    let kind = TrajectoryKind::from_args(&args);
+    let trajectory = kind.build(
+        args.duration.0,
+        args.start_roll,
+        args.end_roll,
+        total_roll_deg,
+    )?;
 
     let base_fov_deg = field_diameter_for_array(&focal_plane)
         .map(|a| a.as_degrees())
@@ -356,27 +722,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (envelope_center, envelope_diameter) = fov_envelope(&trajectory, base_fov_deg);
 
-    if circle_mode {
-        info!(
-            "Trajectory: circle centered on RA {:.4}° Dec {:.4}°, radius {:.4}°, \
-             {:.2} turns over {:.1}s ({} waypoints)",
-            args.start.ra_degrees(),
-            args.start.dec_degrees(),
-            args.circle_radius_deg,
-            args.circle_turns,
-            args.duration.0.as_secs_f64(),
-            trajectory.waypoints().len()
-        );
-    } else {
-        let end = args.end.unwrap();
-        info!(
-            "Trajectory: RA {:.4}° Dec {:.4}° → RA {:.4}° Dec {:.4}° over {:.1}s",
-            args.start.ra_degrees(),
-            args.start.dec_degrees(),
-            end.ra_degrees(),
-            end.dec_degrees(),
-            args.duration.0.as_secs_f64()
-        );
+    match &kind {
+        TrajectoryKind::Line { start, end } => {
+            info!(
+                "Trajectory: line RA {:.4}° Dec {:.4}° → RA {:.4}° Dec {:.4}° over {:.1}s",
+                start.ra_degrees(),
+                start.dec_degrees(),
+                end.ra_degrees(),
+                end.dec_degrees(),
+                args.duration.0.as_secs_f64()
+            );
+        }
+        TrajectoryKind::Circle {
+            start,
+            radius_deg,
+            turns,
+            ..
+        } => {
+            info!(
+                "Trajectory: circle centered on RA {:.4}° Dec {:.4}°, radius {:.4}°, \
+                 {:.2} turns over {:.1}s ({} waypoints)",
+                start.ra_degrees(),
+                start.dec_degrees(),
+                radius_deg,
+                turns,
+                args.duration.0.as_secs_f64(),
+                trajectory.waypoints().len()
+            );
+        }
+        TrajectoryKind::Pink {
+            start,
+            mean_arcsec,
+            seed,
+            ..
+        } => {
+            info!(
+                "Trajectory: pink-noise residuals around RA {:.4}° Dec {:.4}°, \
+                 mean |offset|={:.2}″, {} waypoints over {:.1}s (seed={})",
+                start.ra_degrees(),
+                start.dec_degrees(),
+                mean_arcsec,
+                trajectory.waypoints().len(),
+                args.duration.0.as_secs_f64(),
+                seed,
+            );
+        }
+        TrajectoryKind::Csv { path } => {
+            info!(
+                "Trajectory: loaded {} waypoints from {} spanning {:.3}s",
+                trajectory.waypoints().len(),
+                path.display(),
+                trajectory.end_time().as_secs_f64() - trajectory.start_time().as_secs_f64(),
+            );
+        }
     }
     info!(
         "Roll: start {:.3}° → end {:.3}°",
@@ -477,4 +875,247 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use clap::Parser;
+
+    /// Shared baseline args with a pinned trajectory mode. Every test
+    /// supplies its own `--mode ...` override because `Args` has no
+    /// default for `--mode`.
+    fn base(mode: &'static str) -> Vec<&'static str> {
+        vec![
+            "motion_simulator",
+            "--start",
+            "213.39,-55.86",
+            "--duration",
+            "10s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/nope",
+            "--mode",
+            mode,
+        ]
+    }
+
+    #[test]
+    fn mode_is_required() {
+        let argv = [
+            "motion_simulator",
+            "--start",
+            "0,0",
+            "--duration",
+            "1s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/x",
+        ];
+        let err = Args::try_parse_from(argv).expect_err("missing --mode must fail");
+        assert!(
+            err.to_string().contains("--mode"),
+            "clap error should mention --mode, got: {err}"
+        );
+    }
+
+    #[test]
+    fn line_mode_requires_end() {
+        let err = Args::try_parse_from(base("line")).expect_err("missing --end must fail");
+        assert!(
+            err.to_string().contains("--end"),
+            "clap error should mention --end, got: {err}"
+        );
+    }
+
+    #[test]
+    fn line_mode_with_end_parses() {
+        let mut argv = base("line");
+        argv.extend(["--end", "213.50,-55.70"]);
+        let args = Args::try_parse_from(argv).expect("line + --end parses");
+        assert_eq!(args.mode, TrajectoryMode::Line);
+        assert_relative_eq!(args.end.unwrap().ra_degrees(), 213.50, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn circle_mode_requires_radius() {
+        let err = Args::try_parse_from(base("circle"))
+            .expect_err("missing --circle-radius-deg must fail");
+        assert!(
+            err.to_string().contains("circle-radius-deg"),
+            "clap error should mention --circle-radius-deg, got: {err}"
+        );
+    }
+
+    #[test]
+    fn circle_mode_with_radius_parses_and_ignores_end() {
+        let mut argv = base("circle");
+        argv.extend(["--circle-radius-deg", "0.1"]);
+        let args = Args::try_parse_from(argv).expect("circle + radius parses");
+        assert_eq!(args.mode, TrajectoryMode::Circle);
+        assert_relative_eq!(args.circle_radius_deg.unwrap(), 0.1, epsilon = 1e-9);
+        assert!(args.end.is_none(), "--end not required for circle mode");
+    }
+
+    #[test]
+    fn pink_mode_requires_mean_arcsec() {
+        let err =
+            Args::try_parse_from(base("pink")).expect_err("missing --pink-mean-arcsec must fail");
+        assert!(
+            err.to_string().contains("pink-mean-arcsec"),
+            "clap error should mention --pink-mean-arcsec, got: {err}"
+        );
+    }
+
+    #[test]
+    fn pink_mode_with_mean_arcsec_parses() {
+        let mut argv = base("pink");
+        argv.extend(["--pink-mean-arcsec", "6.0", "--pink-seed", "42"]);
+        let args = Args::try_parse_from(argv).expect("pink + mean parses");
+        assert_eq!(args.mode, TrajectoryMode::Pink);
+        assert_relative_eq!(args.pink_mean_arcsec.unwrap(), 6.0, epsilon = 1e-9);
+        assert_eq!(args.pink_seed, 42);
+        assert!(args.end.is_none(), "--end not required for pink mode");
+    }
+
+    #[test]
+    fn trajectory_kind_from_args_matches_mode() {
+        // Line.
+        let mut argv = base("line");
+        argv.extend(["--end", "213.50,-55.70"]);
+        let args = Args::try_parse_from(argv).unwrap();
+        assert!(matches!(
+            TrajectoryKind::from_args(&args),
+            TrajectoryKind::Line { .. }
+        ));
+
+        // Circle.
+        let mut argv = base("circle");
+        argv.extend(["--circle-radius-deg", "0.2"]);
+        let args = Args::try_parse_from(argv).unwrap();
+        match TrajectoryKind::from_args(&args) {
+            TrajectoryKind::Circle { radius_deg, .. } => {
+                assert_relative_eq!(radius_deg, 0.2, epsilon = 1e-9);
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
+
+        // Pink.
+        let mut argv = base("pink");
+        argv.extend(["--pink-mean-arcsec", "6.0"]);
+        let args = Args::try_parse_from(argv).unwrap();
+        match TrajectoryKind::from_args(&args) {
+            TrajectoryKind::Pink { mean_arcsec, .. } => {
+                assert_relative_eq!(mean_arcsec, 6.0, epsilon = 1e-9);
+            }
+            other => panic!("expected Pink, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn print_pink_variance_seed_42_10_arcsec() {
+        // Seed + waypoint count matches the 5-s pink preview
+        // (pink_waypoints default 1024 → 1025 samples).
+        let (ra, dec) = pink_noise_2d_arcsec(1025, 10.0, 42);
+        let n = ra.len() as f64;
+        let ra_var: f64 = ra.iter().map(|v| v * v).sum::<f64>() / n;
+        let dec_var: f64 = dec.iter().map(|v| v * v).sum::<f64>() / n;
+        let ra_std = ra_var.sqrt();
+        let dec_std = dec_var.sqrt();
+        eprintln!(
+            "seed=42, n=1025, target_mean=10\": \
+             RA var = {ra_var:.2} arcsec² (std {ra_std:.2}\"), \
+             Dec var = {dec_var:.2} arcsec² (std {dec_std:.2}\")"
+        );
+    }
+
+    #[test]
+    fn pink_noise_2d_hits_requested_mean_magnitude() {
+        let (ra, dec) = pink_noise_2d_arcsec(4096, 6.0, 7);
+        let mean_mag: f64 = ra
+            .iter()
+            .zip(&dec)
+            .map(|(a, b)| (a * a + b * b).sqrt())
+            .sum::<f64>()
+            / ra.len() as f64;
+        assert_relative_eq!(mean_mag, 6.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn csv_mode_requires_trajectory_csv() {
+        let argv = [
+            "motion_simulator",
+            "--mode",
+            "csv",
+            "--duration",
+            "1s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/x",
+        ];
+        let err = Args::try_parse_from(argv).expect_err("missing --trajectory-csv must fail");
+        assert!(
+            err.to_string().contains("trajectory-csv"),
+            "clap error should mention --trajectory-csv, got: {err}"
+        );
+    }
+
+    #[test]
+    fn csv_mode_does_not_require_start() {
+        let argv = [
+            "motion_simulator",
+            "--mode",
+            "csv",
+            "--trajectory-csv",
+            "/tmp/nope.csv",
+            "--duration",
+            "1s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/x",
+        ];
+        let args = Args::try_parse_from(argv).expect("csv + path parses without --start");
+        assert_eq!(args.mode, TrajectoryMode::Csv);
+        assert!(args.start.is_none());
+        assert!(args.trajectory_csv.is_some());
+    }
+
+    #[test]
+    fn build_csv_trajectory_loads_three_waypoints() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "time_s,qw,qx,qy,qz\n\
+             0.0,1.0,0.0,0.0,0.0\n\
+             0.5,0.99999,0.004,0.001,0.0\n\
+             1.0,0.99998,0.006,0.002,0.0\n",
+        )
+        .unwrap();
+        let traj = build_csv_trajectory(tmp.path()).unwrap();
+        assert_eq!(traj.waypoints().len(), 3);
+        assert_relative_eq!(traj.end_time().as_secs_f64(), 1.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn build_csv_trajectory_rejects_nonmonotonic_time() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "time_s,qw,qx,qy,qz\n\
+             0.0,1.0,0.0,0.0,0.0\n\
+             1.0,1.0,0.0,0.0,0.0\n\
+             0.5,1.0,0.0,0.0,0.0\n",
+        )
+        .unwrap();
+        let err = build_csv_trajectory(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("strictly increasing"),
+            "expected monotonicity error, got: {err}"
+        );
+    }
 }

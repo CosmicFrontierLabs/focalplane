@@ -48,6 +48,16 @@ scripts/install-hooks.sh
 
 ## System Access
 - **NEVER run sudo commands directly** - Always ask the user to run sudo commands manually
+- User-space installs that don't need sudo (e.g. `curl ... | sh` into `~/.local/bin`) are fine to run without asking
+
+## Python Env Management
+- **Use `uv`** (installed at `~/.local/bin/uv`) for all Python work; do **not** fall back to `pip install --user`, `pip install --break-system-packages`, or raw `python3 -m venv`
+- Preferred pattern for one-off scripts:
+  ```bash
+  uv run --with pandas --with scipy --with matplotlib script.py
+  ```
+  uv creates an ephemeral env, installs the requested packages, and runs the script. No manual activate/cleanup.
+- For longer-lived projects, prefer `uv venv` + `uv pip install -r ...` over `python3 -m venv`
 
 ## Code Style Guidelines
 - **Comments**: Avoid comments that reference pre-change conditions (e.g., "Changed from X", "Previously Y"). Comments should describe current state only.
