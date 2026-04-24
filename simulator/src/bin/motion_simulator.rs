@@ -159,6 +159,87 @@ fn build_pink_trajectory(
     Ok(Trajectory::new(waypoints)?)
 }
 
+/// Load a trajectory from a simple CSV of absolute orientations.
+/// Expected columns (by header, case-sensitive): `time_s`, `qw`, `qx`,
+/// `qy`, `qz`. Extra columns are ignored. Quaternions are normalized on
+/// load; non-monotonic `time_s` is rejected.
+fn build_csv_trajectory(path: &std::path::Path) -> Result<Trajectory, Box<dyn std::error::Error>> {
+    use nalgebra::{Quaternion, UnitQuaternion};
+    use std::io::{BufRead, BufReader};
+
+    let file = std::fs::File::open(path).map_err(|e| format!("opening {}: {e}", path.display()))?;
+    let mut lines = BufReader::new(file).lines();
+
+    let header = lines
+        .next()
+        .ok_or_else(|| format!("{} is empty", path.display()))?
+        .map_err(|e| e.to_string())?;
+    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
+    let idx = |name: &str| -> Result<usize, String> {
+        columns
+            .iter()
+            .position(|c| *c == name)
+            .ok_or_else(|| format!("{} is missing column `{name}`", path.display()))
+    };
+    let (i_t, i_qw, i_qx, i_qy, i_qz) = (
+        idx("time_s")?,
+        idx("qw")?,
+        idx("qx")?,
+        idx("qy")?,
+        idx("qz")?,
+    );
+
+    let mut waypoints: Vec<Waypoint> = Vec::new();
+    let mut last_t = f64::NEG_INFINITY;
+    for (line_no, line) in lines.enumerate() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cells: Vec<&str> = line.split(',').map(str::trim).collect();
+        let parse = |i: usize, name: &str| -> Result<f64, String> {
+            cells
+                .get(i)
+                .ok_or_else(|| format!("line {}: missing `{name}` cell", line_no + 2))?
+                .parse::<f64>()
+                .map_err(|e| format!("line {}: bad `{name}` value: {e}", line_no + 2))
+        };
+        let t_s = parse(i_t, "time_s")?;
+        if t_s <= last_t {
+            return Err(format!(
+                "{}: `time_s` must be strictly increasing (line {} has {} ≤ previous {})",
+                path.display(),
+                line_no + 2,
+                t_s,
+                last_t,
+            )
+            .into());
+        }
+        last_t = t_s;
+
+        let q = UnitQuaternion::from_quaternion(Quaternion::new(
+            parse(i_qw, "qw")?,
+            parse(i_qx, "qx")?,
+            parse(i_qy, "qy")?,
+            parse(i_qz, "qz")?,
+        ));
+        waypoints.push(Waypoint::new(
+            std::time::Duration::from_secs_f64(t_s.max(0.0)),
+            q,
+        ));
+    }
+
+    if waypoints.len() < 2 {
+        return Err(format!(
+            "{}: need at least 2 rows, found {}",
+            path.display(),
+            waypoints.len()
+        )
+        .into());
+    }
+    Ok(Trajectory::new(waypoints)?)
+}
+
 /// Generate a 2-D pink-noise offset series (RA, Dec) in arcseconds,
 /// scaled so the mean magnitude `mean(|offset|)` equals
 /// `target_mean_arcsec`. Centered at zero after generation.
@@ -211,6 +292,10 @@ enum TrajectoryMode {
     /// Pink-spectrum pointing residual around `--start`; uses
     /// `--pink-mean-arcsec`, `--pink-waypoints`, `--pink-seed`.
     Pink,
+    /// Trajectory loaded from a CSV of (time_s, qw, qx, qy, qz) rows
+    /// via `--trajectory-csv`. `--start` is not required; the CSV
+    /// supplies absolute orientations.
+    Csv,
 }
 
 /// Resolved trajectory description with mode-specific parameters
@@ -235,6 +320,9 @@ enum TrajectoryKind {
         waypoints: usize,
         seed: u64,
     },
+    Csv {
+        path: std::path::PathBuf,
+    },
 }
 
 impl TrajectoryKind {
@@ -243,15 +331,20 @@ impl TrajectoryKind {
     /// by the time we get here, so the `expect` messages just describe
     /// the invariant rather than running in practice.
     fn from_args(args: &Args) -> Self {
+        let start = || {
+            args.start.expect(
+                "clap required_unless_present guarantees --start for line/circle/pink modes",
+            )
+        };
         match args.mode {
             TrajectoryMode::Line => TrajectoryKind::Line {
-                start: args.start,
+                start: start(),
                 end: args
                     .end
                     .expect("clap required_if_eq guarantees --end when --mode=line"),
             },
             TrajectoryMode::Circle => TrajectoryKind::Circle {
-                start: args.start,
+                start: start(),
                 radius_deg: args.circle_radius_deg.expect(
                     "clap required_if_eq guarantees --circle-radius-deg when --mode=circle",
                 ),
@@ -259,12 +352,18 @@ impl TrajectoryKind {
                 waypoints_per_turn: args.circle_waypoints,
             },
             TrajectoryMode::Pink => TrajectoryKind::Pink {
-                start: args.start,
+                start: start(),
                 mean_arcsec: args
                     .pink_mean_arcsec
                     .expect("clap required_if_eq guarantees --pink-mean-arcsec when --mode=pink"),
                 waypoints: args.pink_waypoints,
                 seed: args.pink_seed,
+            },
+            TrajectoryMode::Csv => TrajectoryKind::Csv {
+                path: args
+                    .trajectory_csv
+                    .clone()
+                    .expect("clap required_if_eq guarantees --trajectory-csv when --mode=csv"),
             },
         }
     }
@@ -314,6 +413,7 @@ impl TrajectoryKind {
                 start_roll_deg,
                 total_roll_deg,
             ),
+            TrajectoryKind::Csv { path } => build_csv_trajectory(path),
         }
     }
 }
@@ -405,9 +505,11 @@ struct Args {
     #[arg(
         long,
         value_parser = parse_ra_dec,
-        help = "Start pointing in 'ra,dec' degrees (e.g., '56.75,24.12')"
+        required_unless_present = "trajectory_csv",
+        help = "Start pointing in 'ra,dec' degrees (e.g., '56.75,24.12'); \
+                not required when --mode=csv"
     )]
-    start: Equatorial,
+    start: Option<Equatorial>,
 
     #[arg(
         long,
@@ -455,6 +557,14 @@ struct Args {
 
     #[arg(long, default_value_t = 0, help = "RNG seed for pink-noise trajectory")]
     pink_seed: u64,
+
+    #[arg(
+        long,
+        required_if_eq("mode", "csv"),
+        help = "Path to a CSV file with columns time_s, qw, qx, qy, qz \
+                (required when --mode=csv)"
+    )]
+    trajectory_csv: Option<std::path::PathBuf>,
 
     #[arg(
         long,
@@ -655,6 +765,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 trajectory.waypoints().len(),
                 args.duration.0.as_secs_f64(),
                 seed,
+            );
+        }
+        TrajectoryKind::Csv { path } => {
+            info!(
+                "Trajectory: loaded {} waypoints from {} spanning {:.3}s",
+                trajectory.waypoints().len(),
+                path.display(),
+                trajectory.end_time().as_secs_f64() - trajectory.start_time().as_secs_f64(),
             );
         }
     }
@@ -924,5 +1042,80 @@ mod tests {
             .sum::<f64>()
             / ra.len() as f64;
         assert_relative_eq!(mean_mag, 6.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn csv_mode_requires_trajectory_csv() {
+        let argv = [
+            "motion_simulator",
+            "--mode",
+            "csv",
+            "--duration",
+            "1s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/x",
+        ];
+        let err = Args::try_parse_from(argv).expect_err("missing --trajectory-csv must fail");
+        assert!(
+            err.to_string().contains("trajectory-csv"),
+            "clap error should mention --trajectory-csv, got: {err}"
+        );
+    }
+
+    #[test]
+    fn csv_mode_does_not_require_start() {
+        let argv = [
+            "motion_simulator",
+            "--mode",
+            "csv",
+            "--trajectory-csv",
+            "/tmp/nope.csv",
+            "--duration",
+            "1s",
+            "--catalog",
+            "fake.bin",
+            "--output-dir",
+            "/tmp/x",
+        ];
+        let args = Args::try_parse_from(argv).expect("csv + path parses without --start");
+        assert_eq!(args.mode, TrajectoryMode::Csv);
+        assert!(args.start.is_none());
+        assert!(args.trajectory_csv.is_some());
+    }
+
+    #[test]
+    fn build_csv_trajectory_loads_three_waypoints() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "time_s,qw,qx,qy,qz\n\
+             0.0,1.0,0.0,0.0,0.0\n\
+             0.5,0.99999,0.004,0.001,0.0\n\
+             1.0,0.99998,0.006,0.002,0.0\n",
+        )
+        .unwrap();
+        let traj = build_csv_trajectory(tmp.path()).unwrap();
+        assert_eq!(traj.waypoints().len(), 3);
+        assert_relative_eq!(traj.end_time().as_secs_f64(), 1.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn build_csv_trajectory_rejects_nonmonotonic_time() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            "time_s,qw,qx,qy,qz\n\
+             0.0,1.0,0.0,0.0,0.0\n\
+             1.0,1.0,0.0,0.0,0.0\n\
+             0.5,1.0,0.0,0.0,0.0\n",
+        )
+        .unwrap();
+        let err = build_csv_trajectory(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("strictly increasing"),
+            "expected monotonicity error, got: {err}"
+        );
     }
 }
