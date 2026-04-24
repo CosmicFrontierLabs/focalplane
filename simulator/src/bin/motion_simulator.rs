@@ -111,9 +111,33 @@ struct Args {
     #[arg(
         long,
         value_parser = parse_ra_dec,
-        help = "End pointing in 'ra,dec' degrees (e.g., '57.0,24.5')"
+        required_unless_present = "circle_radius_deg",
+        help = "End pointing in 'ra,dec' degrees (ignored when --circle-radius-deg is set)"
     )]
-    end: Equatorial,
+    end: Option<Equatorial>,
+
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        help = "If > 0, ignore --end and trace a circle of this radius (degrees) \
+                around --start, subdivided into --circle-waypoints steps"
+    )]
+    circle_radius_deg: f64,
+
+    #[arg(
+        long,
+        default_value_t = 256,
+        help = "Number of waypoints to subdivide the circle into (one period = \
+                --circle-turns full loops)"
+    )]
+    circle_waypoints: usize,
+
+    #[arg(
+        long,
+        default_value_t = 1.0,
+        help = "Number of full circle loops over the trajectory duration"
+    )]
+    circle_turns: f64,
 
     #[arg(
         long,
@@ -257,37 +281,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let total_roll_deg = (args.end_roll - args.start_roll) + 360.0 * args.roll_turns;
-    let trajectory = if args.roll_turns.abs() > f64::EPSILON {
-        // Multi-waypoint trajectory: subdivide so each SLERP segment sweeps
-        // at most 90° of roll. Necessary because a two-waypoint trajectory
-        // cannot represent a > 180° quaternion path — SLERP collapses to
-        // the shortest arc, losing whole rotations.
-        let segments = ((total_roll_deg.abs() / 90.0).ceil() as usize).max(1);
+    let circle_mode = args.circle_radius_deg > 0.0;
+    let trajectory = if circle_mode {
+        // Trace a circle in RA/Dec centered on --start. Subdivide into
+        // `circle_waypoints` steps per full turn so SLERP stays close to
+        // the intended ring (a two-waypoint loop degenerates to no motion).
+        let turns = args.circle_turns.max(f64::EPSILON);
+        let segments = (args.circle_waypoints as f64 * turns).ceil() as usize;
+        let segments = segments.max(8);
         let duration_s = args.duration.0.as_secs_f64();
+        let r = args.circle_radius_deg;
+        let ra0 = args.start.ra_degrees();
+        let dec0 = args.start.dec_degrees();
+        let cos_dec0 = dec0.to_radians().cos().max(1e-6);
         let waypoints: Vec<Waypoint> = (0..=segments)
             .map(|i| {
                 let frac = i as f64 / segments as f64;
                 let t = std::time::Duration::from_secs_f64(duration_s * frac);
-                let ra = args.start.ra_degrees()
-                    + frac * (args.end.ra_degrees() - args.start.ra_degrees());
-                let dec = args.start.dec_degrees()
-                    + frac * (args.end.dec_degrees() - args.start.dec_degrees());
+                let theta = 2.0 * std::f64::consts::PI * turns * frac;
+                // Scale RA offset by 1/cos(dec) so the motion traces a
+                // geometric circle on the sky (small-angle approximation).
+                let ra = ra0 + (r * theta.cos()) / cos_dec0;
+                let dec = dec0 + r * theta.sin();
                 let eq = Equatorial::from_degrees(ra, dec);
                 let roll_deg = args.start_roll + frac * total_roll_deg;
                 Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
             })
             .collect();
         Trajectory::new(waypoints)?
-    } else if args.start_roll == 0.0 && args.end_roll == 0.0 {
-        Trajectory::from_endpoints(args.start, args.end, args.duration.0)?
+    } else if args.roll_turns.abs() > f64::EPSILON {
+        // Multi-waypoint trajectory: subdivide so each SLERP segment sweeps
+        // at most 90° of roll. Necessary because a two-waypoint trajectory
+        // cannot represent a > 180° quaternion path — SLERP collapses to
+        // the shortest arc, losing whole rotations.
+        let end = args
+            .end
+            .ok_or("--end is required unless --circle-radius-deg is set")?;
+        let segments = ((total_roll_deg.abs() / 90.0).ceil() as usize).max(1);
+        let duration_s = args.duration.0.as_secs_f64();
+        let waypoints: Vec<Waypoint> = (0..=segments)
+            .map(|i| {
+                let frac = i as f64 / segments as f64;
+                let t = std::time::Duration::from_secs_f64(duration_s * frac);
+                let ra =
+                    args.start.ra_degrees() + frac * (end.ra_degrees() - args.start.ra_degrees());
+                let dec = args.start.dec_degrees()
+                    + frac * (end.dec_degrees() - args.start.dec_degrees());
+                let eq = Equatorial::from_degrees(ra, dec);
+                let roll_deg = args.start_roll + frac * total_roll_deg;
+                Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+            })
+            .collect();
+        Trajectory::new(waypoints)?
     } else {
-        Trajectory::from_endpoints_with_roll(
-            args.start,
-            args.start_roll.to_radians(),
-            args.end,
-            args.end_roll.to_radians(),
-            args.duration.0,
-        )?
+        let end = args
+            .end
+            .ok_or("--end is required unless --circle-radius-deg is set")?;
+        if args.start_roll == 0.0 && args.end_roll == 0.0 {
+            Trajectory::from_endpoints(args.start, end, args.duration.0)?
+        } else {
+            Trajectory::from_endpoints_with_roll(
+                args.start,
+                args.start_roll.to_radians(),
+                end,
+                args.end_roll.to_radians(),
+                args.duration.0,
+            )?
+        }
     };
 
     let base_fov_deg = field_diameter_for_array(&focal_plane)
@@ -296,14 +356,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (envelope_center, envelope_diameter) = fov_envelope(&trajectory, base_fov_deg);
 
-    info!(
-        "Trajectory: RA {:.4}° Dec {:.4}° → RA {:.4}° Dec {:.4}° over {:.1}s",
-        args.start.ra_degrees(),
-        args.start.dec_degrees(),
-        args.end.ra_degrees(),
-        args.end.dec_degrees(),
-        args.duration.0.as_secs_f64()
-    );
+    if circle_mode {
+        info!(
+            "Trajectory: circle centered on RA {:.4}° Dec {:.4}°, radius {:.4}°, \
+             {:.2} turns over {:.1}s ({} waypoints)",
+            args.start.ra_degrees(),
+            args.start.dec_degrees(),
+            args.circle_radius_deg,
+            args.circle_turns,
+            args.duration.0.as_secs_f64(),
+            trajectory.waypoints().len()
+        );
+    } else {
+        let end = args.end.unwrap();
+        info!(
+            "Trajectory: RA {:.4}° Dec {:.4}° → RA {:.4}° Dec {:.4}° over {:.1}s",
+            args.start.ra_degrees(),
+            args.start.dec_degrees(),
+            end.ra_degrees(),
+            end.dec_degrees(),
+            args.duration.0.as_secs_f64()
+        );
+    }
     info!(
         "Roll: start {:.3}° → end {:.3}°",
         args.start_roll, args.end_roll
