@@ -165,12 +165,17 @@ impl Trajectory {
         Ok(boresight_of(&q))
     }
 
-    /// Generate evenly spaced frame times from start to end (inclusive of start).
+    /// Generate evenly spaced frame times from start to end. Each
+    /// emitted time is a frame *start* — the renderer integrates from
+    /// `t` forward up to `t + exposure`, clamped to `end_time()`. We
+    /// stop strictly before `end_time()` so we never emit a frame
+    /// whose entire exposure window collapses to zero against the
+    /// upper clamp (that produced a black tail frame in every render).
     pub fn frame_times(&self, timestep: Duration) -> Vec<Duration> {
         let mut times = Vec::new();
         let mut t = self.start_time();
         let end = self.end_time();
-        while t <= end {
+        while t < end {
             times.push(t);
             t += timestep;
         }
@@ -457,10 +462,29 @@ mod tests {
         )
         .unwrap();
 
+        // end_time is excluded so we never emit a frame whose exposure
+        // window collapses against the upper clamp.
         let times = traj.frame_times(Duration::from_secs(2));
-        assert_eq!(times.len(), 6); // 0, 2, 4, 6, 8, 10
+        assert_eq!(times.len(), 5); // 0, 2, 4, 6, 8 (10 is end_time, excluded)
         assert_eq!(times[0], Duration::ZERO);
-        assert_eq!(times[5], Duration::from_secs(10));
+        assert_eq!(times[4], Duration::from_secs(8));
+    }
+
+    #[test]
+    fn test_frame_times_excludes_end() {
+        // Regression: a 10s trajectory at 1s timestep used to return 11
+        // entries (0..=10) with the 10s entry rendering as a black tile
+        // because (end - end) = 0 exposure.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(0.0, 0.0),
+            make_pointing(10.0, 0.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let times = traj.frame_times(Duration::from_secs(1));
+        assert_eq!(times.len(), 10);
+        assert_eq!(*times.last().unwrap(), Duration::from_secs(9));
+        assert!(times.iter().all(|t| *t < traj.end_time()));
     }
 
     #[test]
