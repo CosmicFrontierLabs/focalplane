@@ -333,6 +333,13 @@ pub struct TrajectoryRenderConfig<'a> {
     /// Optional override for the per-subsample drift budget (pixels).
     /// Defaults to [`crate::sims::motion_blur::DEFAULT_MAX_DRIFT_PER_SAMPLE_PX`].
     pub max_drift_per_sample_px: Option<f64>,
+    /// Optional finer per-stamp drift budget (pixels). When `Some`,
+    /// each subsample is divided into `M` PSF stamps so drift per stamp
+    /// stays below this threshold; when `None`, `M = 1` and behavior
+    /// matches the original renderer. Use this to capture
+    /// high-frequency jitter that would otherwise alias across
+    /// subsamples (e.g. PSD-derived reaction-wheel residuals).
+    pub max_drift_per_stamp_px: Option<f64>,
     /// Force a single sub-orientation per frame regardless of drift.
     pub force_static: bool,
     /// Suppress the indicatif progress bar during rendering.
@@ -363,6 +370,7 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
         max_drift_per_sample_px: config
             .max_drift_per_sample_px
             .unwrap_or(DEFAULT_MAX_DRIFT_PER_SAMPLE_PX),
+        max_drift_per_stamp_px: config.max_drift_per_stamp_px,
         base_seed: config.base_seed,
         force_static: config.force_static,
         quiet: config.quiet,
