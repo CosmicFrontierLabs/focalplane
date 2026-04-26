@@ -23,7 +23,7 @@ use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 
 use crate::hardware::satellite::FocalPlaneConfig;
-use crate::sims::orientation::boresight_of;
+use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::roi_render::RoiAnchor;
 use crate::sims::trajectory::TrajectoryError;
 
@@ -88,6 +88,9 @@ pub struct RoiOverlay {
     /// taken from the first frame) to keep intensity changes between
     /// frames visible rather than re-normalized away.
     pub display_range: Option<(u16, u16)>,
+    /// Optional star info rendered as text just outside the ROI panel
+    /// (one line per element). Caller decides what to show.
+    pub label_lines: Vec<String>,
 }
 
 impl Default for ContextRenderConfig {
@@ -234,16 +237,21 @@ pub fn render_context_frame(
     let tag_text = "NON-ANALYTIC";
     let (_tag_w, tag_h) = text_size(label_scale, &*FONT, tag_text);
     let bore = boresight_of(orientation);
-    let ra_text = format!("RA:  {:10.2}", bore.ra_degrees());
-    let dec_text = format!("DEC: {:+10.2}", bore.dec_degrees());
+    let roll_deg = roll_of(orientation).to_degrees();
+    // Tightly aligned readouts. Value column width 11 = sign + 3 digits +
+    // '.' + 6 decimals (max for ROLL ±180°); aligned colons across the
+    // three labels.
+    let ra_text = format!("RA  : {:>11.6}", bore.ra_degrees());
+    let dec_text = format!("DEC : {:>+11.6}", bore.dec_degrees());
+    let roll_text = format!("ROLL: {roll_deg:>+11.6}");
     let label_x = cx_i + gap;
     // Stack, top-to-bottom:
     //   NON-ANALYTIC
-    //   RA:  <value>
-    //   DEC: <value>
-    // each line separated from the next by 2 px, with the bottom of
-    // the DEC line sitting a few px above the right reticle arm.
-    let dec_y = cy_i - tag_h as i32 - 8;
+    //   RA   : <val>
+    //   DEC  : <val>
+    //   ROLL : <val>
+    let roll_y = cy_i - tag_h as i32 - 8;
+    let dec_y = roll_y - tag_h as i32 - 2;
     let ra_y = dec_y - tag_h as i32 - 2;
     let tag_y = ra_y - tag_h as i32 - 2;
     draw_text_mut(&mut img, red, label_x, tag_y, label_scale, &*FONT, tag_text);
@@ -256,6 +264,15 @@ pub fn render_context_frame(
         label_scale,
         &*FONT,
         &dec_text,
+    );
+    draw_text_mut(
+        &mut img,
+        red,
+        label_x,
+        roll_y,
+        label_scale,
+        &*FONT,
+        &roll_text,
     );
 
     // Optional ROI zoom panel: draws a physically correct oversampled
@@ -303,13 +320,25 @@ fn composite_roi_overlay(
         let (hi_x_mm, hi_y_mm) = mm_from_pixel(cx_px + size_px / 2.0, cy_px - size_px / 2.0);
         let (x0_px, y0_px) = mm_to_px(lo_x_mm, lo_y_mm);
         let (x1_px, y1_px) = mm_to_px(hi_x_mm, hi_y_mm);
-        // Axis-aligned rectangle in image pixels.
-        draw_rect_outline(
-            img,
-            (x0_px.min(x1_px) as i32, y0_px.min(y1_px) as i32),
-            (x0_px.max(x1_px) as i32, y0_px.max(y1_px) as i32),
-            red,
-        );
+        let bx0 = x0_px.min(x1_px) as i32;
+        let by0 = y0_px.min(y1_px) as i32;
+        let bx1 = x0_px.max(x1_px) as i32;
+        let by1 = y0_px.max(y1_px) as i32;
+        // Source-region marker: hairline 1-pixel outline in fully
+        // saturated red so it reads against the brighter pinkish red
+        // used for the ROI panel and the reticle labels.
+        let source_red = Rgb([255, 0, 0]);
+        draw_rect_outline(img, (bx0, by0), (bx1, by1), source_red);
+        // Tick-mark cross extending out from the box corners so the
+        // human eye can find the source even at extreme zoom-out.
+        let tick = ((img.width().min(img.height()) as f64) * 0.012).round() as i32;
+        let tick = tick.max(8);
+        let cx = (bx0 + bx1) / 2;
+        let cy = (by0 + by1) / 2;
+        draw_line(img, (bx0 - tick - 4, cy), (bx0 - 4, cy), source_red);
+        draw_line(img, (bx1 + 4, cy), (bx1 + tick + 4, cy), source_red);
+        draw_line(img, (cx, by0 - tick - 4), (cx, by0 - 4), source_red);
+        draw_line(img, (cx, by1 + 4), (cx, by1 + tick + 4), source_red);
         let _ = (w_px, h_px);
     }
 
@@ -319,18 +348,52 @@ fn composite_roi_overlay(
     // Auto-pick: prefer the corner whose 5%-margin rectangle fits the
     // panel entirely. Try bottom-right, bottom-left, top-right,
     // top-left in order.
+    let (width_i, height_i) = (img.width() as i32, img.height() as i32);
     let margin = ((img.width().min(img.height()) as f64) * 0.02).round() as i32;
     let candidates: &[(i32, i32)] = &[
         (
-            img.width() as i32 - panel_side as i32 - margin,
-            img.height() as i32 - panel_side as i32 - margin,
+            width_i - panel_side as i32 - margin,
+            height_i - panel_side as i32 - margin,
         ),
-        (margin, img.height() as i32 - panel_side as i32 - margin),
-        (img.width() as i32 - panel_side as i32 - margin, margin),
+        (margin, height_i - panel_side as i32 - margin),
+        (width_i - panel_side as i32 - margin, margin),
         (margin, margin),
     ];
-    let (panel_x, panel_y) = *candidates.first().unwrap_or(&(0, 0));
-    let (width_i, height_i) = (img.width() as i32, img.height() as i32);
+
+    // Compute the sensors' image-space AABBs so we can pick a corner
+    // that actually doesn't eclipse a sensor outline. Without this the
+    // panel happily draws on top of the nearest sensor, which is
+    // almost always the first corner we try.
+    let sensor_rects: Vec<(i32, i32, i32, i32)> = fp
+        .array
+        .sensors
+        .iter()
+        .map(|ps| {
+            let (w_len, h_len) = ps.sensor.dimensions.get_width_height();
+            let half_w = w_len.as_millimeters() / 2.0;
+            let half_h = h_len.as_millimeters() / 2.0;
+            let (cx, cy) = (ps.position.x_mm, ps.position.y_mm);
+            let (x0, y0) = mm_to_px(cx - half_w, cy + half_h);
+            let (x1, y1) = mm_to_px(cx + half_w, cy - half_h);
+            (
+                x0.min(x1) as i32,
+                y0.min(y1) as i32,
+                x0.max(x1) as i32,
+                y0.max(y1) as i32,
+            )
+        })
+        .collect();
+    let panel_overlaps = |x: i32, y: i32| -> bool {
+        let (px1, py1) = (x + panel_side as i32, y + panel_side as i32);
+        sensor_rects
+            .iter()
+            .any(|&(sx0, sy0, sx1, sy1)| x < sx1 && px1 > sx0 && y < sy1 && py1 > sy0)
+    };
+    let (panel_x, panel_y) = candidates
+        .iter()
+        .copied()
+        .find(|&(x, y)| !panel_overlaps(x, y))
+        .unwrap_or_else(|| *candidates.first().unwrap_or(&(0, 0)));
     // Clamp so even on tiny test canvases we don't try to draw off-image.
     let panel_x = panel_x.max(0).min(width_i - panel_side as i32 - 1);
     let panel_y = panel_y.max(0).min(height_i - panel_side as i32 - 1);
@@ -371,6 +434,33 @@ fn composite_roi_overlay(
         ),
         red,
     );
+
+    // Star-info label just outside the panel. Renders below by default;
+    // if there isn't room (panel hugs the bottom edge), renders above.
+    if !overlay.label_lines.is_empty() {
+        let label_scale = PxScale::from((width_i.min(height_i) as f32 / 100.0).max(11.0));
+        let probe_text = overlay
+            .label_lines
+            .iter()
+            .max_by_key(|s| s.len())
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let (_, line_h) = text_size(label_scale, &*FONT, probe_text);
+        let line_h = line_h as i32 + 2;
+        let total_h = line_h * overlay.label_lines.len() as i32;
+        let panel_bottom = panel_y + panel_side as i32 - 1;
+        let below_y = panel_bottom + 6;
+        let label_below = below_y + total_h <= height_i;
+        let mut text_y = if label_below {
+            below_y
+        } else {
+            panel_y - total_h - 4
+        };
+        for line in &overlay.label_lines {
+            draw_text_mut(img, red, panel_x, text_y, label_scale, &*FONT, line);
+            text_y += line_h;
+        }
+    }
 
     let _ = (width_f, height_f);
     Ok(())

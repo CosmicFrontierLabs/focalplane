@@ -873,26 +873,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let frame_times = trajectory.frame_times(preview_timestep);
 
         // ROI anchor: picked once per run from the first frame so the
-        // zoom panel stays stationary across the whole preview.
-        let roi_anchor = if args.roi {
+        // zoom panel stays stationary across the whole preview. Picker
+        // scans every sensor and returns the brightest in-bounds star
+        // along with its catalog entry so we can label the panel.
+        let (roi_anchor, roi_label_lines) = if args.roi {
             let first_q = trajectory
                 .orientation_at(trajectory.start_time())
                 .map_err(|e| format!("first-frame orientation: {e}"))?;
             match pick_roi_anchor(&stars, &focal_plane, &first_q, args.roi_size) {
-                Some(a) => {
+                Some((a, star)) => {
+                    let bv_text = star
+                        .b_v
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_else(|| "-".into());
+                    let lines = vec![
+                        format!("MAG {:.2}", star.magnitude),
+                        format!("B-V {bv_text}"),
+                        format!("SENSOR {}", a.sensor_idx),
+                        format!("PX {:.0}, {:.0}", a.center_px.0, a.center_px.1),
+                    ];
                     info!(
-                        "ROI anchor: sensor {} px ({:.1}, {:.1}) size {}",
-                        a.sensor_idx, a.center_px.0, a.center_px.1, a.size_px
+                        "ROI anchor: sensor {} px ({:.1}, {:.1}) size {} — star id {} mag {:.2}",
+                        a.sensor_idx,
+                        a.center_px.0,
+                        a.center_px.1,
+                        a.size_px,
+                        star.id,
+                        star.magnitude,
                     );
-                    Some(a)
+                    (Some(a), lines)
                 }
                 None => {
                     warn!("No star satisfies ROI placement constraints; rendering without ROI");
-                    None
+                    (None, Vec::new())
                 }
             }
         } else {
-            None
+            (None, Vec::new())
         };
 
         info!(
@@ -911,29 +928,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let exposure = args.shared.exposure.0;
         let drift_budget = args.max_drift_per_sample_px;
         let base_seed = args.seed;
+
+        // ROI patches refresh once per `exposure` window. With a
+        // 24 fps preview and a 250 ms exposure that's once every six
+        // frames; each refresh integrates ±exposure/2 around the
+        // keyframe time so the patch represents the three frames
+        // before and three after.
+        let preview_timestep_s = preview_timestep.as_secs_f64();
+        let exposure_s = exposure.as_secs_f64();
+        let n_subframes = ((exposure_s / preview_timestep_s).round() as usize).max(1);
+        let keyframe_patches: Vec<Option<ndarray::Array2<u16>>> = if let Some(anchor) = roi_anchor {
+            let n_keyframes = frame_times.len().div_ceil(n_subframes);
+            info!(
+                "ROI keyframes: {} (1 per {} preview frames; integrating {:.0} ms ± centered)",
+                n_keyframes,
+                n_subframes,
+                exposure_s * 1000.0,
+            );
+            (0..n_keyframes)
+                .into_par_iter()
+                .map(|kf_idx| {
+                    let frame_idx = (kf_idx * n_subframes).min(frame_times.len() - 1);
+                    let kf_t = frame_times[frame_idx];
+                    let half = exposure / 2;
+                    let frame_start = kf_t.saturating_sub(half);
+                    let plan = simulator::sims::roi_render::RoiFramePlan {
+                        frame_start,
+                        exposure,
+                        max_drift_per_sample_px: drift_budget,
+                        seed: base_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ kf_idx as u64,
+                    };
+                    render_roi_patch(&trajectory, &stars, &focal_plane, anchor, &plan)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Freeze the ROI display range once per render: 1st/99th
+        // percentile pooled across every keyframe's patch. Reusing the
+        // same (black, white) stretch for every preview frame keeps
+        // absolute intensity changes visible (you actually see the
+        // star brighten/dim) instead of autoscale flattening them.
+        let frozen_display_range: Option<(u16, u16)> =
+            if keyframe_patches.iter().any(|p| p.is_some()) {
+                let mut all: Vec<u16> = Vec::new();
+                for patch in keyframe_patches.iter().filter_map(|p| p.as_ref()) {
+                    all.extend(patch.iter().copied());
+                }
+                if !all.is_empty() {
+                    all.sort_unstable();
+                    // Lower bound at 1% strips noise floor; upper bound at
+                    // 99.9% lets the star peak through (the bright PSF
+                    // covers ~0.3-0.5% of total pixels — the conventional
+                    // 99% percentile clips it flat).
+                    let lo = all[all.len() / 100];
+                    let hi_idx = all.len() - 1 - (all.len() / 1000);
+                    let hi = all[hi_idx];
+                    info!("ROI display range frozen at {lo}..={hi} (1%/99.9% pooled)");
+                    Some((lo, hi))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
         let results: Vec<Result<(), String>> = frame_times
             .par_iter()
             .enumerate()
             .map(|(idx, t)| -> Result<(), String> {
                 let orientation = trajectory.orientation_at(*t).map_err(|e| e.to_string())?;
-                let overlay = if let Some(anchor) = roi_anchor {
-                    let plan = simulator::sims::roi_render::RoiFramePlan {
-                        frame_start: *t,
-                        exposure,
-                        max_drift_per_sample_px: drift_budget,
-                        seed: base_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ idx as u64,
-                    };
-                    render_roi_patch(&trajectory, &stars, &focal_plane, anchor, &plan).map(
-                        |patch| RoiOverlay {
+                let overlay = roi_anchor.and_then(|anchor| {
+                    let kf_idx = idx / n_subframes;
+                    keyframe_patches
+                        .get(kf_idx)
+                        .and_then(|p| p.as_ref())
+                        .map(|patch| RoiOverlay {
                             anchor,
-                            patch,
+                            patch: patch.clone(),
                             zoom: args.roi_zoom,
-                            display_range: None,
-                        },
-                    )
-                } else {
-                    None
-                };
+                            display_range: frozen_display_range,
+                            label_lines: roi_label_lines.clone(),
+                        })
+                });
                 let path = context_dir.join(format!("frame_{idx:06}.png"));
                 render_context_frame(
                     &orientation,

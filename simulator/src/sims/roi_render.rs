@@ -41,19 +41,22 @@ impl RoiAnchor {
     }
 }
 
-/// Pick the ROI anchor: the brightest in-field star on any sensor that
-/// sits at least `size_px / 2` pixels from every edge of its sensor.
-/// Brightness is ranked by [`StarData::magnitude`] (smaller = brighter).
+/// Pick the ROI anchor by scanning *every* sensor in the focal plane:
+/// the returned anchor is the projection of the single brightest
+/// in-field star whose pixel position sits at least `size_px / 2`
+/// pixels from every edge of *its* sensor. Brightness is ranked by
+/// [`StarData::magnitude`] (smaller = brighter). Also returns a
+/// reference to the chosen star so callers can label the ROI panel.
 /// Returns `None` if no qualifying star is found.
-pub fn pick_roi_anchor(
-    stars: &[StarData],
+pub fn pick_roi_anchor<'a>(
+    stars: &'a [StarData],
     fp: &FocalPlaneConfig,
     orientation: &nalgebra::UnitQuaternion<f64>,
     size_px: usize,
-) -> Option<RoiAnchor> {
+) -> Option<(RoiAnchor, &'a StarData)> {
     let padding_mm = 0.0;
     let half = size_px as f64 / 2.0;
-    let mut best: Option<(f64, RoiAnchor)> = None;
+    let mut best: Option<(f64, RoiAnchor, &StarData)> = None;
     for (sensor_idx, ps) in fp.array.sensors.iter().enumerate() {
         let (w_px, h_px) = ps.sensor.dimensions.get_pixel_width_height();
         let (w_px, h_px) = (w_px as f64, h_px as f64);
@@ -66,7 +69,7 @@ pub fn pick_roi_anchor(
                 continue;
             }
             let score = star.magnitude;
-            if best.as_ref().map(|(m, _)| score < *m).unwrap_or(true) {
+            if best.as_ref().map(|(m, _, _)| score < *m).unwrap_or(true) {
                 best = Some((
                     score,
                     RoiAnchor {
@@ -74,11 +77,12 @@ pub fn pick_roi_anchor(
                         center_px: (px, py),
                         size_px,
                     },
+                    star,
                 ));
             }
         }
     }
-    best.map(|(_, a)| a)
+    best.map(|(_, anchor, star)| (anchor, star))
 }
 
 /// Endpoint-approximation of maximum angular drift a trajectory covers
@@ -261,9 +265,11 @@ mod tests {
                 b_v: Some(0.6),
             },
         ];
-        let anchor = pick_roi_anchor(&stars, &fp, &orient, 64).expect("an anchor exists");
+        let (anchor, star) = pick_roi_anchor(&stars, &fp, &orient, 64).expect("an anchor exists");
         assert_eq!(anchor.sensor_idx, 0);
         assert_eq!(anchor.size_px, 64);
+        // mag 3.0 is brighter than mag 5.0, so star id 2 should win.
+        assert_eq!(star.id, 2);
     }
 
     #[test]
@@ -278,7 +284,7 @@ mod tests {
             b_v: Some(0.6),
         };
         let traj = static_trajectory(pointing);
-        let anchor = pick_roi_anchor(std::slice::from_ref(&star), &fp, &orient, 32).unwrap();
+        let (anchor, _) = pick_roi_anchor(std::slice::from_ref(&star), &fp, &orient, 32).unwrap();
         let plan = RoiFramePlan {
             frame_start: Duration::from_secs(0),
             exposure: Duration::from_millis(100),
