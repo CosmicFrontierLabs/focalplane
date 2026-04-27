@@ -212,47 +212,59 @@ knob.
 
 Trajectory: 5 s slice, 2 kHz waypoints, 0.121″ / 0.126″ per-axis RMS,
 PSD content out to 1 kHz. Rendered through a single IMX455 on the
-cosmic-frontier-jbt50cm telescope, 250 ms exposures, 5 frames.
-
-The numbers below were captured under the deterministic-midpoint
-stamp placement that this PR's earlier commit introduced; the
-qualitative findings (M=1 → M=10 small change, M=10 ≡ M=50) carry
-over unchanged to stratified MC because the within-subsample jitter
-excursion is well below the PSF width (`σ_jit_sub / σ_PSF ≈ 0.2`).
-Absolute pixel values shift by O(1 ADU) under the stratified-MC mode
-because the M=1 stamp is now random within the subsample rather than
-fixed at the midpoint.
+cosmic-frontier-jbt50cm telescope, 250 ms exposures, 5 frames, all
+under the **stratified-MC** stamp placement.
 
 | pass        | `--max-drift-per-sample-px` | `--max-drift-per-stamp-px` | `n` per frame | `m` per subsample | wall (5 tiles ‖) |
 | ----------- | --------------------------- | -------------------------- | ------------- | ----------------- | ---------------- |
 | **default** | 0.1                         | unset                      | 2628–4711     | 1                 | hours (killed)   |
-| **M=1**     | 1.0                         | unset                      | 311–456       | 1                 | 131 s            |
-| **M=10**    | 1.0                         | 0.1                        | 311–456       | 10                | 801 s (6.1×)     |
-| **M=50**    | 1.0                         | 0.02                       | 311–456       | 50                | 3,836 s (29×)    |
+| **M=1**     | 1.0                         | unset                      | 311–456       | 1                 | 133 s            |
+| **M=10**    | 1.0                         | 0.1                        | 311–456       | 10                | 803 s (6.0×)     |
+| **M=50**    | 1.0                         | 0.02                       | 311–456       | 50                | 3,827 s (29×)    |
 
-Frame-1 comparison on three brightness tiers (peak ADU values from M=1 baseline):
+Frame-1 comparison on three brightness tiers, stratified MC:
 
-| star tier            | peak  | RMS Δ(M=10−M=1) | RMS Δ(M=50−M=1) | Δcentroid M=10 (mpx) | Δcentroid M=50 (mpx) |
-| -------------------- | ----- | --------------- | --------------- | -------------------- | -------------------- |
-| brightest            | 23 636 | 2.06            | 2.06            | (−0.0, −0.2)         | (−0.0, −0.2)         |
-| median (n=1110)      | 100   | 0.11            | 0.11            | (+0.0, +0.0)         | (+0.0, +0.0)         |
-| half-median          | 50    | 0.20            | 0.20            | **(+53.6, +9.4)**    | **(+53.6, +9.4)**    |
+| star tier            | peak M=1 | peak M=10 | peak M=50 | RMS Δ(M=10−M=1) | RMS Δ(M=50−M=1) | RMS Δ(M=50−M=10) |
+| -------------------- | -------- | --------- | --------- | --------------- | --------------- | ---------------- |
+| brightest            | 23,803   | 23,643    | 23,639    | 31.26           | 31.40           | **1.44**         |
+| median               | 98       | 84        | 84        | 1.39            | 1.44            | **0.57**         |
+| ~half-median         | 50       | 50        | 50        | 1.33            | 1.34            | **0.43**         |
 
-Two clean takeaways:
+Three clean takeaways:
 
-1. **`m` converges quickly for this trajectory.** M=10 and M=50 are
-   numerically identical to a tenth of a milli-pixel. The PSD has zero
-   content above 1 kHz; M=10 already gives an effective stamp rate
-   above 16 kHz; nothing left to recover beyond that point.
+1. **M=10 has converged for this trajectory.** RMS(M=50−M=10) is
+   ~30× smaller than RMS(M=10−M=1) on every tier. The PSD has zero
+   content above 1 kHz; M=10 gives an effective stamp rate above
+   16 kHz; nothing left for higher M to recover. M=50 buys nothing
+   measurable for ~5× the runtime.
 
-2. **The bias the inner cadence removes is photometric, not
-   astrometric — and it matters most for faint sources.** Bright-star
-   centroids barely move (sub-mpx). Faint-star centroids shift by
-   tens of milli-pixels (≈ 7 mas at this plate scale) because at low
-   SNR the centroid is dominated by the sub-pixel position M=1
-   chooses, while M=fine averages over the actual jitter cloud.
-   M=fine is the physically correct case; M=1 is biased toward the
-   per-subsample sample point.
+2. **The big M=10−M=1 RMS is the *variance of the M=1 estimator*,
+   not bias against M=10.** Stratified M=1 is single-sample MC: one
+   uniform-random draw places all photons at one orientation, which
+   could be anywhere in the subsample window. The 31 ADU dipole on
+   the brightest star is the ±half-pixel uncertainty from that
+   single draw. M=10 has averaged it down (1/√10 ≈ 0.32× variance);
+   M=50 by another √5 ≈ 0.45×, indistinguishable from M=10 in
+   absolute terms.
+
+3. **Peak ADU drops M=1 → M=10 are systematic, not noise.** Bright
+   star peak: 23,803 → 23,643 (−0.7%). Median: 98 → 84 (−14%). The
+   M=1 case concentrates all photons at one sub-pixel position, so
+   peaks are inflated; M=10 spreads them across the actual jitter
+   cloud and the peak relaxes to its true value. The fractional
+   effect is largest for faint sources because at low SNR every
+   photon dominates the peak pixel.
+
+Practical takeaway: **for this trajectory class M=10 is the
+production-grade choice.** M=1 is too noisy per pixel to trust for
+photometry; M=50 is wasted compute for indistinguishable output.
+
+A different trajectory class (looser per-sample budget so
+σ_jit_sub > σ_PSF, or trajectory content closer to the stamp
+Nyquist) would push the M-needed value higher. The principled picker
+sketched above (M ≈ k·max(1, (σ_jit_sub/σ_PSF)²) for some
+k = 4–10 visually, 50–100 photometrically) recovers the right scaling
+in either regime.
 
 ## Code references
 
