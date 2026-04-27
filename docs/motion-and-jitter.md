@@ -16,9 +16,9 @@ displacement is large but the per-photon variation is monotonic over
 the exposure window.
 
 **Jitter** — high-frequency stochastic pointing residuals. Examples:
-reaction-wheel induced micro-vibration, structural ringing, optical
-bench thermal flutter. Stochastic, broadband, often dominated by tones
-at the wheel rotation rate plus harmonics. Within a single 250 ms
+reaction-wheel induced micro-vibration, structural ringing.
+Stochastic, broadband, often dominated by tones at the wheel rotation
+rate plus harmonics. Within a single 250 ms
 exposure the spacecraft may complete many cycles of jitter; the photon
 arrival time within the exposure decides where each photon lands.
 
