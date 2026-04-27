@@ -54,23 +54,47 @@ sets a path-length budget: the scheduler computes the trajectory's
 total angular drift across the exposure and picks the smallest `n`
 that keeps per-subsample drift below the budget. Default `0.1 px`.
 
-### Inner cadence — `m` stamps per subsample (PSF placement)
+### Inner cadence — `m` stamps per subsample (stratified Monte Carlo)
 
-Each subsample is then divided into `m` PSF stamps. Each stamp:
+Each subsample window is divided into `m` equal-width sub-bins, and
+each stamp lands at a **uniform-random offset within its sub-bin** —
+classical stratified Monte Carlo:
 
-1. Queries the trajectory at its own midpoint via SLERP (cheap)
+```
+Δt_sub_bin = (exposure / n) / m
+stamp_time[j] = t_sub_start + (j + U_j) · Δt_sub_bin    where U_j ~ Uniform[0, 1)
+```
+
+Each stamp then:
+
+1. Queries the trajectory at `stamp_time[j]` via SLERP (cheap)
 2. Projects every visible star to its per-time pixel position
 3. Deposits `flux / m` electrons through the same Simpson PSF stamp
    used for the single-stamp case
 
-The accumulated mean-electron image is unchanged in expectation, but
-the *spatial distribution* of the deposited flux now reflects the
-within-subsample motion of the spacecraft instead of being pinned to a
+The accumulated mean-electron image preserves the convolved-PSF
+expectation, but the *spatial distribution* of the deposited flux now
+reflects the within-subsample motion instead of being pinned to a
 single per-subsample orientation.
 
+**Why stratified MC and not a regular grid.** A deterministic
+even-spaced grid at interval `Δt_stamp` has a comb response in
+frequency: a trajectory tone at `f ≈ k / Δt_stamp` is sampled at the
+same phase every stamp and the M deposits don't average out the
+within-cycle variation — the resulting image is systematically biased
+at that frequency. Pure Monte Carlo (random uniform anywhere in the
+subsample) avoids the bias but converges only as O(1/√m). Stratified
+MC keeps one random sample per equal-width sub-bin, so it (a) removes
+the regular-grid bias for any tone above the stamp Nyquist *and*
+(b) keeps the smooth-integrand convergence of a regular grid for the
+low-frequency content. It's the right combination for trajectories
+mixing low-frequency drift and high-frequency stochastic content.
+
 The inner cadence is picked from the optional `--max-drift-per-stamp-px`
-budget. When unset, `m = 1` and the renderer reproduces the original
-one-stamp-per-subsample behavior bit-for-bit.
+budget. When unset, `m = 1` and each subsample contributes a single
+random stamp drawn uniformly from the entire subsample window. This is
+not bit-identical to the deterministic-midpoint behavior the renderer
+used before stratified MC was introduced, but it is unbiased.
 
 ## Why split the budgets
 
@@ -110,17 +134,19 @@ renderer composes them automatically.
 
 ## Determinism
 
-Adding the inner stamp loop introduces no new randomness. The stamp
-midpoints are deterministic from `(frame_start, exposure, n, stamps_per_sample)`.
-Per-stamp positions come from `Trajectory::orientation_at`, which is
-deterministic quaternion SLERP. The only RNG draws are the unified
-Poisson photon-noise draw and the Gaussian read-noise draw, both
-applied **once per tile** to the accumulated mean image and both
-seeded from `tile_seed(base_seed, frame_idx, sensor_idx)`.
+The renderer draws three independent RNG streams per tile, all seeded
+from a single `tile_seed(base_seed, frame_idx, sensor_idx)` plus a
+named domain tag (`rng_domain::POISSON`, `READ_NOISE`, `STAMP_JITTER`).
+Domain separation guarantees that perturbing one source — adding
+`STAMP_JITTER` for stratified-MC stamp placement, in this PR — does
+not shift the bytes the other two would have produced.
 
-Output PNGs are byte-identical for fixed `(base_seed, frame_idx, sensor_idx, n, m)`.
+The stamp-jitter RNG is consumed sequentially: subsample 0 draws its
+M uniforms, then subsample 1, and so on. Output PNGs are
+byte-identical for fixed `(base_seed, frame_idx, sensor_idx, n, m)`.
 This invariant is pinned by `test_per_stamp_render_is_deterministic`
-in `motion_blur.rs`.
+(end-to-end render comparison) and `test_stamp_times_seeded_rng_is_reproducible`
+(stamp-time draw comparison) in `motion_blur.rs`.
 
 ## Picking budgets in practice
 
@@ -187,6 +213,15 @@ knob.
 Trajectory: 5 s slice, 2 kHz waypoints, 0.121″ / 0.126″ per-axis RMS,
 PSD content out to 1 kHz. Rendered through a single IMX455 on the
 cosmic-frontier-jbt50cm telescope, 250 ms exposures, 5 frames.
+
+The numbers below were captured under the deterministic-midpoint
+stamp placement that this PR's earlier commit introduced; the
+qualitative findings (M=1 → M=10 small change, M=10 ≡ M=50) carry
+over unchanged to stratified MC because the within-subsample jitter
+excursion is well below the PSF width (`σ_jit_sub / σ_PSF ≈ 0.2`).
+Absolute pixel values shift by O(1 ADU) under the stratified-MC mode
+because the M=1 stamp is now random within the subsample rather than
+fixed at the midpoint.
 
 | pass        | `--max-drift-per-sample-px` | `--max-drift-per-stamp-px` | `n` per frame | `m` per subsample | wall (5 tiles ‖) |
 | ----------- | --------------------------- | -------------------------- | ------------- | ----------------- | ---------------- |

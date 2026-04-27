@@ -40,7 +40,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
 use nalgebra::UnitQuaternion;
 use ndarray::Array2;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
 use rayon::prelude::*;
 use shared::image_proc::noise::apply_poisson_photon_noise;
@@ -77,12 +77,14 @@ pub const DEFAULT_MAX_DRIFT_PER_SAMPLE_PX: f64 = 0.1;
 ///   Adaptive: chosen to keep per-subsample boresight drift under
 ///   `max_drift_per_sample_px`. Typically 1–10.
 /// - **`stamps_per_sample` finer trajectory queries inside each
-///   subsample** drive *PSF-stamp* placement. Each stamp queries the
-///   trajectory at its own midpoint and deposits `flux / M` electrons
-///   at the per-time projected pixel position. Defaults to 1 (one
-///   stamp per subsample, identical to the original renderer);
-///   raise it to capture high-frequency jitter that would otherwise
-///   alias instead of contributing motion blur.
+///   subsample** drive *PSF-stamp* placement via **stratified Monte
+///   Carlo**: each subsample window is divided into `m` equal-width
+///   sub-bins, and each stamp lands at a uniform-random offset within
+///   its sub-bin. Each stamp queries the trajectory at its own time
+///   and deposits `flux / m` electrons at the per-time projected
+///   pixel position. Stratification preserves smooth-integrand
+///   convergence while removing the systematic bias a regular grid
+///   produces against trajectory tones near `k / Δt_sub`.
 ///
 /// Subsample boundaries are midpoints so the integral of a
 /// linearly-varying rate over the exposure equals the midpoint value
@@ -118,18 +120,25 @@ impl SubsampleSchedule {
             .collect()
     }
 
-    /// Stamp midpoints inside subsample `sample_idx`. Returns a vector
-    /// of length `stamps_per_sample.max(1)`, evenly spaced across the
-    /// subsample window using the same midpoint convention as
-    /// [`Self::sample_times`].
-    pub fn stamp_times_for_sample(&self, sample_idx: usize) -> Vec<Duration> {
+    /// Stratified Monte Carlo stamp times inside subsample `sample_idx`.
+    /// Returns a vector of length `stamps_per_sample.max(1)`. Stamp `j`
+    /// lands at `t_sub_start + (j + U) * stamp_dt`, where `U ~ Uniform[0, 1)`
+    /// is drawn from `rng` and `stamp_dt = (exposure / n) / m`. The
+    /// stratification by sub-bin guarantees one stamp per equal-width
+    /// slice of the subsample window; randomness within each slice
+    /// removes the bias a fixed-midpoint grid produces against
+    /// trajectory content at frequencies near `k / stamp_dt`.
+    pub fn stamp_times_for_sample<R: Rng>(&self, sample_idx: usize, rng: &mut R) -> Vec<Duration> {
         let n = self.n.max(1);
         let m = self.stamps_per_sample.max(1);
         let dt = self.exposure.as_secs_f64() / n as f64;
         let stamp_dt = dt / m as f64;
         let t_sub_start = self.frame_start.as_secs_f64() + sample_idx as f64 * dt;
         (0..m)
-            .map(|j| Duration::from_secs_f64(t_sub_start + (j as f64 + 0.5) * stamp_dt))
+            .map(|j| {
+                let u: f64 = rng.random();
+                Duration::from_secs_f64(t_sub_start + (j as f64 + u) * stamp_dt)
+            })
             .collect()
     }
 
@@ -493,6 +502,16 @@ fn tile_seed(base_seed: u64, frame_idx: usize, sensor_idx: usize) -> u64 {
     h
 }
 
+/// Domain tags for deriving sub-seeds from a `tile_seed`. Each tile
+/// draws independent RNG streams for Poisson photon noise, Gaussian
+/// read noise, and stratified-MC stamp jitter; the tags below
+/// separate them so changing one source does not perturb the others.
+mod rng_domain {
+    pub const POISSON: u64 = 0;
+    pub const READ_NOISE: u64 = 0xA5A5_5A5A_A5A5_5A5A;
+    pub const STAMP_JITTER: u64 = 0x4D6F_6E74_6543_726C; // "MonteCarl"
+}
+
 /// Render a single `(frame, sensor)` tile.
 ///
 /// Runs the adaptive subsample loop, composes the unified Poisson lambda,
@@ -515,13 +534,20 @@ fn render_tile(
     let stamps_per_sample = schedule.stamps_per_sample.max(1);
     let stamp_weight = 1.0 / stamps_per_sample as f64;
 
+    // Per-tile RNG for stratified-MC stamp placement. Iterating
+    // sample_idx in order with a single sequential RNG keeps the draw
+    // sequence (and therefore the stamp times, the orientation
+    // queries, and the deposited image) bit-deterministic for a
+    // given tile_seed.
+    let mut stamp_rng = StdRng::seed_from_u64(tile_seed ^ rng_domain::STAMP_JITTER);
+
     for sample_idx in 0..schedule.n.max(1) {
         // Per-subsample per-star flux is shared across all M stamps of
         // this subsample (flux depends on star+sensor only, not on
         // orientation), so we pull it from the global cache once and
         // hold a local copy to avoid M lock acquisitions per star.
         let mut subsample_flux: HashMap<u64, SourceFlux> = HashMap::new();
-        for stamp_t in schedule.stamp_times_for_sample(sample_idx) {
+        for stamp_t in schedule.stamp_times_for_sample(sample_idx, &mut stamp_rng) {
             let t_clamped = stamp_t
                 .min(scene.trajectory.end_time())
                 .max(scene.trajectory.start_time());
@@ -561,7 +587,8 @@ fn render_tile(
 
     // Build unified Poisson mean image and draw.
     let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
-    let poisson_image = apply_poisson_photon_noise(&mean_image, Some(tile_seed));
+    let poisson_image =
+        apply_poisson_photon_noise(&mean_image, Some(tile_seed ^ rng_domain::POISSON));
 
     // Gaussian read noise (electronics, not shot noise) applied afterwards.
     let read_noise_rms = satellite
@@ -571,7 +598,7 @@ fn render_tile(
         .unwrap_or(0.0)
         .max(0.0);
     let final_electrons = if read_noise_rms > 0.0 {
-        let mut rng = StdRng::seed_from_u64(tile_seed ^ 0xA5A5_5A5A_A5A5_5A5A);
+        let mut rng = StdRng::seed_from_u64(tile_seed ^ rng_domain::READ_NOISE);
         let normal =
             Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
         poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
@@ -1116,49 +1143,87 @@ mod tests {
     }
 
     #[test]
-    fn test_stamp_times_default_is_one_per_subsample() {
-        // With stamps_per_sample = 1, stamp midpoints collapse onto sample midpoints.
+    fn test_stamp_times_one_stamp_uniform_in_subsample() {
+        // With stamps_per_sample = 1, the single stamp lands at a
+        // uniform-random time within the entire subsample window
+        // [t_sub_start, t_sub_start + dt_sub).
         let sched = SubsampleSchedule {
             frame_start: Duration::from_secs(10),
             exposure: Duration::from_secs(4),
             n: 4,
             stamps_per_sample: 1,
         };
+        let mut rng = StdRng::seed_from_u64(0xCAFE);
         for i in 0..sched.n {
-            let stamps = sched.stamp_times_for_sample(i);
+            let stamps = sched.stamp_times_for_sample(i, &mut rng);
             assert_eq!(stamps.len(), 1);
-            assert_abs_diff_eq!(
-                stamps[0].as_secs_f64(),
-                sched.sample_times()[i].as_secs_f64(),
-                epsilon = 1e-12
+            let lo = sched.frame_start.as_secs_f64() + i as f64 * 1.0;
+            let hi = lo + 1.0;
+            let t = stamps[0].as_secs_f64();
+            assert!(
+                t >= lo && t < hi,
+                "stamp {t} must fall inside subsample [{lo}, {hi})"
             );
         }
     }
 
     #[test]
-    fn test_stamp_times_subdivide_subsample_window() {
-        // Each 1s subsample is divided into 4 stamps at the 1/8, 3/8, 5/8, 7/8 marks.
+    fn test_stamp_times_stratified_into_equal_sub_bins() {
+        // M=4: each subsample window is divided into four equal sub-bins
+        // and each stamp lands at a uniform-random offset *within its
+        // own bin*. Verify the per-bin containment for a couple of
+        // (sample_idx, m, dt) combinations and that draws differ
+        // across calls (random) but stay within their stratum.
         let sched = SubsampleSchedule {
             frame_start: Duration::from_secs(10),
             exposure: Duration::from_secs(4),
             n: 4,
             stamps_per_sample: 4,
         };
-        let stamps_first: Vec<f64> = sched
-            .stamp_times_for_sample(0)
-            .iter()
-            .map(|d| d.as_secs_f64())
-            .collect();
-        // Subsample 0 spans [10.0, 11.0). Stamp dt = 0.25, midpoints at 10.125, 10.375, 10.625, 10.875.
+        let mut rng = StdRng::seed_from_u64(0xBEEF);
+        let stamps_first = sched.stamp_times_for_sample(0, &mut rng);
         assert_eq!(stamps_first.len(), 4);
-        assert_abs_diff_eq!(stamps_first[0], 10.125, epsilon = 1e-12);
-        assert_abs_diff_eq!(stamps_first[1], 10.375, epsilon = 1e-12);
-        assert_abs_diff_eq!(stamps_first[2], 10.625, epsilon = 1e-12);
-        assert_abs_diff_eq!(stamps_first[3], 10.875, epsilon = 1e-12);
+        // Subsample 0 spans [10.0, 11.0); sub-bin width = 0.25.
+        for (j, t) in stamps_first.iter().enumerate() {
+            let lo = 10.0 + 0.25 * j as f64;
+            let hi = lo + 0.25;
+            let v = t.as_secs_f64();
+            assert!(
+                v >= lo && v < hi,
+                "stamp {v} (j={j}) must land in stratum [{lo}, {hi})"
+            );
+        }
+        // Subsample 3 spans [13.0, 14.0); same per-bin containment.
+        let stamps_last = sched.stamp_times_for_sample(3, &mut rng);
+        for (j, t) in stamps_last.iter().enumerate() {
+            let lo = 13.0 + 0.25 * j as f64;
+            let hi = lo + 0.25;
+            let v = t.as_secs_f64();
+            assert!(
+                v >= lo && v < hi,
+                "stamp {v} (j={j}) must land in stratum [{lo}, {hi})"
+            );
+        }
+    }
 
-        // Subsample 3 spans [13.0, 14.0). Last stamp midpoint at 13.875.
-        let stamps_last = sched.stamp_times_for_sample(3);
-        assert_abs_diff_eq!(stamps_last[3].as_secs_f64(), 13.875, epsilon = 1e-12);
+    #[test]
+    fn test_stamp_times_seeded_rng_is_reproducible() {
+        // Two calls with two RNGs seeded identically must produce
+        // identical stamp time sequences — the determinism contract
+        // the renderer relies on.
+        let sched = SubsampleSchedule {
+            frame_start: Duration::ZERO,
+            exposure: Duration::from_secs(1),
+            n: 8,
+            stamps_per_sample: 16,
+        };
+        let mut rng_a = StdRng::seed_from_u64(0xDEADBEEF);
+        let mut rng_b = StdRng::seed_from_u64(0xDEADBEEF);
+        for i in 0..sched.n {
+            let a = sched.stamp_times_for_sample(i, &mut rng_a);
+            let b = sched.stamp_times_for_sample(i, &mut rng_b);
+            assert_eq!(a, b);
+        }
     }
 
     #[test]
