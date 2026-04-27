@@ -510,7 +510,7 @@ impl RngDomain {
         match self {
             RngDomain::Poisson => 0x0000_0000_0000_0000,
             RngDomain::ReadNoise => 0xA5A5_5A5A_A5A5_5A5A,
-            RngDomain::StampJitter => 0x4D6F_6E74_6543_726C, // "MonteCarl"
+            RngDomain::StampJitter => 0x4D6F_6E74_6543_6172, // "MonteCar" (8 ASCII bytes)
         }
     }
 }
