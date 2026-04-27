@@ -1,0 +1,234 @@
+# Motion and jitter in the focal-plane renderer
+
+The renderer integrates each exposure window across many spacecraft
+orientations so that the time-varying scene smears into the image the
+way a real shutter would record it. Two physically distinct regimes
+need different sampling treatments, and the renderer has two
+independent cadences to handle them.
+
+## The regimes
+
+**Motion** — low-frequency, deterministic spacecraft pointing change.
+Examples: a slew between targets, a tracking-error envelope, a
+deliberate scan pattern. Smooth, predictable, *integrable* with a
+small number of well-placed orientation samples. The total angular
+displacement is large but the per-photon variation is monotonic over
+the exposure window.
+
+**Jitter** — high-frequency stochastic pointing residuals. Examples:
+reaction-wheel induced micro-vibration, structural ringing, optical
+bench thermal flutter. Stochastic, broadband, often dominated by tones
+at the wheel rotation rate plus harmonics. Within a single 250 ms
+exposure the spacecraft may complete many cycles of jitter; the photon
+arrival time within the exposure decides where each photon lands.
+
+If both regimes existed in isolation the right sampling cadence would
+be obvious for each. They do not — they are mixed together in any
+realistic spacecraft trajectory — so the renderer slices the exposure
+window two different ways.
+
+## Two-cadence sampling
+
+Every exposure window is split twice. See
+[`SubsampleSchedule`](../simulator/src/sims/motion_blur.rs) for the type
+and [`render_tile`](../simulator/src/sims/motion_blur.rs) for the
+inner loop.
+
+### Outer cadence — `n` subsamples (scene-state refresh)
+
+`n` evenly-spaced sub-orientation samples drive everything that
+depends on *which slice of the trajectory we are in*:
+
+- per-star chromatic flux integration
+- in-field star slice (envelope prefilter)
+- zodiacal background mean (depends on instantaneous boresight)
+- padding margin for the projection-and-cull pass
+
+Each subsample is expensive — flux integration is a Simpson rule over
+the stellar spectrum × QE curve, paid once per (star, sensor). It is
+worth caching across stamps within a subsample, but cannot be cached
+across subsamples without a stale-orientation bug.
+
+The outer cadence is picked from `--max-drift-per-sample-px`, which
+sets a path-length budget: the scheduler computes the trajectory's
+total angular drift across the exposure and picks the smallest `n`
+that keeps per-subsample drift below the budget. Default `0.1 px`.
+
+### Inner cadence — `m` stamps per subsample (PSF placement)
+
+Each subsample is then divided into `m` PSF stamps. Each stamp:
+
+1. Queries the trajectory at its own midpoint via SLERP (cheap)
+2. Projects every visible star to its per-time pixel position
+3. Deposits `flux / m` electrons through the same Simpson PSF stamp
+   used for the single-stamp case
+
+The accumulated mean-electron image is unchanged in expectation, but
+the *spatial distribution* of the deposited flux now reflects the
+within-subsample motion of the spacecraft instead of being pinned to a
+single per-subsample orientation.
+
+The inner cadence is picked from the optional `--max-drift-per-stamp-px`
+budget. When unset, `m = 1` and the renderer reproduces the original
+one-stamp-per-subsample behavior bit-for-bit.
+
+## Why split the budgets
+
+The two budgets exist because per-subsample work and per-stamp work
+have very different costs:
+
+| Work                            | Per subsample | Per stamp |
+| ------------------------------- | ------------- | --------- |
+| Trajectory SLERP                | yes           | yes       |
+| Star projection                 | yes           | yes       |
+| Chromatic flux integration      | yes           | no (cached) |
+| In-field star envelope prefilter| yes           | no        |
+| Zodiacal evaluation             | yes           | no        |
+| PSF Simpson stamp deposit       | yes           | yes       |
+
+Forcing the same cadence on both would either over-pay for cheap
+high-frequency stamping or under-resolve the low-frequency motion. The
+two-budget scheme lets each cadence scale with its actual physical
+demand.
+
+## When each cadence dominates
+
+For a **drift-only trajectory** (clean slew, telescope pointing change,
+no jitter), the outer cadence does all the work. `n = O(10)` captures
+the smooth motion, `m = 1` is sufficient, and the renderer behaves
+exactly as it did before this split existed.
+
+For a **jitter-dominated trajectory** (PSD-derived reaction-wheel
+residuals at fixed RPM, structural flutter), the inner cadence is what
+matters. The outer cadence can stay loose — `n = O(10)` is fine for
+scene-state refresh — and `m` scales with the trajectory's spectral
+bandwidth to capture every wiggle in the photon-deposit positions.
+
+The interesting and common case is **mixed**: deterministic drift plus
+stochastic jitter. The two budgets are picked independently and the
+renderer composes them automatically.
+
+## Determinism
+
+Adding the inner stamp loop introduces no new randomness. The stamp
+midpoints are deterministic from `(frame_start, exposure, n, stamps_per_sample)`.
+Per-stamp positions come from `Trajectory::orientation_at`, which is
+deterministic quaternion SLERP. The only RNG draws are the unified
+Poisson photon-noise draw and the Gaussian read-noise draw, both
+applied **once per tile** to the accumulated mean image and both
+seeded from `tile_seed(base_seed, frame_idx, sensor_idx)`.
+
+Output PNGs are byte-identical for fixed `(base_seed, frame_idx, sensor_idx, n, m)`.
+This invariant is pinned by `test_per_stamp_render_is_deterministic`
+in `motion_blur.rs`.
+
+## Picking budgets in practice
+
+### Default heuristic — path-length budget
+
+Set `--max-drift-per-sample-px = 0.1` (the default). The path-length
+scheduler picks `n` so per-subsample drift stays below 0.1 px. Leave
+`--max-drift-per-stamp-px` unset so `m = 1`. Behavior is identical to
+the renderer before this split existed.
+
+This works correctly even for jittery trajectories — the path-length
+budget will pick a very large `n` that captures the within-exposure
+jitter — but it pays the per-subsample cost (chromatic flux, envelope
+filter, zodiacal) for every one of those samples. On the LOS-PSD
+trajectory it picks `n = 2628..4711` per 250 ms exposure.
+
+### Looser outer + finer inner — explicit two-budget
+
+Set `--max-drift-per-sample-px = 1.0` (10× looser) and
+`--max-drift-per-stamp-px = 0.1` (matching the original effective
+sub-stamp drift). The outer cadence now picks `n = O(100)` instead of
+`O(1000)`, and the inner cadence picks `m = O(10)` to recover the
+within-subsample fidelity. Same total stamp count, much less
+per-subsample work.
+
+This is the cost-saving regime the inner cadence enables.
+
+### Principled velocity-variance approach (proposed, not yet wired up)
+
+For a stationary jitter process with one-sided PSD `S(f)`, the right
+metric for stamp count is angular velocity variance, not path length:
+
+```
+σ²_v  =  ∫ (2π f)² S(f) df            [angular velocity variance]
+
+T_min ≈ T_exp · σ_v · √(1/ε) / σ_PSF   [total stamps for relative error ε]
+```
+
+where `σ_PSF` is the PSF Gaussian width (≈ 1 pixel at typical
+diffraction-limited sampling) and `ε` is the relative-error tolerance
+(0.01 = 1 % peak error is a sensible default). The path-length budget
+is secretly an approximation of this: `path_length ≈ T_exp · σ_v` for
+a zero-mean jitter process, so setting `max_drift_per_sample_px ≈ σ_PSF · √ε`
+recovers the same answer.
+
+The advantages of the velocity-variance form:
+
+- **Cheaper**: one integral over the PSD at trajectory-load time vs.
+  `max_drift_over_window` per frame (which is `O(N_waypoints)` in the
+  current implementation, the bottleneck on long PSD-derived
+  trajectories with `O(10⁵)` waypoints).
+- **Stable**: doesn't fluctuate frame-to-frame with the trajectory's
+  instantaneous wiggle pattern.
+- **Self-documenting**: `--target-relative-error 0.01` says what it
+  enforces; `--max-drift-per-sample-px 0.1` says how it enforces it.
+
+A `Trajectory::velocity_variance_rad2_per_s2()` accessor that
+estimates `σ²_v` from numerical differences of consecutive waypoints
+would let the renderer pick `n × m` from a single `--target-relative-error`
+knob.
+
+## Empirical findings — LOS-PSD reaction wheel at 2007 RPM
+
+Trajectory: 5 s slice, 2 kHz waypoints, 0.121″ / 0.126″ per-axis RMS,
+PSD content out to 1 kHz. Rendered through a single IMX455 on the
+cosmic-frontier-jbt50cm telescope, 250 ms exposures, 5 frames.
+
+| pass        | `--max-drift-per-sample-px` | `--max-drift-per-stamp-px` | `n` per frame | `m` per subsample | wall (5 tiles ‖) |
+| ----------- | --------------------------- | -------------------------- | ------------- | ----------------- | ---------------- |
+| **default** | 0.1                         | unset                      | 2628–4711     | 1                 | hours (killed)   |
+| **M=1**     | 1.0                         | unset                      | 311–456       | 1                 | 131 s            |
+| **M=10**    | 1.0                         | 0.1                        | 311–456       | 10                | 801 s (6.1×)     |
+| **M=50**    | 1.0                         | 0.02                       | 311–456       | 50                | 3,836 s (29×)    |
+
+Frame-1 comparison on three brightness tiers (peak ADU values from M=1 baseline):
+
+| star tier            | peak  | RMS Δ(M=10−M=1) | RMS Δ(M=50−M=1) | Δcentroid M=10 (mpx) | Δcentroid M=50 (mpx) |
+| -------------------- | ----- | --------------- | --------------- | -------------------- | -------------------- |
+| brightest            | 23 636 | 2.06            | 2.06            | (−0.0, −0.2)         | (−0.0, −0.2)         |
+| median (n=1110)      | 100   | 0.11            | 0.11            | (+0.0, +0.0)         | (+0.0, +0.0)         |
+| half-median          | 50    | 0.20            | 0.20            | **(+53.6, +9.4)**    | **(+53.6, +9.4)**    |
+
+Two clean takeaways:
+
+1. **`m` converges quickly for this trajectory.** M=10 and M=50 are
+   numerically identical to a tenth of a milli-pixel. The PSD has zero
+   content above 1 kHz; M=10 already gives an effective stamp rate
+   above 16 kHz; nothing left to recover beyond that point.
+
+2. **The bias the inner cadence removes is photometric, not
+   astrometric — and it matters most for faint sources.** Bright-star
+   centroids barely move (sub-mpx). Faint-star centroids shift by
+   tens of milli-pixels (≈ 7 mas at this plate scale) because at low
+   SNR the centroid is dominated by the sub-pixel position M=1
+   chooses, while M=fine averages over the actual jitter cloud.
+   M=fine is the physically correct case; M=1 is biased toward the
+   per-subsample sample point.
+
+## Code references
+
+- [`simulator/src/sims/motion_blur.rs`](../simulator/src/sims/motion_blur.rs)
+  — `SubsampleSchedule`, `MotionBlurConfig`, `render_tile`,
+  `tile_seed`, the per-stamp determinism tests
+- [`simulator/src/sims/trajectory.rs`](../simulator/src/sims/trajectory.rs)
+  — `Trajectory::orientation_at`, `frame_times`,
+  `TrajectoryRenderConfig`
+- [`simulator/src/bin/motion_simulator.rs`](../simulator/src/bin/motion_simulator.rs)
+  — CLI flags `--max-drift-per-sample-px`, `--max-drift-per-stamp-px`
+- [`scripts/los_psd_to_trajectory_csv.py`](../scripts/los_psd_to_trajectory_csv.py)
+  — converter from a 2-axis LOS PSD CSV to a quaternion-waypoint
+  trajectory file consumable by `motion_simulator --mode csv`
