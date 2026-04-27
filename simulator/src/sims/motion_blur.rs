@@ -487,29 +487,68 @@ fn envelope_prefilter<'a>(
     Ok(kept)
 }
 
-/// Deterministic tile seed derived from `(base_seed, frame_idx, sensor_idx)`.
-fn tile_seed(base_seed: u64, frame_idx: usize, sensor_idx: usize) -> u64 {
-    // Cheap splitmix-style mix; reproducible, well-distributed enough for
-    // RNG seeding.
-    let mut h = base_seed
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(frame_idx as u64)
-        .wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= (sensor_idx as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 27;
-    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
-    h
+/// Named randomness sources within a single render tile. Each source
+/// gets its own deterministic seed derived from the tile's master
+/// seed, so perturbing one (e.g. changing the stamp-jitter sequence)
+/// cannot shift the bytes the others would have produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RngDomain {
+    /// Unified Poisson photon-noise draw on the accumulated mean image.
+    Poisson,
+    /// Gaussian read-noise draw applied after Poisson.
+    ReadNoise,
+    /// Stratified-MC uniform-random per-stamp time jitter inside each subsample.
+    StampJitter,
 }
 
-/// Domain tags for deriving sub-seeds from a `tile_seed`. Each tile
-/// draws independent RNG streams for Poisson photon noise, Gaussian
-/// read noise, and stratified-MC stamp jitter; the tags below
-/// separate them so changing one source does not perturb the others.
-mod rng_domain {
-    pub const POISSON: u64 = 0;
-    pub const READ_NOISE: u64 = 0xA5A5_5A5A_A5A5_5A5A;
-    pub const STAMP_JITTER: u64 = 0x4D6F_6E74_6543_726C; // "MonteCarl"
+impl RngDomain {
+    /// Domain-specific 64-bit XOR tag. Values are arbitrary as long
+    /// as they are pairwise distinct; the downstream
+    /// `StdRng::seed_from_u64` does its own state expansion. Treat
+    /// these as labels, not as cryptographic constants.
+    const fn tag(self) -> u64 {
+        match self {
+            RngDomain::Poisson => 0x0000_0000_0000_0000,
+            RngDomain::ReadNoise => 0xA5A5_5A5A_A5A5_5A5A,
+            RngDomain::StampJitter => 0x4D6F_6E74_6543_726C, // "MonteCarl"
+        }
+    }
+}
+
+/// Per-tile master seed plus the API for deriving sub-stream seeds
+/// and RNGs for each [`RngDomain`]. All streams are deterministic
+/// from `(base_seed, frame_idx, sensor_idx)`, and each domain is
+/// independent of the others — adding a new randomness source via a
+/// new [`RngDomain`] variant does not perturb existing output.
+#[derive(Debug, Clone, Copy)]
+pub struct TileSeed(u64);
+
+impl TileSeed {
+    /// Build the per-tile master seed from `(base, frame_idx, sensor_idx)`.
+    pub fn for_tile(base: u64, frame_idx: usize, sensor_idx: usize) -> Self {
+        // Cheap splitmix-style mix; reproducible, well-distributed
+        // enough for RNG seeding.
+        let mut h = base
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(frame_idx as u64)
+            .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= (sensor_idx as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 31;
+        Self(h)
+    }
+
+    /// Sub-stream seed for APIs that consume `u64` directly
+    /// (e.g. [`apply_poisson_photon_noise`]).
+    pub fn seed(self, domain: RngDomain) -> u64 {
+        self.0 ^ domain.tag()
+    }
+
+    /// Sub-stream RNG ready to consume for APIs that take `&mut impl Rng`.
+    pub fn rng(self, domain: RngDomain) -> StdRng {
+        StdRng::seed_from_u64(self.seed(domain))
+    }
 }
 
 /// Render a single `(frame, sensor)` tile.
@@ -522,7 +561,7 @@ fn render_tile(
     sensor_idx: usize,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
-    tile_seed: u64,
+    tile_seed: TileSeed,
     output_path: &Path,
 ) -> Result<(), TrajectoryError> {
     let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
@@ -538,8 +577,8 @@ fn render_tile(
     // sample_idx in order with a single sequential RNG keeps the draw
     // sequence (and therefore the stamp times, the orientation
     // queries, and the deposited image) bit-deterministic for a
-    // given tile_seed.
-    let mut stamp_rng = StdRng::seed_from_u64(tile_seed ^ rng_domain::STAMP_JITTER);
+    // given tile seed.
+    let mut stamp_rng = tile_seed.rng(RngDomain::StampJitter);
 
     for sample_idx in 0..schedule.n.max(1) {
         // Per-subsample per-star flux is shared across all M stamps of
@@ -588,7 +627,7 @@ fn render_tile(
     // Build unified Poisson mean image and draw.
     let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
     let poisson_image =
-        apply_poisson_photon_noise(&mean_image, Some(tile_seed ^ rng_domain::POISSON));
+        apply_poisson_photon_noise(&mean_image, Some(tile_seed.seed(RngDomain::Poisson)));
 
     // Gaussian read noise (electronics, not shot noise) applied afterwards.
     let read_noise_rms = satellite
@@ -598,7 +637,7 @@ fn render_tile(
         .unwrap_or(0.0)
         .max(0.0);
     let final_electrons = if read_noise_rms > 0.0 {
-        let mut rng = StdRng::seed_from_u64(tile_seed ^ rng_domain::READ_NOISE);
+        let mut rng = tile_seed.rng(RngDomain::ReadNoise);
         let normal =
             Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
         poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
@@ -808,7 +847,7 @@ pub fn render_motion_trajectory(
         .map(|(tile, out_path)| {
             let plan = &plans[tile.frame_plan_idx];
             let sat = &satellites[tile.sensor_idx];
-            let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
+            let seed = TileSeed::for_tile(base_seed, plan.idx, tile.sensor_idx);
             let tile_started = Instant::now();
             let result = render_tile(
                 &scene,
@@ -1284,14 +1323,31 @@ mod tests {
 
     #[test]
     fn test_tile_seed_is_deterministic_and_varies() {
-        let a = tile_seed(42, 0, 0);
-        let b = tile_seed(42, 0, 0);
-        let c = tile_seed(42, 1, 0);
-        let d = tile_seed(42, 0, 1);
+        let a = TileSeed::for_tile(42, 0, 0).seed(RngDomain::Poisson);
+        let b = TileSeed::for_tile(42, 0, 0).seed(RngDomain::Poisson);
+        let c = TileSeed::for_tile(42, 1, 0).seed(RngDomain::Poisson);
+        let d = TileSeed::for_tile(42, 0, 1).seed(RngDomain::Poisson);
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_ne!(a, d);
         assert_ne!(c, d);
+    }
+
+    #[test]
+    fn test_tile_seed_domains_are_independent() {
+        // The same tile must produce three distinct sub-seeds for the
+        // three named domains, so that perturbing (e.g.) the stamp
+        // jitter does not accidentally shift the Poisson or read-noise
+        // streams.
+        let tile = TileSeed::for_tile(1234, 5, 6);
+        let p = tile.seed(RngDomain::Poisson);
+        let r = tile.seed(RngDomain::ReadNoise);
+        let s = tile.seed(RngDomain::StampJitter);
+        assert_ne!(p, r);
+        assert_ne!(p, s);
+        assert_ne!(r, s);
+        // Same domain on the same tile must reproduce the same seed.
+        assert_eq!(tile.seed(RngDomain::StampJitter), s);
     }
 
     fn static_trajectory() -> Trajectory {
