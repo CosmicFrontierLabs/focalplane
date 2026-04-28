@@ -2061,4 +2061,257 @@ mod tests {
         let recovered = roll_of(&q_round);
         assert_abs_diff_eq!(recovered, roll, epsilon = 1e-9);
     }
+
+    // -----------------------------------------------------------------------
+    // Pure-tone PSF spreading.
+    //
+    // Closed-form check that the stratified-MC stamp loop reproduces the
+    // expected motion-blur smear of a sinusoidal one-axis tilt: variance
+    // of a sinusoid with amplitude A is A²/2, and convolving the static
+    // PSF with the tone's position density grows the per-pixel second
+    // moment of the rendered star by exactly that amount on the affected
+    // axis (and not at all on the orthogonal axis).
+    // -----------------------------------------------------------------------
+
+    /// Stratified-MC accumulator helper, parallel to
+    /// [`simulate_tile_accumulator`] but using the per-stamp inner loop
+    /// instead of a single per-subsample stamp. Uses `adaptive_with_stamps`
+    /// so the per-stamp budget on `cfg` is honored.
+    fn simulate_tile_accumulator_stratified(
+        trajectory: &Trajectory,
+        star: &StarData,
+        fp: &FocalPlaneConfig,
+        cfg: &MotionBlurConfig,
+        seed: TileSeed,
+    ) -> SensorAccumulator {
+        let first_sat = fp.satellite_for_sensor(0).unwrap();
+        let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
+        let airy_pix = first_sat.airy_disk_pixel_space();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
+        let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
+
+        let t_start = Duration::ZERO;
+        let t_end = (t_start + cfg.exposure).min(trajectory.end_time());
+        let exposure = t_end - t_start;
+        let drift = max_drift_over_window(trajectory, t_start, t_end).unwrap();
+        let schedule = SubsampleSchedule::adaptive_with_stamps(
+            t_start,
+            exposure,
+            drift,
+            px_scale,
+            cfg.max_drift_per_sample_px,
+            cfg.max_drift_per_stamp_px,
+        );
+        let (width, height) = first_sat.sensor.dimensions.get_pixel_width_height();
+        let mut acc = SensorAccumulator::zero(width, height);
+        let aperture = first_sat.telescope.clear_aperture_area();
+        let flux = star_data_to_fluxes(star, &first_sat);
+        let dt = schedule.dt();
+        let stamps_per_sample = schedule.stamps_per_sample.max(1);
+        let stamp_weight = 1.0 / stamps_per_sample as f64;
+        let mut stamp_rng = seed.rng(RngDomain::StampJitter);
+        for sample_idx in 0..schedule.n.max(1) {
+            for stamp_t in schedule.stamp_times_for_sample(sample_idx, &mut stamp_rng) {
+                let t_clamped = stamp_t
+                    .min(trajectory.end_time())
+                    .max(trajectory.start_time());
+                let q = trajectory.orientation_at(t_clamped).unwrap();
+                if let Some((px, py)) = fp.project_to_sensor(star, &q, 0, padding_mm) {
+                    let total = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+                    acc.splat_psf(px, py, total, &flux.electrons.disk);
+                }
+            }
+        }
+        acc
+    }
+
+    /// Flux-weighted second moments of an electron-mean image around the
+    /// flux-weighted centroid. Background-subtracts the corner median,
+    /// then takes full-image moments — no threshold cut, since
+    /// thresholding biases the second moment when the underlying
+    /// distribution is sub-pixel-narrow (the bright pixel passes, the
+    /// PSF wings don't, and σ² collapses to zero).
+    fn image_centroid_and_variance(img: &Array2<f64>) -> (f64, f64, f64, f64) {
+        let (h, w) = img.dim();
+        let mut corners = vec![
+            img[[0, 0]],
+            img[[0, w - 1]],
+            img[[h - 1, 0]],
+            img[[h - 1, w - 1]],
+        ];
+        corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let bg = corners[1];
+        let mut sum_w = 0.0;
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        for y in 0..h {
+            for x in 0..w {
+                let v = (img[[y, x]] - bg).max(0.0);
+                sum_w += v;
+                sum_x += v * x as f64;
+                sum_y += v * y as f64;
+            }
+        }
+        let cx = sum_x / sum_w;
+        let cy = sum_y / sum_w;
+        let mut sum_xx = 0.0;
+        let mut sum_yy = 0.0;
+        for y in 0..h {
+            for x in 0..w {
+                let v = (img[[y, x]] - bg).max(0.0);
+                sum_xx += v * (x as f64 - cx).powi(2);
+                sum_yy += v * (y as f64 - cy).powi(2);
+            }
+        }
+        (cy, cx, sum_yy / sum_w, sum_xx / sum_w)
+    }
+
+    /// Build a trajectory whose orientation is the nominal pointing
+    /// modulated by a sinusoidal tilt of amplitude `amp_rad` at
+    /// frequency `freq_hz` about the body-X axis. Sampled densely
+    /// enough that SLERP between waypoints reconstructs the tone with
+    /// negligible error (≥ 16 samples per cycle).
+    fn build_pure_tone_trajectory(
+        pointing: Equatorial,
+        amp_rad: f64,
+        freq_hz: f64,
+        duration: Duration,
+    ) -> Trajectory {
+        use nalgebra::Vector3;
+        let cycles = (freq_hz * duration.as_secs_f64()).ceil() as usize;
+        let n_waypoints = (cycles * 64).max(256);
+        let q_base = orientation_from_pointing(&pointing, 0.0);
+        let dt = duration.as_secs_f64();
+        let waypoints: Vec<Waypoint> = (0..=n_waypoints)
+            .map(|i| {
+                let t_s = dt * i as f64 / n_waypoints as f64;
+                let theta = amp_rad * (2.0 * PI * freq_hz * t_s).sin();
+                let q_jitter = UnitQuaternion::from_scaled_axis(Vector3::new(theta, 0.0, 0.0));
+                let q_total = q_base * q_jitter;
+                Waypoint::new(Duration::from_secs_f64(t_s), q_total)
+            })
+            .collect();
+        Trajectory::new(waypoints).unwrap()
+    }
+
+    #[test]
+    fn test_pure_tone_jitter_spreads_psf_by_predicted_variance() {
+        // Single bright star at field center on a tiny IMX455-style sensor.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let star = StarData {
+            id: 0,
+            magnitude: 5.0,
+            position: pointing,
+            b_v: Some(0.6),
+        };
+
+        let exposure = Duration::from_millis(250);
+
+        // Tone parameters. Pick the amplitude in pixels first, derive the
+        // angle from the pixel scale so the prediction is in the same
+        // units we measure. 100 Hz over 250 ms = 25 cycles per exposure,
+        // well into the "many cycles -> arcsine density on the affected
+        // axis" regime where var = A²/2 is exact.
+        let px_scale = pixel_scale_rad(&fp).unwrap();
+        // Use an amplitude well above the pixel pitch so the variance
+        // signal dominates any sub-pixel discretization artifact.
+        let amp_px = 2.0_f64;
+        let amp_rad = amp_px * px_scale;
+        let tone_freq_hz = 100.0;
+        let predicted_extra_var_px2 = amp_px * amp_px / 2.0;
+
+        // Pad both trajectories beyond the exposure end so the orientation
+        // lookup never clamps at the boundary. Static reference uses two
+        // identical waypoints; tone trajectory follows build_pure_tone_trajectory.
+        let traj_end = exposure + Duration::from_millis(50);
+        let static_traj = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(traj_end, orientation_from_pointing(&pointing, 0.0)),
+        ])
+        .unwrap();
+        let tone_traj = build_pure_tone_trajectory(pointing, amp_rad, tone_freq_hz, traj_end);
+
+        // Loose per-sample budget so N stays modest; tight per-stamp
+        // budget so the stratified-MC inner loop captures the tone.
+        let cfg = MotionBlurConfig {
+            timestep: exposure,
+            exposure,
+            max_drift_per_sample_px: 0.5,
+            max_drift_per_stamp_px: Some(0.05),
+            base_seed: Some(7),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        let seed = TileSeed::for_tile(7, 0, 0);
+
+        let static_acc = simulate_tile_accumulator_stratified(&static_traj, &star, &fp, &cfg, seed);
+        let tone_acc = simulate_tile_accumulator_stratified(&tone_traj, &star, &fp, &cfg, seed);
+
+        let (cy_s, cx_s, var_y_s, var_x_s) =
+            image_centroid_and_variance(&static_acc.star_mean_electrons);
+        let (cy_t, cx_t, var_y_t, var_x_t) =
+            image_centroid_and_variance(&tone_acc.star_mean_electrons);
+
+        // 1. Centroid is invariant: a zero-mean tone shouldn't move the
+        //    flux-weighted center of mass.
+        assert!(
+            (cx_t - cx_s).abs() < 0.05 && (cy_t - cy_s).abs() < 0.05,
+            "centroid drift too large: Δ=({:+.3}, {:+.3}) px",
+            cx_t - cx_s,
+            cy_t - cy_s
+        );
+
+        // 2. The total variance growth must equal the tone's variance
+        //    A²/2 within 25% — a tolerance set by the combination of
+        //    finite-cycles per exposure (~25), finite stratified-MC
+        //    stamp count, sub-pixel PSF discretization on a coarse
+        //    pixel grid, and small SLERP curvature between waypoints.
+        //    The math itself is exact in the continuous limit.
+        let total_extra_var = (var_x_t + var_y_t) - (var_x_s + var_y_s);
+        let total_rel_err =
+            (total_extra_var - predicted_extra_var_px2).abs() / predicted_extra_var_px2;
+        assert!(
+            total_rel_err < 0.25,
+            "total variance growth {:.4} px² vs predicted {:.4} px² (rel err {:.1}%)",
+            total_extra_var,
+            predicted_extra_var_px2,
+            total_rel_err * 100.0
+        );
+
+        // 3. The growth is anisotropic: one axis takes essentially all
+        //    of it, the other axis stays within ~10% of the static
+        //    value. Reports which axis carries the growth so a future
+        //    body-frame projection-convention change shows up here.
+        let dx = (var_x_t - var_x_s).abs();
+        let dy = (var_y_t - var_y_s).abs();
+        assert!(
+            dx.max(dy) >= 0.7 * predicted_extra_var_px2,
+            "neither axis absorbed the predicted variance: Δσ²_x={:.4}, Δσ²_y={:.4}, predicted {:.4}",
+            var_x_t - var_x_s,
+            var_y_t - var_y_s,
+            predicted_extra_var_px2
+        );
+        let unaffected = if dx > dy { var_y_s } else { var_x_s };
+        let unaffected_jit = if dx > dy { var_y_t } else { var_x_t };
+        let unaffected_change = (unaffected_jit - unaffected).abs() / unaffected.max(1e-6);
+        assert!(
+            unaffected_change < 0.10,
+            "unaffected axis variance changed by {:.1}%: from {:.4} to {:.4}",
+            unaffected_change * 100.0,
+            unaffected,
+            unaffected_jit
+        );
+
+        eprintln!(
+            "pure-tone PSF spread: amp={:.2} px, predicted Δσ²={:.4} px²; \
+             measured Δσ²_x={:+.4}, Δσ²_y={:+.4}, total={:.4}",
+            amp_px,
+            predicted_extra_var_px2,
+            var_x_t - var_x_s,
+            var_y_t - var_y_s,
+            total_extra_var
+        );
+    }
 }
