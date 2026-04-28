@@ -1,23 +1,73 @@
 """
-Synthesize a quaternion-waypoint trajectory CSV from a 2-axis line-of-sight
-PSD (rad^2/Hz), suitable for `motion_simulator --mode csv --trajectory-csv ...`.
+Synthesize a quaternion-waypoint trajectory CSV from a 2-axis FEM-derived
+optical-frame rotation PSD, suitable for
+`motion_simulator --mode csv --trajectory-csv ...`.
 
-Input PSD format (header columns, comments allowed):
+Input PSD format (header columns, `#`-prefixed comments allowed):
     freq_hz, psd_los_x_rad2_per_hz, psd_los_y_rad2_per_hz
 
-Each axis is synthesized independently via random-phase complex-Gaussian
-spectrum + irfft, then composed onto a nominal RA/Dec/roll pointing using
-the same body-axis convention as `ody_to_trajectory_csv.py` (body +Z =
-boresight, body +X = east, body +Y = north). Body-Z error is held at
-zero — the input PSD only describes pitch/yaw jitter.
+What those columns mean
+-----------------------
+The two PSD columns are the recovered rotation degrees-of-freedom
+about the FEM/optical local axes — *not* sky tangent-plane LOS X/Y
+displacements:
 
-Usage:
-    uv run --with numpy --with pandas --with scipy \
-      scripts/los_psd_to_trajectory_csv.py \
-      --input los_psd_at_2000rpm.csv \
-      --output trajectory_los_2000rpm_100s.csv \
-      --duration 100.0 --fs 2000.0 \
-      --ra 213.39 --dec -55.86 --roll 0.0 \
+  - `psd_los_x_rad2_per_hz`: PSD of the recovered rotation **about**
+    the FEM/optical local X axis (in rad²/Hz).
+  - `psd_los_y_rad2_per_hz`: PSD of the recovered rotation **about**
+    the FEM/optical local Y axis (in rad²/Hz).
+
+These should NOT be interpreted as displacement PSDs along sky east
+(RA·cos(Dec)) and north (Dec). They are mechanical optical-axis
+rotation spectra; the script maps them onto the simulator's body
+frame, where:
+
+  - simulator body **+Z** is the boresight,
+  - simulator body **+X** is the FEM optical local X axis,
+  - simulator body **+Y** is the FEM optical local Y axis.
+
+`--roll` chooses how the FEM optical X/Y axes are oriented relative
+to sky east/north for the nominal RA/Dec. With `--roll 0.0`, body +X
+aligns with sky east and body +Y aligns with sky north (right-handed
+J2000 tangent frame). Pass non-zero `--roll` (in degrees) to rotate
+the optical-axis pair about the boresight before applying the
+perturbations.
+
+Roll-convention sanity reference (with --roll 0.0)
+--------------------------------------------------
+For a rotation by +θ about a body axis, the boresight (body +Z)
+moves on the sky as follows (right-hand rule, small angle):
+
+  - Positive rotation about body +X (FEM optical X) →
+    boresight tilts **south** by |θ| (body +Z gains a -body-Y component).
+  - Positive rotation about body +Y (FEM optical Y) →
+    boresight tilts **east** by |θ| (body +Z gains a +body-X component).
+
+Inverting either input column flips the corresponding sky direction;
+adding 90° to `--roll` swaps the X and Y deflection directions.
+
+Synthesis
+---------
+Each axis is synthesized independently via fixed-magnitude /
+random-phase per-bin spectrum + irfft. DC and Nyquist bins are
+zeroed. Body-Z (roll) perturbation is held at zero — the input PSD
+describes pitch/yaw only.
+
+Sample timing
+-------------
+The output CSV contains `N + 1` waypoints with `dt = 1/fs`, spanning
+times `[0, duration]` inclusive. Setting `--duration 100 --fs 2000`
+writes 200 001 rows, with the first at `t=0` and the last at
+`t=100.0` exactly.
+
+Usage
+-----
+    uv run --with numpy --with pandas --with scipy \\
+      scripts/los_psd_to_trajectory_csv.py \\
+      --input los_psd_at_2000rpm.csv \\
+      --output trajectory_los_2000rpm_100s.csv \\
+      --duration 100.0 --fs 2000.0 \\
+      --ra 213.39 --dec -55.86 --roll 0.0 \\
       --seed 42
 """
 
@@ -32,7 +82,16 @@ from scipy.spatial.transform import Rotation
 
 
 def nominal_body_to_world(ra_deg: float, dec_deg: float, roll_deg: float) -> Rotation:
-    """Body->world rotation: body +Z = boresight, body +X = east, body +Y = north."""
+    """Body->world rotation defining the simulator body frame at the nominal
+    pointing (RA, Dec, roll). Conventions:
+
+      - body **+Z** = boresight (radial on the sky)
+      - body **+X** = sky east at the boresight at roll=0 (twisted by `roll_deg` about +Z)
+      - body **+Y** = sky north at the boresight at roll=0 (twisted by `roll_deg` about +Z)
+
+    The FEM/optical local X and Y axes are mapped onto body +X and +Y
+    respectively, so a positive rotation about the FEM optical X axis
+    appears as a rotation about body +X in the perturbation step."""
     ra = np.deg2rad(ra_deg)
     dec = np.deg2rad(dec_deg)
     sin_ra, cos_ra = np.sin(ra), np.cos(ra)
@@ -99,7 +158,16 @@ def main() -> int:
     )
     p.add_argument("--ra", type=float, default=0.0, help="Nominal boresight RA in degrees")
     p.add_argument("--dec", type=float, default=0.0, help="Nominal boresight Dec in degrees")
-    p.add_argument("--roll", type=float, default=0.0, help="Nominal roll in degrees")
+    p.add_argument(
+        "--roll",
+        type=float,
+        default=0.0,
+        help="Roll about the boresight (degrees) that orients the FEM optical "
+        "X/Y axes relative to sky east/north. roll=0 aligns body +X with sky "
+        "east and body +Y with sky north (so a +X-axis input rotation tilts "
+        "the boresight south, a +Y-axis input rotation tilts it east). "
+        "See module docstring for the full sky-direction reference.",
+    )
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the random-phase synthesis")
     args = p.parse_args()
 
@@ -110,9 +178,12 @@ def main() -> int:
             f"warning: fs={fs:.1f} Hz is below 2*max(freq)={2*float(freq.max()):.1f} Hz; "
             "PSD content above Nyquist will be discarded"
         )
-    n_samples = int(round(args.duration * fs))
+    # N + 1 samples spanning [0, duration] inclusive at dt = 1/fs.
+    # Setting --duration 100 --fs 2000 writes 200 001 rows, with the
+    # first at t=0 and the last at t=100.0 exactly.
+    n_samples = int(round(args.duration * fs)) + 1
     if n_samples < 4:
-        raise SystemExit(f"duration*fs = {n_samples} samples is too short")
+        raise SystemExit(f"duration*fs + 1 = {n_samples} samples is too short")
 
     rng = np.random.default_rng(args.seed)
     bdyx = synthesize_from_psd(freq, psd_x, fs, n_samples, rng)
@@ -146,7 +217,8 @@ def main() -> int:
     target_var_y = float(np.trapezoid(psd_y, freq))
     print(
         f"wrote {len(out)} rows to {args.output}\n"
-        f"  duration={args.duration:.3f}s  fs={fs:.1f}Hz  dt={1/fs:.6f}s\n"
+        f"  duration={args.duration:.3f}s  fs={fs:.1f}Hz  dt={1/fs:.6f}s  "
+        f"(samples at t=0 ... t={t[-1]:.6f})\n"
         f"  axis X: synth std={np.sqrt(var_x)*206265:.3f}\" "
         f"(target from PSD integral {np.sqrt(target_var_x)*206265:.3f}\")\n"
         f"  axis Y: synth std={np.sqrt(var_y)*206265:.3f}\" "
