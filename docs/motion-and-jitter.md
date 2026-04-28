@@ -23,13 +23,12 @@ the exposure decides where each photon lands.
 
 ## Single stamp loop, single budget
 
-Every exposure window is sliced into `stamps_per_exposure` equal-width
-sub-bins, and each stamp lands at a **uniform-random offset within
-its sub-bin** — classical stratified Monte Carlo:
+Every exposure window is sampled by `stamps_per_exposure` PSF stamps
+placed via the **1D golden-ratio low-discrepancy sequence**:
 
 ```
-Δt_stamp = exposure / stamps_per_exposure
-stamp_time[j] = frame_start + (j + U_j) · Δt_stamp    where U_j ~ Uniform[0, 1)
+φ⁻¹  =  (√5 − 1)/2  ≈  0.6180339887
+stamp_time[j]  =  frame_start  +  ((j + 0.5)·φ⁻¹  +  phase) mod 1  ·  exposure
 ```
 
 Each stamp:
@@ -48,21 +47,30 @@ scheduler computes the trajectory's total angular path length across
 the exposure and chooses the smallest count that keeps per-stamp
 drift below the budget. Default `0.1 px`. See
 [`SubsampleSchedule`](../simulator/src/sims/motion_blur.rs) for the
-type and [`render_tile`](../simulator/src/sims/motion_blur.rs) for
-the loop.
+type, [`render_tile`](../simulator/src/sims/motion_blur.rs) for the
+loop, and [`quasi_random`](../simulator/src/sims/quasi_random.rs) for
+the sequence implementation + convergence discussion.
 
-**Why stratified MC and not a regular grid.** A deterministic
-even-spaced grid at interval `Δt_stamp` has a comb response in
-frequency: a trajectory tone at `f ≈ k / Δt_stamp` is sampled at the
-same phase every stamp and the deposits don't average out the
-within-cycle variation — the resulting image is systematically biased
-at that frequency. Pure Monte Carlo (random uniform anywhere in the
-exposure) avoids the bias but converges only as `O(1/√M)`. Stratified
-MC keeps one random sample per equal-width sub-bin, so it (a) removes
-the regular-grid bias for any tone above the stamp Nyquist *and*
-(b) keeps the smooth-integrand convergence of a regular grid for the
-low-frequency content. The right combination for trajectories mixing
-low-frequency drift and high-frequency stochastic content.
+**Why golden-ratio and not stratified MC or a regular grid.**
+
+- **Regular grid** has a comb spectral response: trajectory content at
+  `f ≈ k/Δt_stamp` is sampled at the same phase every stamp and the
+  deposits don't average out the within-cycle variation, giving a
+  systematic bias at that frequency.
+- **Stratified Monte Carlo** (one uniform-random sample per equal sub-bin)
+  removes the comb bias and gives `O(σ_within/√M)` convergence —
+  decent, but requires per-stamp RNG draws and converges as `O(1/M)`
+  for smooth integrands.
+- **Golden-ratio sequence** is deterministic, has discrepancy
+  `O(log(M)/M)` (best possible in 1D), no RNG draws needed, and the
+  first `m` of any `n`-point sequence is itself a good `m`-point set
+  (free progressive-render mode). For our use case it strictly
+  dominates stratified MC.
+
+`phase` is per-tile, derived deterministically from the tile seed so
+different `(frame, sensor)` tiles get different realizations of the
+same low-discrepancy property — preventing systematic per-frame bias
+without sacrificing reproducibility.
 
 ## Envelope prefilter — the only "scene-state" knob
 
@@ -109,14 +117,16 @@ automatically.
 
 ## Determinism
 
-The renderer draws three independent RNG streams per tile, all seeded
-from a single `TileSeed::for_tile(base_seed, frame_idx, sensor_idx)`
-plus a named `RngDomain` tag (`Poisson`, `ReadNoise`, `StampJitter`).
-Domain separation guarantees that perturbing one source does not
-shift the bytes the other two would have produced.
+The renderer draws two independent RNG streams per tile (Poisson
+photon noise + Gaussian read noise) and one deterministic per-tile
+phase for stamp placement. All three derive from a single per-tile
+seed `tile_seed(base_seed, frame_idx, sensor_idx)` XOR'd with a
+named domain tag (`POISSON_DOMAIN`, `READ_NOISE_DOMAIN`,
+`STAMP_PHASE_DOMAIN`). Domain separation guarantees perturbing one
+source cannot shift the bytes another would have produced.
 
-The stamp-jitter RNG is consumed sequentially across the
-`stamps_per_exposure` strata, so output PNGs are byte-identical for
+Stamp times are deterministic from `(stamps_per_exposure, phase)` —
+no per-stamp RNG draws — so output PNGs are byte-identical for
 fixed `(base_seed, frame_idx, sensor_idx, stamps_per_exposure)`.
 This invariant is pinned by `test_per_stamp_render_is_deterministic`
 (end-to-end render comparison) and `test_stamp_times_seeded_rng_is_reproducible`
@@ -231,7 +241,10 @@ scaling in either regime.
 
 - [`simulator/src/sims/motion_blur.rs`](../simulator/src/sims/motion_blur.rs)
   — `SubsampleSchedule`, `MotionBlurConfig`, `render_tile`,
-  `TileSeed` / `RngDomain`, the per-stamp determinism tests
+  `tile_seed` + domain constants, the per-stamp determinism tests
+- [`simulator/src/sims/quasi_random.rs`](../simulator/src/sims/quasi_random.rs)
+  — golden-ratio sequence, per-tile phase derivation, convergence
+  notes, spectral-discrepancy tests
 - [`simulator/src/sims/trajectory.rs`](../simulator/src/sims/trajectory.rs)
   — `Trajectory::orientation_at`, `Trajectory::peak_excursion_rad`,
   `frame_times`,
