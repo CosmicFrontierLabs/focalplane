@@ -2168,16 +2168,17 @@ mod tests {
 
     /// Build a trajectory whose orientation is the nominal pointing
     /// modulated by a sinusoidal tilt of amplitude `amp_rad` at
-    /// frequency `freq_hz` about the body-X axis. Sampled densely
-    /// enough that SLERP between waypoints reconstructs the tone with
-    /// negligible error (≥ 16 samples per cycle).
+    /// frequency `freq_hz` about an arbitrary body-frame `axis`
+    /// (a unit vector). Sampled densely enough that SLERP between
+    /// waypoints reconstructs the tone with negligible error
+    /// (≥ 64 samples per cycle).
     fn build_pure_tone_trajectory(
         pointing: Equatorial,
         amp_rad: f64,
         freq_hz: f64,
         duration: Duration,
+        axis: nalgebra::Vector3<f64>,
     ) -> Trajectory {
-        use nalgebra::Vector3;
         let cycles = (freq_hz * duration.as_secs_f64()).ceil() as usize;
         let n_waypoints = (cycles * 64).max(256);
         let q_base = orientation_from_pointing(&pointing, 0.0);
@@ -2186,7 +2187,7 @@ mod tests {
             .map(|i| {
                 let t_s = dt * i as f64 / n_waypoints as f64;
                 let theta = amp_rad * (2.0 * PI * freq_hz * t_s).sin();
-                let q_jitter = UnitQuaternion::from_scaled_axis(Vector3::new(theta, 0.0, 0.0));
+                let q_jitter = UnitQuaternion::from_scaled_axis(axis * theta);
                 let q_total = q_base * q_jitter;
                 Waypoint::new(Duration::from_secs_f64(t_s), q_total)
             })
@@ -2194,9 +2195,20 @@ mod tests {
         Trajectory::new(waypoints).unwrap()
     }
 
-    #[test]
-    fn test_pure_tone_jitter_spreads_psf_by_predicted_variance() {
-        // Single bright star at field center on a tiny IMX455-style sensor.
+    /// Run the variance-addition identity check for a pure sinusoidal
+    /// tilt of amplitude `amp_px` (in pixels) about an arbitrary body
+    /// axis. Asserts:
+    ///   1. the rendered centroid is invariant (zero-mean tone);
+    ///   2. the total per-axis second-moment growth equals A²/2
+    ///      within 25% (loose tolerance absorbs finite-cycles, finite-
+    ///      stamp MC noise, sub-pixel PSF discretization, and SLERP
+    ///      curvature between waypoints — the math itself is exact);
+    ///   3. the growth is anisotropic — one image axis absorbs ≥70% of
+    ///      the predicted variance, and the other image axis's variance
+    ///      stays within 10% of its static value.
+    /// `axis_label` appears in failure messages so a regression in the
+    /// body→image projection convention is easy to read off.
+    fn assert_pure_tone_psf_spread(body_axis: nalgebra::Vector3<f64>, axis_label: &str) {
         let fp = tiny_fp();
         let pointing = Equatorial::from_degrees(45.0, 30.0);
         let star = StarData {
@@ -2207,30 +2219,25 @@ mod tests {
         };
 
         let exposure = Duration::from_millis(250);
-
-        // Tone parameters. Pick the amplitude in pixels first, derive the
-        // angle from the pixel scale so the prediction is in the same
-        // units we measure. 100 Hz over 250 ms = 25 cycles per exposure,
-        // well into the "many cycles -> arcsine density on the affected
-        // axis" regime where var = A²/2 is exact.
         let px_scale = pixel_scale_rad(&fp).unwrap();
-        // Use an amplitude well above the pixel pitch so the variance
-        // signal dominates any sub-pixel discretization artifact.
+        // Amplitude well above the pixel pitch so the variance signal
+        // dominates any sub-pixel discretization artifact.
         let amp_px = 2.0_f64;
         let amp_rad = amp_px * px_scale;
+        // 100 Hz over 250 ms = 25 cycles per exposure, well into the
+        // "many cycles → arcsine density on the affected axis" regime
+        // where Var(A·sin(ωt)) = A²/2 is exact.
         let tone_freq_hz = 100.0;
         let predicted_extra_var_px2 = amp_px * amp_px / 2.0;
 
-        // Pad both trajectories beyond the exposure end so the orientation
-        // lookup never clamps at the boundary. Static reference uses two
-        // identical waypoints; tone trajectory follows build_pure_tone_trajectory.
         let traj_end = exposure + Duration::from_millis(50);
         let static_traj = Trajectory::new(vec![
             Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
             Waypoint::new(traj_end, orientation_from_pointing(&pointing, 0.0)),
         ])
         .unwrap();
-        let tone_traj = build_pure_tone_trajectory(pointing, amp_rad, tone_freq_hz, traj_end);
+        let tone_traj =
+            build_pure_tone_trajectory(pointing, amp_rad, tone_freq_hz, traj_end, body_axis);
 
         // Loose per-sample budget so N stays modest; tight per-stamp
         // budget so the stratified-MC inner loop captures the tone.
@@ -2254,58 +2261,56 @@ mod tests {
         let (cy_t, cx_t, var_y_t, var_x_t) =
             image_centroid_and_variance(&tone_acc.star_mean_electrons);
 
-        // 1. Centroid is invariant: a zero-mean tone shouldn't move the
-        //    flux-weighted center of mass.
+        // 1. Centroid invariance.
         assert!(
             (cx_t - cx_s).abs() < 0.05 && (cy_t - cy_s).abs() < 0.05,
-            "centroid drift too large: Δ=({:+.3}, {:+.3}) px",
+            "[body-{axis_label} tone] centroid drift too large: Δ=({:+.3}, {:+.3}) px",
             cx_t - cx_s,
             cy_t - cy_s
         );
 
-        // 2. The total variance growth must equal the tone's variance
-        //    A²/2 within 25% — a tolerance set by the combination of
-        //    finite-cycles per exposure (~25), finite stratified-MC
-        //    stamp count, sub-pixel PSF discretization on a coarse
-        //    pixel grid, and small SLERP curvature between waypoints.
-        //    The math itself is exact in the continuous limit.
+        // 2. Total variance growth ≈ A²/2.
         let total_extra_var = (var_x_t + var_y_t) - (var_x_s + var_y_s);
         let total_rel_err =
             (total_extra_var - predicted_extra_var_px2).abs() / predicted_extra_var_px2;
         assert!(
             total_rel_err < 0.25,
-            "total variance growth {:.4} px² vs predicted {:.4} px² (rel err {:.1}%)",
+            "[body-{axis_label} tone] total variance growth {:.4} px² vs predicted {:.4} px² \
+             (rel err {:.1}%)",
             total_extra_var,
             predicted_extra_var_px2,
             total_rel_err * 100.0
         );
 
-        // 3. The growth is anisotropic: one axis takes essentially all
-        //    of it, the other axis stays within ~10% of the static
-        //    value. Reports which axis carries the growth so a future
-        //    body-frame projection-convention change shows up here.
+        // 3. Anisotropy: one axis absorbs the growth, the other stays put.
         let dx = (var_x_t - var_x_s).abs();
         let dy = (var_y_t - var_y_s).abs();
         assert!(
             dx.max(dy) >= 0.7 * predicted_extra_var_px2,
-            "neither axis absorbed the predicted variance: Δσ²_x={:.4}, Δσ²_y={:.4}, predicted {:.4}",
+            "[body-{axis_label} tone] neither image axis absorbed the predicted variance: \
+             Δσ²_x={:.4}, Δσ²_y={:.4}, predicted {:.4}",
             var_x_t - var_x_s,
             var_y_t - var_y_s,
             predicted_extra_var_px2
         );
-        let unaffected = if dx > dy { var_y_s } else { var_x_s };
-        let unaffected_jit = if dx > dy { var_y_t } else { var_x_t };
-        let unaffected_change = (unaffected_jit - unaffected).abs() / unaffected.max(1e-6);
+        let (unaffected_static, unaffected_tone, unaffected_label) = if dx > dy {
+            (var_y_s, var_y_t, "y")
+        } else {
+            (var_x_s, var_x_t, "x")
+        };
+        let unaffected_change =
+            (unaffected_tone - unaffected_static).abs() / unaffected_static.max(1e-6);
         assert!(
             unaffected_change < 0.10,
-            "unaffected axis variance changed by {:.1}%: from {:.4} to {:.4}",
+            "[body-{axis_label} tone] unaffected image-{unaffected_label} variance changed by \
+             {:.1}%: from {:.4} to {:.4}",
             unaffected_change * 100.0,
-            unaffected,
-            unaffected_jit
+            unaffected_static,
+            unaffected_tone
         );
 
         eprintln!(
-            "pure-tone PSF spread: amp={:.2} px, predicted Δσ²={:.4} px²; \
+            "body-{axis_label} pure-tone PSF spread: amp={:.2} px, predicted Δσ²={:.4} px²; \
              measured Δσ²_x={:+.4}, Δσ²_y={:+.4}, total={:.4}",
             amp_px,
             predicted_extra_var_px2,
@@ -2313,5 +2318,15 @@ mod tests {
             var_y_t - var_y_s,
             total_extra_var
         );
+    }
+
+    #[test]
+    fn test_pure_tone_jitter_body_x_axis() {
+        assert_pure_tone_psf_spread(nalgebra::Vector3::x(), "X");
+    }
+
+    #[test]
+    fn test_pure_tone_jitter_body_y_axis() {
+        assert_pure_tone_psf_spread(nalgebra::Vector3::y(), "Y");
     }
 }
