@@ -40,7 +40,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
 use nalgebra::UnitQuaternion;
 use ndarray::Array2;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
 use rayon::prelude::*;
 use shared::image_proc::noise::apply_poisson_photon_noise;
@@ -69,11 +69,28 @@ pub const DEFAULT_MAX_DRIFT_PER_SAMPLE_PX: f64 = 0.1;
 
 /// Time-domain subsampling schedule inside an exposure window.
 ///
-/// A `SubsampleSchedule` describes how many equally-spaced sub-orientation
-/// samples are taken across a single frame's exposure. The boundary times
-/// are "midpoints" so that the integral of a linearly-varying rate over
-/// the exposure is the midpoint value times the exposure; dividing by `n`
-/// yields the per-subsample contribution.
+/// A `SubsampleSchedule` describes how a frame's exposure is sliced in
+/// time. Two cadences:
+///
+/// - **`n` sub-orientation samples** drive *scene-state* refresh
+///   (per-star flux, the in-field star slice, the zodiacal mean).
+///   Adaptive: chosen to keep per-subsample boresight drift under
+///   `max_drift_per_sample_px`. Typically 1–10.
+/// - **`stamps_per_sample` finer trajectory queries inside each
+///   subsample** drive *PSF-stamp* placement via **stratified Monte
+///   Carlo**: each subsample window is divided into `m` equal-width
+///   sub-bins, and each stamp lands at a uniform-random offset within
+///   its sub-bin. Each stamp queries the trajectory at its own time
+///   and deposits `flux / m` electrons at the per-time projected
+///   pixel position. Stratification preserves smooth-integrand
+///   convergence while removing the systematic bias a regular grid
+///   produces against trajectory tones near `k / Δt_sub`.
+///
+/// Subsample boundaries are midpoints so the integral of a
+/// linearly-varying rate over the exposure equals the midpoint value
+/// times the exposure; dividing by `n` yields the per-subsample
+/// contribution and dividing again by `stamps_per_sample` yields the
+/// per-stamp contribution.
 #[derive(Debug, Clone, Copy)]
 pub struct SubsampleSchedule {
     /// Absolute trajectory time at which the frame's exposure starts.
@@ -82,6 +99,9 @@ pub struct SubsampleSchedule {
     pub exposure: Duration,
     /// Number of sub-orientation samples across the exposure (>= 1).
     pub n: usize,
+    /// Number of fine trajectory queries inside each subsample (>= 1).
+    /// `1` reproduces the original one-stamp-per-subsample behavior.
+    pub stamps_per_sample: usize,
 }
 
 impl SubsampleSchedule {
@@ -100,6 +120,28 @@ impl SubsampleSchedule {
             .collect()
     }
 
+    /// Stratified Monte Carlo stamp times inside subsample `sample_idx`.
+    /// Returns a vector of length `stamps_per_sample.max(1)`. Stamp `j`
+    /// lands at `t_sub_start + (j + U) * stamp_dt`, where `U ~ Uniform[0, 1)`
+    /// is drawn from `rng` and `stamp_dt = (exposure / n) / m`. The
+    /// stratification by sub-bin guarantees one stamp per equal-width
+    /// slice of the subsample window; randomness within each slice
+    /// removes the bias a fixed-midpoint grid produces against
+    /// trajectory content at frequencies near `k / stamp_dt`.
+    pub fn stamp_times_for_sample<R: Rng>(&self, sample_idx: usize, rng: &mut R) -> Vec<Duration> {
+        let n = self.n.max(1);
+        let m = self.stamps_per_sample.max(1);
+        let dt = self.exposure.as_secs_f64() / n as f64;
+        let stamp_dt = dt / m as f64;
+        let t_sub_start = self.frame_start.as_secs_f64() + sample_idx as f64 * dt;
+        (0..m)
+            .map(|j| {
+                let u: f64 = rng.random();
+                Duration::from_secs_f64(t_sub_start + (j as f64 + u) * stamp_dt)
+            })
+            .collect()
+    }
+
     /// Adaptive schedule from a drift budget.
     ///
     /// `max_drift_rad_over_exposure` is the total angular distance the
@@ -111,12 +153,40 @@ impl SubsampleSchedule {
     /// `N = max(1, ceil(max_drift_over_exposure_rad / (max_drift_per_sample_px * pixel_scale_rad)))`
     ///
     /// When the drift budget is zero (static pointing), `N = 1`.
+    /// `stamps_per_sample` is set to 1 — see [`Self::adaptive_with_stamps`]
+    /// for finer per-subsample stamping.
     pub fn adaptive(
         frame_start: Duration,
         exposure: Duration,
         max_drift_rad_over_exposure: f64,
         pixel_scale_rad: f64,
         max_drift_per_sample_px: f64,
+    ) -> Self {
+        Self::adaptive_with_stamps(
+            frame_start,
+            exposure,
+            max_drift_rad_over_exposure,
+            pixel_scale_rad,
+            max_drift_per_sample_px,
+            None,
+        )
+    }
+
+    /// Adaptive schedule that also picks `stamps_per_sample` from a
+    /// finer per-stamp drift budget. When `max_drift_per_stamp_px` is
+    /// `Some(b)`, each subsample is divided into
+    /// `M = max(1, ceil((per-subsample drift) / (b * pixel_scale)))`
+    /// stamps. When `None`, `M = 1` and behavior is identical to
+    /// [`Self::adaptive`]. The two budgets are independent: the outer
+    /// one drives scene-state refresh, the inner one drives PSF-stamp
+    /// placement and is what actually captures sub-subsample jitter.
+    pub fn adaptive_with_stamps(
+        frame_start: Duration,
+        exposure: Duration,
+        max_drift_rad_over_exposure: f64,
+        pixel_scale_rad: f64,
+        max_drift_per_sample_px: f64,
+        max_drift_per_stamp_px: Option<f64>,
     ) -> Self {
         let n = if max_drift_rad_over_exposure <= 0.0
             || pixel_scale_rad <= 0.0
@@ -127,10 +197,27 @@ impl SubsampleSchedule {
             let budget_rad = max_drift_per_sample_px * pixel_scale_rad;
             (max_drift_rad_over_exposure / budget_rad).ceil() as usize
         };
+        let n = n.max(1);
+        let stamps_per_sample = match max_drift_per_stamp_px {
+            Some(stamp_budget_px)
+                if stamp_budget_px > 0.0
+                    && pixel_scale_rad > 0.0
+                    && max_drift_rad_over_exposure > 0.0 =>
+            {
+                // Per-subsample drift assumes the trajectory is
+                // approximately uniform over the exposure (the same
+                // assumption the per-sample budget already makes).
+                let per_sub_drift_rad = max_drift_rad_over_exposure / n as f64;
+                let stamp_budget_rad = stamp_budget_px * pixel_scale_rad;
+                ((per_sub_drift_rad / stamp_budget_rad).ceil() as usize).max(1)
+            }
+            _ => 1,
+        };
         Self {
             frame_start,
             exposure,
-            n: n.max(1),
+            n,
+            stamps_per_sample,
         }
     }
 }
@@ -241,6 +328,14 @@ pub struct MotionBlurConfig {
     /// Per-subsample drift budget in pixels. The adaptive scheduler picks
     /// `N` so that drift per subsample stays below this threshold.
     pub max_drift_per_sample_px: f64,
+    /// Optional finer per-stamp drift budget (pixels). When `Some(b)`,
+    /// each subsample is divided into `M` PSF stamps so drift per
+    /// stamp stays below `b`. When `None`, `M = 1` and behavior matches
+    /// the original one-stamp-per-subsample renderer. Set this an order
+    /// of magnitude tighter than `max_drift_per_sample_px` to capture
+    /// high-frequency jitter (e.g. PSD-derived reaction-wheel residuals)
+    /// that would otherwise alias instead of contributing motion blur.
+    pub max_drift_per_stamp_px: Option<f64>,
     /// Optional base RNG seed (combined per-tile with `(frame_idx, sensor_idx)`).
     pub base_seed: Option<u64>,
     /// If true, force `N = 1` per frame regardless of the adaptive budget.
@@ -268,6 +363,7 @@ impl Default for MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
             max_drift_per_sample_px: DEFAULT_MAX_DRIFT_PER_SAMPLE_PX,
+            max_drift_per_stamp_px: None,
             base_seed: None,
             force_static: false,
             quiet: false,
@@ -391,19 +487,68 @@ fn envelope_prefilter<'a>(
     Ok(kept)
 }
 
-/// Deterministic tile seed derived from `(base_seed, frame_idx, sensor_idx)`.
-fn tile_seed(base_seed: u64, frame_idx: usize, sensor_idx: usize) -> u64 {
-    // Cheap splitmix-style mix; reproducible, well-distributed enough for
-    // RNG seeding.
-    let mut h = base_seed
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(frame_idx as u64)
-        .wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= (sensor_idx as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 27;
-    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
-    h
+/// Named randomness sources within a single render tile. Each source
+/// gets its own deterministic seed derived from the tile's master
+/// seed, so perturbing one (e.g. changing the stamp-jitter sequence)
+/// cannot shift the bytes the others would have produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RngDomain {
+    /// Unified Poisson photon-noise draw on the accumulated mean image.
+    Poisson,
+    /// Gaussian read-noise draw applied after Poisson.
+    ReadNoise,
+    /// Stratified-MC uniform-random per-stamp time jitter inside each subsample.
+    StampJitter,
+}
+
+impl RngDomain {
+    /// Domain-specific 64-bit XOR tag. Values are arbitrary as long
+    /// as they are pairwise distinct; the downstream
+    /// `StdRng::seed_from_u64` does its own state expansion. Treat
+    /// these as labels, not as cryptographic constants.
+    const fn tag(self) -> u64 {
+        match self {
+            RngDomain::Poisson => 0x0000_0000_0000_0000,
+            RngDomain::ReadNoise => 0xA5A5_5A5A_A5A5_5A5A,
+            RngDomain::StampJitter => 0x4D6F_6E74_6543_6172, // "MonteCar" (8 ASCII bytes)
+        }
+    }
+}
+
+/// Per-tile master seed plus the API for deriving sub-stream seeds
+/// and RNGs for each [`RngDomain`]. All streams are deterministic
+/// from `(base_seed, frame_idx, sensor_idx)`, and each domain is
+/// independent of the others — adding a new randomness source via a
+/// new [`RngDomain`] variant does not perturb existing output.
+#[derive(Debug, Clone, Copy)]
+pub struct TileSeed(u64);
+
+impl TileSeed {
+    /// Build the per-tile master seed from `(base, frame_idx, sensor_idx)`.
+    pub fn for_tile(base: u64, frame_idx: usize, sensor_idx: usize) -> Self {
+        // Cheap splitmix-style mix; reproducible, well-distributed
+        // enough for RNG seeding.
+        let mut h = base
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(frame_idx as u64)
+            .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= (sensor_idx as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 27;
+        h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 31;
+        Self(h)
+    }
+
+    /// Sub-stream seed for APIs that consume `u64` directly
+    /// (e.g. [`apply_poisson_photon_noise`]).
+    pub fn seed(self, domain: RngDomain) -> u64 {
+        self.0 ^ domain.tag()
+    }
+
+    /// Sub-stream RNG ready to consume for APIs that take `&mut impl Rng`.
+    pub fn rng(self, domain: RngDomain) -> StdRng {
+        StdRng::seed_from_u64(self.seed(domain))
+    }
 }
 
 /// Render a single `(frame, sensor)` tile.
@@ -416,7 +561,7 @@ fn render_tile(
     sensor_idx: usize,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
-    tile_seed: u64,
+    tile_seed: TileSeed,
     output_path: &Path,
 ) -> Result<(), TrajectoryError> {
     let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
@@ -425,34 +570,51 @@ fn render_tile(
 
     let schedule = &plan.schedule;
     let dt = schedule.dt();
-    let sample_times = schedule.sample_times();
+    let stamps_per_sample = schedule.stamps_per_sample.max(1);
+    let stamp_weight = 1.0 / stamps_per_sample as f64;
 
-    for &t in &sample_times {
-        let t_clamped = t
-            .min(scene.trajectory.end_time())
-            .max(scene.trajectory.start_time());
-        let orientation = scene.trajectory.orientation_at(t_clamped)?;
-        for star in &plan.stars {
-            let hit =
-                match scene
-                    .fp
-                    .project_to_sensor(star, &orientation, sensor_idx, plan.padding_mm)
-                {
+    // Per-tile RNG for stratified-MC stamp placement. Iterating
+    // sample_idx in order with a single sequential RNG keeps the draw
+    // sequence (and therefore the stamp times, the orientation
+    // queries, and the deposited image) bit-deterministic for a
+    // given tile seed.
+    let mut stamp_rng = tile_seed.rng(RngDomain::StampJitter);
+
+    for sample_idx in 0..schedule.n.max(1) {
+        // Per-subsample per-star flux is shared across all M stamps of
+        // this subsample (flux depends on star+sensor only, not on
+        // orientation), so we pull it from the global cache once and
+        // hold a local copy to avoid M lock acquisitions per star.
+        let mut subsample_flux: HashMap<u64, SourceFlux> = HashMap::new();
+        for stamp_t in schedule.stamp_times_for_sample(sample_idx, &mut stamp_rng) {
+            let t_clamped = stamp_t
+                .min(scene.trajectory.end_time())
+                .max(scene.trajectory.start_time());
+            let orientation = scene.trajectory.orientation_at(t_clamped)?;
+            for star in &plan.stars {
+                let hit = match scene.fp.project_to_sensor(
+                    star,
+                    &orientation,
+                    sensor_idx,
+                    plan.padding_mm,
+                ) {
                     Some(px) => px,
                     None => continue,
                 };
-            let flux = {
-                let mut cache = flux_cache.lock().expect("flux cache mutex poisoned");
-                cache
-                    .entry((star.id, sensor_idx))
-                    .or_insert_with(|| star_data_to_fluxes(star, satellite))
-                    .clone()
-            };
-            // Per-subsample electron contribution for this star at this pixel
-            // position: flux.electrons is a rate (e-/s/cm^2), integrate over
-            // the subsample duration and telescope aperture.
-            let total_electrons = flux.electrons.integrated_over(&dt, aperture);
-            accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
+                let flux = subsample_flux.entry(star.id).or_insert_with(|| {
+                    let mut cache = flux_cache.lock().expect("flux cache mutex poisoned");
+                    cache
+                        .entry((star.id, sensor_idx))
+                        .or_insert_with(|| star_data_to_fluxes(star, satellite))
+                        .clone()
+                });
+                // Per-stamp electron contribution: integrate flux rate
+                // over the *subsample* dt, then split evenly across the
+                // subsample's M stamps. Sum over M stamps reproduces the
+                // single-stamp budget exactly.
+                let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+                accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
+            }
         }
     }
 
@@ -464,7 +626,8 @@ fn render_tile(
 
     // Build unified Poisson mean image and draw.
     let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
-    let poisson_image = apply_poisson_photon_noise(&mean_image, Some(tile_seed));
+    let poisson_image =
+        apply_poisson_photon_noise(&mean_image, Some(tile_seed.seed(RngDomain::Poisson)));
 
     // Gaussian read noise (electronics, not shot noise) applied afterwards.
     let read_noise_rms = satellite
@@ -474,7 +637,7 @@ fn render_tile(
         .unwrap_or(0.0)
         .max(0.0);
     let final_electrons = if read_noise_rms > 0.0 {
-        let mut rng = StdRng::seed_from_u64(tile_seed ^ 0xA5A5_5A5A_A5A5_5A5A);
+        let mut rng = tile_seed.rng(RngDomain::ReadNoise);
         let normal =
             Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
         poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
@@ -575,14 +738,16 @@ pub fn render_motion_trajectory(
                 frame_start: t,
                 exposure,
                 n: 1,
+                stamps_per_sample: 1,
             }
         } else {
-            SubsampleSchedule::adaptive(
+            SubsampleSchedule::adaptive_with_stamps(
                 t,
                 exposure,
                 drift,
                 px_scale,
                 config.max_drift_per_sample_px,
+                config.max_drift_per_stamp_px,
             )
         };
         n_min = n_min.min(schedule.n);
@@ -682,7 +847,7 @@ pub fn render_motion_trajectory(
         .map(|(tile, out_path)| {
             let plan = &plans[tile.frame_plan_idx];
             let sat = &satellites[tile.sensor_idx];
-            let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
+            let seed = TileSeed::for_tile(base_seed, plan.idx, tile.sensor_idx);
             let tile_started = Instant::now();
             let result = render_tile(
                 &scene,
@@ -1002,6 +1167,7 @@ mod tests {
             frame_start: Duration::from_secs(10),
             exposure: Duration::from_secs(4),
             n: 4,
+            stamps_per_sample: 1,
         };
         let times: Vec<f64> = sched
             .sample_times()
@@ -1016,6 +1182,137 @@ mod tests {
     }
 
     #[test]
+    fn test_stamp_times_one_stamp_uniform_in_subsample() {
+        // With stamps_per_sample = 1, the single stamp lands at a
+        // uniform-random time within the entire subsample window
+        // [t_sub_start, t_sub_start + dt_sub).
+        let sched = SubsampleSchedule {
+            frame_start: Duration::from_secs(10),
+            exposure: Duration::from_secs(4),
+            n: 4,
+            stamps_per_sample: 1,
+        };
+        let mut rng = StdRng::seed_from_u64(0xCAFE);
+        for i in 0..sched.n {
+            let stamps = sched.stamp_times_for_sample(i, &mut rng);
+            assert_eq!(stamps.len(), 1);
+            let lo = sched.frame_start.as_secs_f64() + i as f64 * 1.0;
+            let hi = lo + 1.0;
+            let t = stamps[0].as_secs_f64();
+            assert!(
+                t >= lo && t < hi,
+                "stamp {t} must fall inside subsample [{lo}, {hi})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stamp_times_stratified_into_equal_sub_bins() {
+        // M=4: each subsample window is divided into four equal sub-bins
+        // and each stamp lands at a uniform-random offset *within its
+        // own bin*. Verify the per-bin containment for a couple of
+        // (sample_idx, m, dt) combinations and that draws differ
+        // across calls (random) but stay within their stratum.
+        let sched = SubsampleSchedule {
+            frame_start: Duration::from_secs(10),
+            exposure: Duration::from_secs(4),
+            n: 4,
+            stamps_per_sample: 4,
+        };
+        let mut rng = StdRng::seed_from_u64(0xBEEF);
+        let stamps_first = sched.stamp_times_for_sample(0, &mut rng);
+        assert_eq!(stamps_first.len(), 4);
+        // Subsample 0 spans [10.0, 11.0); sub-bin width = 0.25.
+        for (j, t) in stamps_first.iter().enumerate() {
+            let lo = 10.0 + 0.25 * j as f64;
+            let hi = lo + 0.25;
+            let v = t.as_secs_f64();
+            assert!(
+                v >= lo && v < hi,
+                "stamp {v} (j={j}) must land in stratum [{lo}, {hi})"
+            );
+        }
+        // Subsample 3 spans [13.0, 14.0); same per-bin containment.
+        let stamps_last = sched.stamp_times_for_sample(3, &mut rng);
+        for (j, t) in stamps_last.iter().enumerate() {
+            let lo = 13.0 + 0.25 * j as f64;
+            let hi = lo + 0.25;
+            let v = t.as_secs_f64();
+            assert!(
+                v >= lo && v < hi,
+                "stamp {v} (j={j}) must land in stratum [{lo}, {hi})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stamp_times_seeded_rng_is_reproducible() {
+        // Two calls with two RNGs seeded identically must produce
+        // identical stamp time sequences — the determinism contract
+        // the renderer relies on.
+        let sched = SubsampleSchedule {
+            frame_start: Duration::ZERO,
+            exposure: Duration::from_secs(1),
+            n: 8,
+            stamps_per_sample: 16,
+        };
+        let mut rng_a = StdRng::seed_from_u64(0xDEADBEEF);
+        let mut rng_b = StdRng::seed_from_u64(0xDEADBEEF);
+        for i in 0..sched.n {
+            let a = sched.stamp_times_for_sample(i, &mut rng_a);
+            let b = sched.stamp_times_for_sample(i, &mut rng_b);
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_adaptive_with_stamps_picks_m_from_per_subsample_drift() {
+        // 10 px drift / 1s exposure, 0.1 px per-sub budget => N = 100, so each
+        // subsample sees 0.1 px drift. With per-stamp budget 0.01 px, each
+        // subsample should be split into M = 10 stamps.
+        let pixel_scale = 1e-5_f64;
+        let drift_px = 10.0;
+        let sched = SubsampleSchedule::adaptive_with_stamps(
+            Duration::ZERO,
+            Duration::from_secs(1),
+            drift_px * pixel_scale,
+            pixel_scale,
+            0.1,        // per-sub budget
+            Some(0.01), // per-stamp budget
+        );
+        assert_eq!(sched.n, 100);
+        assert_eq!(sched.stamps_per_sample, 10);
+    }
+
+    #[test]
+    fn test_adaptive_with_stamps_none_collapses_to_m_1() {
+        let pixel_scale = 1e-5_f64;
+        let sched = SubsampleSchedule::adaptive_with_stamps(
+            Duration::ZERO,
+            Duration::from_secs(1),
+            10.0 * pixel_scale,
+            pixel_scale,
+            0.1,
+            None,
+        );
+        assert_eq!(sched.stamps_per_sample, 1);
+    }
+
+    #[test]
+    fn test_adaptive_with_stamps_static_trajectory_gives_m_1() {
+        let sched = SubsampleSchedule::adaptive_with_stamps(
+            Duration::ZERO,
+            Duration::from_secs(1),
+            0.0, // no drift
+            1e-5,
+            0.1,
+            Some(0.01),
+        );
+        assert_eq!(sched.n, 1);
+        assert_eq!(sched.stamps_per_sample, 1);
+    }
+
+    #[test]
     fn test_sensor_accumulator_combined_mean() {
         let mut acc = SensorAccumulator::zero(4, 4);
         acc.star_mean_electrons[[1, 1]] = 5.0;
@@ -1026,14 +1323,31 @@ mod tests {
 
     #[test]
     fn test_tile_seed_is_deterministic_and_varies() {
-        let a = tile_seed(42, 0, 0);
-        let b = tile_seed(42, 0, 0);
-        let c = tile_seed(42, 1, 0);
-        let d = tile_seed(42, 0, 1);
+        let a = TileSeed::for_tile(42, 0, 0).seed(RngDomain::Poisson);
+        let b = TileSeed::for_tile(42, 0, 0).seed(RngDomain::Poisson);
+        let c = TileSeed::for_tile(42, 1, 0).seed(RngDomain::Poisson);
+        let d = TileSeed::for_tile(42, 0, 1).seed(RngDomain::Poisson);
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_ne!(a, d);
         assert_ne!(c, d);
+    }
+
+    #[test]
+    fn test_tile_seed_domains_are_independent() {
+        // The same tile must produce three distinct sub-seeds for the
+        // three named domains, so that perturbing (e.g.) the stamp
+        // jitter does not accidentally shift the Poisson or read-noise
+        // streams.
+        let tile = TileSeed::for_tile(1234, 5, 6);
+        let p = tile.seed(RngDomain::Poisson);
+        let r = tile.seed(RngDomain::ReadNoise);
+        let s = tile.seed(RngDomain::StampJitter);
+        assert_ne!(p, r);
+        assert_ne!(p, s);
+        assert_ne!(r, s);
+        // Same domain on the same tile must reproduce the same seed.
+        assert_eq!(tile.seed(RngDomain::StampJitter), s);
     }
 
     fn static_trajectory() -> Trajectory {
@@ -1347,6 +1661,139 @@ mod tests {
     }
 
     #[test]
+    fn test_per_stamp_render_is_deterministic() {
+        // Same (base_seed, frame, sensor, M) must produce byte-identical
+        // PNGs across runs even with the per-stamp inner loop active. A
+        // genuine sub-arcsec sweep across the exposure exercises the
+        // per-stamp orientation queries, not just the M=1 fallback.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let drift = Equatorial::from_degrees(45.0 + 0.001, 30.0); // ~3.6"
+        let traj = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(
+                Duration::from_secs(10),
+                orientation_from_pointing(&drift, 0.0),
+            ),
+        ])
+        .unwrap();
+        let stars: Vec<StarData> = (0..4)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.0,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0005 * i as f64,
+                    pointing.dec_degrees(),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: Some(0.01),
+            base_seed: Some(424242),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        let tmp_a = tempfile::tempdir().unwrap();
+        let tmp_b = tempfile::tempdir().unwrap();
+        render_motion_trajectory(
+            &traj,
+            &stars,
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp_a.path(),
+        )
+        .unwrap();
+        render_motion_trajectory(
+            &traj,
+            &stars,
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp_b.path(),
+        )
+        .unwrap();
+        let name = "sensor_00/frame_000000.png";
+        let a = std::fs::read(tmp_a.path().join(name)).unwrap();
+        let b = std::fs::read(tmp_b.path().join(name)).unwrap();
+        assert_eq!(a, b, "per-stamp rendering must be deterministic");
+    }
+
+    #[test]
+    fn test_per_stamp_changes_render_vs_per_subsample() {
+        // Same trajectory, same seed, only the per-stamp budget differs.
+        // The two outputs MUST differ — otherwise the inner stamp loop is
+        // a no-op. Uses a sweep big enough to cross multiple pixels so
+        // the smear shape is sensitive to where stamps land within each
+        // subsample.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let drift = Equatorial::from_degrees(45.0 + 0.01, 30.0); // ~36"
+        let traj = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(
+                Duration::from_secs(10),
+                orientation_from_pointing(&drift, 0.0),
+            ),
+        ])
+        .unwrap();
+        let stars = vec![StarData {
+            id: 0,
+            magnitude: 5.0,
+            position: pointing,
+            b_v: Some(0.6),
+        }];
+        let cfg_coarse = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            // Loose per-sub budget so N stays small and there's room for
+            // M to actually change the within-subsample distribution.
+            max_drift_per_sample_px: 1.0,
+            max_drift_per_stamp_px: None,
+            base_seed: Some(99),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        let cfg_fine = MotionBlurConfig {
+            max_drift_per_stamp_px: Some(0.05),
+            ..cfg_coarse.clone()
+        };
+        let tmp_coarse = tempfile::tempdir().unwrap();
+        let tmp_fine = tempfile::tempdir().unwrap();
+        render_motion_trajectory(
+            &traj,
+            &stars,
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg_coarse,
+            tmp_coarse.path(),
+        )
+        .unwrap();
+        render_motion_trajectory(
+            &traj,
+            &stars,
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg_fine,
+            tmp_fine.path(),
+        )
+        .unwrap();
+        let name = "sensor_00/frame_000000.png";
+        let coarse = std::fs::read(tmp_coarse.path().join(name)).unwrap();
+        let fine = std::fs::read(tmp_fine.path().join(name)).unwrap();
+        assert_ne!(
+            coarse, fine,
+            "raising stamps_per_sample on a moving trajectory must change the rendered streak"
+        );
+    }
+
+    #[test]
     fn test_frame_sensor_tile_parallelism_determinism() {
         // Rendering twice with the same seeds should produce identical
         // output bytes regardless of rayon pool size.
@@ -1414,6 +1861,7 @@ mod tests {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
             max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: None,
             base_seed: Some(seed),
             force_static: true,
             quiet: true,

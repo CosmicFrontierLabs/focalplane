@@ -626,6 +626,17 @@ struct Args {
 
     #[arg(
         long,
+        help = "Optional finer per-stamp drift budget in pixels. When set, each \
+                subsample is split into M PSF stamps so per-stamp drift stays \
+                below this threshold; M=1 (today's behavior) is used when unset. \
+                Capture high-frequency jitter (e.g. PSD-derived reaction-wheel \
+                residuals) by setting this an order of magnitude tighter than \
+                --max-drift-per-sample-px"
+    )]
+    max_drift_per_stamp_px: Option<f64>,
+
+    #[arg(
+        long,
         default_value_t = false,
         help = "Force N=1 subsample per frame (disables motion blur; for debugging)"
     )]
@@ -813,6 +824,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_dir: output_path,
             base_seed: Some(args.seed),
             max_drift_per_sample_px: Some(args.max_drift_per_sample_px),
+            max_drift_per_stamp_px: args.max_drift_per_stamp_px,
             force_static: args.force_static,
             quiet: args.quiet,
             telescope_name: telescope.name.clone(),
