@@ -12,7 +12,7 @@ use crate::image_proc::render::{StarInFocalPlane, StarInFrame};
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::sims::motion_blur::{
-    render_motion_trajectory, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_SAMPLE_PX,
+    render_motion_trajectory, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_STAMP_PX,
 };
 use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
@@ -163,6 +163,52 @@ impl Trajectory {
     pub fn pointing_at(&self, t: Duration) -> Result<Equatorial, TrajectoryError> {
         let q = self.orientation_at(t)?;
         Ok(boresight_of(&q))
+    }
+
+    /// Maximum angular distance (radians) between any waypoint
+    /// orientation in `[t_start, t_end]` and a chosen `reference`
+    /// orientation. Scans every waypoint inside the window plus the
+    /// two SLERP-interpolated boundary orientations; returns the
+    /// largest deviation.
+    ///
+    /// This is the *peak excursion* of the trajectory relative to the
+    /// reference, and is the right padding budget for an envelope
+    /// prefilter that only projects stars at the reference orientation
+    /// — it tells you how far the focal-plane AABB must be inflated to
+    /// catch any star whose excursion brings it onto the sensor at
+    /// some moment during the window.
+    ///
+    /// Distinct from [`Self::pointing_at`] etc.: returns a *bound on
+    /// motion* over the window, not an instantaneous orientation.
+    pub fn peak_excursion_rad(
+        &self,
+        t_start: Duration,
+        t_end: Duration,
+        reference: &UnitQuaternion<f64>,
+    ) -> Result<f64, TrajectoryError> {
+        if t_end <= t_start {
+            return Ok(0.0);
+        }
+        let lo = t_start.max(self.start_time());
+        let hi = t_end.min(self.end_time());
+        if hi <= lo {
+            return Ok(0.0);
+        }
+        let mut peak = 0.0_f64;
+        let q_lo = self.orientation_at(lo)?;
+        let q_hi = self.orientation_at(hi)?;
+        peak = peak.max(reference.angle_to(&q_lo));
+        peak = peak.max(reference.angle_to(&q_hi));
+        for wp in &self.waypoints {
+            if wp.time <= lo {
+                continue;
+            }
+            if wp.time >= hi {
+                break;
+            }
+            peak = peak.max(reference.angle_to(&wp.orientation));
+        }
+        Ok(peak)
     }
 
     /// Generate evenly spaced frame times from start to end. Each
@@ -330,17 +376,13 @@ pub struct TrajectoryRenderConfig<'a> {
     pub output_dir: &'a Path,
     /// Optional RNG seed for reproducible noise.
     pub base_seed: Option<u64>,
-    /// Optional override for the per-subsample drift budget (pixels).
-    /// Defaults to [`crate::sims::motion_blur::DEFAULT_MAX_DRIFT_PER_SAMPLE_PX`].
-    pub max_drift_per_sample_px: Option<f64>,
-    /// Optional finer per-stamp drift budget (pixels). When `Some`,
-    /// each subsample is divided into `M` PSF stamps so drift per stamp
-    /// stays below this threshold; when `None`, `M = 1` and behavior
-    /// matches the original renderer. Use this to capture
-    /// high-frequency jitter that would otherwise alias across
-    /// subsamples (e.g. PSD-derived reaction-wheel residuals).
+    /// Optional override for the per-stamp drift budget (pixels). Total
+    /// stamps per exposure is derived from this and the trajectory's
+    /// per-frame angular path length. Defaults to
+    /// [`crate::sims::motion_blur::DEFAULT_MAX_DRIFT_PER_STAMP_PX`].
     pub max_drift_per_stamp_px: Option<f64>,
-    /// Force a single sub-orientation per frame regardless of drift.
+    /// Force a single stamp per frame regardless of drift. Useful for
+    /// debugging.
     pub force_static: bool,
     /// Suppress the indicatif progress bar during rendering.
     pub quiet: bool,
@@ -367,10 +409,9 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
     let motion_cfg = MotionBlurConfig {
         timestep: config.timestep,
         exposure: config.exposure,
-        max_drift_per_sample_px: config
-            .max_drift_per_sample_px
-            .unwrap_or(DEFAULT_MAX_DRIFT_PER_SAMPLE_PX),
-        max_drift_per_stamp_px: config.max_drift_per_stamp_px,
+        max_drift_per_stamp_px: config
+            .max_drift_per_stamp_px
+            .unwrap_or(DEFAULT_MAX_DRIFT_PER_STAMP_PX),
         base_seed: config.base_seed,
         force_static: config.force_static,
         quiet: config.quiet,
@@ -493,6 +534,55 @@ mod tests {
         assert_eq!(times.len(), 10);
         assert_eq!(*times.last().unwrap(), Duration::from_secs(9));
         assert!(times.iter().all(|t| *t < traj.end_time()));
+    }
+
+    #[test]
+    fn test_peak_excursion_static_is_zero() {
+        let p = make_pointing(45.0, 0.0);
+        let traj = Trajectory::from_endpoints(p, p, Duration::from_secs(10)).unwrap();
+        let q_mid = traj.orientation_at(Duration::from_secs(5)).unwrap();
+        let exc = traj
+            .peak_excursion_rad(Duration::ZERO, Duration::from_secs(10), &q_mid)
+            .unwrap();
+        assert!(
+            exc < 1e-12,
+            "static trajectory peak excursion = {exc} (expected ~0)"
+        );
+    }
+
+    #[test]
+    fn test_peak_excursion_linear_is_half_total_drift() {
+        // Linear sweep from RA 0 to RA 1 deg over 10 s. The mid-time
+        // orientation is at RA 0.5 deg, so the maximum deviation from
+        // mid-time is at the endpoints — half the total angular sweep.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(0.0, 0.0),
+            make_pointing(1.0, 0.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let q_mid = traj.orientation_at(Duration::from_secs(5)).unwrap();
+        let exc = traj
+            .peak_excursion_rad(Duration::ZERO, Duration::from_secs(10), &q_mid)
+            .unwrap();
+        let expected = 0.5_f64.to_radians();
+        assert_abs_diff_eq!(exc, expected, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn test_peak_excursion_clamps_to_trajectory_window() {
+        let traj = Trajectory::from_endpoints(
+            make_pointing(0.0, 0.0),
+            make_pointing(1.0, 0.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let q_mid = traj.orientation_at(Duration::from_secs(5)).unwrap();
+        // Window beyond end: returns 0 because hi-lo collapses
+        let exc = traj
+            .peak_excursion_rad(Duration::from_secs(20), Duration::from_secs(30), &q_mid)
+            .unwrap();
+        assert_eq!(exc, 0.0);
     }
 
     #[test]

@@ -97,8 +97,8 @@ pub struct FrameMeta {
     pub boresight: EquatorialMeta,
     /// Mid-frame roll angle derived from `quat`, in degrees.
     pub roll_deg: f64,
-    /// Number of sub-orientation samples used inside this exposure.
-    pub n_subsamples: usize,
+    /// Total number of stratified-MC PSF stamps deposited across this exposure.
+    pub n_stamps: usize,
     /// Map from `"sensor_NN"` (zero-padded sensor index) to the relative
     /// forward-slash PNG path, e.g. `"sensor_00/frame_000000.png"`.
     pub paths: BTreeMap<String, String>,
@@ -150,11 +150,11 @@ pub struct RenderConfigMeta {
     pub exposure_s: f64,
     /// Time between successive frame start times, in seconds.
     pub timestep_s: f64,
-    /// Per-subsample drift budget in pixels.
-    pub max_drift_per_sample_px: f64,
+    /// Per-stamp drift budget in pixels.
+    pub max_drift_per_stamp_px: f64,
     /// Base RNG seed used to derive per-tile seeds.
     pub seed: u64,
-    /// If true, the adaptive scheduler was bypassed (N = 1 per frame).
+    /// If true, the adaptive scheduler was bypassed (a single PSF stamp per frame).
     pub force_static: bool,
     /// Catalog path the run was configured with.
     pub catalog_path: String,
@@ -245,7 +245,7 @@ mod tests {
             render_config: RenderConfigMeta {
                 exposure_s: 1.0,
                 timestep_s: 1.0,
-                max_drift_per_sample_px: 0.1,
+                max_drift_per_stamp_px: 0.1,
                 seed: 42,
                 force_static: false,
                 catalog_path: "catalog.bin".to_string(),
