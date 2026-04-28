@@ -1,19 +1,19 @@
 //! Parallel motion-blur renderer for focal-plane trajectories.
 //!
-//! Replaces the static-per-frame trajectory renderer with an integrator
-//! that averages many spacecraft sub-orientations across each exposure.
-//! The number of sub-orientations per frame is chosen adaptively so that
-//! the per-subsample boresight drift stays below a fraction of a pixel;
-//! when the trajectory is static the schedule collapses to a single sample
-//! per frame.
+//! Each frame's exposure window is integrated as a single flat
+//! stratified-Monte-Carlo sequence of PSF stamps. The total stamp
+//! count is chosen adaptively from a per-stamp drift budget so the
+//! trajectory's angular path between consecutive stamps stays below
+//! a fraction of a pixel; for a static trajectory the schedule
+//! collapses to a single stamp.
 //!
 //! # Noise model
 //!
 //! A single unified Poisson draw is taken per `(frame, sensor)` over the
 //! mean-electron image comprising:
 //!
-//! - Star contributions accumulated across all subsamples (each subsample
-//!   contributes its own `dt = exposure / N` electron rate).
+//! - Star contributions accumulated across all stamps (each stamp
+//!   contributes `flux × dt` electrons where `dt = exposure / stamps_per_exposure`).
 //! - A uniform zodiacal mean evaluated at the frame's central boresight.
 //! - A uniform dark-current mean from the per-sensor dark current rate
 //!   times the full exposure duration.
@@ -38,7 +38,6 @@ use chrono::SecondsFormat;
 use image::{ImageBuffer, Luma};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
-use nalgebra::UnitQuaternion;
 use ndarray::Array2;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
@@ -63,161 +62,104 @@ use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::trajectory::{Trajectory, TrajectoryError};
 use crate::star_math::star_data_to_fluxes;
 
-/// Default per-subsample drift budget (in pixels). Adaptive scheduling picks
-/// the smallest N that keeps per-subsample drift below this threshold.
-pub const DEFAULT_MAX_DRIFT_PER_SAMPLE_PX: f64 = 0.1;
+/// Default per-stamp drift budget (in pixels). The total stamp count is
+/// derived as `ceil(total_drift_rad / (DEFAULT_MAX_DRIFT_PER_STAMP_PX * pixel_scale_rad))`.
+pub const DEFAULT_MAX_DRIFT_PER_STAMP_PX: f64 = 0.1;
 
-/// Time-domain subsampling schedule inside an exposure window.
+/// Time-domain stamp schedule inside an exposure window.
 ///
-/// A `SubsampleSchedule` describes how a frame's exposure is sliced in
-/// time. Two cadences:
+/// A `SubsampleSchedule` describes a single flat sequence of
+/// PSF-stamp times across the exposure: the window is divided into
+/// `stamps_per_exposure` equal-width sub-bins and each stamp lands at
+/// a uniform-random offset within its sub-bin (stratified Monte
+/// Carlo). Stratification preserves smooth-integrand convergence
+/// while removing the systematic bias a regular grid produces against
+/// trajectory tones near `k / Δt_stamp`.
 ///
-/// - **`n` sub-orientation samples** drive *scene-state* refresh
-///   (per-star flux, the in-field star slice, the zodiacal mean).
-///   Adaptive: chosen to keep per-subsample boresight drift under
-///   `max_drift_per_sample_px`. Typically 1–10.
-/// - **`stamps_per_sample` finer trajectory queries inside each
-///   subsample** drive *PSF-stamp* placement via **stratified Monte
-///   Carlo**: each subsample window is divided into `m` equal-width
-///   sub-bins, and each stamp lands at a uniform-random offset within
-///   its sub-bin. Each stamp queries the trajectory at its own time
-///   and deposits `flux / m` electrons at the per-time projected
-///   pixel position. Stratification preserves smooth-integrand
-///   convergence while removing the systematic bias a regular grid
-///   produces against trajectory tones near `k / Δt_sub`.
+/// Each stamp queries the trajectory at its own time, projects every
+/// in-field star, and deposits `flux / stamps_per_exposure` electrons
+/// at the per-time projected pixel position.
 ///
-/// Subsample boundaries are midpoints so the integral of a
-/// linearly-varying rate over the exposure equals the midpoint value
-/// times the exposure; dividing by `n` yields the per-subsample
-/// contribution and dividing again by `stamps_per_sample` yields the
-/// per-stamp contribution.
+/// `envelope_padding_rad` is the safety padding the *envelope
+/// prefilter* uses to inflate the focal-plane AABB so that any star
+/// whose excursion brings it onto the sensor at any point during the
+/// exposure is retained. It is the only thing the renderer needs from
+/// "scene-state cadence" — there is no separate subsample-level loop
+/// for scene state.
 #[derive(Debug, Clone, Copy)]
 pub struct SubsampleSchedule {
     /// Absolute trajectory time at which the frame's exposure starts.
     pub frame_start: Duration,
     /// Total exposure duration for this frame.
     pub exposure: Duration,
-    /// Number of sub-orientation samples across the exposure (>= 1).
-    pub n: usize,
-    /// Number of fine trajectory queries inside each subsample (>= 1).
-    /// `1` reproduces the original one-stamp-per-subsample behavior.
-    pub stamps_per_sample: usize,
+    /// Total number of stratified-MC PSF stamps across the exposure (>= 1).
+    pub stamps_per_exposure: usize,
+    /// Peak excursion of the trajectory from the frame's mid-time
+    /// orientation, in radians. The envelope prefilter inflates the
+    /// focal-plane AABB by this amount (converted to mm) on top of
+    /// its own PSF-extent padding.
+    pub envelope_padding_rad: f64,
 }
 
 impl SubsampleSchedule {
-    /// Sub-sample interval: `exposure / n`.
+    /// Per-stamp duration: `exposure / stamps_per_exposure`. Each
+    /// stamp's electron contribution is integrated over this `dt`.
     pub fn dt(&self) -> Duration {
-        Duration::from_secs_f64(self.exposure.as_secs_f64() / self.n.max(1) as f64)
+        Duration::from_secs_f64(
+            self.exposure.as_secs_f64() / self.stamps_per_exposure.max(1) as f64,
+        )
     }
 
-    /// Evenly spaced sample midpoints inside the exposure window:
-    /// `frame_start + (i + 0.5) * dt` for `i in 0..n`.
-    pub fn sample_times(&self) -> Vec<Duration> {
-        let dt = self.exposure.as_secs_f64() / self.n.max(1) as f64;
+    /// Stratified Monte Carlo stamp times across the entire exposure
+    /// window. Returns a vector of length `stamps_per_exposure.max(1)`.
+    /// Stamp `j` lands at `frame_start + (j + U_j) * dt`, where
+    /// `U_j ~ Uniform[0, 1)` is drawn from `rng` and
+    /// `dt = exposure / stamps_per_exposure`.
+    pub fn stamp_times<R: Rng>(&self, rng: &mut R) -> Vec<Duration> {
+        let total = self.stamps_per_exposure.max(1);
+        let dt = self.exposure.as_secs_f64() / total as f64;
         let t0 = self.frame_start.as_secs_f64();
-        (0..self.n.max(1))
-            .map(|i| Duration::from_secs_f64(t0 + (i as f64 + 0.5) * dt))
-            .collect()
-    }
-
-    /// Stratified Monte Carlo stamp times inside subsample `sample_idx`.
-    /// Returns a vector of length `stamps_per_sample.max(1)`. Stamp `j`
-    /// lands at `t_sub_start + (j + U) * stamp_dt`, where `U ~ Uniform[0, 1)`
-    /// is drawn from `rng` and `stamp_dt = (exposure / n) / m`. The
-    /// stratification by sub-bin guarantees one stamp per equal-width
-    /// slice of the subsample window; randomness within each slice
-    /// removes the bias a fixed-midpoint grid produces against
-    /// trajectory content at frequencies near `k / stamp_dt`.
-    pub fn stamp_times_for_sample<R: Rng>(&self, sample_idx: usize, rng: &mut R) -> Vec<Duration> {
-        let n = self.n.max(1);
-        let m = self.stamps_per_sample.max(1);
-        let dt = self.exposure.as_secs_f64() / n as f64;
-        let stamp_dt = dt / m as f64;
-        let t_sub_start = self.frame_start.as_secs_f64() + sample_idx as f64 * dt;
-        (0..m)
+        (0..total)
             .map(|j| {
                 let u: f64 = rng.random();
-                Duration::from_secs_f64(t_sub_start + (j as f64 + u) * stamp_dt)
+                Duration::from_secs_f64(t0 + (j as f64 + u) * dt)
             })
             .collect()
     }
 
-    /// Adaptive schedule from a drift budget.
-    ///
-    /// `max_drift_rad_over_exposure` is the total angular distance the
-    /// spacecraft is expected to travel over the full exposure window
-    /// (radians). `pixel_scale_rad` is the instrument's angular resolution
-    /// per pixel. `max_drift_per_sample_px` is the per-subsample drift
-    /// budget in pixels (typically 0.1).
-    ///
-    /// `N = max(1, ceil(max_drift_over_exposure_rad / (max_drift_per_sample_px * pixel_scale_rad)))`
-    ///
-    /// When the drift budget is zero (static pointing), `N = 1`.
-    /// `stamps_per_sample` is set to 1 — see [`Self::adaptive_with_stamps`]
-    /// for finer per-subsample stamping.
-    pub fn adaptive(
-        frame_start: Duration,
-        exposure: Duration,
-        max_drift_rad_over_exposure: f64,
-        pixel_scale_rad: f64,
-        max_drift_per_sample_px: f64,
-    ) -> Self {
-        Self::adaptive_with_stamps(
-            frame_start,
-            exposure,
-            max_drift_rad_over_exposure,
-            pixel_scale_rad,
-            max_drift_per_sample_px,
-            None,
-        )
+    /// Frame mid-time, used as the reference orientation for envelope
+    /// prefiltering and zodiacal evaluation.
+    pub fn mid_time(&self) -> Duration {
+        self.frame_start + self.exposure / 2
     }
 
-    /// Adaptive schedule that also picks `stamps_per_sample` from a
-    /// finer per-stamp drift budget. When `max_drift_per_stamp_px` is
-    /// `Some(b)`, each subsample is divided into
-    /// `M = max(1, ceil((per-subsample drift) / (b * pixel_scale)))`
-    /// stamps. When `None`, `M = 1` and behavior is identical to
-    /// [`Self::adaptive`]. The two budgets are independent: the outer
-    /// one drives scene-state refresh, the inner one drives PSF-stamp
-    /// placement and is what actually captures sub-subsample jitter.
-    pub fn adaptive_with_stamps(
+    /// Construct a schedule from a per-stamp drift budget plus a peak
+    /// excursion (both in radians). Stamp count is
+    /// `ceil(total_drift_rad / (max_drift_per_stamp_px * pixel_scale_rad))`,
+    /// minimum 1. Envelope padding stores `peak_excursion_rad` directly
+    /// for later mm conversion in [`envelope_prefilter`].
+    pub fn from_drift_budget(
         frame_start: Duration,
         exposure: Duration,
-        max_drift_rad_over_exposure: f64,
+        total_drift_rad_over_exposure: f64,
+        peak_excursion_rad: f64,
         pixel_scale_rad: f64,
-        max_drift_per_sample_px: f64,
-        max_drift_per_stamp_px: Option<f64>,
+        max_drift_per_stamp_px: f64,
     ) -> Self {
-        let n = if max_drift_rad_over_exposure <= 0.0
+        let stamps_per_exposure = if total_drift_rad_over_exposure <= 0.0
             || pixel_scale_rad <= 0.0
-            || max_drift_per_sample_px <= 0.0
+            || max_drift_per_stamp_px <= 0.0
         {
             1
         } else {
-            let budget_rad = max_drift_per_sample_px * pixel_scale_rad;
-            (max_drift_rad_over_exposure / budget_rad).ceil() as usize
-        };
-        let n = n.max(1);
-        let stamps_per_sample = match max_drift_per_stamp_px {
-            Some(stamp_budget_px)
-                if stamp_budget_px > 0.0
-                    && pixel_scale_rad > 0.0
-                    && max_drift_rad_over_exposure > 0.0 =>
-            {
-                // Per-subsample drift assumes the trajectory is
-                // approximately uniform over the exposure (the same
-                // assumption the per-sample budget already makes).
-                let per_sub_drift_rad = max_drift_rad_over_exposure / n as f64;
-                let stamp_budget_rad = stamp_budget_px * pixel_scale_rad;
-                ((per_sub_drift_rad / stamp_budget_rad).ceil() as usize).max(1)
-            }
-            _ => 1,
+            let budget_rad = max_drift_per_stamp_px * pixel_scale_rad;
+            ((total_drift_rad_over_exposure / budget_rad).ceil() as usize).max(1)
         };
         Self {
             frame_start,
             exposure,
-            n,
-            stamps_per_sample,
+            stamps_per_exposure,
+            envelope_padding_rad: peak_excursion_rad.max(0.0),
         }
     }
 }
@@ -325,21 +267,14 @@ pub struct MotionBlurConfig {
     pub timestep: Duration,
     /// Exposure duration per frame.
     pub exposure: Duration,
-    /// Per-subsample drift budget in pixels. The adaptive scheduler picks
-    /// `N` so that drift per subsample stays below this threshold.
-    pub max_drift_per_sample_px: f64,
-    /// Optional finer per-stamp drift budget (pixels). When `Some(b)`,
-    /// each subsample is divided into `M` PSF stamps so drift per
-    /// stamp stays below `b`. When `None`, `M = 1` and behavior matches
-    /// the original one-stamp-per-subsample renderer. Set this an order
-    /// of magnitude tighter than `max_drift_per_sample_px` to capture
-    /// high-frequency jitter (e.g. PSD-derived reaction-wheel residuals)
-    /// that would otherwise alias instead of contributing motion blur.
-    pub max_drift_per_stamp_px: Option<f64>,
+    /// Per-stamp drift budget in pixels. Total stamps per exposure
+    /// is derived as `ceil(total_drift_rad / (max_drift_per_stamp_px *
+    /// pixel_scale_rad))`. Tighten to capture high-frequency jitter.
+    pub max_drift_per_stamp_px: f64,
     /// Optional base RNG seed (combined per-tile with `(frame_idx, sensor_idx)`).
     pub base_seed: Option<u64>,
-    /// If true, force `N = 1` per frame regardless of the adaptive budget.
-    /// Useful for debugging and performance comparisons.
+    /// If true, force `stamps_per_exposure = 1` per frame regardless of the
+    /// adaptive budget. Useful for debugging and performance comparisons.
     pub force_static: bool,
     /// If true, suppress the indicatif progress bar (INFO logs still emit).
     /// Intended for non-interactive runs where the bar adds noise.
@@ -362,8 +297,7 @@ impl Default for MotionBlurConfig {
         Self {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: DEFAULT_MAX_DRIFT_PER_SAMPLE_PX,
-            max_drift_per_stamp_px: None,
+            max_drift_per_stamp_px: DEFAULT_MAX_DRIFT_PER_STAMP_PX,
             base_seed: None,
             force_static: false,
             quiet: false,
@@ -433,53 +367,58 @@ fn pixel_scale_rad(fp: &FocalPlaneConfig) -> Option<f64> {
     Some(sat.plate_scale_per_pixel().as_radians())
 }
 
-/// Envelope-prefilter: prune catalog stars whose padded mm position never
-/// lands on the array's total AABB for any orientation sampled on this
-/// frame's exposure window. Conservative: uses the frame's mid-time
-/// orientation plus explicit sub-orientations to build a coverage padding.
+/// Envelope-prefilter: prune catalog stars whose mid-time projected
+/// position falls outside the focal-plane AABB inflated by the
+/// per-frame **peak excursion** plus a fixed PSF-extent margin.
 ///
-/// This version is stricter than `project_stars_to_focal_plane_oriented`
-/// in that it unions the in-band stars across the subsamples, so a star
-/// that swings across the edge during the exposure is retained.
+/// One orientation lookup per star (mid-frame) instead of one per
+/// schedule sample point. Correctness comes from the inflated AABB:
+/// any star whose position at mid-frame is within
+/// `padding_mm + excursion_mm` of the focal-plane envelope can
+/// possibly project onto a sensor at *some* time during the exposure,
+/// so it must be in the candidate set. Per-stamp `project_to_sensor`
+/// then decides whether each stamp actually lands on the detector.
 fn envelope_prefilter<'a>(
     trajectory: &Trajectory,
     catalog_stars: &'a [StarData],
     schedule: &SubsampleSchedule,
     fp: &FocalPlaneConfig,
     padding_mm: f64,
+    pixel_scale_rad: f64,
 ) -> Result<Vec<&'a StarData>, TrajectoryError> {
     let (min_x, min_y, max_x, max_y) = match fp.total_aabb_mm() {
         Some(aabb) => aabb,
         None => return Ok(Vec::new()),
     };
-    let sample_times = schedule.sample_times();
-    let mut orientations: Vec<UnitQuaternion<f64>> = Vec::with_capacity(sample_times.len() + 2);
-    for t in sample_times {
-        let t = t.min(trajectory.end_time()).max(trajectory.start_time());
-        orientations.push(trajectory.orientation_at(t)?);
-    }
-    // Add the exposure endpoints (clamped) so stars that only enter or leave
-    // during the frame are retained.
-    let t_start = schedule.frame_start.max(trajectory.start_time());
-    let t_end = (schedule.frame_start + schedule.exposure).min(trajectory.end_time());
-    orientations.push(trajectory.orientation_at(t_start)?);
-    orientations.push(trajectory.orientation_at(t_end)?);
+    let mid_t = schedule
+        .mid_time()
+        .min(trajectory.end_time())
+        .max(trajectory.start_time());
+    let q_mid = trajectory.orientation_at(mid_t)?;
+
+    // Convert peak excursion (radians) to a mm padding via the focal
+    // length implied by the pixel scale. mm/rad = pixel_size_mm / pixel_scale_rad
+    // collapses to focal_length_mm; we just need (rad * focal_length_mm) which
+    // we get from any sensor's pixel size and pixel-scale ratio.
+    let excursion_mm = if pixel_scale_rad > 0.0 {
+        if let Some(sat) = fp.satellite_for_sensor(0) {
+            let pixel_size_mm = sat.sensor.pixel_size().as_millimeters();
+            schedule.envelope_padding_rad * (pixel_size_mm / pixel_scale_rad)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    let pad = padding_mm + excursion_mm;
 
     let mut kept: Vec<&'a StarData> = Vec::new();
     for star in catalog_stars {
-        let mut hit = false;
-        for q in &orientations {
-            if let Some((x_mm, y_mm)) = fp.sky_to_mm(&star.position, q) {
-                if x_mm >= min_x - padding_mm
-                    && x_mm <= max_x + padding_mm
-                    && y_mm >= min_y - padding_mm
-                    && y_mm <= max_y + padding_mm
-                {
-                    hit = true;
-                    break;
-                }
-            }
-        }
+        let hit = if let Some((x_mm, y_mm)) = fp.sky_to_mm(&star.position, &q_mid) {
+            x_mm >= min_x - pad && x_mm <= max_x + pad && y_mm >= min_y - pad && y_mm <= max_y + pad
+        } else {
+            false
+        };
         if hit {
             kept.push(star);
         }
@@ -553,8 +492,9 @@ impl TileSeed {
 
 /// Render a single `(frame, sensor)` tile.
 ///
-/// Runs the adaptive subsample loop, composes the unified Poisson lambda,
-/// draws Poisson + Gaussian read noise, quantizes, and saves a PNG.
+/// Runs one flat stratified-MC stamp loop across the exposure,
+/// composes the unified Poisson lambda, draws Poisson + Gaussian
+/// read noise, quantizes, and saves a PNG.
 fn render_tile(
     scene: &RenderScene,
     plan: &FramePlan,
@@ -570,51 +510,44 @@ fn render_tile(
 
     let schedule = &plan.schedule;
     let dt = schedule.dt();
-    let stamps_per_sample = schedule.stamps_per_sample.max(1);
-    let stamp_weight = 1.0 / stamps_per_sample as f64;
+    let stamp_weight = 1.0 / schedule.stamps_per_exposure.max(1) as f64;
 
-    // Per-tile RNG for stratified-MC stamp placement. Iterating
-    // sample_idx in order with a single sequential RNG keeps the draw
-    // sequence (and therefore the stamp times, the orientation
-    // queries, and the deposited image) bit-deterministic for a
-    // given tile seed.
+    // Per-tile RNG for stratified-MC stamp placement; sequential
+    // consumption keeps the stamp-time sequence bit-deterministic
+    // for a given tile seed.
     let mut stamp_rng = tile_seed.rng(RngDomain::StampJitter);
 
-    for sample_idx in 0..schedule.n.max(1) {
-        // Per-subsample per-star flux is shared across all M stamps of
-        // this subsample (flux depends on star+sensor only, not on
-        // orientation), so we pull it from the global cache once and
-        // hold a local copy to avoid M lock acquisitions per star.
-        let mut subsample_flux: HashMap<u64, SourceFlux> = HashMap::new();
-        for stamp_t in schedule.stamp_times_for_sample(sample_idx, &mut stamp_rng) {
-            let t_clamped = stamp_t
-                .min(scene.trajectory.end_time())
-                .max(scene.trajectory.start_time());
-            let orientation = scene.trajectory.orientation_at(t_clamped)?;
-            for star in &plan.stars {
-                let hit = match scene.fp.project_to_sensor(
-                    star,
-                    &orientation,
-                    sensor_idx,
-                    plan.padding_mm,
-                ) {
+    // One-shot per-tile cache of (star -> SourceFlux) lookups. Flux
+    // depends only on (star, sensor), not on orientation, so the
+    // value is stable across every stamp of the exposure.
+    let mut local_flux: HashMap<u64, SourceFlux> = HashMap::new();
+
+    for stamp_t in schedule.stamp_times(&mut stamp_rng) {
+        let t_clamped = stamp_t
+            .min(scene.trajectory.end_time())
+            .max(scene.trajectory.start_time());
+        let orientation = scene.trajectory.orientation_at(t_clamped)?;
+        for star in &plan.stars {
+            let hit =
+                match scene
+                    .fp
+                    .project_to_sensor(star, &orientation, sensor_idx, plan.padding_mm)
+                {
                     Some(px) => px,
                     None => continue,
                 };
-                let flux = subsample_flux.entry(star.id).or_insert_with(|| {
-                    let mut cache = flux_cache.lock().expect("flux cache mutex poisoned");
-                    cache
-                        .entry((star.id, sensor_idx))
-                        .or_insert_with(|| star_data_to_fluxes(star, satellite))
-                        .clone()
-                });
-                // Per-stamp electron contribution: integrate flux rate
-                // over the *subsample* dt, then split evenly across the
-                // subsample's M stamps. Sum over M stamps reproduces the
-                // single-stamp budget exactly.
-                let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
-                accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
-            }
+            let flux = local_flux.entry(star.id).or_insert_with(|| {
+                let mut cache = flux_cache.lock().expect("flux cache mutex poisoned");
+                cache
+                    .entry((star.id, sensor_idx))
+                    .or_insert_with(|| star_data_to_fluxes(star, satellite))
+                    .clone()
+            });
+            // Per-stamp electron contribution: flux rate × per-stamp
+            // dt (= exposure / stamps_per_exposure) × aperture. Sum
+            // over all stamps reproduces the full exposure budget.
+            let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+            accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
         }
     }
 
@@ -684,10 +617,10 @@ pub fn render_motion_trajectory(
     let total_tiles = total_frames * sensor_count;
     info!(
         "Rendering trajectory: {total_frames} frames × {sensor_count} sensors = {total_tiles} \
-         tiles, exposure={:.3}s, timestep={:.3}s, max_drift_per_sample_px={:.3}",
+         tiles, exposure={:.3}s, timestep={:.3}s, max_drift_per_stamp_px={:.3}",
         config.exposure.as_secs_f64(),
         config.timestep.as_secs_f64(),
-        config.max_drift_per_sample_px,
+        config.max_drift_per_stamp_px,
     );
 
     // Pre-build per-sensor satellite configs (cheap, avoids lock-free work
@@ -723,43 +656,46 @@ pub fn render_motion_trajectory(
 
     let zlight = ZodiacalLight::new();
     let mut plans: Vec<FramePlan> = Vec::with_capacity(total_frames);
-    let mut n_min = usize::MAX;
-    let mut n_max = 0usize;
+    let mut stamps_min = usize::MAX;
+    let mut stamps_max = 0usize;
     for (frame_idx, &t) in frame_times.iter().enumerate() {
         let exposure = config.exposure;
         // Clamp the exposure window to the trajectory so we do not try to
         // sample beyond the defined range.
         let t_end = (t + exposure).min(scene.trajectory.end_time());
         let exposure = if t_end > t { t_end - t } else { Duration::ZERO };
+
+        // Mid-frame orientation drives both the envelope-padding peak
+        // excursion calculation and the zodiacal evaluation.
+        let mid_t = (t + exposure / 2)
+            .min(scene.trajectory.end_time())
+            .max(scene.trajectory.start_time());
+        let mid_q = scene.trajectory.orientation_at(mid_t)?;
+        let mid_bore = boresight_of(&mid_q);
+
         let drift = max_drift_over_window(scene.trajectory, t, t_end)?;
+        let peak_excursion = scene.trajectory.peak_excursion_rad(t, t_end, &mid_q)?;
 
         let schedule = if config.force_static || exposure.is_zero() {
             SubsampleSchedule {
                 frame_start: t,
                 exposure,
-                n: 1,
-                stamps_per_sample: 1,
+                stamps_per_exposure: 1,
+                envelope_padding_rad: peak_excursion,
             }
         } else {
-            SubsampleSchedule::adaptive_with_stamps(
+            SubsampleSchedule::from_drift_budget(
                 t,
                 exposure,
                 drift,
+                peak_excursion,
                 px_scale,
-                config.max_drift_per_sample_px,
                 config.max_drift_per_stamp_px,
             )
         };
-        n_min = n_min.min(schedule.n);
-        n_max = n_max.max(schedule.n);
+        stamps_min = stamps_min.min(schedule.stamps_per_exposure);
+        stamps_max = stamps_max.max(schedule.stamps_per_exposure);
 
-        // Mid-frame boresight for zodiacal evaluation.
-        let mid_t = t + schedule.exposure / 2;
-        let mid_t = mid_t
-            .min(scene.trajectory.end_time())
-            .max(scene.trajectory.start_time());
-        let mid_q = scene.trajectory.orientation_at(mid_t)?;
-        let mid_bore = boresight_of(&mid_q);
         let zodiacal_per_px_per_s =
             zodiacal_per_px_per_s_at(&zlight, &first_sat, &scene.zodiacal, &mid_bore);
         let exposure_s = schedule.exposure.as_secs_f64();
@@ -774,15 +710,16 @@ pub fn render_motion_trajectory(
             &schedule,
             scene.fp,
             padding_mm,
+            px_scale,
         )?;
         // Per-frame summary routed through the bar so it coexists with the
         // live progress line without scrambled output.
         pb.println(format!(
-            "frame {:06} at t={:.3}s: N={} subsamples, boresight=(ra={:.4}°, dec={:.4}°), \
+            "frame {:06} at t={:.3}s: stamps={}, boresight=(ra={:.4}°, dec={:.4}°), \
              stars={}",
             frame_idx,
             t.as_secs_f64(),
-            schedule.n,
+            schedule.stamps_per_exposure,
             mid_bore.ra_degrees(),
             mid_bore.dec_degrees(),
             stars.len(),
@@ -796,12 +733,12 @@ pub fn render_motion_trajectory(
         });
     }
     if total_frames == 0 {
-        n_min = 0;
-        n_max = 0;
+        stamps_min = 0;
+        stamps_max = 0;
     }
     info!(
-        "Adaptive N per frame: min={} max={} (force_static={})",
-        n_min, n_max, config.force_static
+        "Stamps per exposure: min={} max={} (force_static={})",
+        stamps_min, stamps_max, config.force_static
     );
 
     // Build (frame, sensor) tile list.
@@ -859,10 +796,10 @@ pub fn render_motion_trajectory(
                 out_path,
             );
             debug!(
-                "tile frame={} sensor={} N={} stars={} elapsed={}ms",
+                "tile frame={} sensor={} stamps={} stars={} elapsed={}ms",
                 plan.idx,
                 tile.sensor_idx,
-                plan.schedule.n,
+                plan.schedule.stamps_per_exposure,
                 plan.stars.len(),
                 tile_started.elapsed().as_millis(),
             );
@@ -993,7 +930,7 @@ fn build_render_metadata(
                 dec_deg: bore.dec_degrees(),
             },
             roll_deg: roll_of(&q).to_degrees(),
-            n_subsamples: schedule.n,
+            n_stamps: schedule.stamps_per_exposure,
             paths,
         });
     }
@@ -1032,7 +969,7 @@ fn build_render_metadata(
     let render_config = RenderConfigMeta {
         exposure_s: config.exposure.as_secs_f64(),
         timestep_s: config.timestep.as_secs_f64(),
-        max_drift_per_sample_px: config.max_drift_per_sample_px,
+        max_drift_per_stamp_px: config.max_drift_per_stamp_px,
         seed: config.base_seed.unwrap_or(0),
         force_static: config.force_static,
         catalog_path: config.catalog_path.to_string_lossy().into_owned(),
@@ -1108,6 +1045,7 @@ mod tests {
     use crate::sims::orientation::orientation_from_pointing;
     use crate::sims::trajectory::Waypoint;
     use approx::assert_abs_diff_eq;
+    use nalgebra::UnitQuaternion;
     use shared::units::{Length, LengthExt, Temperature, TemperatureExt};
     use std::f64::consts::PI;
 
@@ -1126,117 +1064,56 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_schedule_static_gives_n_1() {
-        let sched = SubsampleSchedule::adaptive(
+    fn test_from_drift_budget_static_gives_one_stamp() {
+        let sched = SubsampleSchedule::from_drift_budget(
             Duration::ZERO,
             Duration::from_secs(1),
             0.0, // zero drift
+            0.0, // zero excursion
             1e-6,
             0.1,
         );
-        assert_eq!(sched.n, 1);
-        assert_eq!(sched.sample_times().len(), 1);
+        assert_eq!(sched.stamps_per_exposure, 1);
+        assert_eq!(sched.envelope_padding_rad, 0.0);
     }
 
     #[test]
-    fn test_adaptive_schedule_respects_budget() {
-        // 10 px of drift at pixel_scale=1e-5 rad/px with a 0.1 px budget
-        // should yield N = ceil(10 / 0.1) = 100.
+    fn test_from_drift_budget_picks_total_stamps_from_path_length() {
+        // 10 px of total path length at pixel_scale=1e-5 rad/px with a
+        // 0.1 px per-stamp budget should yield 100 total stamps.
         let pixel_scale = 1e-5_f64;
         let drift_px = 10.0;
         let budget_px = 0.1;
-        let sched = SubsampleSchedule::adaptive(
+        let excursion_rad = 0.5_f64 * pixel_scale; // arbitrary positive
+        let sched = SubsampleSchedule::from_drift_budget(
             Duration::ZERO,
             Duration::from_secs(1),
             drift_px * pixel_scale,
+            excursion_rad,
             pixel_scale,
             budget_px,
         );
         let expected = (drift_px / budget_px).ceil() as usize;
-        assert!(
-            (sched.n as isize - expected as isize).abs() <= 1,
-            "got {} expected {}",
-            sched.n,
-            expected
-        );
+        assert_eq!(sched.stamps_per_exposure, expected);
+        assert_abs_diff_eq!(sched.envelope_padding_rad, excursion_rad, epsilon = 1e-15);
     }
 
     #[test]
-    fn test_sample_times_midpoints() {
+    fn test_stamp_times_are_stratified_uniformly_across_exposure() {
+        // 4 stamps over a 4s exposure: each stamp must land in its own
+        // 1s sub-bin [j, j+1) (uniform-random within the bin).
         let sched = SubsampleSchedule {
             frame_start: Duration::from_secs(10),
             exposure: Duration::from_secs(4),
-            n: 4,
-            stamps_per_sample: 1,
-        };
-        let times: Vec<f64> = sched
-            .sample_times()
-            .iter()
-            .map(|d| d.as_secs_f64())
-            .collect();
-        // midpoints: 10 + (0.5, 1.5, 2.5, 3.5) = 10.5, 11.5, 12.5, 13.5
-        assert_abs_diff_eq!(times[0], 10.5, epsilon = 1e-12);
-        assert_abs_diff_eq!(times[1], 11.5, epsilon = 1e-12);
-        assert_abs_diff_eq!(times[2], 12.5, epsilon = 1e-12);
-        assert_abs_diff_eq!(times[3], 13.5, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn test_stamp_times_one_stamp_uniform_in_subsample() {
-        // With stamps_per_sample = 1, the single stamp lands at a
-        // uniform-random time within the entire subsample window
-        // [t_sub_start, t_sub_start + dt_sub).
-        let sched = SubsampleSchedule {
-            frame_start: Duration::from_secs(10),
-            exposure: Duration::from_secs(4),
-            n: 4,
-            stamps_per_sample: 1,
-        };
-        let mut rng = StdRng::seed_from_u64(0xCAFE);
-        for i in 0..sched.n {
-            let stamps = sched.stamp_times_for_sample(i, &mut rng);
-            assert_eq!(stamps.len(), 1);
-            let lo = sched.frame_start.as_secs_f64() + i as f64 * 1.0;
-            let hi = lo + 1.0;
-            let t = stamps[0].as_secs_f64();
-            assert!(
-                t >= lo && t < hi,
-                "stamp {t} must fall inside subsample [{lo}, {hi})"
-            );
-        }
-    }
-
-    #[test]
-    fn test_stamp_times_stratified_into_equal_sub_bins() {
-        // M=4: each subsample window is divided into four equal sub-bins
-        // and each stamp lands at a uniform-random offset *within its
-        // own bin*. Verify the per-bin containment for a couple of
-        // (sample_idx, m, dt) combinations and that draws differ
-        // across calls (random) but stay within their stratum.
-        let sched = SubsampleSchedule {
-            frame_start: Duration::from_secs(10),
-            exposure: Duration::from_secs(4),
-            n: 4,
-            stamps_per_sample: 4,
+            stamps_per_exposure: 4,
+            envelope_padding_rad: 0.0,
         };
         let mut rng = StdRng::seed_from_u64(0xBEEF);
-        let stamps_first = sched.stamp_times_for_sample(0, &mut rng);
-        assert_eq!(stamps_first.len(), 4);
-        // Subsample 0 spans [10.0, 11.0); sub-bin width = 0.25.
-        for (j, t) in stamps_first.iter().enumerate() {
-            let lo = 10.0 + 0.25 * j as f64;
-            let hi = lo + 0.25;
-            let v = t.as_secs_f64();
-            assert!(
-                v >= lo && v < hi,
-                "stamp {v} (j={j}) must land in stratum [{lo}, {hi})"
-            );
-        }
-        // Subsample 3 spans [13.0, 14.0); same per-bin containment.
-        let stamps_last = sched.stamp_times_for_sample(3, &mut rng);
-        for (j, t) in stamps_last.iter().enumerate() {
-            let lo = 13.0 + 0.25 * j as f64;
-            let hi = lo + 0.25;
+        let stamps = sched.stamp_times(&mut rng);
+        assert_eq!(stamps.len(), 4);
+        for (j, t) in stamps.iter().enumerate() {
+            let lo = 10.0 + j as f64;
+            let hi = lo + 1.0;
             let v = t.as_secs_f64();
             assert!(
                 v >= lo && v < hi,
@@ -1253,63 +1130,25 @@ mod tests {
         let sched = SubsampleSchedule {
             frame_start: Duration::ZERO,
             exposure: Duration::from_secs(1),
-            n: 8,
-            stamps_per_sample: 16,
+            stamps_per_exposure: 128,
+            envelope_padding_rad: 0.0,
         };
         let mut rng_a = StdRng::seed_from_u64(0xDEADBEEF);
         let mut rng_b = StdRng::seed_from_u64(0xDEADBEEF);
-        for i in 0..sched.n {
-            let a = sched.stamp_times_for_sample(i, &mut rng_a);
-            let b = sched.stamp_times_for_sample(i, &mut rng_b);
-            assert_eq!(a, b);
-        }
+        let a = sched.stamp_times(&mut rng_a);
+        let b = sched.stamp_times(&mut rng_b);
+        assert_eq!(a, b);
     }
 
     #[test]
-    fn test_adaptive_with_stamps_picks_m_from_per_subsample_drift() {
-        // 10 px drift / 1s exposure, 0.1 px per-sub budget => N = 100, so each
-        // subsample sees 0.1 px drift. With per-stamp budget 0.01 px, each
-        // subsample should be split into M = 10 stamps.
-        let pixel_scale = 1e-5_f64;
-        let drift_px = 10.0;
-        let sched = SubsampleSchedule::adaptive_with_stamps(
-            Duration::ZERO,
-            Duration::from_secs(1),
-            drift_px * pixel_scale,
-            pixel_scale,
-            0.1,        // per-sub budget
-            Some(0.01), // per-stamp budget
-        );
-        assert_eq!(sched.n, 100);
-        assert_eq!(sched.stamps_per_sample, 10);
-    }
-
-    #[test]
-    fn test_adaptive_with_stamps_none_collapses_to_m_1() {
-        let pixel_scale = 1e-5_f64;
-        let sched = SubsampleSchedule::adaptive_with_stamps(
-            Duration::ZERO,
-            Duration::from_secs(1),
-            10.0 * pixel_scale,
-            pixel_scale,
-            0.1,
-            None,
-        );
-        assert_eq!(sched.stamps_per_sample, 1);
-    }
-
-    #[test]
-    fn test_adaptive_with_stamps_static_trajectory_gives_m_1() {
-        let sched = SubsampleSchedule::adaptive_with_stamps(
-            Duration::ZERO,
-            Duration::from_secs(1),
-            0.0, // no drift
-            1e-5,
-            0.1,
-            Some(0.01),
-        );
-        assert_eq!(sched.n, 1);
-        assert_eq!(sched.stamps_per_sample, 1);
+    fn test_mid_time_is_exposure_midpoint() {
+        let sched = SubsampleSchedule {
+            frame_start: Duration::from_secs(10),
+            exposure: Duration::from_secs(4),
+            stamps_per_exposure: 4,
+            envelope_padding_rad: 0.0,
+        };
+        assert_eq!(sched.mid_time(), Duration::from_secs(12));
     }
 
     #[test]
@@ -1385,7 +1224,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(7),
             force_static,
             quiet: true,
@@ -1428,7 +1267,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(10),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(3),
             force_static: true,
             quiet: true,
@@ -1469,7 +1308,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(11),
             force_static: true,
             quiet: true,
@@ -1529,7 +1368,7 @@ mod tests {
         let cfg_static = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(101),
             force_static: false,
             quiet: true,
@@ -1583,36 +1422,16 @@ mod tests {
         fp: &FocalPlaneConfig,
         cfg: &MotionBlurConfig,
     ) -> SensorAccumulator {
-        let first_sat = fp.satellite_for_sensor(0).unwrap();
-        let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
-        let airy_pix = first_sat.airy_disk_pixel_space();
-        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
-        let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
-
-        let t_start = Duration::ZERO;
-        let t_end = (t_start + cfg.exposure).min(trajectory.end_time());
-        let exposure = t_end - t_start;
-        let drift = max_drift_over_window(trajectory, t_start, t_end).unwrap();
-        let schedule = SubsampleSchedule::adaptive(
-            t_start,
-            exposure,
-            drift,
-            px_scale,
-            cfg.max_drift_per_sample_px,
-        );
-        let (width, height) = first_sat.sensor.dimensions.get_pixel_width_height();
-        let mut acc = SensorAccumulator::zero(width, height);
-        let aperture = first_sat.telescope.clear_aperture_area();
-        let flux = star_data_to_fluxes(star, &first_sat);
-        let dt = schedule.dt();
-        for t in schedule.sample_times() {
-            let q = trajectory.orientation_at(t).unwrap();
-            if let Some((px, py)) = fp.project_to_sensor(star, &q, 0, padding_mm) {
-                let total = flux.electrons.integrated_over(&dt, aperture);
-                acc.splat_psf(px, py, total, &flux.electrons.disk);
-            }
-        }
-        acc
+        // Test-only adaptor: forwards to the stratified-MC helper with
+        // a fixed seed so the legacy test that just checks "blur depresses
+        // the peak" stays deterministic.
+        simulate_tile_accumulator_stratified(
+            trajectory,
+            star,
+            fp,
+            cfg,
+            TileSeed::for_tile(0xDEADBEEF, 0, 0),
+        )
     }
 
     #[test]
@@ -1631,7 +1450,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(0),
             force_static: true,
             quiet: true,
@@ -1691,8 +1510,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
-            max_drift_per_stamp_px: Some(0.01),
+            max_drift_per_stamp_px: 0.01,
             base_seed: Some(424242),
             force_static: false,
             quiet: true,
@@ -1751,17 +1569,16 @@ mod tests {
         let cfg_coarse = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            // Loose per-sub budget so N stays small and there's room for
-            // M to actually change the within-subsample distribution.
-            max_drift_per_sample_px: 1.0,
-            max_drift_per_stamp_px: None,
+            // Loose per-stamp budget keeps the total stamp count low
+            // so individual stamp positions are visible in the output.
+            max_drift_per_stamp_px: 1.0,
             base_seed: Some(99),
             force_static: false,
             quiet: true,
             ..Default::default()
         };
         let cfg_fine = MotionBlurConfig {
-            max_drift_per_stamp_px: Some(0.05),
+            max_drift_per_stamp_px: 0.05,
             ..cfg_coarse.clone()
         };
         let tmp_coarse = tempfile::tempdir().unwrap();
@@ -1789,7 +1606,7 @@ mod tests {
         let fine = std::fs::read(tmp_fine.path().join(name)).unwrap();
         assert_ne!(
             coarse, fine,
-            "raising stamps_per_sample on a moving trajectory must change the rendered streak"
+            "tightening max_drift_per_stamp_px on a moving trajectory must change the rendered streak"
         );
     }
 
@@ -1814,7 +1631,7 @@ mod tests {
         let cfg = MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(1337),
             force_static: false,
             quiet: true,
@@ -1860,8 +1677,7 @@ mod tests {
         MotionBlurConfig {
             timestep: Duration::from_secs(1),
             exposure: Duration::from_secs(1),
-            max_drift_per_sample_px: 0.1,
-            max_drift_per_stamp_px: None,
+            max_drift_per_stamp_px: 0.1,
             base_seed: Some(seed),
             force_static: true,
             quiet: true,
@@ -2073,10 +1889,9 @@ mod tests {
     // axis (and not at all on the orthogonal axis).
     // -----------------------------------------------------------------------
 
-    /// Stratified-MC accumulator helper, parallel to
-    /// [`simulate_tile_accumulator`] but using the per-stamp inner loop
-    /// instead of a single per-subsample stamp. Uses `adaptive_with_stamps`
-    /// so the per-stamp budget on `cfg` is honored.
+    /// Stratified-MC accumulator helper. Mirrors the production
+    /// [`render_tile`] flat stamp loop without the Poisson + read-noise
+    /// + PNG-write tail, returning the pre-noise mean-electron image.
     fn simulate_tile_accumulator_stratified(
         trajectory: &Trajectory,
         star: &StarData,
@@ -2094,12 +1909,19 @@ mod tests {
         let t_end = (t_start + cfg.exposure).min(trajectory.end_time());
         let exposure = t_end - t_start;
         let drift = max_drift_over_window(trajectory, t_start, t_end).unwrap();
-        let schedule = SubsampleSchedule::adaptive_with_stamps(
+        let mid_t = (t_start + exposure / 2)
+            .min(trajectory.end_time())
+            .max(trajectory.start_time());
+        let mid_q = trajectory.orientation_at(mid_t).unwrap();
+        let peak_excursion = trajectory
+            .peak_excursion_rad(t_start, t_end, &mid_q)
+            .unwrap();
+        let schedule = SubsampleSchedule::from_drift_budget(
             t_start,
             exposure,
             drift,
+            peak_excursion,
             px_scale,
-            cfg.max_drift_per_sample_px,
             cfg.max_drift_per_stamp_px,
         );
         let (width, height) = first_sat.sensor.dimensions.get_pixel_width_height();
@@ -2107,19 +1929,16 @@ mod tests {
         let aperture = first_sat.telescope.clear_aperture_area();
         let flux = star_data_to_fluxes(star, &first_sat);
         let dt = schedule.dt();
-        let stamps_per_sample = schedule.stamps_per_sample.max(1);
-        let stamp_weight = 1.0 / stamps_per_sample as f64;
+        let stamp_weight = 1.0 / schedule.stamps_per_exposure.max(1) as f64;
         let mut stamp_rng = seed.rng(RngDomain::StampJitter);
-        for sample_idx in 0..schedule.n.max(1) {
-            for stamp_t in schedule.stamp_times_for_sample(sample_idx, &mut stamp_rng) {
-                let t_clamped = stamp_t
-                    .min(trajectory.end_time())
-                    .max(trajectory.start_time());
-                let q = trajectory.orientation_at(t_clamped).unwrap();
-                if let Some((px, py)) = fp.project_to_sensor(star, &q, 0, padding_mm) {
-                    let total = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
-                    acc.splat_psf(px, py, total, &flux.electrons.disk);
-                }
+        for stamp_t in schedule.stamp_times(&mut stamp_rng) {
+            let t_clamped = stamp_t
+                .min(trajectory.end_time())
+                .max(trajectory.start_time());
+            let q = trajectory.orientation_at(t_clamped).unwrap();
+            if let Some((px, py)) = fp.project_to_sensor(star, &q, 0, padding_mm) {
+                let total = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+                acc.splat_psf(px, py, total, &flux.electrons.disk);
             }
         }
         acc
@@ -2240,12 +2059,11 @@ mod tests {
             build_pure_tone_trajectory(pointing, amp_rad, tone_freq_hz, traj_end, body_axis);
 
         // Loose per-sample budget so N stays modest; tight per-stamp
-        // budget so the stratified-MC inner loop captures the tone.
+        // budget so the stratified-MC stamp loop captures the tone.
         let cfg = MotionBlurConfig {
             timestep: exposure,
             exposure,
-            max_drift_per_sample_px: 0.5,
-            max_drift_per_stamp_px: Some(0.05),
+            max_drift_per_stamp_px: 0.05,
             base_seed: Some(7),
             force_static: false,
             quiet: true,
