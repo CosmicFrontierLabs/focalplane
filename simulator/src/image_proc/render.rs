@@ -212,7 +212,7 @@ impl Renderer {
     /// # Returns
     /// A new Renderer with the base star image pre-computed
     ///
-    pub fn from_stars(stars: &Vec<StarInFrame>, satellite_config: SatelliteConfig) -> Self {
+    pub fn from_stars(stars: &[StarInFrame], satellite_config: SatelliteConfig) -> Self {
         // Create base star image for 1 second exposure
         let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
         let base_star_image = add_stars_to_image(
@@ -226,7 +226,7 @@ impl Renderer {
         Self {
             satellite_config,
             base_star_image,
-            rendered_stars: stars.clone(),
+            rendered_stars: stars.to_vec(),
         }
     }
 
@@ -381,7 +381,7 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
 pub fn add_stars_to_image(
     width: usize,
     height: usize,
-    stars: &Vec<StarInFrame>,
+    stars: &[StarInFrame],
     exposure: &Duration,
     aperture: Area,
 ) -> Array2<f64> {

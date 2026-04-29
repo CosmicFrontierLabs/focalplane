@@ -107,7 +107,7 @@ fn test_algorithm(
         let e_image = add_stars_to_image(
             args.domain,
             args.domain,
-            &vec![star],
+            std::slice::from_ref(&star),
             &args.shared.exposure.0,
             satellite.telescope.clear_aperture_area(),
         );
