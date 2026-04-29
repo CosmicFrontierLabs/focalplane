@@ -49,3 +49,6 @@ __pycache__/
 .pytest_cache/
 remote-test-results/
 exp_logs/gyro_parsed.csv
+
+# Local planning / scratch design docs (never committed)
+planning/
