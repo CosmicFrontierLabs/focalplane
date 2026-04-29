@@ -125,6 +125,14 @@ pub struct Scene {
     /// Indexed by sensor index in the array.
     pub per_sensor_stars: Vec<Vec<StarInFrame>>,
 
+    /// Galaxies projected and routed to each sensor's pixel coordinates,
+    /// in the same per-sensor order as `per_sensor_stars`. Empty by
+    /// default; populate via [`Scene::with_galaxies`] (or hand-construct
+    /// for tests / synthetic scenes). Galaxies splat into the same
+    /// mean-electron buffer as stars, so the unified Poisson stage
+    /// applies once to the combined image (INVARIANTS §1).
+    pub per_sensor_galaxies: Vec<Vec<crate::scene_galaxy::GalaxyInFrame>>,
+
     /// Celestial pointing center for the observation.
     pub pointing_center: Equatorial,
 
@@ -161,10 +169,12 @@ impl Scene {
         let fp_stars =
             project_stars_to_focal_plane(&star_refs, &pointing_center, &focal_plane, padding_mm);
         let per_sensor_stars = route_stars_to_sensors(&fp_stars, &focal_plane, padding_mm);
+        let n_sensors = per_sensor_stars.len();
 
         Self {
             focal_plane,
             per_sensor_stars,
+            per_sensor_galaxies: vec![Vec::new(); n_sensors],
             pointing_center,
             zodiacal_coordinates,
         }
@@ -181,12 +191,36 @@ impl Scene {
         pointing_center: Equatorial,
         zodiacal_coordinates: SolarAngularCoordinates,
     ) -> Self {
+        let n_sensors = per_sensor_stars.len();
         Self {
             focal_plane,
             per_sensor_stars,
+            per_sensor_galaxies: vec![Vec::new(); n_sensors],
             pointing_center,
             zodiacal_coordinates,
         }
+    }
+
+    /// Attach pre-computed per-sensor galaxies to the scene. Builder
+    /// method — returns `self` so it can chain off
+    /// [`Scene::from_catalog`] / [`Scene::from_stars`].
+    ///
+    /// `per_sensor_galaxies.len()` must equal the sensor count or
+    /// the method panics — the indexing parity with `per_sensor_stars`
+    /// is what lets the renderer iterate sensors uniformly.
+    pub fn with_galaxies(
+        mut self,
+        per_sensor_galaxies: Vec<Vec<crate::scene_galaxy::GalaxyInFrame>>,
+    ) -> Self {
+        assert_eq!(
+            per_sensor_galaxies.len(),
+            self.per_sensor_stars.len(),
+            "per_sensor_galaxies length ({}) must match per_sensor_stars length ({})",
+            per_sensor_galaxies.len(),
+            self.per_sensor_stars.len()
+        );
+        self.per_sensor_galaxies = per_sensor_galaxies;
+        self
     }
 
     /// Render all sensors and return one `RenderingResult` per sensor.
@@ -212,7 +246,11 @@ impl Scene {
                 .satellite_for_sensor(sensor_idx)
                 .expect("sensor index in range");
 
-            let renderer = Renderer::from_stars(&self.per_sensor_stars[sensor_idx], sat);
+            let renderer = Renderer::from_stars_and_galaxies(
+                &self.per_sensor_stars[sensor_idx],
+                &self.per_sensor_galaxies[sensor_idx],
+                sat,
+            );
 
             let seed = base_seed.map(|s| s + sensor_idx as u64);
             let rendered = renderer.render_with_seed(exposure, &self.zodiacal_coordinates, seed);

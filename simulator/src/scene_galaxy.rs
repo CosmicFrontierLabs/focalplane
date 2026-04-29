@@ -66,6 +66,15 @@ mod tests {
     /// `SourceFlux` instead of running through the spectrum pipeline
     /// since the integration coupling lives outside this module.
     fn fixture_galaxy(x: f64, y: f64, electron_rate: f64) -> GalaxyInFrame {
+        fixture_galaxy_at_scale(x, y, electron_rate, 0.5)
+    }
+
+    fn fixture_galaxy_at_scale(
+        x: f64,
+        y: f64,
+        electron_rate: f64,
+        arcsec_per_pixel: f64,
+    ) -> GalaxyInFrame {
         let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
         let spot = SpotFlux {
             disk: psf,
@@ -81,7 +90,7 @@ mod tests {
             axis_ratio: 0.6,
             position_angle_deg: 30.0,
         };
-        let deposit = SersicSplat::new(profile, 0.5);
+        let deposit = SersicSplat::new(profile, arcsec_per_pixel);
         GalaxyInFrame {
             x,
             y,
@@ -116,6 +125,165 @@ mod tests {
             buf_a.as_slice().unwrap(),
             acc.star_mean_electrons.as_slice().unwrap(),
             "static and splat_galaxy paths must be byte-identical"
+        );
+    }
+
+    /// **End-to-end flux roundtrip**: build a `Renderer` containing
+    /// only a single galaxy (no stars), render with Poisson disabled,
+    /// and verify the sum of all electron pixels equals the galaxy's
+    /// expected `flux_rate × aperture × exposure` within the
+    /// truncation budget.
+    ///
+    /// This is the most direct test that the SersicSplat normalisation,
+    /// the Renderer's `from_stars_and_galaxies` plumbing, the
+    /// `apply_poisson=false` short-circuit, and the per-exposure linear
+    /// scaling all compose correctly. Any unit error or missing factor
+    /// along the chain shows up here.
+    #[test]
+    fn end_to_end_flux_roundtrip_through_renderer() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::SatelliteConfig;
+        use crate::hardware::TelescopeConfig;
+        use crate::image_proc::render::Renderer;
+        use crate::photometry::zodiacal::SolarAngularCoordinates;
+        use shared::units::{Length, LengthExt as _, Temperature, TemperatureExt as _};
+
+        // Build a satellite config with the test sensor + a fixed-FWHM
+        // telescope. The exact aperture / focal length don't matter
+        // for the roundtrip — they cancel out via integrated_over.
+        let telescope = TelescopeConfig::new(
+            "Roundtrip test",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = GSENSE4040BSI.clone();
+        let temp = Temperature::from_celsius(-10.0);
+        let satellite = SatelliteConfig::new(telescope, sensor, temp);
+        let aperture = satellite.telescope.clear_aperture_area();
+
+        // Place a galaxy at a centred sub-pixel position on the sensor.
+        let (w, h) = satellite.sensor.dimensions.get_pixel_width_height();
+        let cx = (w as f64) * 0.5;
+        let cy = (h as f64) * 0.5;
+        let electron_rate = 5_000.0_f64; // electrons / s / cm²
+                                         // Use a well-resolved deposit (50 pixels per θ_eff) so the
+                                         // adaptive Simpson sub-pixel integrator converges within the
+                                         // documented 2% truncation budget.
+        let g = fixture_galaxy_at_scale(cx, cy, electron_rate, 0.1);
+        let exposure = Duration::from_secs(2);
+        let total_in = g.flux.electrons.integrated_over(&exposure, aperture);
+
+        // Render via the static path with Poisson disabled — the
+        // resulting `star_image` is the *mean* electron buffer with
+        // both stars (empty) and galaxies splatted in, scaled by
+        // exposure.
+        let renderer = Renderer::from_stars_and_galaxies(&[], &[g], satellite);
+        let zodi = SolarAngularCoordinates::new(180.0, 60.0).unwrap();
+        let result = renderer.render_with_options(&exposure, &zodi, false, None);
+        let total_out: f64 = result.star_image.iter().sum();
+
+        // Expect within the SersicSplat truncation budget: > 95% of
+        // input flux is captured (loose bound covers high-n wings),
+        // and never exceeds input (Simpson sub-sample is a bounded
+        // integrator).
+        let captured = total_out / total_in;
+        assert!(
+            captured > 0.95 && captured < 1.02,
+            "renderer flux roundtrip: input {total_in:.4} electrons, output {total_out:.4} electrons (captured {captured:.4})"
+        );
+    }
+
+    /// **INVARIANTS §1 lock — variance equals mean (Poisson identity)**.
+    /// Render a galaxy-only scene N times with different RNG seeds and
+    /// no read noise; per-pixel variance over the trials must equal
+    /// per-pixel mean within Monte-Carlo error. Anchors the property
+    /// `Var[Poisson(λ)] = E[Poisson(λ)] = λ` against any future bug
+    /// that introduces a per-source or per-stamp Poisson, which would
+    /// shift the variance/mean ratio away from 1.
+    ///
+    /// `#[ignore]` because it's slow (200 trials × full render). Run
+    /// manually:
+    ///   cargo test -p simulator --lib scene_galaxy --
+    ///       --ignored variance_equals_mean_poisson_identity
+    #[test]
+    #[ignore]
+    fn variance_equals_mean_poisson_identity() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::SatelliteConfig;
+        use crate::hardware::TelescopeConfig;
+        use crate::image_proc::render::Renderer;
+        use crate::photometry::zodiacal::SolarAngularCoordinates;
+        use ndarray::Array2;
+        use shared::units::{Length, LengthExt as _, Temperature, TemperatureExt as _};
+
+        let telescope = TelescopeConfig::new(
+            "Poisson test",
+            Length::from_meters(0.5),
+            Length::from_meters(2.5),
+            0.8,
+        );
+        let sensor = GSENSE4040BSI.clone();
+        let temp = Temperature::from_celsius(-10.0);
+        let satellite = SatelliteConfig::new(telescope, sensor, temp);
+
+        let (w, h) = satellite.sensor.dimensions.get_pixel_width_height();
+        let cx = (w as f64) * 0.5;
+        let cy = (h as f64) * 0.5;
+        // Lower electron rate keeps per-pixel mean small enough that
+        // the Poisson identity is detectable; high rate gets dominated
+        // by the variance of the variance estimator.
+        let g = fixture_galaxy_at_scale(cx, cy, 50.0, 0.1);
+        let renderer = Renderer::from_stars_and_galaxies(&[], &[g], satellite);
+        let zodi = SolarAngularCoordinates::new(180.0, 60.0).unwrap();
+        let exposure = Duration::from_secs(2);
+
+        let n_trials = 200_u32;
+        let mut sum: Option<Array2<f64>> = None;
+        let mut sum_sq: Option<Array2<f64>> = None;
+        for trial in 0..n_trials {
+            // Render with Poisson on but force read noise off by
+            // computing only the star_image (which the Renderer
+            // already separates from sensor noise).
+            let result = renderer.render_with_options(
+                &exposure,
+                &zodi,
+                true, // apply Poisson
+                Some(0xCAFE_F00D ^ trial as u64),
+            );
+            let img = result.star_image;
+            sum = Some(match sum {
+                Some(s) => &s + &img,
+                None => img.clone(),
+            });
+            sum_sq = Some(match sum_sq {
+                Some(s) => &s + &(&img * &img),
+                None => &img * &img,
+            });
+        }
+        let n = n_trials as f64;
+        let mean = sum.unwrap() / n;
+        let var = sum_sq.unwrap() / n - &mean * &mean;
+
+        // Restrict to pixels with non-trivial flux so the variance
+        // estimator isn't dominated by the zero-mean tail.
+        let mut ratios = Vec::new();
+        for (m, v) in mean.iter().zip(var.iter()) {
+            if *m > 1.0 {
+                ratios.push(v / m);
+            }
+        }
+        assert!(!ratios.is_empty(), "no high-mean pixels to evaluate");
+        let mean_ratio: f64 = ratios.iter().sum::<f64>() / ratios.len() as f64;
+        // Pure-Poisson identity: ratio should be 1.0 within MC bound
+        // ~ √(2/(N-1)) ≈ 0.10 for N=200. Allow ±0.10 — tighter would
+        // be flaky on modest sample sizes; looser would let regressions
+        // through.
+        assert!(
+            (mean_ratio - 1.0).abs() < 0.10,
+            "Poisson variance/mean ratio averaged over {} pixels = {:.4}, expected ≈ 1.0",
+            ratios.len(),
+            mean_ratio
         );
     }
 
