@@ -9,13 +9,14 @@ use crate::{
         satellite::FocalPlaneConfig, sensor_noise::generate_sensor_noise, SatelliteConfig,
         SensorConfig,
     },
+    image_proc::deposit::{render_sources, FrameSource},
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
     sims::orientation::orientation_from_pointing,
     star_math::star_data_to_fluxes,
 };
 use meter_math::Locatable2d;
 use shared::{
-    image_proc::noise::apply_poisson_photon_noise,
+    image_proc::{airy::PixelScaledAiryDisk, noise::apply_poisson_photon_noise},
     units::{Area, LengthExt},
 };
 
@@ -35,6 +36,25 @@ impl Locatable2d for StarInFrame {
 
     fn y(&self) -> f64 {
         self.y
+    }
+}
+
+/// `FrameSource` impl for star-in-frame: the deposit is the chromatic
+/// effective Airy disk attached to the star's photoelectron flux, and
+/// the per-frame electron count comes from `SpotFlux::integrated_over`.
+impl FrameSource for StarInFrame {
+    type Deposit = PixelScaledAiryDisk;
+
+    fn position_pixels(&self) -> (f64, f64) {
+        (self.x, self.y)
+    }
+
+    fn total_electrons(&self, dt: Duration, aperture: Area) -> f64 {
+        self.spot.electrons.integrated_over(&dt, aperture)
+    }
+
+    fn deposit(&self) -> &Self::Deposit {
+        &self.spot.electrons.disk
     }
 }
 
@@ -365,45 +385,8 @@ pub fn add_stars_to_image(
     exposure: &Duration,
     aperture: Area,
 ) -> Array2<f64> {
-    // Create new image array with specified dimensions
     let mut image = Array2::zeros((height, width));
-
-    // Calculate the contribution of all stars to this pixel
-    for star in stars {
-        // NOTE(meawopppl) - Should be erf() based cutoff here.
-        // 2x the first 0 should cover 99.99999% of flux or so
-        let max_pix_dist: i32 =
-            (star.spot.electrons.disk.first_zero().max(1.0) * 2.0).ceil() as i32;
-
-        // Calculate pixel range to check based on star position
-        let xc = star.x.round() as i32;
-        let yc = star.y.round() as i32;
-
-        for x in (xc - max_pix_dist)..=(xc + max_pix_dist) {
-            for y in (yc - max_pix_dist)..=(yc + max_pix_dist) {
-                // Bounds check x/y - Skip out of bounds pixels
-                if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                    continue;
-                }
-
-                // Calculate pixel center position relative to star
-                let x_pixel = x as f64 - star.x;
-                let y_pixel = y as f64 - star.y;
-
-                let flux = &star.spot.electrons;
-
-                // Use Simpson's rule integration for accurate flux calculation
-                let contribution = flux.disk.pixel_flux_simpson(
-                    x_pixel,
-                    y_pixel,
-                    flux.integrated_over(exposure, aperture),
-                );
-
-                image[[y as usize, x as usize]] += contribution;
-            }
-        }
-    }
-
+    render_sources(&mut image, stars, *exposure, aperture);
     image
 }
 
