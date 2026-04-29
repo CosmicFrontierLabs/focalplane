@@ -213,6 +213,29 @@ impl SensorAccumulator {
         );
     }
 
+    /// Splat one galaxy's mean electrons (already integrated over `dt`,
+    /// not Poisson-sampled) into the same accumulator stars use, via
+    /// the galaxy's `SersicSplat` deposit. The single-Poisson invariant
+    /// (INVARIANTS §1) is preserved because galaxies land on the same
+    /// `star_mean_electrons` buffer that the unified Poisson eventually
+    /// samples — galaxy and star shot noise are co-sampled from the
+    /// per-pixel `Poisson(λ_total)` of the combined mean.
+    pub fn splat_galaxy(
+        &mut self,
+        px: f64,
+        py: f64,
+        total_electrons: f64,
+        sersic: &crate::image_proc::sersic_splat::SersicSplat,
+    ) {
+        crate::image_proc::deposit::splat_deposit(
+            &mut self.star_mean_electrons,
+            px,
+            py,
+            total_electrons,
+            sersic,
+        );
+    }
+
     /// Returns the combined mean-electron image = star mean + zodiacal
     /// uniform + dark-current uniform (pre-Poisson).
     pub fn combined_mean(&self, zodiacal_per_px: f64, dark_per_px: f64) -> Array2<f64> {

@@ -390,6 +390,22 @@ pub fn add_stars_to_image(
     image
 }
 
+/// Splat a slice of galaxies onto an existing mean-electron buffer
+/// using their `SersicSplat` deposits. Uses the same `render_sources`
+/// helper as stars — i.e., zero new bounding-box-loop code, and
+/// galaxy contributions land on the same buffer as star contributions
+/// so the downstream Poisson stage applies once to the combined mean.
+///
+/// Caller must size `image` to match the sensor's pixel grid.
+pub fn add_galaxies_to_image(
+    image: &mut Array2<f64>,
+    galaxies: &[crate::scene_galaxy::GalaxyInFrame],
+    exposure: &Duration,
+    aperture: Area,
+) {
+    render_sources(image, galaxies, *exposure, aperture);
+}
+
 /// A star projected to focal plane millimeter coordinates.
 ///
 /// Intermediate representation between celestial coordinates and per-sensor

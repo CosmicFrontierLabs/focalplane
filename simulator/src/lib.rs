@@ -75,6 +75,7 @@ pub mod io;
 pub mod photometry;
 pub mod plotting;
 pub mod scene;
+pub mod scene_galaxy;
 pub mod shared_args;
 pub mod sims;
 pub mod star_math;
