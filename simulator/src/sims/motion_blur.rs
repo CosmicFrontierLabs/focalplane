@@ -204,24 +204,13 @@ impl SensorAccumulator {
         total_electrons: f64,
         psf: &shared::image_proc::airy::PixelScaledAiryDisk,
     ) {
-        if total_electrons == 0.0 {
-            return;
-        }
-        let (height, width) = self.star_mean_electrons.dim();
-        let max_pix_dist: i32 = (psf.first_zero().max(1.0) * 2.0).ceil() as i32;
-        let xc = px.round() as i32;
-        let yc = py.round() as i32;
-        for x in (xc - max_pix_dist)..=(xc + max_pix_dist) {
-            for y in (yc - max_pix_dist)..=(yc + max_pix_dist) {
-                if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                    continue;
-                }
-                let x_rel = x as f64 - px;
-                let y_rel = y as f64 - py;
-                let contribution = psf.pixel_flux_simpson(x_rel, y_rel, total_electrons);
-                self.star_mean_electrons[[y as usize, x as usize]] += contribution;
-            }
-        }
+        crate::image_proc::deposit::splat_deposit(
+            &mut self.star_mean_electrons,
+            px,
+            py,
+            total_electrons,
+            psf,
+        );
     }
 
     /// Returns the combined mean-electron image = star mean + zodiacal
