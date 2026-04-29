@@ -213,15 +213,28 @@ impl Renderer {
     /// A new Renderer with the base star image pre-computed
     ///
     pub fn from_stars(stars: &[StarInFrame], satellite_config: SatelliteConfig) -> Self {
-        // Create base star image for 1 second exposure
+        Self::from_stars_and_galaxies(stars, &[], satellite_config)
+    }
+
+    /// Create a renderer from pre-computed stars *and* pre-computed
+    /// galaxies. Both source kinds splat into the same 1-second base
+    /// image; per-exposure scaling and Poisson sampling apply to the
+    /// combined buffer (single-Poisson invariant — INVARIANTS §1).
+    ///
+    /// Galaxies use the `SersicSplat` deposit, stars use the chromatic
+    /// Airy disk. Both run through the shared `render_sources` helper
+    /// so the splat math is identical apart from the per-source
+    /// `MeanFluxDeposit` impl.
+    pub fn from_stars_and_galaxies(
+        stars: &[StarInFrame],
+        galaxies: &[crate::scene_galaxy::GalaxyInFrame],
+        satellite_config: SatelliteConfig,
+    ) -> Self {
         let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
-        let base_star_image = add_stars_to_image(
-            width,
-            height,
-            stars,
-            &Duration::from_secs(1),
-            satellite_config.telescope.clear_aperture_area(),
-        );
+        let aperture = satellite_config.telescope.clear_aperture_area();
+        let one_second = Duration::from_secs(1);
+        let mut base_star_image = add_stars_to_image(width, height, stars, &one_second, aperture);
+        add_galaxies_to_image(&mut base_star_image, galaxies, &one_second, aperture);
 
         Self {
             satellite_config,
