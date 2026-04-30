@@ -242,9 +242,7 @@ impl MeanFluxDeposit for SersicSplat {
         // on each axis at `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE` cells
         // per sensor pixel. Outside that extent the deposit is below
         // the truncation budget; return zero.
-        if cx.abs() > self.thumb_half_extent_arcsec
-            || cy.abs() > self.thumb_half_extent_arcsec
-        {
+        if cx.abs() > self.thumb_half_extent_arcsec || cy.abs() > self.thumb_half_extent_arcsec {
             return 0.0;
         }
         // Cell-centered grid: cell k centre is at
@@ -566,35 +564,57 @@ mod orientation_diag {
         let mut rand_seed = 0xCAFEFEEDu64;
         for i in 0..50 {
             // LCG for repeatable scatter
-            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rand_seed = rand_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let r1 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
-            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rand_seed = rand_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let r2 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
             let dx_pix = (r1 - 0.5) * 1500.0;
             let dy_pix = (r2 - 0.5) * 1500.0;
-            sources.push((centre_x + dx_pix, centre_y + dy_pix, SersicProfile {
-                theta_half_arcsec: 2.0 + (i as f64) * 0.1,
-                n: 1.0,
-                axis_ratio: 0.6,
-                position_angle_deg: (i as f64) * 7.0,
-            }));
+            sources.push((
+                centre_x + dx_pix,
+                centre_y + dy_pix,
+                SersicProfile {
+                    theta_half_arcsec: 2.0 + (i as f64) * 0.1,
+                    n: 1.0,
+                    axis_ratio: 0.6,
+                    position_angle_deg: (i as f64) * 7.0,
+                },
+            ));
         }
         // 16 ellipticals (n=4) — these have huge halos
         for i in 0..16 {
-            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rand_seed = rand_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let r1 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
-            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rand_seed = rand_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let r2 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
             let dx_pix = (r1 - 0.5) * 1500.0;
             let dy_pix = (r2 - 0.5) * 1500.0;
-            sources.push((centre_x + dx_pix, centre_y + dy_pix, SersicProfile {
-                theta_half_arcsec: 5.0 + (i as f64) * 1.0,
-                n: 4.0,
-                axis_ratio: 0.7,
-                position_angle_deg: (i as f64) * 11.0,
-            }));
+            sources.push((
+                centre_x + dx_pix,
+                centre_y + dy_pix,
+                SersicProfile {
+                    theta_half_arcsec: 5.0 + (i as f64) * 1.0,
+                    n: 4.0,
+                    axis_ratio: 0.7,
+                    position_angle_deg: (i as f64) * 11.0,
+                },
+            ));
         }
-        eprintln!("Profile: {} galaxies on {}×{} buffer at {}″/pix", sources.len(), w, h, arcsec_per_pixel);
+        eprintln!(
+            "Profile: {} galaxies on {}×{} buffer at {}″/pix",
+            sources.len(),
+            w,
+            h,
+            arcsec_per_pixel
+        );
         let total_start = Instant::now();
         for (i, (px, py, profile)) in sources.iter().enumerate() {
             let splat = SersicSplat::new(*profile, arcsec_per_pixel);
@@ -616,7 +636,11 @@ mod orientation_diag {
             );
         }
         let total = total_start.elapsed();
-        eprintln!("Total: {:.2}s for {} galaxies", total.as_secs_f64(), sources.len());
+        eprintln!(
+            "Total: {:.2}s for {} galaxies",
+            total.as_secs_f64(),
+            sources.len()
+        );
     }
 
     /// Emit raw float buffer of a PA=45 axis_ratio=0.5 SersicSplat
