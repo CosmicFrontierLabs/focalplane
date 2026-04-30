@@ -1721,7 +1721,7 @@ dependencies = [
 [[package]]
 name = "meter-math"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#57452f60db9a013f84a3f5f6879d69f5571fe4a9"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=12f40c1#12f40c19703502dee206407835599119dba6da67"
 dependencies = [
  "log",
  "nalgebra",
@@ -2806,7 +2806,7 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#57452f60db9a013f84a3f5f6879d69f5571fe4a9"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=12f40c1#12f40c19703502dee206407835599119dba6da67"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2847,7 +2847,7 @@ dependencies = [
 [[package]]
 name = "shared-wasm"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations#57452f60db9a013f84a3f5f6879d69f5571fe4a9"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=12f40c1#12f40c19703502dee206407835599119dba6da67"
 dependencies = [
  "num-traits",
  "serde",
@@ -2977,9 +2977,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "starfield"
-version = "0.11.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "475de7509a4844328065d41bdb762b1155fa7485f7ed5580b6ddcd6be5ade70c"
+checksum = "42042be8ac3f550a5709b25c675b5f1e77d7c2f6f0986dbfec76c8bd9dca07c3"
 dependencies = [
  "base64",
  "byteorder",

@@ -55,11 +55,11 @@ mod tests {
     use super::*;
     use crate::image_proc::deposit::render_sources;
     use crate::photometry::photoconversion::SpotFlux;
-    use crate::photometry::sersic::SersicProfile;
     use crate::sims::motion_blur::SensorAccumulator;
     use ndarray::Array2;
     use shared::image_proc::airy::PixelScaledAiryDisk;
     use shared::units::{AreaExt, LengthExt, Wavelength};
+    use starfield::catalogs::SersicProfile;
     use std::time::Duration;
 
     /// Build a synthetic GalaxyInFrame for tests. Hand-rolls a
