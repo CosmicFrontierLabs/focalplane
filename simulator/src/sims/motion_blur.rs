@@ -50,10 +50,10 @@ use starfield::Equatorial;
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::quantize_image;
-use crate::scene_galaxy::GalaxyInFrame;
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
+use crate::scene_galaxy::GalaxyInFrame;
 use crate::sims::motion_blur_metadata::{
     sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, HardwareMeta,
     RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
