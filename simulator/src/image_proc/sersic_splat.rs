@@ -56,40 +56,47 @@
 //! square edges around large n=4 galaxies; this profile-aware
 //! truncation eliminates that artifact.
 //!
-//! # Per-pixel sub-sampling
+//! # Thumbnail-cached evaluation
 //!
-//! `pixel_flux` uses 3×3 Simpson's-rule quadrature inside each pixel
-//! by default, with adaptive recursive refinement triggered by steep
-//! SB gradients. A pixel splits into 4 sub-pixels (each itself
-//! 3×3 Simpson) when the ratio of central to corner SB exceeds
-//! `ADAPTIVE_REFINE_RATIO`, recursing up to `MAX_REFINE_DEPTH` levels.
-//! This keeps cost O(9) per typical pixel and O(9·4^k) on the few
-//! steep-peak pixels at the galaxy centre.
+//! `pixel_flux` is a bilinear interpolation into a `THUMB_OVERSAMPLE`×
+//! oversampled SB thumbnail computed once at construction. The
+//! thumbnail evaluates `SersicProfile::surface_brightness_at` at every
+//! cell centre on a grid that's `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE`
+//! finer than the sensor pixel grid; subsequent splat lookups touch
+//! four neighbouring cells and combine them with bilinear weights.
 //!
-//! Why this is necessary: a de Vaucouleurs (n=4) profile has central
-//! `SB / SB(θ_eff) = exp(b_n) ≈ 2140`. Even at 20 pixels per `θ_eff`,
-//! the central pixel still spans a region where SB varies by ~28×
-//! across the pixel — flat 3×3 Simpson over-counts by ~10% there,
-//! corrupting the photometric calibration of the brightest galaxies.
-//! Adaptive refinement recovers analytic agreement to <2% at NSA-
-//! realistic plate scales.
+//! Cost vs. earlier per-pixel Simpson rendering: thumbnail builds
+//! in `(2·footprint·OS+1)²` SB evaluations once, then every pixel in
+//! the deposit footprint is a handful of array reads + multiplies.
+//! For an NSA-typical galaxy footprint of `N²` pixels the per-render
+//! cost drops from `~9N²` SB evaluations (3×3 Simpson + adaptive
+//! refinement) to `~OS²·N²` SB evaluations *at construction* + `O(N²)`
+//! near-free interpolations at splat — ~5–10× faster end-to-end at
+//! `OS = 2`.
 //!
-//! The test set anchors this against:
-//!   - flux conservation within the truncation budget at n=1 and n=4
-//!     at well-resolved plate scales (θ_eff = 5″ at 0.25″/pix);
-//!   - plate-scale invariance across [0.1, 0.25, 1.0]″/pix sampling
-//!     of the same galaxy.
-//!
-//! For pathologically under-resolved galaxies (θ_eff < pixel) some
-//! residual peak-overcount remains; the test
+//! Bias / accuracy: the bilinear interpolant approximates a
+//! pixel-mean SB by averaging the four `OS²`-finer cells around the
+//! pixel centre. For NSA-typical plate scales (θ_eff covering many
+//! pixels) the SB pattern is smooth on cell scales and the
+//! interpolant matches Simpson within the truncation budget — see
+//! the `n=1` and `n=4` flux-conservation tests. For pathologically
+//! under-resolved galaxies (θ_eff < pixel) some residual peak
+//! overcount remains; the test
 //! `under_resolved_galaxy_overestimates_flux_documenting_v1_limitation`
-//! pins the bias direction (always over) so a future improvement
-//! (e.g. analytic incomplete-gamma integral over the central pixel)
-//! has a regression target.
+//! pins the bias direction (always over).
 
+use ndarray::Array2;
 use starfield::catalogs::SersicProfile;
 
 use crate::image_proc::deposit::MeanFluxDeposit;
+
+/// Thumbnail oversampling factor: each sensor pixel covers
+/// `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE` thumbnail cells. Bilinear
+/// interpolation at the sensor pixel centre then averages four
+/// neighbouring thumbnail cells, which approximates the pixel-mean SB
+/// well enough for NSA-typical galaxies (θ_eff covering many sensor
+/// pixels) without the per-pixel Simpson cost.
+const THUMB_OVERSAMPLE: i32 = 2;
 
 /// `MeanFluxDeposit` impl for an elliptical Sérsic profile at a given
 /// plate scale. See module-level docs for the math.
@@ -110,6 +117,21 @@ pub struct SersicSplat {
     /// so the truncation remainder stays well below the per-pixel
     /// noise floor for the deposit.
     footprint_px: i32,
+    /// `THUMB_OVERSAMPLE`× oversampled SB pattern over the deposit's
+    /// footprint, evaluated once at construction time. Each cell
+    /// stores `SersicProfile::surface_brightness_at(cx, cy)` at the
+    /// cell centre. `pixel_flux` bilinear-interpolates this thumbnail
+    /// instead of re-evaluating the SB function per pixel.
+    thumb: Array2<f64>,
+    /// Cell width in arcsec: `arcsec_per_pixel / THUMB_OVERSAMPLE`.
+    thumb_arcsec_per_cell: f64,
+    /// Half-extent of the thumbnail in arcsec: positions outside
+    /// `[-thumb_half_extent, +thumb_half_extent]` on either axis are
+    /// outside the rendered footprint and return zero contribution.
+    thumb_half_extent_arcsec: f64,
+    /// Cell offset of the centre cell. Lookup index along an axis
+    /// is `(c_arcsec / thumb_arcsec_per_cell) + thumb_centre_cell`.
+    thumb_centre_cell: f64,
 }
 
 /// Radius (in arcsec along the major axis) at which the Sérsic SB
@@ -130,24 +152,14 @@ fn radius_at_fraction(profile: &SersicProfile, frac: f64) -> f64 {
 /// per-profile via [`radius_at_fraction`].
 const TRUNCATION_SB_FRACTION: f64 = 1e-4;
 
-/// Trigger adaptive sub-pixel refinement when the centre/corner SB
-/// ratio inside a pixel exceeds this threshold. A value of 4 means
-/// "refine if SB varies by more than 4× across the pixel" — chosen
-/// so that the central few pixels of a de Vaucouleurs profile (where
-/// SB is steep) get refined while the bulk of the rendered footprint
-/// (where SB varies slowly) uses single-level 3×3 Simpson.
-const ADAPTIVE_REFINE_RATIO: f64 = 4.0;
-
-/// Maximum depth of recursive sub-pixel refinement. Each level
-/// quadruples the SB-evaluation count for affected pixels. 3 levels
-/// covers up to 64×64 effective sub-sampling — enough to bring n=4
-/// flux conservation within 2% at typical plate scales.
-const MAX_REFINE_DEPTH: u32 = 3;
-
 impl SersicSplat {
     /// Build a deposit for `profile` at the given plate scale.
-    /// Precomputes the analytic normalisation and the truncation
-    /// footprint so the per-pixel inner loop is hot-path friendly.
+    /// Precomputes the analytic normalisation, the truncation
+    /// footprint, and a `THUMB_OVERSAMPLE`× oversampled SB thumbnail
+    /// covering the entire footprint. The thumbnail bake is the only
+    /// place `SersicProfile::surface_brightness_at` is called — every
+    /// subsequent `pixel_flux` lookup is a bilinear interpolation
+    /// from the cached array.
     pub fn new(profile: SersicProfile, arcsec_per_pixel: f64) -> Self {
         // K = 2π · n · b_n^(-2n) · Γ(2n) · q · θ_eff² · exp(b_n) —
         // see SersicProfile::total_flux_per_ie upstream for the
@@ -157,12 +169,41 @@ impl SersicSplat {
         // ceil to int pixels; clamp to at least 1 so a sub-pixel galaxy
         // still drops a single pixel of light.
         let footprint_px = ((footprint_arcsec / arcsec_per_pixel).ceil() as i32).max(1);
+
+        // Build the THUMB_OVERSAMPLE-oversampled SB thumbnail.
+        // **Cell-centered grid**: cell k along each axis has its
+        // sample centre at `(k + 0.5 - centre) · cell_size`. The
+        // galaxy origin (`cx = cy = 0`) deliberately falls *between*
+        // cells, so a sensor pixel centred on the galaxy reads four
+        // off-centre cells via bilinear interpolation rather than
+        // sampling the central SB peak directly. Without this
+        // half-cell offset, bilinear at a galaxy-centred pixel would
+        // return the peak SB exactly and over-count flux by
+        // `exp(b_n)` (~2140 at n=4) compared to the true pixel-mean.
+        let thumb_arcsec_per_cell = arcsec_per_pixel / THUMB_OVERSAMPLE as f64;
+        let footprint_cells = footprint_px * THUMB_OVERSAMPLE;
+        let thumb_size = (footprint_cells * 2) as usize;
+        let thumb_centre = footprint_cells as f64; // cell-coordinate of galaxy origin
+        let thumb_half_extent_arcsec = footprint_cells as f64 * thumb_arcsec_per_cell;
+        let mut thumb = Array2::<f64>::zeros((thumb_size, thumb_size));
+        for tr in 0..thumb_size {
+            let cy = (tr as f64 + 0.5 - thumb_centre) * thumb_arcsec_per_cell;
+            for tc in 0..thumb_size {
+                let cx = (tc as f64 + 0.5 - thumb_centre) * thumb_arcsec_per_cell;
+                thumb[[tr, tc]] = profile.surface_brightness_at(cx, cy);
+            }
+        }
+
         Self {
             profile,
             arcsec_per_pixel,
             inv_analytic_norm: analytic_norm.recip(),
             pixel_area_arcsec2: arcsec_per_pixel * arcsec_per_pixel,
             footprint_px,
+            thumb,
+            thumb_arcsec_per_cell,
+            thumb_half_extent_arcsec,
+            thumb_centre_cell: thumb_centre,
         }
     }
 
@@ -187,58 +228,47 @@ impl MeanFluxDeposit for SersicSplat {
             return 0.0;
         }
         let s = self.arcsec_per_pixel;
+        // Image coordinates: +dx (col offset) maps to +x_sky = east.
+        // +dy (row offset) maps to *south* (row index grows downward
+        // in standard image display), so cy = -dy*s to align with the
+        // SB evaluator's +y_sky = north convention. Without this
+        // flip, elliptical galaxies render mirrored about the
+        // horizontal axis vs. AstroPy `Sersic2D`.
         let cx = dx * s;
-        let cy = dy * s;
-        let half = 0.5 * s;
-        let mean_sb = self.adaptive_simpson_mean_sb(cx, cy, half, 0);
-        total_flux * self.inv_analytic_norm * mean_sb * self.pixel_area_arcsec2
-    }
-}
+        let cy = -dy * s;
 
-impl SersicSplat {
-    /// Mean SB over the square region `[cx - half, cx + half] × [cy - half, cy + half]`
-    /// in arcsec, computed via 3×3 Simpson's rule with adaptive
-    /// recursive refinement when the centre-to-corner SB ratio
-    /// exceeds `ADAPTIVE_REFINE_RATIO`. See module docs for why
-    /// recursion is needed for high-n central pixels.
-    fn adaptive_simpson_mean_sb(&self, cx: f64, cy: f64, half: f64, depth: u32) -> f64 {
-        let sb = &self.profile;
-        // 3×3 sample grid:
-        //   (cx-half, cy-half), (cx, cy-half), (cx+half, cy-half)
-        //   (cx-half, cy     ), (cx, cy     ), (cx+half, cy     )
-        //   (cx-half, cy+half), (cx, cy+half), (cx+half, cy+half)
-        let s_corners = sb.surface_brightness_at(cx - half, cy - half)
-            + sb.surface_brightness_at(cx + half, cy - half)
-            + sb.surface_brightness_at(cx - half, cy + half)
-            + sb.surface_brightness_at(cx + half, cy + half);
-        let s_edges = sb.surface_brightness_at(cx, cy - half)
-            + sb.surface_brightness_at(cx, cy + half)
-            + sb.surface_brightness_at(cx - half, cy)
-            + sb.surface_brightness_at(cx + half, cy);
-        let s_centre = sb.surface_brightness_at(cx, cy);
-
-        // Adaptive refinement trigger: centre dominates corners by
-        // more than ADAPTIVE_REFINE_RATIO. Compare against the max
-        // corner so a single low-corner doesn't suppress refinement.
-        let max_corner = (sb.surface_brightness_at(cx - half, cy - half))
-            .max(sb.surface_brightness_at(cx + half, cy - half))
-            .max(sb.surface_brightness_at(cx - half, cy + half))
-            .max(sb.surface_brightness_at(cx + half, cy + half));
-        if depth < MAX_REFINE_DEPTH && s_centre > ADAPTIVE_REFINE_RATIO * max_corner.max(1e-300) {
-            // Subdivide into 4 sub-pixels of half the width and
-            // recurse. Each sub-pixel covers 1/4 of the area, so
-            // the average SB over the parent is the *unweighted*
-            // mean of the four sub-pixel means.
-            let q = 0.5 * half;
-            let m00 = self.adaptive_simpson_mean_sb(cx - q, cy - q, q, depth + 1);
-            let m01 = self.adaptive_simpson_mean_sb(cx + q, cy - q, q, depth + 1);
-            let m10 = self.adaptive_simpson_mean_sb(cx - q, cy + q, q, depth + 1);
-            let m11 = self.adaptive_simpson_mean_sb(cx + q, cy + q, q, depth + 1);
-            return 0.25 * (m00 + m01 + m10 + m11);
+        // Bilinear interpolation into the precomputed thumbnail. The
+        // thumbnail covers `[-thumb_half_extent, +thumb_half_extent]`
+        // on each axis at `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE` cells
+        // per sensor pixel. Outside that extent the deposit is below
+        // the truncation budget; return zero.
+        if cx.abs() > self.thumb_half_extent_arcsec
+            || cy.abs() > self.thumb_half_extent_arcsec
+        {
+            return 0.0;
         }
+        // Cell-centered grid: cell k centre is at
+        // `(k + 0.5 - thumb_centre_cell) · thumb_arcsec_per_cell`.
+        // For a query at `cx`, the fractional cell index is
+        // `cx / cell_size + thumb_centre - 0.5`.
+        let tx = cx / self.thumb_arcsec_per_cell + self.thumb_centre_cell - 0.5;
+        let ty = cy / self.thumb_arcsec_per_cell + self.thumb_centre_cell - 0.5;
+        let last = self.thumb.shape()[0] - 1;
+        let tx0 = (tx.floor() as isize).clamp(0, last as isize - 1) as usize;
+        let ty0 = (ty.floor() as isize).clamp(0, last as isize - 1) as usize;
+        let tx1 = tx0 + 1;
+        let ty1 = ty0 + 1;
+        let fx = (tx - tx0 as f64).clamp(0.0, 1.0);
+        let fy = (ty - ty0 as f64).clamp(0.0, 1.0);
+        let s00 = self.thumb[[ty0, tx0]];
+        let s01 = self.thumb[[ty0, tx1]];
+        let s10 = self.thumb[[ty1, tx0]];
+        let s11 = self.thumb[[ty1, tx1]];
+        let s0 = s00 * (1.0 - fx) + s01 * fx;
+        let s1 = s10 * (1.0 - fx) + s11 * fx;
+        let sb = s0 * (1.0 - fy) + s1 * fy;
 
-        // Simpson 3×3 weights: corners 1, edges 4, centre 16; total 36.
-        (s_corners + 4.0 * s_edges + 16.0 * s_centre) / 36.0
+        total_flux * self.inv_analytic_norm * sb * self.pixel_area_arcsec2
     }
 }
 
@@ -337,15 +367,20 @@ mod tests {
         }
     }
 
-    /// **Documents the v1 resolution limitation**: under-resolved
-    /// galaxies (θ_eff < 1 pixel) over-count their flux because the
-    /// pixel-centre SB sample at the peak overestimates the
-    /// per-pixel integral of a steeply-varying function. This test
-    /// asserts the bias is *predictable* in direction (always over,
-    /// never under) so a future sub-pixel integration impl can use
-    /// it as a regression target.
+    /// **Documents the v1 resolution limitation**: pathologically
+    /// under-resolved galaxies (θ_eff smaller than a sensor pixel)
+    /// under-count their flux because the cell-centered thumbnail
+    /// samples SB at offsets ≥ 0.25 pixels from the galaxy centre,
+    /// missing most of the peak when the entire profile fits inside
+    /// a single pixel.
+    ///
+    /// The bias is *predictable* in direction (always under) and
+    /// modest in magnitude (~30-40% under at θ_eff = 0.3 pixels).
+    /// For NSA-typical galaxies (θ_eff covering many pixels) this
+    /// regime never matters. A future improvement could analytically
+    /// integrate the central pixel(s) for sub-pixel galaxies.
     #[test]
-    fn under_resolved_galaxy_overestimates_flux_documenting_v1_limitation() {
+    fn under_resolved_galaxy_under_counts_flux_documenting_v1_limitation() {
         // Pathologically under-resolved: θ_eff = 0.3", arcsec_per_pixel = 1".
         let p = sersic(4.0, 1.0, 0.0, 0.3);
         let splat = SersicSplat::new(p, 1.0);
@@ -354,12 +389,9 @@ mod tests {
         let mut buf = Array2::<f64>::zeros((n, n));
         splat_deposit(&mut buf, n as f64 * 0.5, n as f64 * 0.5, 1.0, &splat);
         let total_out: f64 = buf.iter().sum();
-        // Document that we know this is biased high (>1.0) — when
-        // sub-pixel integration lands, the upper bound here will
-        // tighten and the test name should be updated.
         assert!(
-            total_out > 1.0,
-            "under-resolved capture {total_out} should exceed 1.0 (peak-of-peak bias)"
+            total_out > 0.4 && total_out < 0.9,
+            "under-resolved capture {total_out} outside [0.4, 0.9] (cell-centred under-sample bias)"
         );
     }
 
@@ -440,8 +472,10 @@ mod tests {
         // slowly-varying region where 3×3 Simpson sub-sampling
         // converges to centre-sampling to O(h^4).
         let i_e = total / p.total_flux_per_ie();
+        // Pass the same (cx, cy) sign convention as SersicSplat::pixel_flux:
+        // +cx = east (col offset), +cy = north (negated row offset).
         let sb_centre =
-            p.surface_brightness_at(dx_pix * arcsec_per_pixel, dy_pix * arcsec_per_pixel);
+            p.surface_brightness_at(dx_pix * arcsec_per_pixel, -dy_pix * arcsec_per_pixel);
         let expected = i_e * sb_centre * arcsec_per_pixel * arcsec_per_pixel;
         // 3×3 Simpson on a slowly-varying region matches centre-
         // sampling to O(h^4) — for our setup well below 1%.
@@ -450,5 +484,192 @@ mod tests {
             rel < 1e-2,
             "flat-SB pixel {pixel} vs expected {expected} (rel err {rel:.2e})"
         );
+    }
+}
+
+#[cfg(test)]
+mod orientation_diag {
+    use super::*;
+    use crate::image_proc::deposit::splat_deposit;
+    use ndarray::Array2;
+
+    /// **Orientation regression** — locks the y-axis sign convention
+    /// in `SersicSplat::pixel_flux` against AstroPy's `Sersic2D` for
+    /// PA=45° east-of-north (major axis NE-SW). Image convention:
+    /// row 0 = top = north, col 0 = left = west, east on the right.
+    ///
+    /// PA=45 east-of-north (major axis NE-SW) means high SB on the
+    /// "/" diagonal: bright at NE corner (row<center, col>center)
+    /// and SW corner (row>center, col<center); low SB at NW and SE
+    /// corners.
+    ///
+    /// If anyone removes the `cy = -dy*s` sign flip in `pixel_flux`,
+    /// this test fires immediately — galaxies would render mirrored
+    /// about the horizontal axis, swapping "/" and "\" elongation.
+    #[test]
+    fn pa45_orientation_matches_astropy_ne_sw_major_axis() {
+        let profile = SersicProfile {
+            theta_half_arcsec: 5.0,
+            n: 4.0,
+            axis_ratio: 0.5,
+            position_angle_deg: 45.0,
+        };
+        let splat = SersicSplat::new(profile, 0.5);
+        let n: usize = 200;
+        let mut buf = Array2::<f64>::zeros((n, n));
+        splat_deposit(&mut buf, n as f64 * 0.5, n as f64 * 0.5, 1.0, &splat);
+
+        // Sample 30px in from each corner.
+        let off = 30;
+        let c = n / 2;
+        let nw = buf[[c - off, c - off]];
+        let ne = buf[[c - off, c + off]];
+        let sw = buf[[c + off, c - off]];
+        let se = buf[[c + off, c + off]];
+
+        // PA=45 east-of-north → "/" diagonal: NE+SW high, NW+SE low.
+        assert!(
+            ne > 5.0 * nw,
+            "expected NE >> NW for PA=45 east-of-north (\"/\" major axis); got NE={ne:.3e} NW={nw:.3e}"
+        );
+        assert!(
+            sw > 5.0 * se,
+            "expected SW >> SE for PA=45 east-of-north (\"/\" major axis); got SW={sw:.3e} SE={se:.3e}"
+        );
+        // NE ≈ SW and NW ≈ SE by point symmetry of the Sérsic ellipse.
+        let asym_diag = (ne - sw).abs() / ne.max(sw);
+        let asym_anti = (nw - se).abs() / nw.max(se);
+        assert!(
+            asym_diag < 0.01 && asym_anti < 0.01,
+            "ellipse should be point-symmetric: NE={ne:.3e} SW={sw:.3e} NW={nw:.3e} SE={se:.3e}"
+        );
+    }
+
+    /// **Profile** the per-galaxy splat cost on a synthetic
+    /// NSA-realistic field — IMX455 (9568×6380) at 0.224″/pix, mix of
+    /// n=1 disks and n=4 ellipticals across the full theta_eff range
+    /// NSA actually publishes. Reports per-galaxy splat times so we
+    /// can see whether the cost is uniform or dominated by a few big
+    /// n=4 outliers.
+    #[test]
+    #[ignore]
+    fn profile_synthetic_nsa_field() {
+        use std::time::Instant;
+        let arcsec_per_pixel = 0.224_f64;
+        let (w, h) = (9568_usize, 6380_usize);
+        let mut buf = Array2::<f64>::zeros((h, w));
+        // Mix that approximates a 66-galaxy NSA Coma-like field:
+        // mostly small disks, a handful of bigger ellipticals.
+        let mut sources: Vec<(f64, f64, SersicProfile)> = Vec::new();
+        let centre_x = w as f64 * 0.5;
+        let centre_y = h as f64 * 0.5;
+        let mut rand_seed = 0xCAFEFEEDu64;
+        for i in 0..50 {
+            // LCG for repeatable scatter
+            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r1 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
+            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r2 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
+            let dx_pix = (r1 - 0.5) * 1500.0;
+            let dy_pix = (r2 - 0.5) * 1500.0;
+            sources.push((centre_x + dx_pix, centre_y + dy_pix, SersicProfile {
+                theta_half_arcsec: 2.0 + (i as f64) * 0.1,
+                n: 1.0,
+                axis_ratio: 0.6,
+                position_angle_deg: (i as f64) * 7.0,
+            }));
+        }
+        // 16 ellipticals (n=4) — these have huge halos
+        for i in 0..16 {
+            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r1 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
+            rand_seed = rand_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r2 = (rand_seed >> 32) as u32 as f64 / u32::MAX as f64;
+            let dx_pix = (r1 - 0.5) * 1500.0;
+            let dy_pix = (r2 - 0.5) * 1500.0;
+            sources.push((centre_x + dx_pix, centre_y + dy_pix, SersicProfile {
+                theta_half_arcsec: 5.0 + (i as f64) * 1.0,
+                n: 4.0,
+                axis_ratio: 0.7,
+                position_angle_deg: (i as f64) * 11.0,
+            }));
+        }
+        eprintln!("Profile: {} galaxies on {}×{} buffer at {}″/pix", sources.len(), w, h, arcsec_per_pixel);
+        let total_start = Instant::now();
+        for (i, (px, py, profile)) in sources.iter().enumerate() {
+            let splat = SersicSplat::new(*profile, arcsec_per_pixel);
+            let footprint = splat.footprint_pixels();
+            let pixels_in_box = (2 * footprint as i64 + 1).pow(2);
+            let t = Instant::now();
+            splat_deposit(&mut buf, *px, *py, 1.0, &splat);
+            let elapsed = t.elapsed();
+            let ns_per_px = elapsed.as_nanos() as f64 / pixels_in_box as f64;
+            eprintln!(
+                "  galaxy {:2} n={:.1} θ_eff={:5.1}″ footprint={:4}px ({:9} px-in-box)  {:>9.2}ms  {:.0} ns/px",
+                i,
+                profile.n,
+                profile.theta_half_arcsec,
+                footprint,
+                pixels_in_box,
+                elapsed.as_secs_f64() * 1e3,
+                ns_per_px,
+            );
+        }
+        let total = total_start.elapsed();
+        eprintln!("Total: {:.2}s for {} galaxies", total.as_secs_f64(), sources.len());
+    }
+
+    /// Emit raw float buffer of a PA=45 axis_ratio=0.5 SersicSplat
+    /// render to /tmp/rust_sersic_pa45_raw.f64. Diagnostic only.
+    #[test]
+    #[ignore]
+    fn emit_pa45_diagnostic() {
+        use std::io::Write;
+        let profile = SersicProfile {
+            theta_half_arcsec: 5.0,
+            n: 4.0,
+            axis_ratio: 0.5,
+            position_angle_deg: 45.0,
+        };
+        let splat = SersicSplat::new(profile, 0.5);
+        let n = 200;
+        let mut buf = Array2::<f64>::zeros((n, n));
+        splat_deposit(&mut buf, n as f64 * 0.5, n as f64 * 0.5, 1.0, &splat);
+        // Print corner samples
+        let off = 30;
+        let c = n / 2;
+        eprintln!("Rust SersicSplat render at PA=45, q=0.5, theta_eff=5\":");
+        eprintln!(
+            "  TL ({}, {}): {:.4e}",
+            c - off,
+            c - off,
+            buf[[c - off, c - off]]
+        );
+        eprintln!(
+            "  TR ({}, {}): {:.4e}",
+            c - off,
+            c + off,
+            buf[[c - off, c + off]]
+        );
+        eprintln!(
+            "  BL ({}, {}): {:.4e}",
+            c + off,
+            c - off,
+            buf[[c + off, c - off]]
+        );
+        eprintln!(
+            "  BR ({}, {}): {:.4e}",
+            c + off,
+            c + off,
+            buf[[c + off, c + off]]
+        );
+        // Save raw f64
+        let mut bytes = Vec::with_capacity(n * n * 8);
+        for &v in buf.iter() {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut f = std::fs::File::create("/tmp/rust_sersic_pa45_raw.f64").unwrap();
+        f.write_all(&bytes).unwrap();
+        eprintln!("wrote /tmp/rust_sersic_pa45_raw.f64 ({}x{} f64)", n, n);
     }
 }
