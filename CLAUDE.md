@@ -61,6 +61,7 @@ scripts/install-hooks.sh
 
 ## Code Style Guidelines
 - **Comments**: Avoid comments that reference pre-change conditions (e.g., "Changed from X", "Previously Y"). Comments should describe current state only.
+- **No backwards-pointing comments.** Don't explain what code used to do, why it was changed, what's been removed, or what shim was added to work around something. Don't justify a dep pin by what it bumped from or a refactor by what it replaced. Commit messages and PR descriptions are the right place for change history; code comments describe what *is*, not what *was*. If a comment isn't self-justifying as documentation of the current state — delete it. Imagine if every dep pin and every refactor left four lines of exposition behind it.
 - **Imports**: Group in order: std, external crates, local modules. Alphabetize within groups.
   - Avoid using wildcard imports like `use crate::*` - always be explicit.
   - Import types to avoid fully qualified paths (e.g., `use std::collections::VecDeque;` instead of `std::collections::VecDeque` inline).
