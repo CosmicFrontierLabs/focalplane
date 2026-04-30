@@ -87,8 +87,9 @@
 //! (e.g. analytic incomplete-gamma integral over the central pixel)
 //! has a regression target.
 
+use starfield::catalogs::SersicProfile;
+
 use crate::image_proc::deposit::MeanFluxDeposit;
-use crate::photometry::sersic::{gamma, radius_at_fraction, SersicProfile};
 
 /// `MeanFluxDeposit` impl for an elliptical Sérsic profile at a given
 /// plate scale. See module-level docs for the math.
@@ -96,9 +97,10 @@ use crate::photometry::sersic::{gamma, radius_at_fraction, SersicProfile};
 pub struct SersicSplat {
     profile: SersicProfile,
     arcsec_per_pixel: f64,
-    /// `1.0 / K` where `K = 2π · n · b_n^(-2n) · Γ(2n) · q · θ_eff²`.
-    /// Cached inverse so the per-pixel kernel is a multiply, not a
-    /// divide.
+    /// `1.0 / profile.total_flux_per_ie()`. Cached inverse so the
+    /// per-pixel kernel is a multiply, not a divide. Upstream's
+    /// helper handles the full Graham & Driver Eq. 4–6 closed form
+    /// including the easy-to-drop `exp(b_n)` factor.
     inv_analytic_norm: f64,
     /// Pixel area in arcsec² — folded into `pixel_flux` to convert
     /// surface brightness into per-pixel flux.
@@ -108,6 +110,19 @@ pub struct SersicSplat {
     /// so the truncation remainder stays well below the per-pixel
     /// noise floor for the deposit.
     footprint_px: i32,
+}
+
+/// Radius (in arcsec along the major axis) at which the Sérsic SB
+/// drops to `frac` of `I_e`. Closed-form inverse of the Sérsic SB
+/// expression: `r = θ_eff · ((-ln(frac)) / b_n + 1)^n`.
+///
+/// Local to the renderer because it's a render-time *truncation
+/// policy* helper, not a catalog primitive — upstream starfield
+/// deliberately doesn't expose it.
+fn radius_at_fraction(profile: &SersicProfile, frac: f64) -> f64 {
+    let bn = profile.b_n();
+    let raw = -(frac.ln()) / bn + 1.0;
+    profile.theta_half_arcsec * raw.powf(profile.n)
 }
 
 /// Truncation fraction (relative to `I_e`) outside which the Sérsic
@@ -134,22 +149,10 @@ impl SersicSplat {
     /// Precomputes the analytic normalisation and the truncation
     /// footprint so the per-pixel inner loop is hot-path friendly.
     pub fn new(profile: SersicProfile, arcsec_per_pixel: f64) -> Self {
-        let n = profile.n;
-        let bn = profile.b_n();
-        let q = profile.axis_ratio;
-        let re = profile.theta_half_arcsec;
-        // K = 2π · n · b_n^(-2n) · Γ(2n) · q · θ_eff² · exp(b_n).
-        // The exp(b_n) factor is what differentiates the I_e-form
-        // (catalog convention) from the I_0-form. See module docs.
-        let analytic_norm = 2.0
-            * std::f64::consts::PI
-            * n
-            * bn.powf(-2.0 * n)
-            * gamma(2.0 * n)
-            * q
-            * re
-            * re
-            * bn.exp();
+        // K = 2π · n · b_n^(-2n) · Γ(2n) · q · θ_eff² · exp(b_n) —
+        // see SersicProfile::total_flux_per_ie upstream for the
+        // derivation and Graham & Driver (2005) reference.
+        let analytic_norm = profile.total_flux_per_ie();
         let footprint_arcsec = radius_at_fraction(&profile, TRUNCATION_SB_FRACTION);
         // ceil to int pixels; clamp to at least 1 so a sub-pixel galaxy
         // still drops a single pixel of light.
@@ -431,21 +434,12 @@ mod tests {
         let dx_pix = 10.0;
         let dy_pix = 10.0;
         let pixel = splat.pixel_flux(dx_pix, dy_pix, total);
-        let bn = p.b_n();
-        let n = p.n;
-        let q = p.axis_ratio;
-        let re = p.theta_half_arcsec;
-        // K includes exp(b_n) — see module docs for the derivation.
-        let k = 2.0
-            * std::f64::consts::PI
-            * n
-            * bn.powf(-2.0 * n)
-            * gamma(2.0 * n)
-            * q
-            * re
-            * re
-            * bn.exp();
-        let i_e = total / k;
+        // I_e from upstream's closed-form K = total_flux_per_ie. Same
+        // formula SersicSplat::new uses internally — anchors the
+        // pixel-flux output against the analytic expectation in a
+        // slowly-varying region where 3×3 Simpson sub-sampling
+        // converges to centre-sampling to O(h^4).
+        let i_e = total / p.total_flux_per_ie();
         let sb_centre =
             p.surface_brightness_at(dx_pix * arcsec_per_pixel, dy_pix * arcsec_per_pixel);
         let expected = i_e * sb_centre * arcsec_per_pixel * arcsec_per_pixel;
