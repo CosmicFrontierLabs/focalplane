@@ -671,6 +671,23 @@ struct Args {
                 (implies --context-view)"
     )]
     context_only: bool,
+
+    #[arg(
+        long,
+        help = "Path to NSA FITS file for galaxy rendering. If unset and \
+                --galaxies is on, defaults to ~/.cache/starfield/nsa/nsa_v0_1_2.fits \
+                (downloaded on demand via the NYU mirror if absent)."
+    )]
+    galaxy_catalog: Option<std::path::PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Render NSA galaxies in the field. Default off — turns on \
+                NSA loading + Sersic deposit splatting through the standard \
+                renderer pathway."
+    )]
+    galaxies: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -801,6 +818,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     info!("Cached {} stars for trajectory envelope", stars.len());
 
+    // NSA galaxies (optional). Pre-projected once at the envelope
+    // centre — the per-tile renderer uses the same per-sensor list
+    // for every frame. See `sims::nsa_galaxies` for the loader
+    // documentation.
+    let per_sensor_galaxies: Vec<Vec<simulator::scene_galaxy::GalaxyInFrame>> = if args.galaxies {
+        let path = args
+            .galaxy_catalog
+            .clone()
+            .unwrap_or_else(simulator::sims::nsa_galaxies::default_nsa_path);
+        let cfg = simulator::sims::nsa_galaxies::GalaxyLoaderConfig::default();
+        // Use the envelope diameter / 2 as a generous FOV radius
+        // around the trajectory centre. The loader applies its own
+        // padding on top.
+        simulator::sims::nsa_galaxies::load_and_route_nsa_galaxies(
+            &path,
+            &envelope_center,
+            &focal_plane,
+            envelope_diameter * 0.5,
+            &cfg,
+        )?
+    } else {
+        vec![Vec::new(); focal_plane.array.sensor_count()]
+    };
+
     let output_path = Path::new(&args.output_dir);
     if !output_path.exists() {
         std::fs::create_dir_all(output_path)?;
@@ -813,6 +854,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exposure: args.shared.exposure.0,
             focal_plane: &focal_plane,
             catalog_stars: &stars,
+            per_sensor_galaxies: &per_sensor_galaxies,
             zodiacal: args.shared.coordinates,
             output_dir: output_path,
             base_seed: Some(args.seed),

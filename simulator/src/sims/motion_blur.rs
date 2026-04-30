@@ -50,6 +50,7 @@ use starfield::Equatorial;
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::hardware::SatelliteConfig;
 use crate::image_proc::render::quantize_image;
+use crate::scene_galaxy::GalaxyInFrame;
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
@@ -260,6 +261,14 @@ pub type FluxCache = HashMap<(u64, usize), SourceFlux>;
 struct RenderScene<'a> {
     trajectory: &'a Trajectory,
     catalog_stars: &'a [StarData],
+    /// Per-sensor list of pre-projected galaxies (`Scene::with_galaxies`
+    /// shape). Empty inner vecs = no galaxies. Galaxies are projected
+    /// *once* per render at the trajectory's mid-time orientation —
+    /// exact for static trajectories, an approximation for drifting
+    /// trajectories where the galaxy positions would shift sub-pixel
+    /// across the exposure (acceptable until measured-radial-profile
+    /// rendering motivates the upgrade).
+    per_sensor_galaxies: &'a [Vec<GalaxyInFrame>],
     fp: &'a FocalPlaneConfig,
     zodiacal: SolarAngularCoordinates,
 }
@@ -529,6 +538,27 @@ fn render_tile(
         }
     }
 
+    // Galaxies: pre-projected per-sensor (one position per render),
+    // splatted at full-exposure flux so the unified Poisson stage
+    // samples the combined (stars + galaxies + zodi + dark) mean.
+    // Per-stamp re-projection isn't done here because the bounding
+    // box of a Sérsic deposit is much larger than a PSF stamp; a
+    // sub-pixel galaxy shift across the exposure is well below the
+    // per-pixel noise floor of any plausible exposure. Static
+    // trajectories (start == end) are exact.
+    let galaxies = scene
+        .per_sensor_galaxies
+        .get(sensor_idx)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+    for galaxy in galaxies {
+        let total_electrons = galaxy
+            .flux
+            .electrons
+            .integrated_over(&schedule.exposure, aperture);
+        accumulator.splat_galaxy(galaxy.x, galaxy.y, total_electrons, &galaxy.deposit);
+    }
+
     // Dark current: rate × full exposure, uniform over pixels.
     let dark_rate = satellite
         .sensor
@@ -562,9 +592,18 @@ fn render_tile(
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
 ///
 /// Returns the total number of frames rendered.
+///
+/// `per_sensor_galaxies` is the per-sensor pre-projected galaxy list
+/// (the `Scene::with_galaxies` shape). Pass an empty `Vec` per sensor
+/// for star-only renders. Galaxies are projected once at the
+/// trajectory's mid-time orientation and splatted at full-exposure
+/// flux per tile — exact for static trajectories, an approximation
+/// for drifting trajectories where a sub-pixel galaxy shift across
+/// the exposure becomes detectable.
 pub fn render_motion_trajectory(
     trajectory: &Trajectory,
     catalog_stars: &[StarData],
+    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
     fp: &FocalPlaneConfig,
     zodiacal: SolarAngularCoordinates,
     config: &MotionBlurConfig,
@@ -585,6 +624,7 @@ pub fn render_motion_trajectory(
     let scene = RenderScene {
         trajectory,
         catalog_stars,
+        per_sensor_galaxies,
         fp,
         zodiacal,
     };
@@ -1198,6 +1238,7 @@ mod tests {
         let frames = render_motion_trajectory(
             &traj,
             &[],
+            &[],
             fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1241,6 +1282,7 @@ mod tests {
         let frames = render_motion_trajectory(
             &traj,
             &[],
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1283,6 +1325,7 @@ mod tests {
         let frames = render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1300,6 +1343,7 @@ mod tests {
         let frames2 = render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1484,6 +1528,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1493,6 +1538,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1549,6 +1595,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg_coarse,
@@ -1558,6 +1605,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg_fine,
@@ -1605,6 +1653,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1614,6 +1663,7 @@ mod tests {
         render_motion_trajectory(
             &traj,
             &stars,
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1662,6 +1712,7 @@ mod tests {
         let frames = render_motion_trajectory(
             &traj,
             &[],
+            &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
             &cfg,
@@ -1693,6 +1744,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let frames = render_motion_trajectory(
             &traj,
+            &[],
             &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
@@ -1747,6 +1799,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         render_motion_trajectory(
             &traj,
+            &[],
             &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),
@@ -1809,6 +1862,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         render_motion_trajectory(
             &traj,
+            &[],
             &[],
             &fp,
             SolarAngularCoordinates::zodiacal_minimum(),

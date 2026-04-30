@@ -370,6 +370,12 @@ pub struct TrajectoryRenderConfig<'a> {
     pub focal_plane: &'a FocalPlaneConfig,
     /// Pre-fetched catalog stars covering the full trajectory envelope.
     pub catalog_stars: &'a [StarData],
+    /// Per-sensor pre-projected galaxies (`Scene::with_galaxies` shape).
+    /// Defaults to an empty slice — callers that don't render galaxies
+    /// pass `&[]` and the inner vec slot is filled with empties at the
+    /// motion-blur layer. See `crate::sims::nsa_galaxies` for the
+    /// builder that produces this shape from an NSA FITS file.
+    pub per_sensor_galaxies: &'a [Vec<crate::scene_galaxy::GalaxyInFrame>],
     /// Solar angular coordinates for zodiacal background.
     pub zodiacal: SolarAngularCoordinates,
     /// Directory to write 16-bit PNG output frames.
@@ -422,6 +428,7 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
     render_motion_trajectory(
         config.trajectory,
         config.catalog_stars,
+        config.per_sensor_galaxies,
         config.focal_plane,
         config.zodiacal,
         &motion_cfg,
