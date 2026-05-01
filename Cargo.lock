@@ -3447,7 +3447,7 @@ dependencies = [
 [[package]]
 name = "starfield-datasource-utils"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=efeac36#efeac36a907afd67639729e53916d38166dd133f"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=262051c#262051c9693a18bd35235711f4e8c0f8c0c4bf84"
 dependencies = [
  "indicatif",
  "reqwest",
@@ -3457,7 +3457,7 @@ dependencies = [
 [[package]]
 name = "starfield-gaia"
 version = "0.2.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=efeac36#efeac36a907afd67639729e53916d38166dd133f"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=262051c#262051c9693a18bd35235711f4e8c0f8c0c4bf84"
 dependencies = [
  "arrow",
  "cdshealpix",
@@ -3476,7 +3476,7 @@ dependencies = [
 [[package]]
 name = "starfield-nsa"
 version = "0.2.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=efeac36#efeac36a907afd67639729e53916d38166dd133f"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=262051c#262051c9693a18bd35235711f4e8c0f8c0c4bf84"
 dependencies = [
  "fitsio-pure 0.11.0",
  "nalgebra",
