@@ -688,6 +688,32 @@ struct Args {
                 renderer pathway."
     )]
     galaxies: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Load stars from a Gaia DR3 healpix-sharded excerpt directory \
+                (per-source BP-RP color → B-V via the linear fit, plus \
+                Hipparcos bright-star augmentation). Overrides --catalog when \
+                set. Cone-loader still shimmed pending upstream `starfield-gaia` \
+                landing the equivalent."
+    )]
+    gaia_dr3: bool,
+
+    #[arg(
+        long,
+        help = "Directory holding the healpix-sharded DR3 excerpt. Defaults \
+                to ~/.cache/starfield/gaia-excerpts/dr3-mag20/."
+    )]
+    gaia_excerpt_dir: Option<std::path::PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = 19.0,
+        help = "Magnitude cutoff for Gaia DR3 cone loader (G band). Default \
+                matches the historical to_mag_19.bin cutoff."
+    )]
+    gaia_mag_limit: f64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -808,14 +834,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         envelope_diameter
     );
 
-    info!("Loading catalog...");
-    let catalog = args.shared.load_catalog_with_progress(args.quiet)?;
-
-    let stars = catalog.stars_in_field(
-        envelope_center.ra_degrees(),
-        envelope_center.dec_degrees(),
-        envelope_diameter,
-    );
+    let stars: Vec<starfield::catalogs::StarData> = if args.gaia_dr3 {
+        let excerpt_dir = args
+            .gaia_excerpt_dir
+            .clone()
+            .unwrap_or_else(simulator::sims::gaia_dr3::default_excerpt_dir);
+        info!(
+            "Loading Gaia DR3 cone from {} (mag <= {:.2}, augmented with Hipparcos bright \
+             supplement)...",
+            excerpt_dir.display(),
+            args.gaia_mag_limit
+        );
+        let (cat, _augmented) = simulator::sims::gaia_dr3::load_dr3_cone_augmented(
+            &excerpt_dir,
+            envelope_center,
+            envelope_diameter * 0.5,
+            args.gaia_mag_limit,
+        )?;
+        cat.star_data().collect()
+    } else {
+        info!("Loading catalog...");
+        let catalog = args.shared.load_catalog_with_progress(args.quiet)?;
+        catalog.stars_in_field(
+            envelope_center.ra_degrees(),
+            envelope_center.dec_degrees(),
+            envelope_diameter,
+        )
+    };
     info!("Cached {} stars for trajectory envelope", stars.len());
 
     // NSA galaxies (optional). Pre-projected once at the envelope
