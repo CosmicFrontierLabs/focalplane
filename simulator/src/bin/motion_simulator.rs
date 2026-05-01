@@ -845,8 +845,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             excerpt_dir.display(),
             args.gaia_mag_limit
         );
-        let (cat, _augmented) = simulator::sims::gaia_dr3::load_dr3_cone_augmented(
-            &excerpt_dir,
+        let lazy = simulator::sims::gaia_dr3::open_dr3_excerpt(&excerpt_dir)?;
+        let (cat, _augmented) = simulator::sims::gaia_dr3::materialize_cone_augmented(
+            &lazy,
             envelope_center,
             envelope_diameter * 0.5,
             args.gaia_mag_limit,

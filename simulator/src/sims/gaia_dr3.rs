@@ -1,12 +1,14 @@
 //! Gaia DR3 catalog source for the renderer.
 //!
-//! Loads `Dr3Catalog` (from `starfield-gaia`) restricted to a circular
-//! sky region around the trajectory pointing, augments with the embedded
-//! Hipparcos bright-star supplement, and yields `StarData` rows the rest
-//! of the focalplane pipeline already consumes.
+//! Holds a `LazyLoadingCatalog<Dr3>` (from `starfield-gaia`) for the
+//! lifetime of a simulator run. The lazy handle reads only the excerpt
+//! directory's manifest at construction; each cone query opens just the
+//! HEALPix shards that intersect the cone, post-filters by exact
+//! great-circle distance, and augments with the embedded Hipparcos
+//! bright-star supplement so naked-eye stars dropped from the published
+//! Gaia catalog still render.
 //!
-//! Compared to the older `MinimalCatalog`-from-`to_mag_19.bin` path,
-//! every rendered star carries:
+//! Every rendered star carries:
 //!
 //! - per-source DR3 photometry (`phot_g_mean_mag`)
 //! - per-source `B-V` color derived from `BP-RP` via `Dr3Entry::b_v()`
@@ -14,64 +16,55 @@
 //!   `BlackbodyStellarSpectrum::from_gaia_bv_magnitude` gets a real
 //!   color rather than the `DEFAULT_BV` fallback
 //! - the bright-star Hipparcos supplement injected via
-//!   `Dr3Catalog::augment_missing` so naked-eye stars (G < ~3) that
-//!   were dropped from the published Gaia catalog still render
+//!   `Dr3Catalog::augment_missing` (G < ~3 stars dropped from Gaia)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use log::info;
 use starfield::Equatorial;
 use starfield_datasource_utils::cache_dir;
-use starfield_gaia::{Cone, Dr3Catalog};
+use starfield_gaia::{Cone, Dr3, Dr3Catalog, GaiaCatalog, LazyLoadingCatalog};
 
 /// Default location of the healpix-sharded DR3 mag-20 excerpt.
 pub fn default_excerpt_dir() -> PathBuf {
     cache_dir().join("gaia-excerpts").join("dr3-mag20")
 }
 
-/// Load `Dr3Catalog` entries within `radius_deg` of `centre`, brighter
-/// than `mag_limit`, from a healpix-sharded excerpt directory.
-///
-/// Forwards to `Dr3Catalog::from_excerpt_dir_for_cone`, which uses the
-/// directory's manifest to identify the HEALPix level, computes the
-/// cone-coverage cells via cdshealpix, parses only those shard files,
-/// and post-filters rows by exact great-circle distance (HEALPix
-/// covering is conservative; boundary cells are trimmed back to the
-/// requested cone).
-pub fn load_dr3_in_cone(
-    excerpt_dir: &std::path::Path,
+/// Open a lazy view over a HEALPix-sharded DR3 excerpt directory. Reads
+/// only the manifest; no shard files are touched until a cone is
+/// requested. Errors out if the directory is not a one-file-per-cell
+/// HEALPix excerpt for the DR3 release.
+pub fn open_dr3_excerpt(
+    excerpt_dir: &Path,
+) -> Result<LazyLoadingCatalog<Dr3>, Box<dyn std::error::Error>> {
+    info!(
+        "Opening Gaia DR3 excerpt at {} (lazy; manifest only)",
+        excerpt_dir.display()
+    );
+    Ok(LazyLoadingCatalog::<Dr3>::open(excerpt_dir)?)
+}
+
+/// Materialize a cone from a lazy DR3 excerpt and augment it with the
+/// embedded Hipparcos bright-star supplement. Returns the augmented
+/// catalog ready for `StarCatalog::star_data()` iteration; the second
+/// element is the supplement-row count actually inserted (subject to
+/// `mag_limit`).
+pub fn materialize_cone_augmented(
+    lazy: &LazyLoadingCatalog<Dr3>,
     centre: Equatorial,
     radius_deg: f64,
     mag_limit: f64,
-) -> Result<Dr3Catalog, Box<dyn std::error::Error>> {
+) -> Result<(Dr3Catalog, usize), Box<dyn std::error::Error>> {
     info!(
-        "load_dr3_in_cone(dir={}, ra={:.4}, dec={:.4}, radius={:.4}°, mag_limit={:.2})",
-        excerpt_dir.display(),
+        "Materializing Gaia DR3 cone (ra={:.4}, dec={:.4}, radius={:.4}°, mag_limit={:.2})",
         centre.ra_degrees(),
         centre.dec_degrees(),
         radius_deg,
         mag_limit
     );
     let cone = Cone::from_degrees(centre.ra_degrees(), centre.dec_degrees(), radius_deg);
-    Ok(Dr3Catalog::from_excerpt_dir_for_cone(
-        excerpt_dir,
-        cone,
-        mag_limit,
-    )?)
-}
-
-/// Load a Gaia DR3 catalog cone + augment with the embedded Hipparcos
-/// bright-star supplement. Returns the augmented catalog ready for
-/// `StarCatalog::star_data()` iteration. The `n_added` count is the
-/// number of bright supplement rows actually inserted (subject to the
-/// same `mag_limit` gate).
-pub fn load_dr3_cone_augmented(
-    excerpt_dir: &std::path::Path,
-    centre: Equatorial,
-    radius_deg: f64,
-    mag_limit: f64,
-) -> Result<(Dr3Catalog, usize), Box<dyn std::error::Error>> {
-    let mut cat = load_dr3_in_cone(excerpt_dir, centre, radius_deg, mag_limit)?;
+    let mem = lazy.materialize_cone(cone, mag_limit)?;
+    let mut cat = Dr3Catalog(mem);
     let n_added = cat.augment_missing(mag_limit)?;
     info!(
         "Gaia DR3 catalog: cone-loaded + augmented with {n_added} Hipparcos \
