@@ -199,36 +199,30 @@ impl SensorArray {
 }
 
 pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
-    SensorArray::new(vec![
-        PositionedSensor {
-            sensor: IMX455.clone(),
-            position: SensorPosition {
-                x_mm: -61.0,
-                y_mm: 27.01,
-            },
-        },
-        PositionedSensor {
-            sensor: IMX455.clone(),
-            position: SensorPosition {
-                x_mm: -26.5,
-                y_mm: 71.01,
-            },
-        },
-        PositionedSensor {
-            sensor: IMX455.clone(),
-            position: SensorPosition {
-                x_mm: 61.0,
-                y_mm: 27.01,
-            },
-        },
-        PositionedSensor {
-            sensor: IMX455.clone(),
-            position: SensorPosition {
-                x_mm: 26.5,
-                y_mm: 71.01,
-            },
-        },
-    ])
+    /// Outer (low-y) pair |x| offset, mm.
+    const OUTER_X_MM: f64 = 61.0;
+    /// Inner (high-y) pair |x| offset, mm.
+    const INNER_X_MM: f64 = 26.5;
+    /// Outer pair y offset (low row), mm.
+    const OUTER_Y_MM: f64 = 27.01;
+    /// Inner pair y offset (high row), mm.
+    const INNER_Y_MM: f64 = 71.01;
+
+    let centres = [
+        (-OUTER_X_MM, OUTER_Y_MM),
+        (-INNER_X_MM, INNER_Y_MM),
+        (OUTER_X_MM, OUTER_Y_MM),
+        (INNER_X_MM, INNER_Y_MM),
+    ];
+    SensorArray::new(
+        centres
+            .into_iter()
+            .map(|(x_mm, y_mm)| PositionedSensor {
+                sensor: IMX455.clone(),
+                position: SensorPosition { x_mm, y_mm },
+            })
+            .collect(),
+    )
 });
 
 #[cfg(test)]
