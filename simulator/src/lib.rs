@@ -71,7 +71,6 @@
 pub mod algo; // misc module lives here
 pub mod hardware;
 pub mod image_proc; // render module lives here
-pub mod io;
 pub mod photometry;
 pub mod plotting;
 pub mod scene;
