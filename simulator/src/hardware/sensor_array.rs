@@ -199,41 +199,33 @@ impl SensorArray {
 }
 
 pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
-    let x1 = 27.5;
-    let y1 = 20.0;
-
-    let x2 = 58.75;
-    let y2 = -23.75;
-
-    let spencer_y_offset = 50.0;
-
     SensorArray::new(vec![
         PositionedSensor {
             sensor: IMX455.clone(),
             position: SensorPosition {
-                x_mm: x1,
-                y_mm: y1 + spencer_y_offset,
+                x_mm: -61.0,
+                y_mm: 27.01,
             },
         },
         PositionedSensor {
             sensor: IMX455.clone(),
             position: SensorPosition {
-                x_mm: -x1,
-                y_mm: y1 + spencer_y_offset,
+                x_mm: -26.5,
+                y_mm: 71.01,
             },
         },
         PositionedSensor {
             sensor: IMX455.clone(),
             position: SensorPosition {
-                x_mm: x2,
-                y_mm: y2 + spencer_y_offset,
+                x_mm: 61.0,
+                y_mm: 27.01,
             },
         },
         PositionedSensor {
             sensor: IMX455.clone(),
             position: SensorPosition {
-                x_mm: -x2,
-                y_mm: y2 + spencer_y_offset,
+                x_mm: 26.5,
+                y_mm: 71.01,
             },
         },
     ])
