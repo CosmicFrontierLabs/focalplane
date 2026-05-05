@@ -18,7 +18,7 @@
 //! - the bright-star Hipparcos supplement injected via
 //!   `Dr3Catalog::augment_missing` (G < ~3 stars dropped from Gaia)
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use log::info;
 use starfield::Equatorial;
@@ -28,20 +28,6 @@ use starfield_gaia::{Cone, Dr3, Dr3Catalog, GaiaCatalog, LazyLoadingCatalog};
 /// Default location of the healpix-sharded DR3 mag-20 excerpt.
 pub fn default_excerpt_dir() -> PathBuf {
     cache_dir().join("gaia-excerpts").join("dr3-mag20")
-}
-
-/// Open a lazy view over a HEALPix-sharded DR3 excerpt directory. Reads
-/// only the manifest; no shard files are touched until a cone is
-/// requested. Errors out if the directory is not a one-file-per-cell
-/// HEALPix excerpt for the DR3 release.
-pub fn open_dr3_excerpt(
-    excerpt_dir: &Path,
-) -> Result<LazyLoadingCatalog<Dr3>, Box<dyn std::error::Error>> {
-    info!(
-        "Opening Gaia DR3 excerpt at {} (lazy; manifest only)",
-        excerpt_dir.display()
-    );
-    Ok(LazyLoadingCatalog::<Dr3>::open(excerpt_dir)?)
 }
 
 /// Materialize a cone from a lazy DR3 excerpt and augment it with the

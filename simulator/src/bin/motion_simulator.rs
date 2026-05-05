@@ -14,6 +14,7 @@ use simulator::star_math::field_diameter_for_array;
 use simulator::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarCatalog;
 use starfield::Equatorial;
+use starfield_gaia::{Dr3, LazyLoadingCatalog};
 use std::path::Path;
 use std::time::Instant;
 
@@ -695,8 +696,7 @@ struct Args {
         help = "Load stars from a Gaia DR3 healpix-sharded excerpt directory \
                 (per-source BP-RP color → B-V via the linear fit, plus \
                 Hipparcos bright-star augmentation). Overrides --catalog when \
-                set. Cone-loader still shimmed pending upstream `starfield-gaia` \
-                landing the equivalent."
+                set."
     )]
     gaia_dr3: bool,
 
@@ -845,7 +845,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             excerpt_dir.display(),
             args.gaia_mag_limit
         );
-        let lazy = simulator::sims::gaia_dr3::open_dr3_excerpt(&excerpt_dir)?;
+        let lazy = LazyLoadingCatalog::<Dr3>::open(&excerpt_dir)?;
         let (cat, _augmented) = simulator::sims::gaia_dr3::materialize_cone_augmented(
             &lazy,
             envelope_center,
