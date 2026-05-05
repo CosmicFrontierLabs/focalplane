@@ -51,10 +51,29 @@ pub fn materialize_cone_augmented(
     let cone = Cone::from_degrees(centre.ra_degrees(), centre.dec_degrees(), radius_deg);
     let mem = lazy.materialize_cone(cone, mag_limit)?;
     let mut cat = Dr3Catalog(mem);
-    let n_added = cat.augment_missing(mag_limit)?;
+    // Hipparcos supplement injection, restricted to the cone. The
+    // upstream `Dr3Catalog::augment_missing` inserts every supplement
+    // row whose `fitted_g_mag` is brighter than `mag_limit` regardless
+    // of sky position, which dumps ~15 k stars sky-wide for a typical
+    // mag-19 limit; the loop below uses the same parser + entry
+    // converter but adds the cone-containment test before each insert.
+    let supplement = starfield_gaia::dr3::supplement::parse_embedded_supplement()?;
+    let mut n_added = 0usize;
+    for row in &supplement {
+        if row.fitted_g_mag > mag_limit {
+            continue;
+        }
+        if !cone.contains_radec_deg(row.ra, row.dec) {
+            continue;
+        }
+        cat.insert(starfield_gaia::dr3::supplement::supplement_row_to_entry(
+            row,
+        ));
+        n_added += 1;
+    }
     info!(
         "Gaia DR3 catalog: cone-loaded + augmented with {n_added} Hipparcos \
-         bright-star supplement rows (mag_limit = {mag_limit:.2})"
+         bright-star supplement rows in cone (mag_limit = {mag_limit:.2})"
     );
     Ok((cat, n_added))
 }
