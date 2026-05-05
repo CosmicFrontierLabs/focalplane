@@ -2,10 +2,13 @@
 //!
 //! Produces an RGB8 PNG per trajectory frame showing the star field, the
 //! focal-plane sensor outlines, and a reticle at the boresight. The view
-//! is rendered in body-frame millimeters: the boresight sits at image
-//! center, sensors are drawn at their fixed `(x_mm, y_mm)` positions, and
-//! stars are projected through the orientation so they appear to swirl
-//! around the instrument as the telescope rotates.
+//! is rendered in body-frame millimeters: the focal-plane AABB is centred
+//! in the canvas (so the silicon fills the frame regardless of asymmetric
+//! offsets), sensors are drawn at their fixed `(x_mm, y_mm)` positions,
+//! and the red reticle marks the boresight projection at the focal-plane
+//! origin — which sits off canvas-centre when the array is offset from
+//! the optical axis. Stars are projected through the orientation so they
+//! appear to swirl around the instrument as the telescope rotates.
 //!
 //! Star sizes are inflated well above their physical PSF so they remain
 //! visible at the coarse pixel pitch of the 4K context image. Brighter
@@ -124,8 +127,12 @@ pub fn render_context_frame(
     let center_x_px = width as f64 / 2.0;
     let center_y_px = height as f64 / 2.0;
 
-    // `sky_to_mm` returns coordinates anchored so that the boresight lands
-    // at the AABB center. Subtract it so image center == boresight.
+    // Anchor the projection on the AABB center so the silicon fills the
+    // canvas regardless of where the boresight (mm origin) sits relative
+    // to it. The reticle is drawn at `mm_to_px(0.0, 0.0)` below, so it
+    // lands at the true boresight projection — which need not coincide
+    // with the image center when the array is offset from the optical
+    // axis (e.g. the Spencer mosaic).
     let (abc_x, abc_y) = (
         (aabb_min_x + aabb_max_x) / 2.0,
         (aabb_min_y + aabb_max_y) / 2.0,
@@ -234,16 +241,17 @@ pub fn render_context_frame(
         }
     }
 
-    // Reticle at image center. Since we render in body frame, the reticle
-    // arms naturally align with the instrument axes and rotate with the
-    // star field as the telescope rolls. Base the arm length on the
-    // shorter image dimension so aspect-ratio changes don't inflate it.
+    // Reticle at the boresight projection. Since we render in body frame,
+    // the reticle arms naturally align with the instrument axes and rotate
+    // with the star field as the telescope rolls. Base the arm length on
+    // the shorter image dimension so aspect-ratio changes don't inflate it.
     let red = Rgb([255, 90, 90]);
     let short_side = width.min(height) as i32;
     let arm_len = short_side / 40;
     let gap = short_side / 200;
-    let cx_i = center_x_px as i32;
-    let cy_i = center_y_px as i32;
+    let (bore_px, bore_py) = mm_to_px(0.0, 0.0);
+    let cx_i = bore_px.round() as i32;
+    let cy_i = bore_py.round() as i32;
     draw_reticle(&mut img, (cx_i, cy_i), arm_len.max(8), gap.max(2), red);
 
     // Reticle labels — stacked above the right-shooting horizontal arm,
