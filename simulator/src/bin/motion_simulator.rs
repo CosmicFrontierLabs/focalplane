@@ -866,8 +866,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // NSA galaxies (optional). Pre-projected once at the envelope
     // centre — the per-tile renderer uses the same per-sensor list
     // for every frame. See `sims::nsa_galaxies` for the loader
-    // documentation.
-    let per_sensor_galaxies: Vec<Vec<simulator::scene_galaxy::GalaxyInFrame>> = if args.galaxies {
+    // documentation. `galaxies_in_field` is a flat sky-position list
+    // for the context-view ellipse overlay (it covers galaxies that
+    // land in sensor gaps too).
+    let (per_sensor_galaxies, galaxies_in_field) = if args.galaxies {
         let path = args
             .galaxy_catalog
             .clone()
@@ -876,15 +878,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use the envelope diameter / 2 as a generous FOV radius
         // around the trajectory centre. The loader applies its own
         // padding on top.
-        simulator::sims::nsa_galaxies::load_and_route_nsa_galaxies(
+        let per_sensor = simulator::sims::nsa_galaxies::load_and_route_nsa_galaxies(
             &path,
             &envelope_center,
             &focal_plane,
             envelope_diameter * 0.5,
             &cfg,
-        )?
+        )?;
+        let in_field = simulator::sims::nsa_galaxies::load_galaxies_in_fov(
+            &path,
+            &envelope_center,
+            envelope_diameter * 0.5,
+            &cfg,
+        )?;
+        (per_sensor, in_field)
     } else {
-        vec![Vec::new(); focal_plane.array.sensor_count()]
+        (
+            vec![Vec::new(); focal_plane.array.sensor_count()],
+            Vec::new(),
+        )
     };
 
     let output_path = Path::new(&args.output_dir);
@@ -952,8 +964,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|(idx, t)| -> Result<(), String> {
                 let orientation = trajectory.orientation_at(*t).map_err(|e| e.to_string())?;
                 let path = context_dir.join(format!("frame_{idx:06}.png"));
-                render_context_frame(&orientation, &stars, &focal_plane, &ctx_cfg, &path)
-                    .map_err(|e| e.to_string())
+                render_context_frame(
+                    &orientation,
+                    &stars,
+                    &galaxies_in_field,
+                    &focal_plane,
+                    &ctx_cfg,
+                    &path,
+                )
+                .map_err(|e| e.to_string())
             })
             .collect();
         for r in results {

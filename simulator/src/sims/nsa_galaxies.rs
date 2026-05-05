@@ -129,6 +129,66 @@ pub fn default_nsa_path() -> PathBuf {
     cache_dir().join("nsa").join("nsa_v0_1_2.fits")
 }
 
+/// Lightweight galaxy descriptor: sky position + Sérsic ellipse
+/// parameters. Carries only what the context-view ellipse renderer
+/// needs (no fluxes, no `SersicSplat`), so the per-galaxy cost stays
+/// flat at a handful of `f64`s for the in-FOV catalog scan.
+#[derive(Debug, Clone, Copy)]
+pub struct GalaxyInField {
+    pub position: Equatorial,
+    pub theta_half_arcsec: f64,
+    pub axis_ratio: f64,
+    pub position_angle_deg: f64,
+}
+
+/// Load NSA from `path` (downloading if absent), filter to the angular
+/// box around `pointing` plus `config.fov_pad_deg`, drop pathological
+/// fits, and return a flat list of `GalaxyInField` entries.
+///
+/// Mirrors the in-FOV pre-filter in [`load_and_route_nsa_galaxies`] but
+/// stops short of per-sensor projection — the context-view renderer
+/// wants every galaxy in the focal-plane envelope, including ones that
+/// land in a sensor gap, so it can mark them with a dotted ellipse.
+pub fn load_galaxies_in_fov(
+    path: &Path,
+    pointing: &Equatorial,
+    fov_radius_deg: f64,
+    config: &GalaxyLoaderConfig,
+) -> Result<Vec<GalaxyInField>, Box<dyn std::error::Error>> {
+    let path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        info!("NSA FITS missing at {}; downloading...", path.display());
+        starfield_nsa::download_nsa()?
+    };
+    let cat = NsaCatalog::from_fits_file(&path)?;
+    let cos_dec0 = pointing.dec_degrees().to_radians().cos();
+    let half_box_deg = fov_radius_deg + config.fov_pad_deg;
+    let out: Vec<GalaxyInField> = cat
+        .stars()
+        .filter(|e| {
+            let dra = (e.ra - pointing.ra_degrees()) * cos_dec0;
+            let ddec = e.dec - pointing.dec_degrees();
+            dra.abs() < half_box_deg && ddec.abs() < half_box_deg
+        })
+        .filter(|e| is_well_fit(e, config.min_n, config.max_n, config.max_theta_eff))
+        .map(|e| GalaxyInField {
+            position: Equatorial::from_degrees(e.ra, e.dec),
+            theta_half_arcsec: e.sersic_th50 as f64,
+            axis_ratio: e.sersic_ba as f64,
+            position_angle_deg: e.sersic_phi as f64,
+        })
+        .collect();
+    info!(
+        "{} NSA galaxies in {:.2}° box around ({:.4}, {:.4}) for context overlay",
+        out.len(),
+        half_box_deg * 2.0,
+        pointing.ra_degrees(),
+        pointing.dec_degrees()
+    );
+    Ok(out)
+}
+
 /// Load NSA from `path` (downloading via the NYU mirror if absent),
 /// filter to the field of view around `pointing` plus `fov_pad_deg`
 /// of slack, drop pathological fits, and project to per-sensor

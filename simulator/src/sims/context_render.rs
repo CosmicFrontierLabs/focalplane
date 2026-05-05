@@ -22,8 +22,11 @@ use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 
 use crate::hardware::satellite::FocalPlaneConfig;
+use crate::sims::nsa_galaxies::GalaxyInField;
 use crate::sims::orientation::boresight_of;
 use crate::sims::trajectory::TrajectoryError;
+
+const RAD_TO_ARCSEC: f64 = 206_264.806_247_096_4;
 
 type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
 
@@ -84,9 +87,16 @@ impl Default for ContextRenderConfig {
 }
 
 /// Render a single context-view frame to `output_path`.
+///
+/// `galaxies` is a sky-position+ellipse-only list of NSA galaxies in
+/// the focal-plane envelope. Each entry is marked with a yellow dotted
+/// ellipse sized at the galaxy's Sérsic half-light radius so the
+/// preview shows where extended sources will land relative to the
+/// silicon. Pass an empty slice to skip the overlay.
 pub fn render_context_frame(
     orientation: &UnitQuaternion<f64>,
     stars: &[StarData],
+    galaxies: &[GalaxyInField],
     fp: &FocalPlaneConfig,
     config: &ContextRenderConfig,
     output_path: &Path,
@@ -155,6 +165,46 @@ pub fn render_context_frame(
         // the star to hit a detector.
         if fp.array.mm_to_pixel(x_mm, y_mm).is_some() {
             draw_availability_ring(&mut img, (px, py), star.magnitude, config);
+        }
+    }
+
+    // Galaxy overlays: dotted ellipses at the Sérsic half-light radius.
+    // Drawn before the sensor outlines so the green box stays on top
+    // (helps eyeballing which galaxies actually clip a detector).
+    if !galaxies.is_empty() {
+        let arcsec_per_mm = fp.plate_scale_rad_per_mm() * RAD_TO_ARCSEC;
+        let yellow = Rgb([255, 200, 60]);
+        for g in galaxies {
+            let Some((x_mm, y_mm)) = fp.sky_to_mm(&g.position, orientation) else {
+                continue;
+            };
+            let (cx, cy) = mm_to_px(x_mm, y_mm);
+            // Convert θ_eff (arcsec) → mm at the focal plane → context px.
+            let semi_major_mm = g.theta_half_arcsec / arcsec_per_mm;
+            let a_px = semi_major_mm / mm_per_px;
+            let b_px = a_px * g.axis_ratio;
+            // Wider canvas slack than stars: an off-centre ellipse may
+            // still poke partway into the canvas.
+            let slack = (a_px.max(b_px) + 4.0).ceil();
+            if cx + slack < 0.0
+                || cx - slack > width as f64
+                || cy + slack < 0.0
+                || cy - slack > height as f64
+            {
+                continue;
+            }
+            // NSA position angle is east-of-north on sky. The focal
+            // plane has +y mm = north (up in the canvas after the
+            // y-flip in `mm_to_px`), so rotating the ellipse's parametric
+            // axes by `pa` gives the correct on-canvas orientation.
+            draw_dotted_ellipse(
+                &mut img,
+                (cx, cy),
+                a_px,
+                b_px,
+                g.position_angle_deg.to_radians(),
+                yellow,
+            );
         }
     }
 
@@ -413,6 +463,59 @@ fn draw_circle(img: &mut RgbImage, center: (i32, i32), r: i32, color: Rgb<u8>) {
     }
 }
 
+/// Draw a dashed (dotted) outline of an ellipse with semi-axes
+/// `a_px` (along the rotated x axis) and `b_px` (along y), rotated by
+/// `pa_rad`. The arc is sampled in `n` parametric segments, each
+/// segment plotted as a 2x2 block so the dashes stay visible at 4K
+/// canvas density. Every other segment is left empty for the dash.
+///
+/// Falls through silently if either semi-axis is below 1 px — there's
+/// nothing to draw at sub-pixel scale.
+fn draw_dotted_ellipse(
+    img: &mut RgbImage,
+    center: (f64, f64),
+    a_px: f64,
+    b_px: f64,
+    pa_rad: f64,
+    color: Rgb<u8>,
+) {
+    let max_axis = a_px.max(b_px);
+    if max_axis < 1.0 {
+        return;
+    }
+    let (cx, cy) = center;
+    let (sin_pa, cos_pa) = pa_rad.sin_cos();
+    // ~one parametric step per outline pixel keeps the dashes from
+    // bunching at the apex of an elongated ellipse.
+    let n = (std::f64::consts::TAU * max_axis).ceil().max(48.0) as usize;
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    for i in 0..n {
+        // Dotted: two-on, two-off pattern.
+        if (i / 2) % 2 == 1 {
+            continue;
+        }
+        let t = (i as f64) * std::f64::consts::TAU / n as f64;
+        let (st, ct) = t.sin_cos();
+        let lx = a_px * ct;
+        let ly = b_px * st;
+        // Rotate by `pa`, then flip the vertical contribution because
+        // image y points down while focal-plane y points up.
+        let dx = lx * cos_pa - ly * sin_pa;
+        let dy_canvas = -(lx * sin_pa + ly * cos_pa);
+        let x = (cx + dx).round() as i32;
+        let y = (cy + dy_canvas).round() as i32;
+        for oy in 0..=1 {
+            for ox in 0..=1 {
+                let px = x + ox;
+                let py = y + oy;
+                if px >= 0 && px < w && py >= 0 && py < h {
+                    img.put_pixel(px as u32, py as u32, color);
+                }
+            }
+        }
+    }
+}
+
 /// Mark a star with a colored ring based on how bright it is: deep blue for
 /// tracking-grade (≤ `tracking_mag_limit`), light blue for astrometry-only
 /// (between tracking and `astrometry_mag_limit`), nothing for dimmer.
@@ -490,7 +593,7 @@ mod tests {
             height: 256,
             ..Default::default()
         };
-        render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
+        render_context_frame(&orient, &[], &[], &fp, &cfg, &path).unwrap();
         assert!(path.is_file(), "context PNG must exist");
         let meta = std::fs::metadata(&path).unwrap();
         assert!(meta.len() > 100, "context PNG is suspiciously small");
@@ -511,7 +614,7 @@ mod tests {
             height: 256,
             ..Default::default()
         };
-        render_context_frame(&orient, &[], &fp, &cfg, &path).unwrap();
+        render_context_frame(&orient, &[], &[], &fp, &cfg, &path).unwrap();
         let img = image::open(&path).unwrap().into_rgb8();
         let non_black = img.pixels().filter(|p| p.0 != [0, 0, 0]).count();
         assert!(
