@@ -244,8 +244,21 @@ pub struct BlackbodyStellarSpectrum {
 /// # Usage
 /// Convert B-V color index to stellar effective temperature using
 /// Ballesteros (2012) empirical relationship for famous stars.
+/// Lower clamp on `b_v` before applying the Ballesteros formula.
+///
+/// Eq. 14 has poles at `b_v = -0.62/0.92 ≈ -0.674` and `b_v ≈ -1.848`
+/// — below the first pole the formula returns negative `T` and the
+/// downstream `BlackbodyStellarSpectrum::new` panics. Real Gaia DR3
+/// sources occasionally yield `b_v ≲ -0.7` after the BP-RP → B-V
+/// linear fit (hot O-stars, photometric outliers). Clamp at `-0.4` —
+/// the formula is only nominally calibrated down to about that B-V
+/// anyway, and `temperature_from_bv(-0.4) ≈ 21 700 K` already covers
+/// the physically reasonable hot end.
+const BV_CLAMP_MIN: f64 = -0.4;
+
 pub fn temperature_from_bv(b_v: f64) -> f64 {
     // equation 14 in the source above
+    let b_v = b_v.max(BV_CLAMP_MIN);
     4600.0 * (1.0 / (0.92 * b_v + 1.7) + (1.0 / (0.92 * b_v + 0.62)))
 }
 
@@ -741,5 +754,32 @@ mod tests {
         let blue = Band::from_nm_bounds(300.0, 400.0);
         assert!(o_bb_spec.irradiance(&blue) > g_bb_spec.irradiance(&blue));
         assert!(o_bb_spec.irradiance(&blue) > m_bb_spec.irradiance(&blue));
+    }
+
+    /// Regression for issue #84: Ballesteros (2012) eq. 14 has poles at
+    /// `b_v ≈ -0.674` and `-1.848`; below the first pole the raw
+    /// formula returns negative `T` and downstream
+    /// `BlackbodyStellarSpectrum::new` panics. The clamp on the input
+    /// must keep the returned temperature finite, positive, and within
+    /// the calibrated stellar range for any `b_v` Gaia DR3 might emit
+    /// (occasionally `< -1` after the BP-RP → B-V linear fit).
+    #[test]
+    fn temperature_from_bv_does_not_panic_on_extreme_blue() {
+        for b_v in [-0.5, -0.674, -0.7, -1.0, -1.848, -3.0, f64::NEG_INFINITY] {
+            let t = temperature_from_bv(b_v);
+            assert!(
+                t.is_finite() && t > 0.0,
+                "temperature_from_bv({b_v}) = {t} should be finite and positive"
+            );
+            // Sanity: clamp at b_v = -0.4 gives ≈ 21 700 K, well within
+            // the O-star regime (cap at 50 000 to catch a regression).
+            assert!(
+                (1_000.0..=50_000.0).contains(&t),
+                "temperature_from_bv({b_v}) = {t} K outside [1000, 50000]"
+            );
+            // BlackbodyStellarSpectrum::new panics on T <= 0; verify
+            // the constructor accepts the clamped result.
+            let _ = BlackbodyStellarSpectrum::new(t, 1.0);
+        }
     }
 }
