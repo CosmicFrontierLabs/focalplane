@@ -52,7 +52,7 @@ plotters = { version = "0.3", default-features = false, features = [
 ] }
 chrono = "0.4.41"
 ab_glyph = "0.2"           # TTF glyph rasterization for context-view labels
-imageproc = { version = "0.25", default-features = false } # draw_text_mut over `image`
+imageproc = { version = "0.25.1", default-features = false } # draw_text_mut over `image`
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = [
