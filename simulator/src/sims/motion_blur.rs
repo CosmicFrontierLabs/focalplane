@@ -39,10 +39,8 @@ use image::{ImageBuffer, Luma};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
 use ndarray::Array2;
-use rand::{rngs::StdRng, SeedableRng};
-use rand_distr::{Distribution, Normal};
 use rayon::prelude::*;
-use shared::image_proc::noise::apply_poisson_photon_noise;
+use shared::image_proc::noise::{apply_gaussian_read_noise, apply_poisson_photon_noise};
 use shared::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
@@ -509,6 +507,7 @@ fn render_tile(
     // value is stable across every stamp of the exposure.
     let mut local_flux: HashMap<u64, SourceFlux> = HashMap::new();
 
+    let t_splat_stars = Instant::now();
     for stamp_t in schedule.stamp_times(stamp_phase) {
         let t_clamped = stamp_t
             .min(scene.trajectory.end_time())
@@ -537,6 +536,7 @@ fn render_tile(
             accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
         }
     }
+    let ms_splat_stars = t_splat_stars.elapsed().as_millis();
 
     // Galaxies: pre-projected per-sensor (one position per render),
     // splatted at full-exposure flux so the unified Poisson stage
@@ -546,6 +546,7 @@ fn render_tile(
     // sub-pixel galaxy shift across the exposure is well below the
     // per-pixel noise floor of any plausible exposure. Static
     // trajectories (start == end) are exact.
+    let t_splat_galaxies = Instant::now();
     let galaxies = scene
         .per_sensor_galaxies
         .get(sensor_idx)
@@ -558,6 +559,7 @@ fn render_tile(
             .integrated_over(&schedule.exposure, aperture);
         accumulator.splat_galaxy(galaxy.x, galaxy.y, total_electrons, &galaxy.deposit);
     }
+    let ms_splat_galaxies = t_splat_galaxies.elapsed().as_millis();
 
     // Dark current: rate × full exposure, uniform over pixels.
     let dark_rate = satellite
@@ -566,8 +568,13 @@ fn render_tile(
     let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
 
     // Build unified Poisson mean image and draw.
+    let t_combined_mean = Instant::now();
     let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
+    let ms_combined_mean = t_combined_mean.elapsed().as_millis();
+
+    let t_poisson = Instant::now();
     let poisson_image = apply_poisson_photon_noise(&mean_image, Some(tile_seed ^ POISSON_DOMAIN));
+    let ms_poisson = t_poisson.elapsed().as_millis();
 
     // Gaussian read noise (electronics, not shot noise) applied afterwards.
     let read_noise_rms = satellite
@@ -576,17 +583,38 @@ fn render_tile(
         .estimate(satellite.temperature.as_celsius(), schedule.exposure)
         .unwrap_or(0.0)
         .max(0.0);
-    let final_electrons = if read_noise_rms > 0.0 {
-        let mut rng = StdRng::seed_from_u64(tile_seed ^ READ_NOISE_DOMAIN);
-        let normal =
-            Normal::new(0.0_f64, read_noise_rms).expect("read noise RMS must be non-negative");
-        poisson_image.mapv(|e| (e + normal.sample(&mut rng)).max(0.0))
-    } else {
-        poisson_image
-    };
+    let t_read_noise = Instant::now();
+    let final_electrons = apply_gaussian_read_noise(
+        &poisson_image,
+        read_noise_rms,
+        Some(tile_seed ^ READ_NOISE_DOMAIN),
+    );
+    let ms_read_noise = t_read_noise.elapsed().as_millis();
 
+    let t_quantize = Instant::now();
     let quantized = quantize_image(&final_electrons, &satellite.sensor);
-    save_u16_png(&quantized, output_path)
+    let ms_quantize = t_quantize.elapsed().as_millis();
+
+    let t_save = Instant::now();
+    let result = save_u16_png(&quantized, output_path);
+    let ms_save = t_save.elapsed().as_millis();
+
+    debug!(
+        "tile-phases frame={} sensor={} \
+         splat_stars={}ms splat_galaxies={}ms combined_mean={}ms \
+         poisson={}ms read_noise={}ms quantize={}ms png_save={}ms",
+        plan.idx,
+        sensor_idx,
+        ms_splat_stars,
+        ms_splat_galaxies,
+        ms_combined_mean,
+        ms_poisson,
+        ms_read_noise,
+        ms_quantize,
+        ms_save,
+    );
+
+    result
 }
 
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
