@@ -573,7 +573,7 @@ fn render_tile(
     let ms_combined_mean = t_combined_mean.elapsed().as_millis();
 
     let t_poisson = Instant::now();
-    let poisson_image = apply_poisson_photon_noise(&mean_image, Some(tile_seed ^ POISSON_DOMAIN));
+    let poisson_image = apply_poisson_photon_noise(mean_image, Some(tile_seed ^ POISSON_DOMAIN));
     let ms_poisson = t_poisson.elapsed().as_millis();
 
     // Gaussian read noise (electronics, not shot noise) applied afterwards.
@@ -585,7 +585,7 @@ fn render_tile(
         .max(0.0);
     let t_read_noise = Instant::now();
     let final_electrons = apply_gaussian_read_noise(
-        &poisson_image,
+        poisson_image,
         read_noise_rms,
         Some(tile_seed ^ READ_NOISE_DOMAIN),
     );
