@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
-use ndarray::Array2;
+use ndarray::{Array2, Zip};
 use starfield::{catalogs::StarData, Equatorial};
 
 use crate::{
@@ -360,21 +360,19 @@ impl Renderer {
 }
 
 pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Array2<u16> {
-    // Get the DN per electron conversion factor from the sensor
-    // Calculate max DN value based on sensor bit depth (saturate at sensor's max value)
     let max_dn = ((1 << sensor.bit_depth) - 1) as f64;
+    let well_depth = sensor.max_well_depth_e;
+    let dn_per_e = sensor.dn_per_electron;
 
-    // Combine conversion, clipping and rounding in a single mapv operation:
-    // 1. Convert from electrons to DN
-    // 2. Clip to valid range (0 to max DN for the sensor bit depth)
-    // 3. Round to nearest integer
-    // 4. Convert to u16
-    electron_img.mapv(|total_e| {
-        let clipped_e = total_e.clamp(0.0, sensor.max_well_depth_e);
-        let dn = clipped_e * sensor.dn_per_electron;
-        let clipped = dn.clamp(0.0, max_dn);
-        clipped.round() as u16
-    })
+    let mut quantized = Array2::<u16>::zeros(electron_img.raw_dim());
+    Zip::from(&mut quantized)
+        .and(electron_img)
+        .par_for_each(|out, &total_e| {
+            let clipped_e = total_e.clamp(0.0, well_depth);
+            let dn = clipped_e * dn_per_e;
+            *out = dn.clamp(0.0, max_dn).round() as u16;
+        });
+    quantized
 }
 
 /// Creates an image with stars using Simpson's rule integration for the Airy disk PSF.
