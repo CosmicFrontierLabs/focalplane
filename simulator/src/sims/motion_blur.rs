@@ -235,11 +235,21 @@ impl SensorAccumulator {
         );
     }
 
-    /// Returns the combined mean-electron image = star mean + zodiacal
-    /// uniform + dark-current uniform (pre-Poisson).
-    pub fn combined_mean(&self, zodiacal_per_px: f64, dark_per_px: f64) -> Array2<f64> {
+    /// Consume the accumulator and return the combined mean-electron image
+    /// = star mean + zodiacal uniform + dark-current uniform (pre-Poisson).
+    ///
+    /// The accumulator's existing `star_mean_electrons` buffer is reused —
+    /// no second 488 MB allocation, no read-then-write of a fresh array.
+    /// The scalar background is added in place via rayon-parallel
+    /// element-wise iteration (ndarray's `rayon` feature is enabled).
+    pub fn into_combined_mean(mut self, zodiacal_per_px: f64, dark_per_px: f64) -> Array2<f64> {
         let bg = (zodiacal_per_px + dark_per_px).max(0.0);
-        &self.star_mean_electrons + bg
+        if bg > 0.0 {
+            self.star_mean_electrons
+                .par_iter_mut()
+                .for_each(|pixel| *pixel += bg);
+        }
+        self.star_mean_electrons
     }
 }
 
@@ -569,7 +579,7 @@ fn render_tile(
 
     // Build unified Poisson mean image and draw.
     let t_combined_mean = Instant::now();
-    let mean_image = accumulator.combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
+    let mean_image = accumulator.into_combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
     let ms_combined_mean = t_combined_mean.elapsed().as_millis();
 
     let t_poisson = Instant::now();
@@ -1193,7 +1203,7 @@ mod tests {
     fn test_sensor_accumulator_combined_mean() {
         let mut acc = SensorAccumulator::zero(4, 4);
         acc.star_mean_electrons[[1, 1]] = 5.0;
-        let combined = acc.combined_mean(2.0, 1.0);
+        let combined = acc.into_combined_mean(2.0, 1.0);
         assert_eq!(combined[[0, 0]], 3.0); // 0 + 2 + 1
         assert_eq!(combined[[1, 1]], 8.0); // 5 + 2 + 1
     }
