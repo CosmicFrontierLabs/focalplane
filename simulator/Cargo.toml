@@ -29,9 +29,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = "0.32"             # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3fdfe23", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3fdfe23" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3fdfe23" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7936ec9", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7936ec9" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7936ec9" }
 
 rand = "0.9"
 rand_distr = "0.5"

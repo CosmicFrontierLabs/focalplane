@@ -318,7 +318,7 @@ impl Renderer {
 
         // Apply Poisson arrival time statistics to star photons if requested
         let star_image = if apply_poisson {
-            apply_poisson_photon_noise(&scaled_star_image, rng_seed)
+            apply_poisson_photon_noise(scaled_star_image, rng_seed)
         } else {
             scaled_star_image
         };
@@ -339,7 +339,7 @@ impl Renderer {
 
         let zodiacal_image = if apply_poisson {
             let new_seed = rng_seed.map(|val| val + 1);
-            apply_poisson_photon_noise(&zodiacal_mean, new_seed)
+            apply_poisson_photon_noise(zodiacal_mean, new_seed)
         } else {
             zodiacal_mean
         };
