@@ -1,12 +1,11 @@
 use clap::{Parser, ValueEnum};
 use log::{info, warn};
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use rand_distr::StandardNormal;
 use rayon::prelude::*;
 use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
+use simulator::sims::jitter::build_pink_trajectory;
 use simulator::sims::trajectory::{
     fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig, Waypoint,
 };
@@ -17,38 +16,6 @@ use starfield::Equatorial;
 use starfield_gaia::{Dr3, LazyLoadingCatalog};
 use std::path::Path;
 use std::time::Instant;
-
-/// Generate `n` samples of pink (1/f) noise via Paul Kellett's 7-pole
-/// filter. Good approximation across about three decades of frequency.
-fn pink_noise_series(n: usize, rng: &mut impl Rng) -> Vec<f64> {
-    let mut b = [0.0_f64; 7];
-    let mut out = Vec::with_capacity(n);
-    // Warm the filter so the first samples aren't transient-heavy.
-    for _ in 0..256 {
-        let white: f64 = rng.sample(StandardNormal);
-        b[0] = 0.99886 * b[0] + white * 0.0555179;
-        b[1] = 0.99332 * b[1] + white * 0.0750759;
-        b[2] = 0.96900 * b[2] + white * 0.1538520;
-        b[3] = 0.86650 * b[3] + white * 0.3104856;
-        b[4] = 0.55000 * b[4] + white * 0.5329522;
-        b[5] = -0.7616 * b[5] - white * 0.0168980;
-        let _ = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + white * 0.5362;
-        b[6] = white * 0.115926;
-    }
-    for _ in 0..n {
-        let white: f64 = rng.sample(StandardNormal);
-        b[0] = 0.99886 * b[0] + white * 0.0555179;
-        b[1] = 0.99332 * b[1] + white * 0.0750759;
-        b[2] = 0.96900 * b[2] + white * 0.1538520;
-        b[3] = 0.86650 * b[3] + white * 0.3104856;
-        b[4] = 0.55000 * b[4] + white * 0.5329522;
-        b[5] = -0.7616 * b[5] - white * 0.0168980;
-        let pink = b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6] + white * 0.5362;
-        b[6] = white * 0.115926;
-        out.push(pink);
-    }
-    out
-}
 
 /// Build a circular-sweep trajectory of radius `radius_deg` around
 /// `pointing`, tracing `turns` full loops over `duration` at
@@ -123,41 +90,6 @@ fn build_line_trajectory(
             duration,
         )?)
     }
-}
-
-/// Build a pink-spectrum residual trajectory centered on `pointing`,
-/// scaled so the mean pointing offset magnitude equals
-/// `mean_arcsec`. The residual is spread over `segments` waypoints
-/// across `duration`, with roll interpolated linearly from
-/// `start_roll_deg` to `start_roll_deg + total_roll_deg`.
-fn build_pink_trajectory(
-    pointing: Equatorial,
-    mean_arcsec: f64,
-    segments: usize,
-    seed: u64,
-    duration: std::time::Duration,
-    start_roll_deg: f64,
-    total_roll_deg: f64,
-) -> Result<Trajectory, Box<dyn std::error::Error>> {
-    let segments = segments.max(8);
-    let (ra_offset_arcsec, dec_offset_arcsec) =
-        pink_noise_2d_arcsec(segments + 1, mean_arcsec, seed);
-    let ra0 = pointing.ra_degrees();
-    let dec0 = pointing.dec_degrees();
-    let cos_dec0 = dec0.to_radians().cos().max(1e-6);
-    let duration_s = duration.as_secs_f64();
-    let waypoints: Vec<Waypoint> = (0..=segments)
-        .map(|i| {
-            let frac = i as f64 / segments as f64;
-            let t = std::time::Duration::from_secs_f64(duration_s * frac);
-            let ra = ra0 + (ra_offset_arcsec[i] / 3600.0) / cos_dec0;
-            let dec = dec0 + dec_offset_arcsec[i] / 3600.0;
-            let eq = Equatorial::from_degrees(ra, dec);
-            let roll_deg = start_roll_deg + frac * total_roll_deg;
-            Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
-        })
-        .collect();
-    Ok(Trajectory::new(waypoints)?)
 }
 
 /// Load a trajectory from a simple CSV of absolute orientations.
@@ -239,34 +171,6 @@ fn build_csv_trajectory(path: &std::path::Path) -> Result<Trajectory, Box<dyn st
         .into());
     }
     Ok(Trajectory::new(waypoints)?)
-}
-
-/// Generate a 2-D pink-noise offset series (RA, Dec) in arcseconds,
-/// scaled so the mean magnitude `mean(|offset|)` equals
-/// `target_mean_arcsec`. Centered at zero after generation.
-fn pink_noise_2d_arcsec(n: usize, target_mean_arcsec: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
-    let mut rng = StdRng::seed_from_u64(seed);
-    let ra = pink_noise_series(n, &mut rng);
-    let dec = pink_noise_series(n, &mut rng);
-    let ra_mean = ra.iter().sum::<f64>() / n as f64;
-    let dec_mean = dec.iter().sum::<f64>() / n as f64;
-    let ra: Vec<f64> = ra.iter().map(|v| v - ra_mean).collect();
-    let dec: Vec<f64> = dec.iter().map(|v| v - dec_mean).collect();
-    let raw_mean_mag: f64 = ra
-        .iter()
-        .zip(&dec)
-        .map(|(a, b)| (a * a + b * b).sqrt())
-        .sum::<f64>()
-        / n as f64;
-    let scale = if raw_mean_mag > 1e-12 {
-        target_mean_arcsec / raw_mean_mag
-    } else {
-        0.0
-    };
-    (
-        ra.into_iter().map(|v| v * scale).collect(),
-        dec.into_iter().map(|v| v * scale).collect(),
-    )
 }
 
 /// Focal-plane array layout. `Single` is the default (one sensor at
@@ -413,7 +317,8 @@ impl TrajectoryKind {
                 duration,
                 start_roll_deg,
                 total_roll_deg,
-            ),
+            )
+            .map_err(Into::into),
             TrajectoryKind::Csv { path } => build_csv_trajectory(path),
         }
     }
@@ -1124,35 +1029,6 @@ mod tests {
             }
             other => panic!("expected Pink, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn print_pink_variance_seed_42_10_arcsec() {
-        // Seed + waypoint count matches the 5-s pink preview
-        // (pink_waypoints default 1024 → 1025 samples).
-        let (ra, dec) = pink_noise_2d_arcsec(1025, 10.0, 42);
-        let n = ra.len() as f64;
-        let ra_var: f64 = ra.iter().map(|v| v * v).sum::<f64>() / n;
-        let dec_var: f64 = dec.iter().map(|v| v * v).sum::<f64>() / n;
-        let ra_std = ra_var.sqrt();
-        let dec_std = dec_var.sqrt();
-        eprintln!(
-            "seed=42, n=1025, target_mean=10\": \
-             RA var = {ra_var:.2} arcsec² (std {ra_std:.2}\"), \
-             Dec var = {dec_var:.2} arcsec² (std {dec_std:.2}\")"
-        );
-    }
-
-    #[test]
-    fn pink_noise_2d_hits_requested_mean_magnitude() {
-        let (ra, dec) = pink_noise_2d_arcsec(4096, 6.0, 7);
-        let mean_mag: f64 = ra
-            .iter()
-            .zip(&dec)
-            .map(|(a, b)| (a * a + b * b).sqrt())
-            .sum::<f64>()
-            / ra.len() as f64;
-        assert_relative_eq!(mean_mag, 6.0, epsilon = 1e-6);
     }
 
     #[test]

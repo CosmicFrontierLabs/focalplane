@@ -2,6 +2,7 @@
 
 pub mod context_render;
 pub mod gaia_dr3;
+pub mod jitter;
 pub mod motion_blur;
 pub mod motion_blur_metadata;
 pub mod nsa_galaxies;
