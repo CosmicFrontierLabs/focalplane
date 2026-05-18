@@ -298,6 +298,16 @@ struct FramePlan<'a> {
     zodiacal_per_px: Vec<f64>,
 }
 
+/// Per-tile work unit: the shared scene, the per-frame plan, and which
+/// sensor on the focal-plane array the tile renders to. These three
+/// references always travel together across every per-tile function, so
+/// callers bundle them once and pass a single `&TileRenderContext`.
+struct TileRenderContext<'a> {
+    scene: &'a RenderScene<'a>,
+    plan: &'a FramePlan<'a>,
+    sensor_idx: usize,
+}
+
 /// Configuration for [`render_motion_trajectory`].
 #[derive(Debug, Clone)]
 pub struct MotionBlurConfig {
@@ -492,9 +502,7 @@ const STAMP_PHASE_DOMAIN: u64 = 0x4D6F_6E74_6543_6172; // "MonteCar" (8 ASCII by
 /// Poisson lambda, draws Poisson + Gaussian read noise, and quantizes.
 /// No disk I/O — the caller decides what to do with the returned image.
 fn render_tile_array(
-    scene: &RenderScene,
-    plan: &FramePlan,
-    sensor_idx: usize,
+    ctx: &TileRenderContext<'_>,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
     tile_seed: u64,
@@ -504,9 +512,7 @@ fn render_tile_array(
         return Ok(Array2::<u16>::zeros((height, width)));
     }
     let full_roi = AABB::from_coords(0, 0, height - 1, width - 1);
-    render_tile_array_roi(
-        scene, plan, sensor_idx, flux_cache, satellite, tile_seed, full_roi,
-    )
+    render_tile_array_roi(ctx, flux_cache, satellite, tile_seed, full_roi)
 }
 
 /// Output of [`build_tile_mean_image`]: the pre-noise mean-electron
@@ -533,14 +539,17 @@ struct MeanImageResult {
 /// land via the standard `splat_deposit` bounds check, which clips at
 /// the ROI buffer's edge.
 fn build_tile_mean_image(
-    scene: &RenderScene,
-    plan: &FramePlan,
-    sensor_idx: usize,
+    ctx: &TileRenderContext<'_>,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
     tile_seed: u64,
     roi: AABB,
 ) -> Result<MeanImageResult, TrajectoryError> {
+    let TileRenderContext {
+        scene,
+        plan,
+        sensor_idx,
+    } = *ctx;
     let (sensor_w, sensor_h) = satellite.sensor.dimensions.get_pixel_width_height();
     if sensor_w == 0
         || sensor_h == 0
@@ -706,9 +715,7 @@ fn build_tile_mean_image(
 /// streams differ because the shared parallel-chunk noise sampler keys
 /// its per-row-chunk RNG off the buffer's row count.
 fn render_tile_array_roi(
-    scene: &RenderScene,
-    plan: &FramePlan,
-    sensor_idx: usize,
+    ctx: &TileRenderContext<'_>,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
     tile_seed: u64,
@@ -721,9 +728,7 @@ fn render_tile_array_roi(
         ms_splat_stars,
         ms_splat_galaxies,
         ms_combined_mean,
-    } = build_tile_mean_image(
-        scene, plan, sensor_idx, flux_cache, satellite, tile_seed, roi,
-    )?;
+    } = build_tile_mean_image(ctx, flux_cache, satellite, tile_seed, roi)?;
 
     let t_poisson = Instant::now();
     let poisson_image = apply_poisson_photon_noise(mean_image, Some(tile_seed ^ POISSON_DOMAIN));
@@ -733,7 +738,10 @@ fn render_tile_array_roi(
     let read_noise_rms = satellite
         .sensor
         .read_noise_estimator
-        .estimate(satellite.temperature.as_celsius(), plan.schedule.exposure)
+        .estimate(
+            satellite.temperature.as_celsius(),
+            ctx.plan.schedule.exposure,
+        )
         .unwrap_or(0.0)
         .max(0.0);
     let t_read_noise = Instant::now();
@@ -752,8 +760,8 @@ fn render_tile_array_roi(
         "tile-phases frame={} sensor={} roi=({},{})+{}x{} \
          splat_stars={}ms splat_galaxies={}ms combined_mean={}ms \
          poisson={}ms read_noise={}ms quantize={}ms",
-        plan.idx,
-        sensor_idx,
+        ctx.plan.idx,
+        ctx.sensor_idx,
         roi.min_col,
         roi.min_row,
         roi_w,
@@ -949,7 +957,12 @@ pub fn render_one_frame(
         .map(|sensor_idx| {
             let sat = &ctx.satellites[sensor_idx];
             let seed = tile_seed(base_seed, frame_idx, sensor_idx);
-            let arr = render_tile_array(&scene, &plan, sensor_idx, &cache, sat, seed)?;
+            let tile_ctx = TileRenderContext {
+                scene: &scene,
+                plan: &plan,
+                sensor_idx,
+            };
+            let arr = render_tile_array(&tile_ctx, &cache, sat, seed)?;
             Ok((sensor_idx, arr))
         })
         .collect();
@@ -1025,7 +1038,12 @@ pub fn render_one_frame_roi(
     let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
     let sat = &ctx.satellites[sensor_idx];
     let seed = tile_seed(base_seed, frame_idx, sensor_idx);
-    render_tile_array_roi(&scene, &plan, sensor_idx, &cache, sat, seed, roi)
+    let tile_ctx = TileRenderContext {
+        scene: &scene,
+        plan: &plan,
+        sensor_idx,
+    };
+    render_tile_array_roi(&tile_ctx, &cache, sat, seed, roi)
 }
 
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
@@ -1165,7 +1183,12 @@ pub fn render_motion_trajectory(
             let sat = &ctx.satellites[tile.sensor_idx];
             let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
             let tile_started = Instant::now();
-            let result = render_tile_array(&scene, plan, tile.sensor_idx, &flux_cache, sat, seed)
+            let tile_ctx = TileRenderContext {
+                scene: &scene,
+                plan,
+                sensor_idx: tile.sensor_idx,
+            };
+            let result = render_tile_array(&tile_ctx, &flux_cache, sat, seed)
                 .and_then(|arr| save_u16_png(&arr, out_path));
             debug!(
                 "tile frame={} sensor={} stamps={} stars={} elapsed={}ms",
@@ -2126,10 +2149,13 @@ mod tests {
         let seed = tile_seed(cfg.base_seed.unwrap(), 0, sensor_idx);
 
         let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
-        let full_mean = build_tile_mean_image(
-            &scene,
-            &plan,
+        let tile_ctx = TileRenderContext {
+            scene: &scene,
+            plan: &plan,
             sensor_idx,
+        };
+        let full_mean = build_tile_mean_image(
+            &tile_ctx,
             &cache,
             sat,
             seed,
@@ -2142,7 +2168,7 @@ mod tests {
         let roi = AABB::from_coords(12, 14, 35, 37);
         let roi_w = roi.max_col - roi.min_col + 1;
         let roi_h = roi.max_row - roi.min_row + 1;
-        let roi_mean = build_tile_mean_image(&scene, &plan, sensor_idx, &cache, sat, seed, roi)
+        let roi_mean = build_tile_mean_image(&tile_ctx, &cache, sat, seed, roi)
             .unwrap()
             .mean_image;
 
