@@ -7,7 +7,8 @@ use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
 use simulator::sims::jitter::build_pink_trajectory;
 use simulator::sims::trajectory::{
-    fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig, Waypoint,
+    fov_envelope, prefetch_catalog_for_envelope, render_trajectory, Trajectory,
+    TrajectoryRenderConfig, Waypoint,
 };
 use simulator::star_math::field_diameter_for_array;
 use simulator::units::{AngleExt, LengthExt, TemperatureExt};
@@ -761,11 +762,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         info!("Loading catalog...");
         let catalog = args.shared.load_catalog_with_progress(args.quiet)?;
-        catalog.stars_in_field(
-            envelope_center.ra_degrees(),
-            envelope_center.dec_degrees(),
-            envelope_diameter,
-        )
+        prefetch_catalog_for_envelope(&catalog, (envelope_center, envelope_diameter))
     };
     info!("Cached {} stars for trajectory envelope", stars.len());
 
