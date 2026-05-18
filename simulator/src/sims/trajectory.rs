@@ -10,9 +10,8 @@ use thiserror::Error;
 use crate::hardware::satellite::FocalPlaneConfig;
 use crate::image_proc::render::{StarInFocalPlane, StarInFrame};
 use crate::photometry::photoconversion::SourceFlux;
-use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::sims::motion_blur::{
-    render_motion_trajectory, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_STAMP_PX,
+    render_motion_trajectory, LightSources, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_STAMP_PX,
 };
 use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
@@ -493,16 +492,11 @@ pub struct TrajectoryRenderConfig<'a> {
     pub exposure: Duration,
     /// Focal plane hardware configuration.
     pub focal_plane: &'a FocalPlaneConfig,
-    /// Pre-fetched catalog stars covering the full trajectory envelope.
-    pub catalog_stars: &'a [StarData],
-    /// Per-sensor pre-projected galaxies (`Scene::with_galaxies` shape).
-    /// Defaults to an empty slice — callers that don't render galaxies
-    /// pass `&[]` and the inner vec slot is filled with empties at the
-    /// motion-blur layer. See `crate::sims::nsa_galaxies` for the
-    /// builder that produces this shape from an NSA FITS file.
-    pub per_sensor_galaxies: &'a [Vec<crate::scene_galaxy::GalaxyInFrame>],
-    /// Solar angular coordinates for zodiacal background.
-    pub zodiacal: SolarAngularCoordinates,
+    /// All light contributing to the rendered frames: foreground stars,
+    /// pre-projected per-sensor galaxies, and diffuse zodiacal background.
+    /// See [`LightSources`] and `crate::sims::nsa_galaxies` for the
+    /// builder that produces the galaxy shape from an NSA FITS file.
+    pub sources: LightSources<'a>,
     /// Directory to write 16-bit PNG output frames.
     pub output_dir: &'a Path,
     /// Optional RNG seed for reproducible noise.
@@ -552,10 +546,8 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
     };
     render_motion_trajectory(
         config.trajectory,
-        config.catalog_stars,
-        config.per_sensor_galaxies,
+        &config.sources,
         config.focal_plane,
-        config.zodiacal,
         &motion_cfg,
         config.output_dir,
     )

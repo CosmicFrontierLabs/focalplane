@@ -9,7 +9,9 @@ use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
 use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
-use simulator::sims::motion_blur::{render_one_frame, render_one_frame_roi, MotionBlurConfig};
+use simulator::sims::motion_blur::{
+    render_one_frame, render_one_frame_roi, LightSources, MotionBlurConfig,
+};
 use simulator::sims::orientation::orientation_from_pointing;
 use simulator::sims::trajectory::{Trajectory, Waypoint};
 use starfield::catalogs::StarData;
@@ -206,16 +208,20 @@ fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
         min_col + roi_side - 1,
     );
 
+    let sources = LightSources {
+        catalog_stars: &stars,
+        per_sensor_galaxies: &[],
+        zodiacal: zodi,
+    };
+
     let mut group = c.benchmark_group("render_one_frame_roi");
     group.sample_size(10);
     group.bench_function("full_9568x6380", |b| {
         b.iter(|| {
             render_one_frame(
                 black_box(&traj),
-                black_box(&stars),
-                black_box(&[]),
+                black_box(&sources),
                 black_box(&fp),
-                black_box(zodi),
                 black_box(Duration::ZERO),
                 black_box(0),
                 black_box(&cfg),
@@ -228,10 +234,8 @@ fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
         b.iter(|| {
             render_one_frame_roi(
                 black_box(&traj),
-                black_box(&stars),
-                black_box(&[]),
+                black_box(&sources),
                 black_box(&fp),
-                black_box(zodi),
                 black_box(Duration::ZERO),
                 black_box(0),
                 black_box(&cfg),
