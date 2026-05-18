@@ -14,6 +14,8 @@ use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::sims::motion_blur::{
     render_motion_trajectory, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_STAMP_PX,
 };
+
+pub use crate::sims::motion_blur::render_one_frame;
 use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
 
