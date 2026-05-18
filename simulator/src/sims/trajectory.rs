@@ -32,6 +32,9 @@ pub enum TrajectoryError {
     #[error("time {0:?} is outside trajectory range [{1:?}, {2:?}]")]
     TimeOutOfRange(Duration, Duration, Duration),
 
+    #[error("period {period:?} is shorter than trajectory span {span:?}")]
+    PeriodTooShort { period: Duration, span: Duration },
+
     #[error("focal plane has no sensors")]
     NoSensors,
 
@@ -71,6 +74,13 @@ impl Waypoint {
 #[derive(Debug, Clone)]
 pub struct Trajectory {
     waypoints: Vec<Waypoint>,
+    /// When `Some`, calls to [`Trajectory::orientation_at`] treat `t` modulo
+    /// `period`. The implicit wrap segment from `end_time()` to
+    /// `start_time() + period` SLERPs from the last stored waypoint's
+    /// orientation back to the first stored waypoint's orientation, so
+    /// `orientation_at(start) == orientation_at(start + period)` by
+    /// construction.
+    period: Option<Duration>,
 }
 
 impl Trajectory {
@@ -87,7 +97,10 @@ impl Trajectory {
                 });
             }
         }
-        Ok(Self { waypoints })
+        Ok(Self {
+            waypoints,
+            period: None,
+        })
     }
 
     /// Build a two-waypoint trajectory between two pointings, both with zero roll.
@@ -129,19 +142,95 @@ impl Trajectory {
         &self.waypoints
     }
 
+    /// Trajectory span = `end_time() - start_time()`. Convenience.
+    pub fn duration(&self) -> Duration {
+        self.end_time() - self.start_time()
+    }
+
+    /// Period after which the trajectory repeats, if marked periodic via
+    /// [`Trajectory::with_period`] or [`Trajectory::looped`]. `None` for
+    /// the default open-ended form.
+    pub fn period(&self) -> Option<Duration> {
+        self.period
+    }
+
+    /// Mark the trajectory as periodic with the given period.
+    ///
+    /// `period` must be at least the trajectory's span
+    /// (`end_time() - start_time()`). Any excess
+    /// (`period - span`) becomes the implicit wrap segment over which
+    /// [`orientation_at`] SLERPs from the last waypoint back to the
+    /// first. Setting `period` exactly equal to the span produces a
+    /// zero-length wrap and is only appropriate when the first and last
+    /// waypoint orientations already agree.
+    pub fn with_period(mut self, period: Duration) -> Result<Self, TrajectoryError> {
+        let span = self.duration();
+        if period < span {
+            return Err(TrajectoryError::PeriodTooShort { period, span });
+        }
+        self.period = Some(period);
+        Ok(self)
+    }
+
+    /// Convenience: mark the trajectory periodic, picking the period so
+    /// the implicit wrap segment has the same duration as the
+    /// trajectory's first stored segment.
+    ///
+    /// Equivalent to
+    /// `self.with_period(self.duration() + (waypoints[1].time - waypoints[0].time))`,
+    /// which guarantees the wrap segment is non-degenerate and visually
+    /// matches the local sampling cadence at the seam. The looping
+    /// semantics live entirely inside [`orientation_at`] — no
+    /// post-processed smoothing or pre-baked extra waypoints are
+    /// introduced.
+    pub fn looped(self) -> Self {
+        let first_dt = self.waypoints[1].time - self.waypoints[0].time;
+        let period = self.duration() + first_dt;
+        self.with_period(period)
+            .expect("looped(): period == span + first_dt > span by construction")
+    }
+
     /// Interpolate the spacecraft orientation at a given time using
     /// quaternion SLERP between bracketing waypoints.
+    ///
+    /// If [`with_period`] / [`looped`] has been called, `t` is taken
+    /// modulo the period; out-of-range times are then never an error.
+    /// When the wrapped time falls in the implicit wrap segment between
+    /// the last stored waypoint and `start_time() + period`, the result
+    /// is a SLERP from the last waypoint's orientation back to the
+    /// first waypoint's orientation.
     pub fn orientation_at(&self, t: Duration) -> Result<UnitQuaternion<f64>, TrajectoryError> {
         let start = self.start_time();
         let end = self.end_time();
-        if t < start || t > end {
-            return Err(TrajectoryError::TimeOutOfRange(t, start, end));
-        }
+
+        let t_in_span = if let Some(period) = self.period {
+            let period_s = period.as_secs_f64();
+            if period_s <= 0.0 {
+                return Ok(self.waypoints[0].orientation);
+            }
+            let rel = (t.as_secs_f64() - start.as_secs_f64()).rem_euclid(period_s);
+            let span_s = self.duration().as_secs_f64();
+            if rel <= span_s {
+                start + Duration::from_secs_f64(rel)
+            } else {
+                // Wrap segment: SLERP from last waypoint to first.
+                let wrap_dur_s = period_s - span_s;
+                let frac = (rel - span_s) / wrap_dur_s;
+                let last = self.waypoints.last().unwrap().orientation;
+                let first = self.waypoints[0].orientation;
+                return Ok(last.slerp(&first, frac));
+            }
+        } else {
+            if t < start || t > end {
+                return Err(TrajectoryError::TimeOutOfRange(t, start, end));
+            }
+            t
+        };
 
         let seg_idx = self
             .waypoints
             .windows(2)
-            .position(|w| t >= w[0].time && t <= w[1].time)
+            .position(|w| t_in_span >= w[0].time && t_in_span <= w[1].time)
             .unwrap_or(self.waypoints.len() - 2);
 
         let w0 = &self.waypoints[seg_idx];
@@ -151,7 +240,7 @@ impl Trajectory {
         if seg_duration == 0.0 {
             return Ok(w0.orientation);
         }
-        let frac = (t - w0.time).as_secs_f64() / seg_duration;
+        let frac = (t_in_span - w0.time).as_secs_f64() / seg_duration;
 
         Ok(w0.orientation.slerp(&w1.orientation, frac))
     }
@@ -655,5 +744,99 @@ mod tests {
         let qm = traj.orientation_at(Duration::from_secs(5)).unwrap();
         let expected_roll = 0.5 * (start_roll + end_roll);
         assert_abs_diff_eq!(roll_of(&qm), expected_roll, epsilon = 1e-9);
+    }
+
+    /// Build a five-waypoint trajectory whose first and last orientations
+    /// differ by a known angle. Used by the periodicity tests below.
+    fn nonperiodic_test_trajectory() -> Trajectory {
+        let mut wps = Vec::new();
+        for i in 0..5 {
+            let t = Duration::from_secs_f64(i as f64 * 0.25);
+            let pointing = make_pointing(10.0 + 4.0 * i as f64, 20.0);
+            wps.push(Waypoint::from_pointing(t, pointing));
+        }
+        Trajectory::new(wps).unwrap()
+    }
+
+    #[test]
+    fn with_period_rejects_period_shorter_than_span() {
+        let traj = nonperiodic_test_trajectory();
+        let span = traj.duration();
+        let too_short = span - Duration::from_millis(1);
+        let err = traj.with_period(too_short).expect_err("must reject");
+        match err {
+            TrajectoryError::PeriodTooShort { period, span: s } => {
+                assert_eq!(period, too_short);
+                assert_eq!(s, span);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn looped_makes_pose_at_seam_match_pose_at_start() {
+        let traj = nonperiodic_test_trajectory().looped();
+        let period = traj.period().expect("looped sets a period");
+
+        let q_start = traj.orientation_at(Duration::ZERO).unwrap();
+        let q_seam = traj.orientation_at(period).unwrap();
+
+        // After one full period we should be back at the start orientation
+        // bit-exactly (modulo float wobble): both calls land on the same
+        // SLERP endpoint by construction.
+        assert_abs_diff_eq!(q_start.angle_to(&q_seam), 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn periodic_trajectory_is_periodic_across_many_cycles() {
+        let traj = nonperiodic_test_trajectory().looped();
+        let period = traj.period().unwrap();
+        let period_s = period.as_secs_f64();
+
+        // Sample at a fractional offset inside the period.
+        let t0 = Duration::from_secs_f64(0.37 * period_s);
+        let q0 = traj.orientation_at(t0).unwrap();
+
+        // The same fractional offset in any future cycle must agree.
+        for cycle in 1..=7 {
+            let t_cycle = Duration::from_secs_f64(cycle as f64 * period_s + 0.37 * period_s);
+            let q_cycle = traj.orientation_at(t_cycle).unwrap();
+            let drift = q0.angle_to(&q_cycle);
+            assert!(
+                drift.abs() < 1e-12,
+                "cycle {cycle}: angular drift {drift:e} exceeds 1e-12 rad"
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_trajectory_wrap_segment_lands_on_first_waypoint() {
+        // Within the wrap segment, SLERP goes from last waypoint to first.
+        // At the wrap segment's end (i.e. t == period), pose must equal
+        // the first waypoint's orientation.
+        let traj = nonperiodic_test_trajectory().looped();
+        let period = traj.period().unwrap();
+        let first = traj.waypoints()[0].orientation;
+        let q_end = traj.orientation_at(period).unwrap();
+        assert_abs_diff_eq!(first.angle_to(&q_end), 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn periodic_trajectory_wrap_segment_lands_on_last_waypoint() {
+        // At the start of the wrap segment (i.e. t == end_time), the
+        // SLERP frac is 0 so pose must equal the last stored waypoint.
+        let traj = nonperiodic_test_trajectory().looped();
+        let last = traj.waypoints().last().unwrap().orientation;
+        let q_at_end = traj.orientation_at(traj.end_time()).unwrap();
+        assert_abs_diff_eq!(last.angle_to(&q_at_end), 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn non_periodic_trajectory_still_rejects_out_of_range() {
+        let traj = nonperiodic_test_trajectory();
+        let err = traj
+            .orientation_at(traj.end_time() + Duration::from_millis(1))
+            .expect_err("non-periodic must error on out-of-range");
+        assert!(matches!(err, TrajectoryError::TimeOutOfRange(_, _, _)));
     }
 }
