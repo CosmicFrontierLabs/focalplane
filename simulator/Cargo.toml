@@ -61,6 +61,7 @@ criterion = { version = "0.5", default-features = false, features = [
     "html_reports",
 ] } # Benchmarking (no plotters: criterion's plotters feature pulls image 0.24)
 approx = "0.5"                                               # Approximate floating point comparisons
+rustfft = "6.2"                                              # FFT for jitter PSD slope test
 tempfile = "3.10"                                            # Temporary file handling
 
 [[bench]]
