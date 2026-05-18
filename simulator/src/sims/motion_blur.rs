@@ -40,6 +40,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
 use ndarray::Array2;
 use rayon::prelude::*;
+use shared::image_proc::detection::AABB;
 use shared::image_proc::noise::{apply_gaussian_read_noise, apply_poisson_photon_noise};
 use shared::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarData;
@@ -47,6 +48,7 @@ use starfield::Equatorial;
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::hardware::SatelliteConfig;
+use crate::image_proc::deposit::MeanFluxDeposit;
 use crate::image_proc::render::quantize_image;
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::spectrum::Spectrum;
@@ -261,24 +263,25 @@ impl SensorAccumulator {
 /// repeating that work for every sub-orientation.
 pub type FluxCache = HashMap<(u64, usize), SourceFlux>;
 
+/// All light contributing to a rendered frame: foreground point sources
+/// (stars), extended sources (galaxies, pre-projected per sensor), and
+/// the diffuse sky background (zodiacal model parameters).
+#[derive(Clone, Copy)]
+pub struct LightSources<'a> {
+    pub catalog_stars: &'a [StarData],
+    pub per_sensor_galaxies: &'a [Vec<GalaxyInFrame>],
+    pub zodiacal: SolarAngularCoordinates,
+}
+
 /// Static inputs shared across every `(frame, sensor)` tile in a render.
 ///
-/// Bundles the trajectory, the full star catalog, the focal-plane hardware,
-/// and the scene's zodiacal coordinates so downstream functions take a single
-/// `&RenderScene` rather than four independent references.
+/// Bundles the trajectory, the scene's light sources, and the focal-plane
+/// hardware so downstream functions take a single `&RenderScene` rather
+/// than several independent references.
 struct RenderScene<'a> {
     trajectory: &'a Trajectory,
-    catalog_stars: &'a [StarData],
-    /// Per-sensor list of pre-projected galaxies (`Scene::with_galaxies`
-    /// shape). Empty inner vecs = no galaxies. Galaxies are projected
-    /// *once* per render at the trajectory's mid-time orientation —
-    /// exact for static trajectories, an approximation for drifting
-    /// trajectories where the galaxy positions would shift sub-pixel
-    /// across the exposure (acceptable until measured-radial-profile
-    /// rendering motivates the upgrade).
-    per_sensor_galaxies: &'a [Vec<GalaxyInFrame>],
+    sources: LightSources<'a>,
     fp: &'a FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
 }
 
 /// Per-frame render plan produced by the serial planning pass.
@@ -293,6 +296,16 @@ struct FramePlan<'a> {
     stars: Vec<&'a StarData>,
     padding_mm: f64,
     zodiacal_per_px: Vec<f64>,
+}
+
+/// Per-tile work unit: the shared scene, the per-frame plan, and which
+/// sensor on the focal-plane array the tile renders to. These three
+/// references always travel together across every per-tile function, so
+/// callers bundle them once and pass a single `&TileRenderContext`.
+struct TileRenderContext<'a> {
+    scene: &'a RenderScene<'a>,
+    plan: &'a FramePlan<'a>,
+    sensor_idx: usize,
 }
 
 /// Configuration for [`render_motion_trajectory`].
@@ -483,22 +496,81 @@ const POISSON_DOMAIN: u64 = 0x0000_0000_0000_0000;
 const READ_NOISE_DOMAIN: u64 = 0xA5A5_5A5A_A5A5_5A5A;
 const STAMP_PHASE_DOMAIN: u64 = 0x4D6F_6E74_6543_6172; // "MonteCar" (8 ASCII bytes)
 
-/// Render a single `(frame, sensor)` tile.
+/// Render a single `(frame, sensor)` tile into a quantized `Array2<u16>`.
 ///
 /// Runs one flat stamp loop across the exposure, composes the unified
-/// Poisson lambda, draws Poisson + Gaussian read noise, quantizes,
-/// and saves a PNG.
-fn render_tile(
-    scene: &RenderScene,
-    plan: &FramePlan,
-    sensor_idx: usize,
+/// Poisson lambda, draws Poisson + Gaussian read noise, and quantizes.
+/// No disk I/O — the caller decides what to do with the returned image.
+fn render_tile_array(
+    ctx: &TileRenderContext<'_>,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
     tile_seed: u64,
-    output_path: &Path,
-) -> Result<(), TrajectoryError> {
+) -> Result<Array2<u16>, TrajectoryError> {
     let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
-    let mut accumulator = SensorAccumulator::zero(width, height);
+    if width == 0 || height == 0 {
+        return Ok(Array2::<u16>::zeros((height, width)));
+    }
+    let full_roi = AABB::from_coords(0, 0, height - 1, width - 1);
+    render_tile_array_roi(ctx, flux_cache, satellite, tile_seed, full_roi)
+}
+
+/// Output of [`build_tile_mean_image`]: the pre-noise mean-electron
+/// image for a tile ROI plus the elapsed-time breakdown for the
+/// caller's debug log.
+struct MeanImageResult {
+    mean_image: Array2<f64>,
+    roi_w: usize,
+    roi_h: usize,
+    ms_splat_stars: u128,
+    ms_splat_galaxies: u128,
+    ms_combined_mean: u128,
+}
+
+/// Build the pre-noise mean-electron image for one tile's `roi` —
+/// splats stars across the stamp schedule, splats galaxies once,
+/// folds in the per-tile zodiacal and dark-current scalars. The
+/// returned `Array2<f64>` is shaped `(roi_height, roi_width)` with the
+/// pixel at `(0, 0)` corresponding to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// Stars and galaxies whose entire footprint AABB falls outside the
+/// ROI are skipped (perf, no math effect). Partial-overlap deposits
+/// land via the standard `splat_deposit` bounds check, which clips at
+/// the ROI buffer's edge.
+fn build_tile_mean_image(
+    ctx: &TileRenderContext<'_>,
+    flux_cache: &Arc<Mutex<FluxCache>>,
+    satellite: &SatelliteConfig,
+    tile_seed: u64,
+    roi: AABB,
+) -> Result<MeanImageResult, TrajectoryError> {
+    let TileRenderContext {
+        scene,
+        plan,
+        sensor_idx,
+    } = *ctx;
+    let (sensor_w, sensor_h) = satellite.sensor.dimensions.get_pixel_width_height();
+    if sensor_w == 0
+        || sensor_h == 0
+        || roi.max_row >= sensor_h
+        || roi.max_col >= sensor_w
+        || roi.min_row > roi.max_row
+        || roi.min_col > roi.max_col
+    {
+        return Err(TrajectoryError::RoiOutOfBounds {
+            roi: roi.to_tuple(),
+            sensor_idx,
+            width: sensor_w,
+            height: sensor_h,
+        });
+    }
+    let roi_w = roi.max_col - roi.min_col + 1;
+    let roi_h = roi.max_row - roi.min_row + 1;
+    let x_off = roi.min_col as f64;
+    let y_off = roi.min_row as f64;
+
+    let mut accumulator = SensorAccumulator::zero(roi_w, roi_h);
     let aperture = satellite.telescope.clear_aperture_area();
 
     let schedule = &plan.schedule;
@@ -539,11 +611,28 @@ fn render_tile(
                     .or_insert_with(|| star_data_to_fluxes(star, satellite))
                     .clone()
             });
+            // Skip stars whose entire PSF footprint falls outside the
+            // ROI extent — the splat would write nothing once shifted
+            // into ROI-local coordinates, so the per-pixel Simpson loop
+            // is a pure cost.
+            let footprint = flux.electrons.disk.footprint_pixels() as f64;
+            if hit.0 + footprint < x_off
+                || hit.0 - footprint >= x_off + roi_w as f64
+                || hit.1 + footprint < y_off
+                || hit.1 - footprint >= y_off + roi_h as f64
+            {
+                continue;
+            }
             // Per-stamp electron contribution: flux rate × per-stamp
             // dt (= exposure / stamps_per_exposure) × aperture. Sum
             // over all stamps reproduces the full exposure budget.
             let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
-            accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
+            accumulator.splat_psf(
+                hit.0 - x_off,
+                hit.1 - y_off,
+                total_electrons,
+                &flux.electrons.disk,
+            );
         }
     }
     let ms_splat_stars = t_splat_stars.elapsed().as_millis();
@@ -558,16 +647,30 @@ fn render_tile(
     // trajectories (start == end) are exact.
     let t_splat_galaxies = Instant::now();
     let galaxies = scene
+        .sources
         .per_sensor_galaxies
         .get(sensor_idx)
         .map(|v| v.as_slice())
         .unwrap_or(&[]);
     for galaxy in galaxies {
+        let footprint = galaxy.deposit.footprint_pixels() as f64;
+        if galaxy.x + footprint < x_off
+            || galaxy.x - footprint >= x_off + roi_w as f64
+            || galaxy.y + footprint < y_off
+            || galaxy.y - footprint >= y_off + roi_h as f64
+        {
+            continue;
+        }
         let total_electrons = galaxy
             .flux
             .electrons
             .integrated_over(&schedule.exposure, aperture);
-        accumulator.splat_galaxy(galaxy.x, galaxy.y, total_electrons, &galaxy.deposit);
+        accumulator.splat_galaxy(
+            galaxy.x - x_off,
+            galaxy.y - y_off,
+            total_electrons,
+            &galaxy.deposit,
+        );
     }
     let ms_splat_galaxies = t_splat_galaxies.elapsed().as_millis();
 
@@ -577,10 +680,55 @@ fn render_tile(
         .dark_current_at_temperature(satellite.temperature);
     let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
 
-    // Build unified Poisson mean image and draw.
+    // Build unified Poisson mean image.
     let t_combined_mean = Instant::now();
     let mean_image = accumulator.into_combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
     let ms_combined_mean = t_combined_mean.elapsed().as_millis();
+
+    Ok(MeanImageResult {
+        mean_image,
+        roi_w,
+        roi_h,
+        ms_splat_stars,
+        ms_splat_galaxies,
+        ms_combined_mean,
+    })
+}
+
+/// Render the subset of a `(frame, sensor)` tile that falls inside `roi`.
+///
+/// Produces an `Array2<u16>` shaped `(roi_height, roi_width)`. The
+/// pixel at `(0, 0)` of the returned array corresponds to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// `roi` uses inclusive bounds in sensor (row, col) coordinates and must
+/// be entirely inside the sensor extent. Stars and galaxies are filtered
+/// against the ROI extent inflated by the PSF/Sérsic footprint so any
+/// source whose deposit can touch the ROI is splatted; partial-overlap
+/// deposits clip at the ROI edge.
+///
+/// **Bit-equality contract**: when `roi` covers the full sensor, the
+/// quantized output is byte-identical to [`render_tile_array`] for the
+/// same `(scene, plan, sensor_idx, tile_seed)`. For a smaller `roi` the
+/// pre-noise mean-electron image is byte-identical to the corresponding
+/// slice of the full-sensor mean, but the Poisson and Gaussian noise
+/// streams differ because the shared parallel-chunk noise sampler keys
+/// its per-row-chunk RNG off the buffer's row count.
+fn render_tile_array_roi(
+    ctx: &TileRenderContext<'_>,
+    flux_cache: &Arc<Mutex<FluxCache>>,
+    satellite: &SatelliteConfig,
+    tile_seed: u64,
+    roi: AABB,
+) -> Result<Array2<u16>, TrajectoryError> {
+    let MeanImageResult {
+        mean_image,
+        roi_w,
+        roi_h,
+        ms_splat_stars,
+        ms_splat_galaxies,
+        ms_combined_mean,
+    } = build_tile_mean_image(ctx, flux_cache, satellite, tile_seed, roi)?;
 
     let t_poisson = Instant::now();
     let poisson_image = apply_poisson_photon_noise(mean_image, Some(tile_seed ^ POISSON_DOMAIN));
@@ -590,7 +738,10 @@ fn render_tile(
     let read_noise_rms = satellite
         .sensor
         .read_noise_estimator
-        .estimate(satellite.temperature.as_celsius(), schedule.exposure)
+        .estimate(
+            satellite.temperature.as_celsius(),
+            ctx.plan.schedule.exposure,
+        )
         .unwrap_or(0.0)
         .max(0.0);
     let t_read_noise = Instant::now();
@@ -605,66 +756,321 @@ fn render_tile(
     let quantized = quantize_image(&final_electrons, &satellite.sensor);
     let ms_quantize = t_quantize.elapsed().as_millis();
 
-    let t_save = Instant::now();
-    let result = save_u16_png(&quantized, output_path);
-    let ms_save = t_save.elapsed().as_millis();
-
     debug!(
-        "tile-phases frame={} sensor={} \
+        "tile-phases frame={} sensor={} roi=({},{})+{}x{} \
          splat_stars={}ms splat_galaxies={}ms combined_mean={}ms \
-         poisson={}ms read_noise={}ms quantize={}ms png_save={}ms",
-        plan.idx,
-        sensor_idx,
+         poisson={}ms read_noise={}ms quantize={}ms",
+        ctx.plan.idx,
+        ctx.sensor_idx,
+        roi.min_col,
+        roi.min_row,
+        roi_w,
+        roi_h,
         ms_splat_stars,
         ms_splat_galaxies,
         ms_combined_mean,
         ms_poisson,
         ms_read_noise,
         ms_quantize,
-        ms_save,
     );
 
-    result
+    Ok(quantized)
+}
+
+/// Shared precomputed inputs for the planning pass and per-frame renders.
+///
+/// Built once per render (or once per `render_one_frame` call) from a
+/// [`FocalPlaneConfig`]: the per-sensor satellite views, the first sensor's
+/// padding budget and pixel scale, and the per-sensor pixel-solid-angle
+/// ratios used to spread the zodiacal rate across heterogeneous sensors.
+struct RenderContext {
+    satellites: Vec<SatelliteConfig>,
+    padding_mm: f64,
+    px_scale: f64,
+    sensor_ratios: Vec<f64>,
+}
+
+impl RenderContext {
+    /// Build the context from a focal plane. Errors when the focal plane
+    /// exposes no sensors.
+    fn from_focal_plane(fp: &FocalPlaneConfig) -> Result<Self, TrajectoryError> {
+        let sensor_count = fp.array.sensor_count();
+        if sensor_count == 0 {
+            return Err(TrajectoryError::NoSensors);
+        }
+        let first_sat = fp
+            .satellite_for_sensor(0)
+            .ok_or(TrajectoryError::NoSensors)?;
+        let airy_pix = first_sat.airy_disk_pixel_space();
+        let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
+        let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
+        let satellites: Vec<SatelliteConfig> = (0..sensor_count)
+            .map(|i| {
+                fp.satellite_for_sensor(i)
+                    .expect("sensor index in range for enumerated sensor_count")
+            })
+            .collect();
+        let sensor_ratios: Vec<f64> = satellites
+            .iter()
+            .map(|sat| per_sensor_pixel_solid_angle_ratio(&satellites[0], sat))
+            .collect();
+        Ok(Self {
+            satellites,
+            padding_mm,
+            px_scale,
+            sensor_ratios,
+        })
+    }
+}
+
+/// Build the per-frame render plan: subsample schedule, prefiltered star
+/// slice, and the per-sensor zodiacal electrons/pixel for the full exposure.
+///
+/// Pure function — no I/O. Used both by the trajectory-level renderer's
+/// serial planning pass and by [`render_one_frame`].
+fn plan_frame<'a>(
+    scene: &'a RenderScene<'a>,
+    ctx: &RenderContext,
+    zlight: &ZodiacalLight,
+    frame_idx: usize,
+    frame_start: Duration,
+    config: &MotionBlurConfig,
+) -> Result<FramePlan<'a>, TrajectoryError> {
+    let exposure = config.exposure;
+    // Clamp the exposure window to the trajectory so we do not try to
+    // sample beyond the defined range.
+    let t_end = (frame_start + exposure).min(scene.trajectory.end_time());
+    let exposure = if t_end > frame_start {
+        t_end - frame_start
+    } else {
+        Duration::ZERO
+    };
+
+    // Mid-frame orientation drives both the envelope-padding peak
+    // excursion calculation and the zodiacal evaluation.
+    let mid_t = (frame_start + exposure / 2)
+        .min(scene.trajectory.end_time())
+        .max(scene.trajectory.start_time());
+    let mid_q = scene.trajectory.orientation_at(mid_t)?;
+    let mid_bore = boresight_of(&mid_q);
+
+    let drift = max_drift_over_window(scene.trajectory, frame_start, t_end)?;
+    let peak_excursion = scene
+        .trajectory
+        .peak_excursion_rad(frame_start, t_end, &mid_q)?;
+
+    let schedule = if config.force_static || exposure.is_zero() {
+        SubsampleSchedule {
+            frame_start,
+            exposure,
+            stamps_per_exposure: 1,
+            envelope_padding_rad: peak_excursion,
+        }
+    } else {
+        SubsampleSchedule::from_drift_budget(
+            frame_start,
+            exposure,
+            drift,
+            peak_excursion,
+            ctx.px_scale,
+            config.max_drift_per_stamp_px,
+        )
+    };
+
+    let first_sat = &ctx.satellites[0];
+    let zodiacal_per_px_per_s =
+        zodiacal_per_px_per_s_at(zlight, first_sat, &scene.sources.zodiacal, &mid_bore);
+    let exposure_s = schedule.exposure.as_secs_f64();
+    let zodiacal_per_px: Vec<f64> = ctx
+        .sensor_ratios
+        .iter()
+        .map(|r| zodiacal_per_px_per_s * r * exposure_s)
+        .collect();
+
+    let stars = envelope_prefilter(
+        scene.trajectory,
+        scene.sources.catalog_stars,
+        &schedule,
+        scene.fp,
+        ctx.padding_mm,
+        ctx.px_scale,
+    )?;
+
+    Ok(FramePlan {
+        idx: frame_idx,
+        schedule,
+        stars,
+        padding_mm: ctx.padding_mm,
+        zodiacal_per_px,
+    })
+}
+
+/// Render a single frame to one `Array2<u16>` per sensor in the focal plane.
+///
+/// In-memory, no disk I/O. The returned vector is indexed by sensor index:
+/// `result[sensor_idx]` is the quantized image for that sensor at the
+/// requested `frame_start`.
+///
+/// Bit-identical to a single iteration of [`render_motion_trajectory`] for
+/// the same `(base_seed, frame_idx)` combination. The deterministic seed
+/// mixing (`tile_seed(base_seed, frame_idx, sensor_idx)`) is preserved, so
+/// callers chaining `render_one_frame` over a sequence of frame times will
+/// reproduce the trajectory renderer's output byte-for-byte.
+///
+/// `frame_start` is the absolute trajectory time at which the exposure
+/// begins. The exposure window is `config.exposure`, clamped to the
+/// trajectory's end. Motion blur stamp count is derived adaptively from
+/// `config.max_drift_per_stamp_px`.
+///
+/// `frame_idx` is mixed into the per-tile seed and into log messages; pass
+/// the frame's position within an outer sequence (or `0` for one-shot use).
+///
+/// `flux_cache` lets the caller share a `(star_id, sensor_idx) -> SourceFlux`
+/// cache across multiple calls (the slow step of star photometry). Pass
+/// `None` for a fresh per-call cache; pass `Some(...)` to reuse a cache
+/// across an outer loop over many frames with the same catalog and
+/// focal plane.
+pub fn render_one_frame(
+    trajectory: &Trajectory,
+    sources: &LightSources<'_>,
+    fp: &FocalPlaneConfig,
+    frame_start: Duration,
+    frame_idx: usize,
+    config: &MotionBlurConfig,
+    flux_cache: Option<Arc<Mutex<FluxCache>>>,
+) -> Result<Vec<Array2<u16>>, TrajectoryError> {
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    let scene = RenderScene {
+        trajectory,
+        sources: *sources,
+        fp,
+    };
+    let zlight = ZodiacalLight::new();
+    let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
+    let cache = flux_cache.unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
+    let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
+    let sensor_count = ctx.satellites.len();
+
+    let results: Vec<Result<(usize, Array2<u16>), TrajectoryError>> = (0..sensor_count)
+        .into_par_iter()
+        .map(|sensor_idx| {
+            let sat = &ctx.satellites[sensor_idx];
+            let seed = tile_seed(base_seed, frame_idx, sensor_idx);
+            let tile_ctx = TileRenderContext {
+                scene: &scene,
+                plan: &plan,
+                sensor_idx,
+            };
+            let arr = render_tile_array(&tile_ctx, &cache, sat, seed)?;
+            Ok((sensor_idx, arr))
+        })
+        .collect();
+
+    let mut images: Vec<Option<Array2<u16>>> = (0..sensor_count).map(|_| None).collect();
+    for r in results {
+        let (idx, arr) = r?;
+        images[idx] = Some(arr);
+    }
+    Ok(images
+        .into_iter()
+        .map(|i| i.expect("sensor index covered"))
+        .collect())
+}
+
+/// Render the `roi` slice of a single `(frame, sensor)` into a quantized
+/// `Array2<u16>` shaped `(roi_height, roi_width)`.
+///
+/// Live-render counterpart to [`render_one_frame`] for callers that
+/// only need a sub-region of one sensor — e.g. an FSM-offset
+/// region-of-interest at full frame rate without paying full-sensor
+/// stamping and noise-sampling cost. The pixel at `(0, 0)` of the
+/// returned array corresponds to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// `roi` is in sensor pixel coordinates with inclusive bounds and must
+/// be entirely contained in the sensor at `sensor_idx`. The returned
+/// image has dimensions `(roi.max_row - roi.min_row + 1,
+/// roi.max_col - roi.min_col + 1)`.
+///
+/// `sensor_idx` selects which sensor on the focal plane the ROI lies
+/// on. Out-of-range indices return [`TrajectoryError::NoSensors`].
+///
+/// # Bit-equality
+///
+/// - When `roi` covers the full sensor extent the output equals
+///   `render_one_frame(...)[sensor_idx]` **byte-for-byte**: the
+///   accumulator and noise buffers have the same shape as the
+///   full-sensor render so every chunk-keyed RNG stream visits the
+///   same pixels in the same order.
+/// - For a smaller `roi` the **pre-noise mean-electron image** is
+///   bit-identical to the corresponding slice of a full-frame render.
+///   The post-noise quantized output diverges because the
+///   `process_array_in_parallel_chunks` sampler used by
+///   `apply_poisson_photon_noise` and `apply_gaussian_read_noise`
+///   keys its per-row-chunk seed off the array's row count, so a
+///   smaller buffer produces a different RNG sequence even with the
+///   same base seed.
+#[allow(clippy::too_many_arguments)]
+pub fn render_one_frame_roi(
+    trajectory: &Trajectory,
+    sources: &LightSources<'_>,
+    fp: &FocalPlaneConfig,
+    frame_start: Duration,
+    frame_idx: usize,
+    config: &MotionBlurConfig,
+    flux_cache: Option<Arc<Mutex<FluxCache>>>,
+    roi: AABB,
+    sensor_idx: usize,
+) -> Result<Array2<u16>, TrajectoryError> {
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    if sensor_idx >= ctx.satellites.len() {
+        return Err(TrajectoryError::NoSensors);
+    }
+    let scene = RenderScene {
+        trajectory,
+        sources: *sources,
+        fp,
+    };
+    let zlight = ZodiacalLight::new();
+    let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
+    let cache = flux_cache.unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
+    let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
+    let sat = &ctx.satellites[sensor_idx];
+    let seed = tile_seed(base_seed, frame_idx, sensor_idx);
+    let tile_ctx = TileRenderContext {
+        scene: &scene,
+        plan: &plan,
+        sensor_idx,
+    };
+    render_tile_array_roi(&tile_ctx, &cache, sat, seed, roi)
 }
 
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
 ///
 /// Returns the total number of frames rendered.
 ///
-/// `per_sensor_galaxies` is the per-sensor pre-projected galaxy list
-/// (the `Scene::with_galaxies` shape). Pass an empty `Vec` per sensor
-/// for star-only renders. Galaxies are projected once at the
-/// trajectory's mid-time orientation and splatted at full-exposure
-/// flux per tile — exact for static trajectories, an approximation
-/// for drifting trajectories where a sub-pixel galaxy shift across
-/// the exposure becomes detectable.
+/// `sources.per_sensor_galaxies` is the per-sensor pre-projected
+/// galaxy list (the `Scene::with_galaxies` shape). Pass an empty
+/// `Vec` per sensor for star-only renders. Galaxies are projected
+/// once at the trajectory's mid-time orientation and splatted at
+/// full-exposure flux per tile — exact for static trajectories, an
+/// approximation for drifting trajectories where a sub-pixel galaxy
+/// shift across the exposure becomes detectable.
 pub fn render_motion_trajectory(
     trajectory: &Trajectory,
-    catalog_stars: &[StarData],
-    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    sources: &LightSources<'_>,
     fp: &FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
     config: &MotionBlurConfig,
     output_dir: &Path,
 ) -> Result<usize, TrajectoryError> {
-    let sensor_count = fp.array.sensor_count();
-    if sensor_count == 0 {
-        return Err(TrajectoryError::NoSensors);
-    }
-    let first_sat = fp
-        .satellite_for_sensor(0)
-        .ok_or(TrajectoryError::NoSensors)?;
-    let airy_pix = first_sat.airy_disk_pixel_space();
-    let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
-    let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
-    let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    let sensor_count = ctx.satellites.len();
 
     let scene = RenderScene {
         trajectory,
-        catalog_stars,
-        per_sensor_galaxies,
+        sources: *sources,
         fp,
-        zodiacal,
     };
 
     let frame_times = trajectory.frame_times(config.timestep);
@@ -677,20 +1083,6 @@ pub fn render_motion_trajectory(
         config.timestep.as_secs_f64(),
         config.max_drift_per_stamp_px,
     );
-
-    // Pre-build per-sensor satellite configs (cheap, avoids lock-free work
-    // per tile). Materialized early so the planning pass can precompute
-    // the per-sensor zodiacal scaling for each frame.
-    let satellites: Vec<SatelliteConfig> = (0..sensor_count)
-        .map(|i| {
-            fp.satellite_for_sensor(i)
-                .expect("sensor index in range for enumerated sensor_count")
-        })
-        .collect();
-    let sensor_ratios: Vec<f64> = satellites
-        .iter()
-        .map(|sat| per_sensor_pixel_solid_angle_ratio(&satellites[0], sat))
-        .collect();
 
     // Progress bar over all (frame, sensor) tiles. `.inc(1)` is called by
     // each worker after the tile's PNG is written. Non-TTY stdout is detected
@@ -714,59 +1106,15 @@ pub fn render_motion_trajectory(
     let mut stamps_min = usize::MAX;
     let mut stamps_max = 0usize;
     for (frame_idx, &t) in frame_times.iter().enumerate() {
-        let exposure = config.exposure;
-        // Clamp the exposure window to the trajectory so we do not try to
-        // sample beyond the defined range.
-        let t_end = (t + exposure).min(scene.trajectory.end_time());
-        let exposure = if t_end > t { t_end - t } else { Duration::ZERO };
-
-        // Mid-frame orientation drives both the envelope-padding peak
-        // excursion calculation and the zodiacal evaluation.
-        let mid_t = (t + exposure / 2)
+        let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, t, config)?;
+        let mid_t = plan
+            .schedule
+            .mid_time()
             .min(scene.trajectory.end_time())
             .max(scene.trajectory.start_time());
-        let mid_q = scene.trajectory.orientation_at(mid_t)?;
-        let mid_bore = boresight_of(&mid_q);
-
-        let drift = max_drift_over_window(scene.trajectory, t, t_end)?;
-        let peak_excursion = scene.trajectory.peak_excursion_rad(t, t_end, &mid_q)?;
-
-        let schedule = if config.force_static || exposure.is_zero() {
-            SubsampleSchedule {
-                frame_start: t,
-                exposure,
-                stamps_per_exposure: 1,
-                envelope_padding_rad: peak_excursion,
-            }
-        } else {
-            SubsampleSchedule::from_drift_budget(
-                t,
-                exposure,
-                drift,
-                peak_excursion,
-                px_scale,
-                config.max_drift_per_stamp_px,
-            )
-        };
-        stamps_min = stamps_min.min(schedule.stamps_per_exposure);
-        stamps_max = stamps_max.max(schedule.stamps_per_exposure);
-
-        let zodiacal_per_px_per_s =
-            zodiacal_per_px_per_s_at(&zlight, &first_sat, &scene.zodiacal, &mid_bore);
-        let exposure_s = schedule.exposure.as_secs_f64();
-        let zodiacal_per_px: Vec<f64> = sensor_ratios
-            .iter()
-            .map(|r| zodiacal_per_px_per_s * r * exposure_s)
-            .collect();
-
-        let stars = envelope_prefilter(
-            scene.trajectory,
-            scene.catalog_stars,
-            &schedule,
-            scene.fp,
-            padding_mm,
-            px_scale,
-        )?;
+        let mid_bore = boresight_of(&scene.trajectory.orientation_at(mid_t)?);
+        stamps_min = stamps_min.min(plan.schedule.stamps_per_exposure);
+        stamps_max = stamps_max.max(plan.schedule.stamps_per_exposure);
         // Per-frame summary routed through the bar so it coexists with the
         // live progress line without scrambled output.
         pb.println(format!(
@@ -774,18 +1122,12 @@ pub fn render_motion_trajectory(
              stars={}",
             frame_idx,
             t.as_secs_f64(),
-            schedule.stamps_per_exposure,
+            plan.schedule.stamps_per_exposure,
             mid_bore.ra_degrees(),
             mid_bore.dec_degrees(),
-            stars.len(),
+            plan.stars.len(),
         ));
-        plans.push(FramePlan {
-            idx: frame_idx,
-            schedule,
-            stars,
-            padding_mm,
-            zodiacal_per_px,
-        });
+        plans.push(plan);
     }
     if total_frames == 0 {
         stamps_min = 0;
@@ -838,18 +1180,16 @@ pub fn render_motion_trajectory(
         .zip(output_paths.par_iter())
         .map(|(tile, out_path)| {
             let plan = &plans[tile.frame_plan_idx];
-            let sat = &satellites[tile.sensor_idx];
+            let sat = &ctx.satellites[tile.sensor_idx];
             let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
             let tile_started = Instant::now();
-            let result = render_tile(
-                &scene,
+            let tile_ctx = TileRenderContext {
+                scene: &scene,
                 plan,
-                tile.sensor_idx,
-                &flux_cache,
-                sat,
-                seed,
-                out_path,
-            );
+                sensor_idx: tile.sensor_idx,
+            };
+            let result = render_tile_array(&tile_ctx, &flux_cache, sat, seed)
+                .and_then(|arr| save_u16_png(&arr, out_path));
             debug!(
                 "tile frame={} sensor={} stamps={} stars={} elapsed={}ms",
                 plan.idx,
@@ -897,7 +1237,7 @@ pub fn render_motion_trajectory(
     // recorded here is relative (forward-slash) to `output_dir`.
     let metadata = build_render_metadata(
         &scene,
-        &satellites,
+        &ctx.satellites,
         config,
         &plans
             .iter()
@@ -991,6 +1331,7 @@ fn build_render_metadata(
     }
 
     let stars: Vec<StarMeta> = scene
+        .sources
         .catalog_stars
         .iter()
         .map(|s| StarMeta {
@@ -1029,8 +1370,8 @@ fn build_render_metadata(
         force_static: config.force_static,
         catalog_path: config.catalog_path.to_string_lossy().into_owned(),
         zodiacal: ZodiacalMeta {
-            elongation_deg: scene.zodiacal.elongation(),
-            latitude_deg: scene.zodiacal.latitude(),
+            elongation_deg: scene.sources.zodiacal.elongation(),
+            latitude_deg: scene.sources.zodiacal.latitude(),
         },
     };
 
@@ -1273,16 +1614,12 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, fp, &cfg, tmp.path()).unwrap();
         frames
     }
 
@@ -1317,16 +1654,12 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 1);
     }
 
@@ -1359,17 +1692,13 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
         // Render normally to exercise the cache.
-        let frames = render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 3);
         // Cache size bound: at most num_stars * sensor_count.
         // We can't peek from outside the function, so rely on invariant by
@@ -1378,16 +1707,7 @@ mod tests {
         // The tightest assertion we can make without instrumenting the
         // internals is: a second run with the same inputs renders the same
         // number of frames, which would fail if the path were non-idempotent.
-        let frames2 = render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let frames2 = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert_eq!(frames, frames2);
     }
 
@@ -1563,26 +1883,13 @@ mod tests {
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_a.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_b.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
         let name = "sensor_00/frame_000000.png";
         let a = std::fs::read(tmp_a.path().join(name)).unwrap();
         let b = std::fs::read(tmp_b.path().join(name)).unwrap();
@@ -1630,32 +1937,305 @@ mod tests {
         };
         let tmp_coarse = tempfile::tempdir().unwrap();
         let tmp_fine = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg_coarse,
-            tmp_coarse.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg_fine,
-            tmp_fine.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg_coarse, tmp_coarse.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg_fine, tmp_fine.path()).unwrap();
         let name = "sensor_00/frame_000000.png";
         let coarse = std::fs::read(tmp_coarse.path().join(name)).unwrap();
         let fine = std::fs::read(tmp_fine.path().join(name)).unwrap();
         assert_ne!(
             coarse, fine,
             "tightening max_drift_per_stamp_px on a moving trajectory must change the rendered streak"
+        );
+    }
+
+    #[test]
+    fn test_render_one_frame_is_deterministic() {
+        // Two calls with the same arguments and the same seed must return
+        // byte-identical arrays. Exercises a drifting trajectory so the
+        // per-stamp loop is active (not the N=1 fallback) and a couple of
+        // stars so the flux cache + envelope prefilter are exercised too.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let drift = Equatorial::from_degrees(45.0 + 0.001, 30.0); // ~3.6"
+        let traj = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(
+                Duration::from_secs(10),
+                orientation_from_pointing(&drift, 0.0),
+            ),
+        ])
+        .unwrap();
+        let stars: Vec<StarData> = (0..3)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.0,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0005 * i as f64,
+                    pointing.dec_degrees(),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.05,
+            base_seed: Some(0xABCD_1234),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let first = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+        let second = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+
+        assert_eq!(first.len(), second.len());
+        assert!(!first.is_empty(), "expected at least one sensor");
+        for (s, (a, b)) in first.iter().zip(second.iter()).enumerate() {
+            assert_eq!(a, b, "sensor {s} arrays differ between identical calls");
+        }
+    }
+
+    #[test]
+    fn test_render_one_frame_matches_render_motion_trajectory_bytes() {
+        // `render_motion_trajectory` is reimplemented in terms of the same
+        // primitives as `render_one_frame`. For any given (base_seed,
+        // frame_idx) the per-sensor quantized arrays must equal the PNG
+        // pixels the trajectory renderer writes for that frame.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let stars: Vec<StarData> = (0..2)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.5,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0005 * i as f64,
+                    pointing.dec_degrees(),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let traj = static_trajectory();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.1,
+            base_seed: Some(54321),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+
+        let frame_idx = 0;
+        let frame_start = Duration::ZERO;
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let one =
+            render_one_frame(&traj, &sources, &fp, frame_start, frame_idx, &cfg, None).unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+
+        let png_path = tmp.path().join(sensor_relative_png_path(0, frame_idx));
+        let img = image::open(&png_path).unwrap().to_luma16();
+        let (w, h) = img.dimensions();
+        let png_arr = Array2::from_shape_vec((h as usize, w as usize), img.into_raw()).unwrap();
+        assert_eq!(
+            one[0], png_arr,
+            "render_one_frame must produce the same pixels render_motion_trajectory writes"
+        );
+    }
+
+    /// Standard fixture for the ROI bit-equality tests: tiny focal plane,
+    /// a handful of well-placed stars, deterministic seed.
+    fn roi_test_fixture() -> (
+        FocalPlaneConfig,
+        Vec<StarData>,
+        Trajectory,
+        MotionBlurConfig,
+    ) {
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let stars: Vec<StarData> = (0..6)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.0 + i as f64 * 0.1,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0008 * (i as f64 - 2.5),
+                    pointing.dec_degrees() + 0.0005 * (i as f64 - 1.5),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let traj = static_trajectory();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.1,
+            base_seed: Some(0x0FC8_BEEF),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        (fp, stars, traj, cfg)
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_full_sensor_is_byte_equal() {
+        // ROI covering the entire sensor must produce a byte-identical
+        // image to render_one_frame's output for that sensor. The
+        // accumulator and noise buffers are identically shaped between
+        // the two paths, so the chunk-keyed RNG streams advance through
+        // the same pixels in the same order.
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let full = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let roi = AABB::from_coords(0, 0, h - 1, w - 1);
+        let roi_image =
+            render_one_frame_roi(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None, roi, 0)
+                .unwrap();
+
+        assert_eq!(roi_image.dim(), (h, w));
+        assert_eq!(
+            roi_image, full[0],
+            "full-sensor ROI must be byte-equal to render_one_frame[sensor_idx]"
+        );
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_subset_mean_matches_full_slice() {
+        // Sub-region ROI: the pre-noise mean-electron image must equal the
+        // corresponding slice of the full-sensor mean byte-for-byte. The
+        // quantized post-noise output cannot be checked directly because
+        // the chunk-keyed noise sampler advances differently on a smaller
+        // buffer (see render_one_frame_roi docs).
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let ctx = RenderContext::from_focal_plane(&fp).unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let scene = RenderScene {
+            trajectory: &traj,
+            sources,
+            fp: &fp,
+        };
+        let zlight = ZodiacalLight::new();
+        let plan = plan_frame(&scene, &ctx, &zlight, 0, Duration::ZERO, &cfg).unwrap();
+        let cache: Arc<Mutex<FluxCache>> = Arc::new(Mutex::new(HashMap::new()));
+        let sensor_idx = 0;
+        let sat = &ctx.satellites[sensor_idx];
+        let seed = tile_seed(cfg.base_seed.unwrap(), 0, sensor_idx);
+
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let tile_ctx = TileRenderContext {
+            scene: &scene,
+            plan: &plan,
+            sensor_idx,
+        };
+        let full_mean = build_tile_mean_image(
+            &tile_ctx,
+            &cache,
+            sat,
+            seed,
+            AABB::from_coords(0, 0, h - 1, w - 1),
+        )
+        .unwrap()
+        .mean_image;
+
+        // A 24x24 ROI offset into the interior of the 64x64 sensor.
+        let roi = AABB::from_coords(12, 14, 35, 37);
+        let roi_w = roi.max_col - roi.min_col + 1;
+        let roi_h = roi.max_row - roi.min_row + 1;
+        let roi_mean = build_tile_mean_image(&tile_ctx, &cache, sat, seed, roi)
+            .unwrap()
+            .mean_image;
+
+        assert_eq!(roi_mean.dim(), (roi_h, roi_w));
+        for r in 0..roi_h {
+            for c in 0..roi_w {
+                let full_val = full_mean[[roi.min_row + r, roi.min_col + c]];
+                let roi_val = roi_mean[[r, c]];
+                assert_eq!(
+                    roi_val.to_bits(),
+                    full_val.to_bits(),
+                    "mean-image pixel ({r},{c}) (sensor {},{}) diverged: roi={roi_val} full={full_val}",
+                    roi.min_row + r,
+                    roi.min_col + c,
+                );
+            }
+        }
+
+        // Sanity check the quantized output too: dimension and dtype only.
+        let roi_image = render_one_frame_roi(
+            &traj,
+            &sources,
+            &fp,
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            roi,
+            sensor_idx,
+        )
+        .unwrap();
+        assert_eq!(roi_image.dim(), (roi_h, roi_w));
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_rejects_out_of_bounds() {
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let oob = AABB::from_coords(0, 0, h, w); // max equal to dim -> out of bounds (inclusive)
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let err = render_one_frame_roi(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None, oob, 0)
+            .unwrap_err();
+        assert!(
+            matches!(err, TrajectoryError::RoiOutOfBounds { .. }),
+            "expected RoiOutOfBounds, got {err:?}"
+        );
+
+        let bad_sensor = render_one_frame_roi(
+            &traj,
+            &sources,
+            &fp,
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            AABB::from_coords(0, 0, h - 1, w - 1),
+            99,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(bad_sensor, TrajectoryError::NoSensors),
+            "expected NoSensors for sensor_idx out of range, got {bad_sensor:?}"
         );
     }
 
@@ -1688,26 +2268,13 @@ mod tests {
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_a.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_b.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
 
         // Compare the PNG bytes of one frame. The new layout routes frame 0
         // of sensor 0 to `sensor_00/frame_000000.png`.
@@ -1747,16 +2314,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(5);
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 2, "expected at least 2 frames, got {}", frames);
 
         let sensor_dir = tmp.path().join("sensor_00");
@@ -1780,16 +2343,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(17);
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
 
@@ -1835,16 +2394,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(23);
         let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
@@ -1898,16 +2453,12 @@ mod tests {
         let fp = tiny_fp();
         let cfg = minimal_metadata_cfg(31);
         let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();

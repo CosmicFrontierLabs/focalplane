@@ -6,8 +6,10 @@ use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
 use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
 use simulator::sims::jitter::build_pink_trajectory;
+use simulator::sims::motion_blur::LightSources;
 use simulator::sims::trajectory::{
-    fov_envelope, render_trajectory, Trajectory, TrajectoryRenderConfig, Waypoint,
+    fov_envelope, prefetch_catalog_for_envelope, render_trajectory, Trajectory,
+    TrajectoryRenderConfig, Waypoint,
 };
 use simulator::star_math::field_diameter_for_array;
 use simulator::units::{AngleExt, LengthExt, TemperatureExt};
@@ -761,11 +763,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         info!("Loading catalog...");
         let catalog = args.shared.load_catalog_with_progress(args.quiet)?;
-        catalog.stars_in_field(
-            envelope_center.ra_degrees(),
-            envelope_center.dec_degrees(),
-            envelope_diameter,
-        )
+        prefetch_catalog_for_envelope(&catalog, (envelope_center, envelope_diameter))
     };
     info!("Cached {} stars for trajectory envelope", stars.len());
 
@@ -816,9 +814,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             timestep: args.timestep.0,
             exposure: args.shared.exposure.0,
             focal_plane: &focal_plane,
-            catalog_stars: &stars,
-            per_sensor_galaxies: &per_sensor_galaxies,
-            zodiacal: args.shared.coordinates,
+            sources: LightSources {
+                catalog_stars: &stars,
+                per_sensor_galaxies: &per_sensor_galaxies,
+                zodiacal: args.shared.coordinates,
+            },
             output_dir: output_path,
             base_seed: Some(args.seed),
             max_drift_per_stamp_px: Some(args.max_drift_per_stamp_px),

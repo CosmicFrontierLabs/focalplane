@@ -1,11 +1,19 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ndarray::Array2;
 use shared::image_proc::airy::PixelScaledAiryDisk;
+use shared::image_proc::detection::AABB;
 use shared::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
+use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor::models::IMX455;
 use simulator::hardware::SatelliteConfig;
 use simulator::image_proc::render::{add_stars_to_image, quantize_image, StarInFrame};
 use simulator::photometry::photoconversion::{SourceFlux, SpotFlux};
+use simulator::photometry::zodiacal::SolarAngularCoordinates;
+use simulator::sims::motion_blur::{
+    render_one_frame, render_one_frame_roi, LightSources, MotionBlurConfig,
+};
+use simulator::sims::orientation::orientation_from_pointing;
+use simulator::sims::trajectory::{Trajectory, Waypoint};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 use std::time::Duration;
@@ -129,10 +137,123 @@ fn bench_renderer_render(c: &mut Criterion) {
     });
 }
 
+/// Build a single-sensor focal plane on a representative IMX455-class
+/// detector for the ROI vs full-frame benchmark. Resolution is the
+/// full 9568x6380 native frame.
+fn bench_focal_plane() -> FocalPlaneConfig {
+    let telescope = simulator::hardware::telescope::TelescopeConfig::new(
+        "Bench Telescope".to_string(),
+        shared::units::Length::from_meters(0.5),
+        shared::units::Length::from_meters(5.0),
+        0.9,
+    );
+    let sat = SatelliteConfig::new(telescope, IMX455.clone(), Temperature::from_celsius(-10.0));
+    FocalPlaneConfig::from_satellite(&sat)
+}
+
+fn bench_catalog(center: Equatorial, count: usize) -> Vec<StarData> {
+    (0..count)
+        .map(|i| {
+            let ra = center.ra_degrees() + ((i as f64 * 0.013) % 1.0 - 0.5) * 0.5;
+            let dec = center.dec_degrees() + ((i as f64 * 0.017) % 1.0 - 0.5) * 0.3;
+            StarData {
+                id: i as u64,
+                magnitude: 8.0 + (i as f64 % 4.0),
+                position: Equatorial::from_degrees(ra, dec),
+                b_v: Some(0.6),
+            }
+        })
+        .collect()
+}
+
+/// Compare `render_one_frame` (full 9568x6380) against
+/// `render_one_frame_roi` for a 1024x1024 ROI on the same sensor.
+/// Reports times so callers can read off the speedup ratio. Per
+/// project convention this bench does **not** assert any timing —
+/// CI is variable; the bench is for visibility.
+fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
+    let fp = bench_focal_plane();
+    let center = Equatorial::from_degrees(56.75, 24.12);
+    let stars = bench_catalog(center, 200);
+    let traj = Trajectory::new(vec![
+        Waypoint::new(Duration::ZERO, orientation_from_pointing(&center, 0.0)),
+        Waypoint::new(
+            Duration::from_secs(10),
+            orientation_from_pointing(&center, 0.0),
+        ),
+    ])
+    .expect("static trajectory");
+    let cfg = MotionBlurConfig {
+        timestep: Duration::from_secs(1),
+        exposure: Duration::from_secs(1),
+        max_drift_per_stamp_px: 0.1,
+        base_seed: Some(0xCAFE_F00D),
+        force_static: true,
+        quiet: true,
+        ..Default::default()
+    };
+    let zodi = SolarAngularCoordinates::zodiacal_minimum();
+    let sensor_idx = 0_usize;
+
+    // Center the ROI in the middle of the 9568x6380 sensor.
+    let sat = fp.satellite_for_sensor(sensor_idx).unwrap();
+    let (sensor_w, sensor_h) = sat.sensor.dimensions.get_pixel_width_height();
+    let roi_side = 1024_usize;
+    let min_row = (sensor_h - roi_side) / 2;
+    let min_col = (sensor_w - roi_side) / 2;
+    let roi = AABB::from_coords(
+        min_row,
+        min_col,
+        min_row + roi_side - 1,
+        min_col + roi_side - 1,
+    );
+
+    let sources = LightSources {
+        catalog_stars: &stars,
+        per_sensor_galaxies: &[],
+        zodiacal: zodi,
+    };
+
+    let mut group = c.benchmark_group("render_one_frame_roi");
+    group.sample_size(10);
+    group.bench_function("full_9568x6380", |b| {
+        b.iter(|| {
+            render_one_frame(
+                black_box(&traj),
+                black_box(&sources),
+                black_box(&fp),
+                black_box(Duration::ZERO),
+                black_box(0),
+                black_box(&cfg),
+                None,
+            )
+            .expect("render_one_frame")
+        })
+    });
+    group.bench_function("roi_1024x1024", |b| {
+        b.iter(|| {
+            render_one_frame_roi(
+                black_box(&traj),
+                black_box(&sources),
+                black_box(&fp),
+                black_box(Duration::ZERO),
+                black_box(0),
+                black_box(&cfg),
+                None,
+                black_box(roi),
+                black_box(sensor_idx),
+            )
+            .expect("render_one_frame_roi")
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_add_stars_to_image,
     bench_quantize_image,
     bench_renderer_render,
+    bench_render_one_frame_full_vs_roi,
 );
 criterion_main!(benches);
