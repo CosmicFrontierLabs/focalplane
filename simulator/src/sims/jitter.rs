@@ -1,19 +1,32 @@
-//! Pink-noise pointing-jitter synthesis.
+//! Pointing-jitter trajectory synthesis.
 //!
-//! Generates pink (1/f) noise residuals suitable for shaping a quasi-static
-//! pointing into a jittered trajectory. The core sample generator is Paul
-//! Kellett's 7-pole IIR approximation, which yields a roughly `-10 dB/decade`
-//! slope across about three decades of frequency at no FFT cost.
+//! Two synthesis routes:
 //!
-//! The high-level entry point is [`build_pink_trajectory`], which composes a
-//! 2-D pink-noise residual ([`pink_noise_2d_arcsec`]) onto a fixed sky
-//! pointing and returns a [`Trajectory`] ready for the renderer.
+//! 1. **Pink-noise IIR** — Paul Kellett's 7-pole 1/f filter (see
+//!    [`pink_noise_series`]). Cheap, no FFT, yields a roughly
+//!    `-10 dB/decade` slope across about three decades of frequency.
+//!    Composed onto a fixed pointing by [`build_pink_trajectory`].
+//!
+//! 2. **PSD-driven FFT synthesis** — fixed-magnitude/random-phase synthesis
+//!    of a real time series whose one-sided PSD matches a tabulated
+//!    rad²/Hz spectrum ([`synthesize_from_psd`]). The high-level
+//!    [`build_trajectory_from_los_psd`] applies independent X- and Y-axis
+//!    body-frame rotation perturbations from a two-column LOS PSD onto a
+//!    nominal RA/Dec/roll pointing and returns a per-sample [`Trajectory`].
+//!    The CSV loader [`load_los_psd_csv`] parses the same file format
+//!    used by `scripts/los_psd_to_trajectory_csv.py`.
 
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::StandardNormal;
+use realfft::num_complex::Complex;
+use realfft::RealFftPlanner;
 use starfield::Equatorial;
+use thiserror::Error;
 
 use crate::sims::trajectory::{Trajectory, TrajectoryError, Waypoint};
 
@@ -112,6 +125,359 @@ pub fn build_pink_trajectory(
     Trajectory::new(waypoints)
 }
 
+/// Two-axis line-of-sight pointing-jitter PSD loaded from a CSV file.
+///
+/// The two PSD columns describe the recovered rotation degrees-of-freedom
+/// about the FEM/optical local X and Y axes, expressed in rad²/Hz on a
+/// strictly-ascending frequency grid. They are *not* displacement PSDs
+/// along sky east / north — see [`load_los_psd_csv`] for the full
+/// convention.
+#[derive(Debug, Clone)]
+pub struct LosPsd {
+    /// Frequency grid in Hz, strictly ascending.
+    pub freq_hz: Vec<f64>,
+    /// PSD of the rotation about the FEM/optical local X axis, in rad²/Hz.
+    pub psd_x_rad2_per_hz: Vec<f64>,
+    /// PSD of the rotation about the FEM/optical local Y axis, in rad²/Hz.
+    pub psd_y_rad2_per_hz: Vec<f64>,
+}
+
+impl LosPsd {
+    /// Highest frequency in the PSD's frequency grid. Useful for picking a
+    /// synthesis sample rate ≥ 2× this value.
+    pub fn max_freq_hz(&self) -> f64 {
+        *self
+            .freq_hz
+            .last()
+            .expect("freq_hz is non-empty by construction")
+    }
+}
+
+/// Error type for [`load_los_psd_csv`].
+#[derive(Debug, Error)]
+pub enum LosPsdLoadError {
+    #[error("opening {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{path} is empty (no header row)")]
+    EmptyFile { path: PathBuf },
+    #[error("{path}: missing header column `{column}`")]
+    MissingColumn { path: PathBuf, column: String },
+    #[error("{path}: line {line}: missing `{column}` cell")]
+    MissingCell {
+        path: PathBuf,
+        line: usize,
+        column: String,
+    },
+    #[error("{path}: line {line}: bad `{column}` value: {source}")]
+    BadCell {
+        path: PathBuf,
+        line: usize,
+        column: String,
+        #[source]
+        source: std::num::ParseFloatError,
+    },
+    #[error("{path}: needs at least 2 frequency rows, found {found}")]
+    TooFewRows { path: PathBuf, found: usize },
+    #[error("{path}: line {line}: `freq_hz` is not strictly ascending")]
+    FrequencyNotAscending { path: PathBuf, line: usize },
+}
+
+/// Load a two-axis LOS PSD from a CSV file.
+///
+/// # File format
+///
+/// The first non-empty, non-`#`-comment line is treated as a header. The
+/// required columns are:
+///
+/// - `freq_hz` — frequency in Hz, strictly ascending
+/// - `psd_los_x_rad2_per_hz` — PSD of rotation about the FEM optical local
+///   X axis, in rad²/Hz
+/// - `psd_los_y_rad2_per_hz` — PSD of rotation about the FEM optical local
+///   Y axis, in rad²/Hz
+///
+/// Column order doesn't matter — the parser dispatches by header name.
+/// Lines whose first non-whitespace character is `#` are skipped (both
+/// before and after the header). Extra columns are ignored.
+///
+/// The format matches the input expected by
+/// `scripts/los_psd_to_trajectory_csv.py`.
+pub fn load_los_psd_csv(path: impl AsRef<Path>) -> Result<LosPsd, LosPsdLoadError> {
+    let path_ref = path.as_ref();
+    let file = std::fs::File::open(path_ref).map_err(|source| LosPsdLoadError::Io {
+        path: path_ref.to_path_buf(),
+        source,
+    })?;
+    let reader = BufReader::new(file);
+
+    let mut header: Option<Vec<String>> = None;
+    let mut freq_hz: Vec<f64> = Vec::new();
+    let mut psd_x: Vec<f64> = Vec::new();
+    let mut psd_y: Vec<f64> = Vec::new();
+    let mut i_f = 0;
+    let mut i_x = 0;
+    let mut i_y = 0;
+
+    for (line_idx, line_result) in reader.lines().enumerate() {
+        let line_no = line_idx + 1;
+        let line = line_result.map_err(|source| LosPsdLoadError::Io {
+            path: path_ref.to_path_buf(),
+            source,
+        })?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+
+        if header.is_none() {
+            let cols: Vec<String> = cells.iter().map(|c| c.to_string()).collect();
+            let find = |name: &str| -> Result<usize, LosPsdLoadError> {
+                cols.iter()
+                    .position(|c| c == name)
+                    .ok_or_else(|| LosPsdLoadError::MissingColumn {
+                        path: path_ref.to_path_buf(),
+                        column: name.to_string(),
+                    })
+            };
+            i_f = find("freq_hz")?;
+            i_x = find("psd_los_x_rad2_per_hz")?;
+            i_y = find("psd_los_y_rad2_per_hz")?;
+            header = Some(cols);
+            continue;
+        }
+
+        let parse_cell = |idx: usize, column: &str| -> Result<f64, LosPsdLoadError> {
+            let cell = cells.get(idx).ok_or_else(|| LosPsdLoadError::MissingCell {
+                path: path_ref.to_path_buf(),
+                line: line_no,
+                column: column.to_string(),
+            })?;
+            cell.parse::<f64>()
+                .map_err(|source| LosPsdLoadError::BadCell {
+                    path: path_ref.to_path_buf(),
+                    line: line_no,
+                    column: column.to_string(),
+                    source,
+                })
+        };
+        let f = parse_cell(i_f, "freq_hz")?;
+        if let Some(&prev) = freq_hz.last() {
+            if f <= prev {
+                return Err(LosPsdLoadError::FrequencyNotAscending {
+                    path: path_ref.to_path_buf(),
+                    line: line_no,
+                });
+            }
+        }
+        freq_hz.push(f);
+        psd_x.push(parse_cell(i_x, "psd_los_x_rad2_per_hz")?);
+        psd_y.push(parse_cell(i_y, "psd_los_y_rad2_per_hz")?);
+    }
+
+    if header.is_none() {
+        return Err(LosPsdLoadError::EmptyFile {
+            path: path_ref.to_path_buf(),
+        });
+    }
+    if freq_hz.len() < 2 {
+        return Err(LosPsdLoadError::TooFewRows {
+            path: path_ref.to_path_buf(),
+            found: freq_hz.len(),
+        });
+    }
+
+    Ok(LosPsd {
+        freq_hz,
+        psd_x_rad2_per_hz: psd_x,
+        psd_y_rad2_per_hz: psd_y,
+    })
+}
+
+/// Body→world rotation defining the simulator body frame at the nominal
+/// pointing.
+///
+/// Conventions:
+///
+/// - body **+Z** = boresight (radial on the sky)
+/// - body **+X** = sky east at the boresight at `roll_deg = 0` (twisted by
+///   `roll_deg` about +Z)
+/// - body **+Y** = sky north at the boresight at `roll_deg = 0` (twisted
+///   by `roll_deg` about +Z)
+///
+/// The FEM/optical local X and Y axes are mapped onto body +X and +Y
+/// respectively, so a positive rotation about the FEM optical X axis
+/// appears as a rotation about body +X in the perturbation step of
+/// [`build_trajectory_from_los_psd`].
+pub fn nominal_body_to_world(ra_deg: f64, dec_deg: f64, roll_deg: f64) -> UnitQuaternion<f64> {
+    let ra = ra_deg.to_radians();
+    let dec = dec_deg.to_radians();
+    let (sin_ra, cos_ra) = ra.sin_cos();
+    let (sin_dec, cos_dec) = dec.sin_cos();
+    let east = Vector3::new(-sin_ra, cos_ra, 0.0);
+    let north = Vector3::new(-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec);
+    let bore = Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec);
+    let base = UnitQuaternion::from_matrix(&Matrix3::from_columns(&[east, north, bore]));
+    let twist = UnitQuaternion::from_scaled_axis(Vector3::new(0.0, 0.0, roll_deg.to_radians()));
+    base * twist
+}
+
+/// Linear interpolation of `(xs, ys)` at `x`, with zero extrapolation
+/// outside the table (matches `numpy.interp(..., left=0.0, right=0.0)`).
+///
+/// `xs` must be strictly ascending and non-empty.
+fn interp_linear_or_zero(xs: &[f64], ys: &[f64], x: f64) -> f64 {
+    debug_assert_eq!(xs.len(), ys.len());
+    debug_assert!(!xs.is_empty());
+    if x <= xs[0] || x >= *xs.last().unwrap() {
+        return 0.0;
+    }
+    let pos = xs.partition_point(|&xi| xi < x);
+    let x0 = xs[pos - 1];
+    let x1 = xs[pos];
+    let y0 = ys[pos - 1];
+    let y1 = ys[pos];
+    y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+}
+
+/// Fixed-magnitude / random-phase synthesis of a real time series whose
+/// one-sided PSD matches `psd(freq_hz)` linearly interpolated onto the
+/// rfft frequency grid.
+///
+/// Returns `n_samples` samples at sample rate `fs` (Hz).
+///
+/// # Derivation
+///
+/// A tone `A cos(2π f_k t + φ)` contributes `A²/2` to the signal
+/// variance, and we want each bin to contribute `S(f_k) * df`, so
+/// `A_k = sqrt(2 * S(f_k) * df)`. With numpy's irfft normalisation
+/// (`X[k] = sum_n x[n] * exp(-2πi k n / N)`), that bin maps to
+/// `|X[k]| = (N/2) * A_k = sqrt(N * fs * S(f_k) / 2)`. DC and Nyquist
+/// bins are zeroed — no mean, no aliased tone at the band edge.
+///
+/// `realfft`'s inverse pass is unnormalised; the result is rescaled by
+/// `1/N` here to match the numpy convention so the synthesised variance
+/// equals the PSD integral.
+pub fn synthesize_from_psd(
+    freq_hz: &[f64],
+    psd: &[f64],
+    fs: f64,
+    n_samples: usize,
+    rng: &mut impl Rng,
+) -> Vec<f64> {
+    assert!(n_samples >= 4, "n_samples must be >= 4 for IRFFT");
+    assert_eq!(
+        freq_hz.len(),
+        psd.len(),
+        "freq_hz and psd must be the same length"
+    );
+    assert!(fs > 0.0, "fs must be positive");
+
+    let n_one_sided = n_samples / 2 + 1;
+    let mut planner = RealFftPlanner::<f64>::new();
+    let inv = planner.plan_fft_inverse(n_samples);
+
+    let mut spectrum = inv.make_input_vec();
+    debug_assert_eq!(spectrum.len(), n_one_sided);
+
+    let nyquist_bin = if n_samples % 2 == 0 {
+        Some(n_one_sided - 1)
+    } else {
+        None
+    };
+    let bin_hz = fs / n_samples as f64;
+    for (k, slot) in spectrum.iter_mut().enumerate() {
+        if k == 0 || Some(k) == nyquist_bin {
+            *slot = Complex::new(0.0, 0.0);
+            continue;
+        }
+        let f = k as f64 * bin_hz;
+        let s = interp_linear_or_zero(freq_hz, psd, f);
+        let magnitude = (n_samples as f64 * fs * s / 2.0).max(0.0).sqrt();
+        let phase = rng.random::<f64>() * std::f64::consts::TAU;
+        *slot = Complex::from_polar(magnitude, phase);
+    }
+
+    let mut output = inv.make_output_vec();
+    inv.process(&mut spectrum, &mut output)
+        .expect("realfft inverse with matching shapes cannot fail");
+
+    let scale = 1.0 / n_samples as f64;
+    for s in output.iter_mut() {
+        *s *= scale;
+    }
+    output
+}
+
+/// Build a per-sample [`Trajectory`] by synthesizing two independent
+/// body-axis rotation time series from a [`LosPsd`] and composing them
+/// onto a nominal RA/Dec/roll pointing.
+///
+/// Output trajectory has `floor(duration * fs) + 1` waypoints uniformly
+/// spaced at `dt = 1/fs`, spanning `[0, n_samples_minus_one / fs]`.
+///
+/// # Arguments
+///
+/// - `psd` — two-axis LOS PSD (e.g. from [`load_los_psd_csv`]).
+/// - `ra_deg`, `dec_deg`, `roll_deg` — nominal boresight pointing and
+///   roll. See [`nominal_body_to_world`] for the body-frame convention.
+/// - `duration` — trajectory duration. The synthesis emits
+///   `floor(duration * fs) + 1` samples so the last waypoint lands at
+///   `floor(duration * fs) / fs` (≤ `duration`).
+/// - `fs` — synthesis sample rate in Hz. Should be ≥ `2 *
+///   psd.max_freq_hz()`; PSD content above `fs / 2` is discarded.
+/// - `seed` — RNG seed for the random-phase synthesis. Two adjacent
+///   sub-streams (`seed` and `seed + 1`) drive the X and Y axes
+///   independently so the two axes remain uncorrelated.
+///
+/// Body-Z (roll) is held at zero throughout — the input PSD describes
+/// pitch/yaw only.
+pub fn build_trajectory_from_los_psd(
+    psd: &LosPsd,
+    ra_deg: f64,
+    dec_deg: f64,
+    roll_deg: f64,
+    duration: Duration,
+    fs: f64,
+    seed: u64,
+) -> Result<Trajectory, TrajectoryError> {
+    assert!(fs > 0.0, "fs must be positive");
+    let n_samples = (duration.as_secs_f64() * fs).floor() as usize + 1;
+    let n_samples = n_samples.max(4);
+
+    let mut rng_x = StdRng::seed_from_u64(seed);
+    let mut rng_y = StdRng::seed_from_u64(seed.wrapping_add(1));
+    let body_x = synthesize_from_psd(
+        &psd.freq_hz,
+        &psd.psd_x_rad2_per_hz,
+        fs,
+        n_samples,
+        &mut rng_x,
+    );
+    let body_y = synthesize_from_psd(
+        &psd.freq_hz,
+        &psd.psd_y_rad2_per_hz,
+        fs,
+        n_samples,
+        &mut rng_y,
+    );
+
+    let nominal = nominal_body_to_world(ra_deg, dec_deg, roll_deg);
+
+    let waypoints: Vec<Waypoint> = (0..n_samples)
+        .map(|i| {
+            let t = Duration::from_secs_f64(i as f64 / fs);
+            let perturb = UnitQuaternion::from_scaled_axis(Vector3::new(body_x[i], body_y[i], 0.0));
+            Waypoint::new(t, nominal * perturb)
+        })
+        .collect();
+
+    Trajectory::new(waypoints)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +566,126 @@ mod tests {
         // segments + 1 waypoints
         assert_eq!(traj.waypoints().len(), 129);
         assert_relative_eq!(traj.end_time().as_secs_f64(), 10.0, epsilon = 1e-9);
+    }
+
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    /// Write a synthetic two-axis LOS PSD CSV to a tempfile and return
+    /// the handle. Format matches `scripts/los_psd_to_trajectory_csv.py`.
+    fn write_psd_csv(rows: &[(f64, f64, f64)]) -> NamedTempFile {
+        let mut f = NamedTempFile::new().expect("tempfile");
+        writeln!(f, "# synthetic LOS PSD for test").unwrap();
+        writeln!(f, "# generated by jitter::tests::write_psd_csv").unwrap();
+        writeln!(f, "freq_hz,psd_los_x_rad2_per_hz,psd_los_y_rad2_per_hz").unwrap();
+        for (freq, px, py) in rows {
+            writeln!(f, "{},{:e},{:e}", freq, px, py).unwrap();
+        }
+        f.flush().unwrap();
+        f
+    }
+
+    #[test]
+    fn load_los_psd_csv_parses_comments_and_headers() {
+        let rows = [
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0e-12, 2.0e-12),
+            (2.0, 1.5e-12, 2.5e-12),
+            (10.0, 1.0e-13, 2.0e-13),
+        ];
+        let tmp = write_psd_csv(&rows);
+        let psd = load_los_psd_csv(tmp.path()).expect("loads");
+        assert_eq!(psd.freq_hz, vec![0.0, 1.0, 2.0, 10.0]);
+        assert_eq!(psd.psd_x_rad2_per_hz, vec![0.0, 1.0e-12, 1.5e-12, 1.0e-13]);
+        assert_eq!(psd.psd_y_rad2_per_hz, vec![0.0, 2.0e-12, 2.5e-12, 2.0e-13]);
+        assert_relative_eq!(psd.max_freq_hz(), 10.0);
+    }
+
+    #[test]
+    fn load_los_psd_csv_rejects_non_ascending_frequency() {
+        let rows = [
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0e-12, 2.0e-12),
+            (0.5, 1.5e-12, 2.5e-12),
+        ];
+        let tmp = write_psd_csv(&rows);
+        let err = load_los_psd_csv(tmp.path()).expect_err("must reject non-ascending freq");
+        assert!(matches!(err, LosPsdLoadError::FrequencyNotAscending { .. }));
+    }
+
+    #[test]
+    fn load_los_psd_csv_rejects_missing_column() {
+        let mut f = NamedTempFile::new().unwrap();
+        // Header missing `psd_los_y_rad2_per_hz`.
+        writeln!(f, "freq_hz,psd_los_x_rad2_per_hz").unwrap();
+        writeln!(f, "1.0,1.0e-12").unwrap();
+        writeln!(f, "2.0,1.5e-12").unwrap();
+        f.flush().unwrap();
+        let err = load_los_psd_csv(f.path()).expect_err("must reject missing column");
+        match err {
+            LosPsdLoadError::MissingColumn { column, .. } => {
+                assert_eq!(column, "psd_los_y_rad2_per_hz")
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// Variance recovery: a flat single-axis PSD `S₀` over a band of width
+    /// `B` Hz integrates to a variance of `S₀ · B`. After synthesizing,
+    /// the empirical variance of the output should match to within
+    /// ~few percent on a 65 k-sample series.
+    #[test]
+    fn synthesize_from_psd_recovers_variance() {
+        let fs = 1024.0_f64;
+        let n_samples = 1 << 16; // 65536
+                                 // Flat PSD of value S0 over [1, 100] Hz, zero elsewhere.
+        let s0 = 1.0e-10_f64;
+        let bandwidth_hz = 99.0_f64;
+        let expected_var = s0 * bandwidth_hz;
+
+        // Three points are enough — linear interp in the band == constant.
+        let freq = vec![1.0, 100.0];
+        let psd = vec![s0, s0];
+
+        let mut rng = StdRng::seed_from_u64(0xBADCAFE);
+        let series = synthesize_from_psd(&freq, &psd, fs, n_samples, &mut rng);
+        assert_eq!(series.len(), n_samples);
+
+        let mean = series.iter().sum::<f64>() / n_samples as f64;
+        let var = series.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / n_samples as f64;
+
+        // Mean should be ~0 (DC bin zeroed).
+        assert!(mean.abs() < 1.0e-7, "mean={mean:e}");
+        // Variance should be within 10% of S0 * B (statistical fluctuation).
+        let rel_err = (var - expected_var).abs() / expected_var;
+        assert!(
+            rel_err < 0.10,
+            "variance {var:e} vs expected {expected_var:e}, rel_err={rel_err}"
+        );
+    }
+
+    #[test]
+    fn build_trajectory_from_los_psd_anchors_pose_at_nominal_pointing() {
+        // Zero PSD everywhere → perturbation should be the identity for
+        // every waypoint, so each pose equals the nominal body-to-world.
+        let rows = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (100.0, 0.0, 0.0)];
+        let tmp = write_psd_csv(&rows);
+        let psd = load_los_psd_csv(tmp.path()).unwrap();
+
+        let (ra, dec, roll) = (213.39_f64, -55.86_f64, 17.0_f64);
+        let fs = 100.0_f64;
+        let duration = Duration::from_secs(2);
+        let traj = build_trajectory_from_los_psd(&psd, ra, dec, roll, duration, fs, 42)
+            .expect("trajectory builds");
+
+        // floor(2 * 100) + 1 = 201 waypoints at dt = 10 ms.
+        assert_eq!(traj.waypoints().len(), 201);
+
+        let nominal = nominal_body_to_world(ra, dec, roll);
+        let q0 = traj.orientation_at(Duration::ZERO).unwrap();
+        let q_end = traj.orientation_at(duration).unwrap();
+        // Zero perturbation: every sample is the nominal pose.
+        assert_relative_eq!(q0.angle_to(&nominal), 0.0, epsilon = 1e-9);
+        assert_relative_eq!(q_end.angle_to(&nominal), 0.0, epsilon = 1e-9);
     }
 }

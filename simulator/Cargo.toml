@@ -53,6 +53,8 @@ plotters = { version = "0.3", default-features = false, features = [
 chrono = "0.4.41"
 ab_glyph = "0.2"           # TTF glyph rasterization for context-view labels
 imageproc = { version = "0.25.1", default-features = false } # draw_text_mut over `image`
+realfft = "3.4"                                              # IRFFT for jitter PSD synthesis
+rustfft = "6.2"                                              # complex FFT backing realfft (re-exports num-complex)
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = [
@@ -61,7 +63,6 @@ criterion = { version = "0.5", default-features = false, features = [
     "html_reports",
 ] } # Benchmarking (no plotters: criterion's plotters feature pulls image 0.24)
 approx = "0.5"                                               # Approximate floating point comparisons
-rustfft = "6.2"                                              # FFT for jitter PSD slope test
 tempfile = "3.10"                                            # Temporary file handling
 
 [[bench]]
