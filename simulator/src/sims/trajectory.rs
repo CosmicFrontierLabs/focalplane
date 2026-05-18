@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
-use starfield::catalogs::StarData;
+use starfield::catalogs::{StarCatalog, StarData};
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -388,6 +388,32 @@ pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, 
         .fold(0.0f64, f64::max);
 
     (center, 2.0 * max_dist + base_fov_deg)
+}
+
+/// Prefetch all catalog stars that fall inside the given FOV envelope.
+///
+/// `envelope` is the `(center, diameter_deg)` pair returned by
+/// [`fov_envelope`]: the first element is the envelope's pointing centre
+/// and the second is its total angular diameter in degrees (so the
+/// included region is a cone of half-angle `diameter_deg / 2` around the
+/// centre).
+///
+/// The returned `Vec<StarData>` owns its rows and outlives the catalog
+/// reference, so callers (notably `tracking-test-bench`'s `scene-camera`
+/// crate) can wrap it in an `Arc` once per `SceneCamera::open()` and
+/// reuse it across thousands of render calls without re-reading the
+/// catalog or holding a borrow against it.
+///
+/// `StarCatalog` is not object-safe (associated `Star` type, `impl
+/// Iterator` return positions) so this function takes a generic catalog
+/// reference rather than the `&dyn StarCatalog` form sketched in the
+/// originating issue.
+pub fn prefetch_catalog_for_envelope<C: StarCatalog + ?Sized>(
+    catalog: &C,
+    envelope: (Equatorial, f64),
+) -> Vec<StarData> {
+    let (center, diameter_deg) = envelope;
+    catalog.stars_in_field(center.ra_degrees(), center.dec_degrees(), diameter_deg)
 }
 
 /// Route focal-plane stars to sensors with a flux cache to avoid redundant computation.
@@ -838,5 +864,96 @@ mod tests {
             .orientation_at(traj.end_time() + Duration::from_millis(1))
             .expect_err("non-periodic must error on out-of-range");
         assert!(matches!(err, TrajectoryError::TimeOutOfRange(_, _, _)));
+    }
+
+    /// In-memory catalog used by the prefetch test: holds a fixed list of
+    /// `StarData` rows and implements just the trait surface the default
+    /// `stars_in_field` filter needs (`filter_star_data` is the hot path).
+    struct PrefetchTestCatalog {
+        stars: Vec<StarData>,
+    }
+
+    impl StarCatalog for PrefetchTestCatalog {
+        type Star = StarData;
+
+        fn get_star(&self, id: usize) -> Option<&StarData> {
+            self.stars.get(id)
+        }
+
+        fn stars(&self) -> impl Iterator<Item = &StarData> {
+            self.stars.iter()
+        }
+
+        fn len(&self) -> usize {
+            self.stars.len()
+        }
+
+        fn filter<F>(&self, predicate: F) -> Vec<&StarData>
+        where
+            F: Fn(&StarData) -> bool,
+        {
+            self.stars.iter().filter(|s| predicate(s)).collect()
+        }
+
+        fn star_data(&self) -> impl Iterator<Item = StarData> + '_ {
+            self.stars.iter().cloned()
+        }
+
+        fn filter_star_data<F>(&self, predicate: F) -> Vec<StarData>
+        where
+            F: Fn(&StarData) -> bool,
+        {
+            self.stars
+                .iter()
+                .filter(|s| predicate(s))
+                .cloned()
+                .collect()
+        }
+    }
+
+    #[test]
+    fn prefetch_catalog_for_envelope_is_nonempty_and_bounded() {
+        // Catalog with a mix of inside-envelope and well-outside-envelope
+        // stars. The envelope is a 0.5-degree-diameter cone around
+        // (RA=10°, Dec=20°), so the half-angle bound is 0.25°.
+        let center = Equatorial::from_degrees(10.0, 20.0);
+        let envelope_diameter_deg = 0.5;
+        let envelope = (center, envelope_diameter_deg);
+        let half_angle_deg = envelope_diameter_deg / 2.0;
+
+        let catalog = PrefetchTestCatalog {
+            stars: vec![
+                // Inside the cone: dead-centre and a near-edge offset.
+                StarData::new(1, 10.0, 20.0, 5.0, Some(0.5)),
+                StarData::new(2, 10.1, 20.1, 6.0, Some(0.6)),
+                // Well outside the cone (degrees away in both axes).
+                StarData::new(3, 50.0, -30.0, 7.0, Some(0.8)),
+                StarData::new(4, 200.0, 60.0, 8.0, Some(1.0)),
+            ],
+        };
+
+        let prefetched = prefetch_catalog_for_envelope(&catalog, envelope);
+
+        assert!(
+            !prefetched.is_empty(),
+            "prefetch should return at least one star for an envelope that contains catalog rows"
+        );
+
+        // Every returned star must be within the envelope's half-angle
+        // of the centre. Tolerance covers the cosine-distance arithmetic
+        // used by `stars_in_field`.
+        let tol_deg = 1e-9;
+        for star in &prefetched {
+            let dist = angular_distance_deg(&center, &star.position);
+            assert!(
+                dist <= half_angle_deg + tol_deg,
+                "star {} at ({:.6}°, {:.6}°) is {:.6}° from centre, exceeds half-angle {:.6}°",
+                star.id,
+                star.position.ra_degrees(),
+                star.position.dec_degrees(),
+                dist,
+                half_angle_deg,
+            );
+        }
     }
 }
