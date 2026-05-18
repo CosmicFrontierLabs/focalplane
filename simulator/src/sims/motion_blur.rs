@@ -263,24 +263,25 @@ impl SensorAccumulator {
 /// repeating that work for every sub-orientation.
 pub type FluxCache = HashMap<(u64, usize), SourceFlux>;
 
+/// All light contributing to a rendered frame: foreground point sources
+/// (stars), extended sources (galaxies, pre-projected per sensor), and
+/// the diffuse sky background (zodiacal model parameters).
+#[derive(Clone, Copy)]
+pub struct LightSources<'a> {
+    pub catalog_stars: &'a [StarData],
+    pub per_sensor_galaxies: &'a [Vec<GalaxyInFrame>],
+    pub zodiacal: SolarAngularCoordinates,
+}
+
 /// Static inputs shared across every `(frame, sensor)` tile in a render.
 ///
-/// Bundles the trajectory, the full star catalog, the focal-plane hardware,
-/// and the scene's zodiacal coordinates so downstream functions take a single
-/// `&RenderScene` rather than four independent references.
+/// Bundles the trajectory, the scene's light sources, and the focal-plane
+/// hardware so downstream functions take a single `&RenderScene` rather
+/// than several independent references.
 struct RenderScene<'a> {
     trajectory: &'a Trajectory,
-    catalog_stars: &'a [StarData],
-    /// Per-sensor list of pre-projected galaxies (`Scene::with_galaxies`
-    /// shape). Empty inner vecs = no galaxies. Galaxies are projected
-    /// *once* per render at the trajectory's mid-time orientation —
-    /// exact for static trajectories, an approximation for drifting
-    /// trajectories where the galaxy positions would shift sub-pixel
-    /// across the exposure (acceptable until measured-radial-profile
-    /// rendering motivates the upgrade).
-    per_sensor_galaxies: &'a [Vec<GalaxyInFrame>],
+    sources: LightSources<'a>,
     fp: &'a FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
 }
 
 /// Per-frame render plan produced by the serial planning pass.
@@ -637,6 +638,7 @@ fn build_tile_mean_image(
     // trajectories (start == end) are exact.
     let t_splat_galaxies = Instant::now();
     let galaxies = scene
+        .sources
         .per_sensor_galaxies
         .get(sensor_idx)
         .map(|v| v.as_slice())
@@ -870,7 +872,7 @@ fn plan_frame<'a>(
 
     let first_sat = &ctx.satellites[0];
     let zodiacal_per_px_per_s =
-        zodiacal_per_px_per_s_at(zlight, first_sat, &scene.zodiacal, &mid_bore);
+        zodiacal_per_px_per_s_at(zlight, first_sat, &scene.sources.zodiacal, &mid_bore);
     let exposure_s = schedule.exposure.as_secs_f64();
     let zodiacal_per_px: Vec<f64> = ctx
         .sensor_ratios
@@ -880,7 +882,7 @@ fn plan_frame<'a>(
 
     let stars = envelope_prefilter(
         scene.trajectory,
-        scene.catalog_stars,
+        scene.sources.catalog_stars,
         &schedule,
         scene.fp,
         ctx.padding_mm,
@@ -921,13 +923,10 @@ fn plan_frame<'a>(
 /// `None` for a fresh per-call cache; pass `Some(...)` to reuse a cache
 /// across an outer loop over many frames with the same catalog and
 /// focal plane.
-#[allow(clippy::too_many_arguments)]
 pub fn render_one_frame(
     trajectory: &Trajectory,
-    catalog_stars: &[StarData],
-    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    sources: &LightSources<'_>,
     fp: &FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
     frame_start: Duration,
     frame_idx: usize,
     config: &MotionBlurConfig,
@@ -936,10 +935,8 @@ pub fn render_one_frame(
     let ctx = RenderContext::from_focal_plane(fp)?;
     let scene = RenderScene {
         trajectory,
-        catalog_stars,
-        per_sensor_galaxies,
+        sources: *sources,
         fp,
-        zodiacal,
     };
     let zlight = ZodiacalLight::new();
     let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
@@ -1004,10 +1001,8 @@ pub fn render_one_frame(
 #[allow(clippy::too_many_arguments)]
 pub fn render_one_frame_roi(
     trajectory: &Trajectory,
-    catalog_stars: &[StarData],
-    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    sources: &LightSources<'_>,
     fp: &FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
     frame_start: Duration,
     frame_idx: usize,
     config: &MotionBlurConfig,
@@ -1021,10 +1016,8 @@ pub fn render_one_frame_roi(
     }
     let scene = RenderScene {
         trajectory,
-        catalog_stars,
-        per_sensor_galaxies,
+        sources: *sources,
         fp,
-        zodiacal,
     };
     let zlight = ZodiacalLight::new();
     let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
@@ -1039,19 +1032,17 @@ pub fn render_one_frame_roi(
 ///
 /// Returns the total number of frames rendered.
 ///
-/// `per_sensor_galaxies` is the per-sensor pre-projected galaxy list
-/// (the `Scene::with_galaxies` shape). Pass an empty `Vec` per sensor
-/// for star-only renders. Galaxies are projected once at the
-/// trajectory's mid-time orientation and splatted at full-exposure
-/// flux per tile — exact for static trajectories, an approximation
-/// for drifting trajectories where a sub-pixel galaxy shift across
-/// the exposure becomes detectable.
+/// `sources.per_sensor_galaxies` is the per-sensor pre-projected
+/// galaxy list (the `Scene::with_galaxies` shape). Pass an empty
+/// `Vec` per sensor for star-only renders. Galaxies are projected
+/// once at the trajectory's mid-time orientation and splatted at
+/// full-exposure flux per tile — exact for static trajectories, an
+/// approximation for drifting trajectories where a sub-pixel galaxy
+/// shift across the exposure becomes detectable.
 pub fn render_motion_trajectory(
     trajectory: &Trajectory,
-    catalog_stars: &[StarData],
-    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    sources: &LightSources<'_>,
     fp: &FocalPlaneConfig,
-    zodiacal: SolarAngularCoordinates,
     config: &MotionBlurConfig,
     output_dir: &Path,
 ) -> Result<usize, TrajectoryError> {
@@ -1060,10 +1051,8 @@ pub fn render_motion_trajectory(
 
     let scene = RenderScene {
         trajectory,
-        catalog_stars,
-        per_sensor_galaxies,
+        sources: *sources,
         fp,
-        zodiacal,
     };
 
     let frame_times = trajectory.frame_times(config.timestep);
@@ -1319,6 +1308,7 @@ fn build_render_metadata(
     }
 
     let stars: Vec<StarMeta> = scene
+        .sources
         .catalog_stars
         .iter()
         .map(|s| StarMeta {
@@ -1357,8 +1347,8 @@ fn build_render_metadata(
         force_static: config.force_static,
         catalog_path: config.catalog_path.to_string_lossy().into_owned(),
         zodiacal: ZodiacalMeta {
-            elongation_deg: scene.zodiacal.elongation(),
-            latitude_deg: scene.zodiacal.latitude(),
+            elongation_deg: scene.sources.zodiacal.elongation(),
+            latitude_deg: scene.sources.zodiacal.latitude(),
         },
     };
 
@@ -1601,16 +1591,12 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, fp, &cfg, tmp.path()).unwrap();
         frames
     }
 
@@ -1645,16 +1631,12 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 1);
     }
 
@@ -1687,17 +1669,13 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
         // Render normally to exercise the cache.
-        let frames = render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 3);
         // Cache size bound: at most num_stars * sensor_count.
         // We can't peek from outside the function, so rely on invariant by
@@ -1706,16 +1684,7 @@ mod tests {
         // The tightest assertion we can make without instrumenting the
         // internals is: a second run with the same inputs renders the same
         // number of frames, which would fail if the path were non-idempotent.
-        let frames2 = render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let frames2 = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert_eq!(frames, frames2);
     }
 
@@ -1891,26 +1860,13 @@ mod tests {
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_a.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_b.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
         let name = "sensor_00/frame_000000.png";
         let a = std::fs::read(tmp_a.path().join(name)).unwrap();
         let b = std::fs::read(tmp_b.path().join(name)).unwrap();
@@ -1958,26 +1914,13 @@ mod tests {
         };
         let tmp_coarse = tempfile::tempdir().unwrap();
         let tmp_fine = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg_coarse,
-            tmp_coarse.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg_fine,
-            tmp_fine.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg_coarse, tmp_coarse.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg_fine, tmp_fine.path()).unwrap();
         let name = "sensor_00/frame_000000.png";
         let coarse = std::fs::read(tmp_coarse.path().join(name)).unwrap();
         let fine = std::fs::read(tmp_fine.path().join(name)).unwrap();
@@ -2025,30 +1968,13 @@ mod tests {
             ..Default::default()
         };
 
-        let first = render_one_frame(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            Duration::ZERO,
-            0,
-            &cfg,
-            None,
-        )
-        .unwrap();
-        let second = render_one_frame(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            Duration::ZERO,
-            0,
-            &cfg,
-            None,
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let first = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+        let second = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
 
         assert_eq!(first.len(), second.len());
         assert!(!first.is_empty(), "expected at least one sensor");
@@ -2089,30 +2015,16 @@ mod tests {
 
         let frame_idx = 0;
         let frame_start = Duration::ZERO;
-        let one = render_one_frame(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            frame_start,
-            frame_idx,
-            &cfg,
-            None,
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let one =
+            render_one_frame(&traj, &sources, &fp, frame_start, frame_idx, &cfg, None).unwrap();
 
         let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
 
         let png_path = tmp.path().join(sensor_relative_png_path(0, frame_idx));
         let img = image::open(&png_path).unwrap().to_luma16();
@@ -2166,36 +2078,19 @@ mod tests {
         // the two paths, so the chunk-keyed RNG streams advance through
         // the same pixels in the same order.
         let (fp, stars, traj, cfg) = roi_test_fixture();
-        let full = render_one_frame(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            Duration::ZERO,
-            0,
-            &cfg,
-            None,
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let full = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
 
         let sat = fp.satellite_for_sensor(0).unwrap();
         let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
         let roi = AABB::from_coords(0, 0, h - 1, w - 1);
-        let roi_image = render_one_frame_roi(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            Duration::ZERO,
-            0,
-            &cfg,
-            None,
-            roi,
-            0,
-        )
-        .unwrap();
+        let roi_image =
+            render_one_frame_roi(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None, roi, 0)
+                .unwrap();
 
         assert_eq!(roi_image.dim(), (h, w));
         assert_eq!(
@@ -2213,12 +2108,15 @@ mod tests {
         // buffer (see render_one_frame_roi docs).
         let (fp, stars, traj, cfg) = roi_test_fixture();
         let ctx = RenderContext::from_focal_plane(&fp).unwrap();
-        let scene = RenderScene {
-            trajectory: &traj,
+        let sources = LightSources {
             catalog_stars: &stars,
             per_sensor_galaxies: &[],
-            fp: &fp,
             zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let scene = RenderScene {
+            trajectory: &traj,
+            sources,
+            fp: &fp,
         };
         let zlight = ZodiacalLight::new();
         let plan = plan_frame(&scene, &ctx, &zlight, 0, Duration::ZERO, &cfg).unwrap();
@@ -2266,10 +2164,8 @@ mod tests {
         // Sanity check the quantized output too: dimension and dtype only.
         let roi_image = render_one_frame_roi(
             &traj,
-            &stars,
-            &[],
+            &sources,
             &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
             Duration::ZERO,
             0,
             &cfg,
@@ -2287,20 +2183,13 @@ mod tests {
         let sat = fp.satellite_for_sensor(0).unwrap();
         let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
         let oob = AABB::from_coords(0, 0, h, w); // max equal to dim -> out of bounds (inclusive)
-        let err = render_one_frame_roi(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            Duration::ZERO,
-            0,
-            &cfg,
-            None,
-            oob,
-            0,
-        )
-        .unwrap_err();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let err = render_one_frame_roi(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None, oob, 0)
+            .unwrap_err();
         assert!(
             matches!(err, TrajectoryError::RoiOutOfBounds { .. }),
             "expected RoiOutOfBounds, got {err:?}"
@@ -2308,10 +2197,8 @@ mod tests {
 
         let bad_sensor = render_one_frame_roi(
             &traj,
-            &stars,
-            &[],
+            &sources,
             &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
             Duration::ZERO,
             0,
             &cfg,
@@ -2355,26 +2242,13 @@ mod tests {
         };
         let tmp_a = tempfile::tempdir().unwrap();
         let tmp_b = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_a.path(),
-        )
-        .unwrap();
-        render_motion_trajectory(
-            &traj,
-            &stars,
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp_b.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
 
         // Compare the PNG bytes of one frame. The new layout routes frame 0
         // of sensor 0 to `sensor_00/frame_000000.png`.
@@ -2414,16 +2288,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(5);
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 2, "expected at least 2 frames, got {}", frames);
 
         let sensor_dir = tmp.path().join("sensor_00");
@@ -2447,16 +2317,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(17);
         let tmp = tempfile::tempdir().unwrap();
-        let frames = render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
 
@@ -2502,16 +2368,12 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(23);
         let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
@@ -2565,16 +2427,12 @@ mod tests {
         let fp = tiny_fp();
         let cfg = minimal_metadata_cfg(31);
         let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(
-            &traj,
-            &[],
-            &[],
-            &fp,
-            SolarAngularCoordinates::zodiacal_minimum(),
-            &cfg,
-            tmp.path(),
-        )
-        .unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
