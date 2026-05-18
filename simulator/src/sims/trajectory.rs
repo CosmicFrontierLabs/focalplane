@@ -40,6 +40,14 @@ pub enum TrajectoryError {
     #[error("focal plane has no sensors")]
     NoSensors,
 
+    #[error("ROI {roi:?} out of bounds for sensor {sensor_idx} ({width}x{height})")]
+    RoiOutOfBounds {
+        roi: (usize, usize, usize, usize),
+        sensor_idx: usize,
+        width: usize,
+        height: usize,
+    },
+
     #[error("image write error: {0}")]
     ImageWrite(String),
 }
