@@ -40,6 +40,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use log::{debug, info};
 use ndarray::Array2;
 use rayon::prelude::*;
+use shared::image_proc::detection::AABB;
 use shared::image_proc::noise::{apply_gaussian_read_noise, apply_poisson_photon_noise};
 use shared::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarData;
@@ -47,6 +48,7 @@ use starfield::Equatorial;
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::hardware::SatelliteConfig;
+use crate::image_proc::deposit::MeanFluxDeposit;
 use crate::image_proc::render::quantize_image;
 use crate::photometry::photoconversion::SourceFlux;
 use crate::photometry::spectrum::Spectrum;
@@ -497,7 +499,68 @@ fn render_tile_array(
     tile_seed: u64,
 ) -> Result<Array2<u16>, TrajectoryError> {
     let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
-    let mut accumulator = SensorAccumulator::zero(width, height);
+    if width == 0 || height == 0 {
+        return Ok(Array2::<u16>::zeros((height, width)));
+    }
+    let full_roi = AABB::from_coords(0, 0, height - 1, width - 1);
+    render_tile_array_roi(
+        scene, plan, sensor_idx, flux_cache, satellite, tile_seed, full_roi,
+    )
+}
+
+/// Output of [`build_tile_mean_image`]: the pre-noise mean-electron
+/// image for a tile ROI plus the elapsed-time breakdown for the
+/// caller's debug log.
+struct MeanImageResult {
+    mean_image: Array2<f64>,
+    roi_w: usize,
+    roi_h: usize,
+    ms_splat_stars: u128,
+    ms_splat_galaxies: u128,
+    ms_combined_mean: u128,
+}
+
+/// Build the pre-noise mean-electron image for one tile's `roi` —
+/// splats stars across the stamp schedule, splats galaxies once,
+/// folds in the per-tile zodiacal and dark-current scalars. The
+/// returned `Array2<f64>` is shaped `(roi_height, roi_width)` with the
+/// pixel at `(0, 0)` corresponding to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// Stars and galaxies whose entire footprint AABB falls outside the
+/// ROI are skipped (perf, no math effect). Partial-overlap deposits
+/// land via the standard `splat_deposit` bounds check, which clips at
+/// the ROI buffer's edge.
+fn build_tile_mean_image(
+    scene: &RenderScene,
+    plan: &FramePlan,
+    sensor_idx: usize,
+    flux_cache: &Arc<Mutex<FluxCache>>,
+    satellite: &SatelliteConfig,
+    tile_seed: u64,
+    roi: AABB,
+) -> Result<MeanImageResult, TrajectoryError> {
+    let (sensor_w, sensor_h) = satellite.sensor.dimensions.get_pixel_width_height();
+    if sensor_w == 0
+        || sensor_h == 0
+        || roi.max_row >= sensor_h
+        || roi.max_col >= sensor_w
+        || roi.min_row > roi.max_row
+        || roi.min_col > roi.max_col
+    {
+        return Err(TrajectoryError::RoiOutOfBounds {
+            roi: roi.to_tuple(),
+            sensor_idx,
+            width: sensor_w,
+            height: sensor_h,
+        });
+    }
+    let roi_w = roi.max_col - roi.min_col + 1;
+    let roi_h = roi.max_row - roi.min_row + 1;
+    let x_off = roi.min_col as f64;
+    let y_off = roi.min_row as f64;
+
+    let mut accumulator = SensorAccumulator::zero(roi_w, roi_h);
     let aperture = satellite.telescope.clear_aperture_area();
 
     let schedule = &plan.schedule;
@@ -538,11 +601,28 @@ fn render_tile_array(
                     .or_insert_with(|| star_data_to_fluxes(star, satellite))
                     .clone()
             });
+            // Skip stars whose entire PSF footprint falls outside the
+            // ROI extent — the splat would write nothing once shifted
+            // into ROI-local coordinates, so the per-pixel Simpson loop
+            // is a pure cost.
+            let footprint = flux.electrons.disk.footprint_pixels() as f64;
+            if hit.0 + footprint < x_off
+                || hit.0 - footprint >= x_off + roi_w as f64
+                || hit.1 + footprint < y_off
+                || hit.1 - footprint >= y_off + roi_h as f64
+            {
+                continue;
+            }
             // Per-stamp electron contribution: flux rate × per-stamp
             // dt (= exposure / stamps_per_exposure) × aperture. Sum
             // over all stamps reproduces the full exposure budget.
             let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
-            accumulator.splat_psf(hit.0, hit.1, total_electrons, &flux.electrons.disk);
+            accumulator.splat_psf(
+                hit.0 - x_off,
+                hit.1 - y_off,
+                total_electrons,
+                &flux.electrons.disk,
+            );
         }
     }
     let ms_splat_stars = t_splat_stars.elapsed().as_millis();
@@ -562,11 +642,24 @@ fn render_tile_array(
         .map(|v| v.as_slice())
         .unwrap_or(&[]);
     for galaxy in galaxies {
+        let footprint = galaxy.deposit.footprint_pixels() as f64;
+        if galaxy.x + footprint < x_off
+            || galaxy.x - footprint >= x_off + roi_w as f64
+            || galaxy.y + footprint < y_off
+            || galaxy.y - footprint >= y_off + roi_h as f64
+        {
+            continue;
+        }
         let total_electrons = galaxy
             .flux
             .electrons
             .integrated_over(&schedule.exposure, aperture);
-        accumulator.splat_galaxy(galaxy.x, galaxy.y, total_electrons, &galaxy.deposit);
+        accumulator.splat_galaxy(
+            galaxy.x - x_off,
+            galaxy.y - y_off,
+            total_electrons,
+            &galaxy.deposit,
+        );
     }
     let ms_splat_galaxies = t_splat_galaxies.elapsed().as_millis();
 
@@ -576,10 +669,59 @@ fn render_tile_array(
         .dark_current_at_temperature(satellite.temperature);
     let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
 
-    // Build unified Poisson mean image and draw.
+    // Build unified Poisson mean image.
     let t_combined_mean = Instant::now();
     let mean_image = accumulator.into_combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
     let ms_combined_mean = t_combined_mean.elapsed().as_millis();
+
+    Ok(MeanImageResult {
+        mean_image,
+        roi_w,
+        roi_h,
+        ms_splat_stars,
+        ms_splat_galaxies,
+        ms_combined_mean,
+    })
+}
+
+/// Render the subset of a `(frame, sensor)` tile that falls inside `roi`.
+///
+/// Produces an `Array2<u16>` shaped `(roi_height, roi_width)`. The
+/// pixel at `(0, 0)` of the returned array corresponds to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// `roi` uses inclusive bounds in sensor (row, col) coordinates and must
+/// be entirely inside the sensor extent. Stars and galaxies are filtered
+/// against the ROI extent inflated by the PSF/Sérsic footprint so any
+/// source whose deposit can touch the ROI is splatted; partial-overlap
+/// deposits clip at the ROI edge.
+///
+/// **Bit-equality contract**: when `roi` covers the full sensor, the
+/// quantized output is byte-identical to [`render_tile_array`] for the
+/// same `(scene, plan, sensor_idx, tile_seed)`. For a smaller `roi` the
+/// pre-noise mean-electron image is byte-identical to the corresponding
+/// slice of the full-sensor mean, but the Poisson and Gaussian noise
+/// streams differ because the shared parallel-chunk noise sampler keys
+/// its per-row-chunk RNG off the buffer's row count.
+fn render_tile_array_roi(
+    scene: &RenderScene,
+    plan: &FramePlan,
+    sensor_idx: usize,
+    flux_cache: &Arc<Mutex<FluxCache>>,
+    satellite: &SatelliteConfig,
+    tile_seed: u64,
+    roi: AABB,
+) -> Result<Array2<u16>, TrajectoryError> {
+    let MeanImageResult {
+        mean_image,
+        roi_w,
+        roi_h,
+        ms_splat_stars,
+        ms_splat_galaxies,
+        ms_combined_mean,
+    } = build_tile_mean_image(
+        scene, plan, sensor_idx, flux_cache, satellite, tile_seed, roi,
+    )?;
 
     let t_poisson = Instant::now();
     let poisson_image = apply_poisson_photon_noise(mean_image, Some(tile_seed ^ POISSON_DOMAIN));
@@ -589,7 +731,7 @@ fn render_tile_array(
     let read_noise_rms = satellite
         .sensor
         .read_noise_estimator
-        .estimate(satellite.temperature.as_celsius(), schedule.exposure)
+        .estimate(satellite.temperature.as_celsius(), plan.schedule.exposure)
         .unwrap_or(0.0)
         .max(0.0);
     let t_read_noise = Instant::now();
@@ -605,11 +747,15 @@ fn render_tile_array(
     let ms_quantize = t_quantize.elapsed().as_millis();
 
     debug!(
-        "tile-phases frame={} sensor={} \
+        "tile-phases frame={} sensor={} roi=({},{})+{}x{} \
          splat_stars={}ms splat_galaxies={}ms combined_mean={}ms \
          poisson={}ms read_noise={}ms quantize={}ms",
         plan.idx,
         sensor_idx,
+        roi.min_col,
+        roi.min_row,
+        roi_w,
+        roi_h,
         ms_splat_stars,
         ms_splat_galaxies,
         ms_combined_mean,
@@ -820,6 +966,73 @@ pub fn render_one_frame(
         .into_iter()
         .map(|i| i.expect("sensor index covered"))
         .collect())
+}
+
+/// Render the `roi` slice of a single `(frame, sensor)` into a quantized
+/// `Array2<u16>` shaped `(roi_height, roi_width)`.
+///
+/// Live-render counterpart to [`render_one_frame`] for callers that
+/// only need a sub-region of one sensor — e.g. an FSM-offset
+/// region-of-interest at full frame rate without paying full-sensor
+/// stamping and noise-sampling cost. The pixel at `(0, 0)` of the
+/// returned array corresponds to sensor pixel
+/// `(roi.min_row, roi.min_col)`.
+///
+/// `roi` is in sensor pixel coordinates with inclusive bounds and must
+/// be entirely contained in the sensor at `sensor_idx`. The returned
+/// image has dimensions `(roi.max_row - roi.min_row + 1,
+/// roi.max_col - roi.min_col + 1)`.
+///
+/// `sensor_idx` selects which sensor on the focal plane the ROI lies
+/// on. Out-of-range indices return [`TrajectoryError::NoSensors`].
+///
+/// # Bit-equality
+///
+/// - When `roi` covers the full sensor extent the output equals
+///   `render_one_frame(...)[sensor_idx]` **byte-for-byte**: the
+///   accumulator and noise buffers have the same shape as the
+///   full-sensor render so every chunk-keyed RNG stream visits the
+///   same pixels in the same order.
+/// - For a smaller `roi` the **pre-noise mean-electron image** is
+///   bit-identical to the corresponding slice of a full-frame render.
+///   The post-noise quantized output diverges because the
+///   `process_array_in_parallel_chunks` sampler used by
+///   `apply_poisson_photon_noise` and `apply_gaussian_read_noise`
+///   keys its per-row-chunk seed off the array's row count, so a
+///   smaller buffer produces a different RNG sequence even with the
+///   same base seed.
+#[allow(clippy::too_many_arguments)]
+pub fn render_one_frame_roi(
+    trajectory: &Trajectory,
+    catalog_stars: &[StarData],
+    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    fp: &FocalPlaneConfig,
+    zodiacal: SolarAngularCoordinates,
+    frame_start: Duration,
+    frame_idx: usize,
+    config: &MotionBlurConfig,
+    flux_cache: Option<Arc<Mutex<FluxCache>>>,
+    roi: AABB,
+    sensor_idx: usize,
+) -> Result<Array2<u16>, TrajectoryError> {
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    if sensor_idx >= ctx.satellites.len() {
+        return Err(TrajectoryError::NoSensors);
+    }
+    let scene = RenderScene {
+        trajectory,
+        catalog_stars,
+        per_sensor_galaxies,
+        fp,
+        zodiacal,
+    };
+    let zlight = ZodiacalLight::new();
+    let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
+    let cache = flux_cache.unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
+    let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
+    let sat = &ctx.satellites[sensor_idx];
+    let seed = tile_seed(base_seed, frame_idx, sensor_idx);
+    render_tile_array_roi(&scene, &plan, sensor_idx, &cache, sat, seed, roi)
 }
 
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
@@ -1908,6 +2121,208 @@ mod tests {
         assert_eq!(
             one[0], png_arr,
             "render_one_frame must produce the same pixels render_motion_trajectory writes"
+        );
+    }
+
+    /// Standard fixture for the ROI bit-equality tests: tiny focal plane,
+    /// a handful of well-placed stars, deterministic seed.
+    fn roi_test_fixture() -> (
+        FocalPlaneConfig,
+        Vec<StarData>,
+        Trajectory,
+        MotionBlurConfig,
+    ) {
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let stars: Vec<StarData> = (0..6)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.0 + i as f64 * 0.1,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0008 * (i as f64 - 2.5),
+                    pointing.dec_degrees() + 0.0005 * (i as f64 - 1.5),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let traj = static_trajectory();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.1,
+            base_seed: Some(0x0FC8_BEEF),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        (fp, stars, traj, cfg)
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_full_sensor_is_byte_equal() {
+        // ROI covering the entire sensor must produce a byte-identical
+        // image to render_one_frame's output for that sensor. The
+        // accumulator and noise buffers are identically shaped between
+        // the two paths, so the chunk-keyed RNG streams advance through
+        // the same pixels in the same order.
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let full = render_one_frame(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+        )
+        .unwrap();
+
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let roi = AABB::from_coords(0, 0, h - 1, w - 1);
+        let roi_image = render_one_frame_roi(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            roi,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(roi_image.dim(), (h, w));
+        assert_eq!(
+            roi_image, full[0],
+            "full-sensor ROI must be byte-equal to render_one_frame[sensor_idx]"
+        );
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_subset_mean_matches_full_slice() {
+        // Sub-region ROI: the pre-noise mean-electron image must equal the
+        // corresponding slice of the full-sensor mean byte-for-byte. The
+        // quantized post-noise output cannot be checked directly because
+        // the chunk-keyed noise sampler advances differently on a smaller
+        // buffer (see render_one_frame_roi docs).
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let ctx = RenderContext::from_focal_plane(&fp).unwrap();
+        let scene = RenderScene {
+            trajectory: &traj,
+            catalog_stars: &stars,
+            per_sensor_galaxies: &[],
+            fp: &fp,
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        let zlight = ZodiacalLight::new();
+        let plan = plan_frame(&scene, &ctx, &zlight, 0, Duration::ZERO, &cfg).unwrap();
+        let cache: Arc<Mutex<FluxCache>> = Arc::new(Mutex::new(HashMap::new()));
+        let sensor_idx = 0;
+        let sat = &ctx.satellites[sensor_idx];
+        let seed = tile_seed(cfg.base_seed.unwrap(), 0, sensor_idx);
+
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let full_mean = build_tile_mean_image(
+            &scene,
+            &plan,
+            sensor_idx,
+            &cache,
+            sat,
+            seed,
+            AABB::from_coords(0, 0, h - 1, w - 1),
+        )
+        .unwrap()
+        .mean_image;
+
+        // A 24x24 ROI offset into the interior of the 64x64 sensor.
+        let roi = AABB::from_coords(12, 14, 35, 37);
+        let roi_w = roi.max_col - roi.min_col + 1;
+        let roi_h = roi.max_row - roi.min_row + 1;
+        let roi_mean = build_tile_mean_image(&scene, &plan, sensor_idx, &cache, sat, seed, roi)
+            .unwrap()
+            .mean_image;
+
+        assert_eq!(roi_mean.dim(), (roi_h, roi_w));
+        for r in 0..roi_h {
+            for c in 0..roi_w {
+                let full_val = full_mean[[roi.min_row + r, roi.min_col + c]];
+                let roi_val = roi_mean[[r, c]];
+                assert_eq!(
+                    roi_val.to_bits(),
+                    full_val.to_bits(),
+                    "mean-image pixel ({r},{c}) (sensor {},{}) diverged: roi={roi_val} full={full_val}",
+                    roi.min_row + r,
+                    roi.min_col + c,
+                );
+            }
+        }
+
+        // Sanity check the quantized output too: dimension and dtype only.
+        let roi_image = render_one_frame_roi(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            roi,
+            sensor_idx,
+        )
+        .unwrap();
+        assert_eq!(roi_image.dim(), (roi_h, roi_w));
+    }
+
+    #[test]
+    fn test_render_one_frame_roi_rejects_out_of_bounds() {
+        let (fp, stars, traj, cfg) = roi_test_fixture();
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let oob = AABB::from_coords(0, 0, h, w); // max equal to dim -> out of bounds (inclusive)
+        let err = render_one_frame_roi(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            oob,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, TrajectoryError::RoiOutOfBounds { .. }),
+            "expected RoiOutOfBounds, got {err:?}"
+        );
+
+        let bad_sensor = render_one_frame_roi(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+            AABB::from_coords(0, 0, h - 1, w - 1),
+            99,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(bad_sensor, TrajectoryError::NoSensors),
+            "expected NoSensors for sensor_idx out of range, got {bad_sensor:?}"
         );
     }
 
