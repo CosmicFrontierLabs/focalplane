@@ -211,6 +211,118 @@ impl Trajectory {
         Ok(peak)
     }
 
+    /// Return a phase-continuous version of this trajectory by SLERP-blending
+    /// the raw end orientation into the first `smoothing_window` of the trajectory.
+    ///
+    /// The returned trajectory satisfies `orientation_at(start_time)` ==
+    /// `orientation_at(end_time)` exactly: the seam is bit-identical, so a
+    /// consumer that wraps phase as `t mod duration` sees no attitude jump
+    /// at the wrap point.
+    ///
+    /// The blend is one-sided at the start: for `t in [start, start +
+    /// smoothing_window]`, the orientation is `slerp(q_end, raw(t), s(u))`
+    /// where `u = t / smoothing_window` and `s(u) = 3u² - 2u³` is a
+    /// smoothstep with `s'(0) = s'(1) = 0`. In the continuous limit, the
+    /// zero slope at `u = 1` makes the blended trajectory's angular
+    /// velocity at the join point match the raw trajectory's velocity
+    /// there, and the zero slope at `u = 0` makes the blended trajectory
+    /// have zero angular velocity at the seam itself. When the wrap
+    /// brings us back from `end_time` to `start_time`, the raw
+    /// trajectory's end velocity is not preserved across the seam, but
+    /// the resulting jerk (rather than the previous pose jump) is far
+    /// less visible in rendered frames. The output is a piecewise-SLERP
+    /// approximation of the continuous blend, so small local velocity
+    /// jumps remain between adjacent sample segments — see
+    /// `MIN_BLEND_SAMPLES` below.
+    ///
+    /// After `start + smoothing_window`, the trajectory follows the raw
+    /// waypoints unchanged. The end waypoint is preserved so the wrap
+    /// target itself is exact.
+    ///
+    /// If `smoothing_window >= duration`, it is clamped to the trajectory's
+    /// duration (the entire trajectory becomes the blend region). If
+    /// `smoothing_window == 0`, the result is the input trajectory with
+    /// its first waypoint orientation replaced by `q_end` — bit-exact at
+    /// the seam but with a pose discontinuity immediately after; this
+    /// degenerate case is supported for API completeness.
+    ///
+    /// At least `MIN_BLEND_SAMPLES` evenly spaced sample points are
+    /// inserted across the blend window so the SLERP between consecutive
+    /// waypoints in the output closely tracks the underlying smoothstep
+    /// curve even when the input has only sparse waypoints (e.g.
+    /// `from_endpoints`).
+    pub fn looped(self, smoothing_window: Duration) -> Trajectory {
+        const MIN_BLEND_SAMPLES: usize = 16;
+
+        let start = self.start_time();
+        let end = self.end_time();
+        let total = end - start;
+        let q_end = self
+            .orientation_at(end)
+            .expect("end_time is always in range");
+
+        if smoothing_window.is_zero() {
+            let mut wps = self.waypoints;
+            wps[0].orientation = q_end;
+            return Trajectory { waypoints: wps };
+        }
+
+        let window = smoothing_window.min(total);
+        let window_end_time = start + window;
+        let q_window_end = self
+            .orientation_at(window_end_time)
+            .expect("window_end_time is within trajectory range");
+
+        let blended = |t: Duration| -> UnitQuaternion<f64> {
+            let raw = self
+                .orientation_at(t)
+                .expect("t is within trajectory range");
+            let u = (t - start).as_secs_f64() / window.as_secs_f64();
+            let s = smoothstep(u);
+            q_end.slerp(&raw, s)
+        };
+
+        let mut new_waypoints: Vec<Waypoint> = Vec::new();
+        new_waypoints.push(Waypoint::new(start, q_end));
+
+        let mut sample_times: Vec<Duration> = Vec::new();
+        for wp in &self.waypoints {
+            if wp.time > start && wp.time < window_end_time {
+                sample_times.push(wp.time);
+            }
+        }
+        let window_secs = window.as_secs_f64();
+        for i in 1..MIN_BLEND_SAMPLES {
+            let frac = i as f64 / MIN_BLEND_SAMPLES as f64;
+            sample_times.push(start + Duration::from_secs_f64(window_secs * frac));
+        }
+        sample_times.sort();
+        sample_times.dedup();
+
+        for t in sample_times {
+            if t <= start || t >= window_end_time {
+                continue;
+            }
+            new_waypoints.push(Waypoint::new(t, blended(t)));
+        }
+
+        new_waypoints.push(Waypoint::new(window_end_time, q_window_end));
+
+        for wp in &self.waypoints {
+            if wp.time > window_end_time {
+                new_waypoints.push(wp.clone());
+            }
+        }
+
+        if new_waypoints.last().map(|w| w.time < end).unwrap_or(false) {
+            new_waypoints.push(Waypoint::new(end, q_end));
+        }
+
+        Trajectory {
+            waypoints: new_waypoints,
+        }
+    }
+
     /// Generate evenly spaced frame times from start to end. Each
     /// emitted time is a frame *start* — the renderer integrates from
     /// `t` forward up to `t + exposure`, clamped to `end_time()`. We
@@ -227,6 +339,14 @@ impl Trajectory {
         }
         times
     }
+}
+
+/// Cubic Hermite smoothstep: `3u² - 2u³` on `[0, 1]`, clamped outside.
+/// Has zero derivative at both endpoints, so it produces a C1 join when
+/// used to blend between two parameterised curves.
+fn smoothstep(u: f64) -> f64 {
+    let u = u.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
 }
 
 /// Convert Equatorial (ra, dec in radians) to unit 3D vector.
@@ -655,5 +775,242 @@ mod tests {
         let qm = traj.orientation_at(Duration::from_secs(5)).unwrap();
         let expected_roll = 0.5 * (start_roll + end_roll);
         assert_abs_diff_eq!(roll_of(&qm), expected_roll, epsilon = 1e-9);
+    }
+
+    /// Sample angular velocity (rad/s) at `t` via a centred finite
+    /// difference over `±dt`, clamped to the trajectory range.
+    fn angular_velocity_at(traj: &Trajectory, t: Duration, dt: Duration) -> f64 {
+        let start = traj.start_time();
+        let end = traj.end_time();
+        let t_lo = if t > start + dt { t - dt } else { start };
+        let t_hi = if t + dt < end { t + dt } else { end };
+        let q_lo = traj.orientation_at(t_lo).unwrap();
+        let q_hi = traj.orientation_at(t_hi).unwrap();
+        let span = (t_hi - t_lo).as_secs_f64();
+        if span <= 0.0 {
+            return 0.0;
+        }
+        q_lo.angle_to(&q_hi) / span
+    }
+
+    #[test]
+    fn test_looped_seam_is_exact() {
+        // Non-periodic linear sweep: pose at t=0 (RA 10) is far from
+        // pose at t=10s (RA 20). After looping, the seam must match.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 30.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        let looped = traj.looped(Duration::from_secs(2));
+
+        let q_start = looped.orientation_at(Duration::ZERO).unwrap();
+        let q_end = looped.orientation_at(Duration::from_secs(10)).unwrap();
+        let seam_angle = q_start.angle_to(&q_end);
+        assert!(
+            seam_angle < 1e-9,
+            "seam angle = {seam_angle} rad (expected < 1e-9)"
+        );
+    }
+
+    #[test]
+    fn test_looped_preserves_end_orientation() {
+        // The end waypoint defines the wrap target — looped() must not
+        // perturb it.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 30.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let raw_end = traj.orientation_at(Duration::from_secs(10)).unwrap();
+
+        let looped = traj.clone().looped(Duration::from_secs(2));
+        let looped_end = looped.orientation_at(Duration::from_secs(10)).unwrap();
+        assert!(raw_end.angle_to(&looped_end) < 1e-12);
+    }
+
+    #[test]
+    fn test_looped_outside_blend_window_matches_raw() {
+        // After t = smoothing_window, the looped trajectory must follow
+        // the raw orientations exactly.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 30.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let raw_at_5 = traj.orientation_at(Duration::from_secs(5)).unwrap();
+        let raw_at_8 = traj.orientation_at(Duration::from_secs(8)).unwrap();
+
+        let looped = traj.looped(Duration::from_secs(2));
+        let looped_at_5 = looped.orientation_at(Duration::from_secs(5)).unwrap();
+        let looped_at_8 = looped.orientation_at(Duration::from_secs(8)).unwrap();
+
+        assert!(raw_at_5.angle_to(&looped_at_5) < 1e-9);
+        assert!(raw_at_8.angle_to(&looped_at_8) < 1e-9);
+    }
+
+    #[test]
+    fn test_looped_blend_region_bounded_angular_velocity() {
+        // For a trajectory that is already approximately periodic
+        // (start ~= end), the blend region should not introduce wild
+        // angular velocity — it should stay within a small overshoot
+        // factor of the raw peak angular velocity.
+        //
+        // Trajectory: RA 10 → RA 10.05 → RA 10 (we route through an
+        // intermediate to make it non-trivial, with start ≈ end so the
+        // looped gap is tiny). Raw peak angular velocity is around
+        // 0.05 deg over 5 s = 0.01 deg/s = 1.75e-4 rad/s.
+        let waypoints = vec![
+            Waypoint::from_pointing(Duration::ZERO, make_pointing(10.0, 0.0)),
+            Waypoint::from_pointing(Duration::from_secs(5), make_pointing(10.05, 0.0)),
+            Waypoint::from_pointing(Duration::from_secs(10), make_pointing(10.0, 0.0)),
+        ];
+        let traj = Trajectory::new(waypoints).unwrap();
+
+        // Measure raw trajectory's peak angular velocity by sampling.
+        let dt = Duration::from_millis(50);
+        let mut raw_peak: f64 = 0.0;
+        for i in 0..=200 {
+            let t = Duration::from_secs_f64(10.0 * i as f64 / 200.0);
+            raw_peak = raw_peak.max(angular_velocity_at(&traj, t, dt));
+        }
+
+        let window = Duration::from_secs(2);
+        let looped = traj.clone().looped(window);
+
+        // Sample angular velocity across the blend region. Allow a 5×
+        // overshoot factor to absorb the tiny seam-closing motion plus
+        // smoothstep's peak slope of 1.5 vs raw's slower segments.
+        let bound = 5.0 * raw_peak;
+        let samples = 200;
+        let window_secs = window.as_secs_f64();
+        for i in 0..=samples {
+            let frac = i as f64 / samples as f64;
+            let t = Duration::from_secs_f64(window_secs * frac);
+            let omega = angular_velocity_at(&looped, t, dt);
+            assert!(
+                omega <= bound,
+                "blend angular velocity {omega} rad/s exceeds bound {bound} rad/s (raw peak = {raw_peak}) at t={t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_looped_angularly_continuous_across_blend() {
+        // No large pose discontinuity inside the blend region: between
+        // any two adjacent sample times, the angular separation should
+        // be small (no orientation jumps).
+        let waypoints = vec![
+            Waypoint::from_pointing(Duration::ZERO, make_pointing(10.0, 0.0)),
+            Waypoint::from_pointing(Duration::from_secs(5), make_pointing(10.05, 0.0)),
+            Waypoint::from_pointing(Duration::from_secs(10), make_pointing(10.0, 0.0)),
+        ];
+        let traj = Trajectory::new(waypoints).unwrap();
+
+        let window = Duration::from_secs(2);
+        let looped = traj.looped(window);
+
+        let window_secs = window.as_secs_f64();
+        let samples = 500;
+        let step_secs = window_secs / samples as f64;
+        let mut prev = looped.orientation_at(Duration::ZERO).unwrap();
+        // No pair of orientations separated by `step_secs` should differ
+        // by more than this generous bound (well under one arcminute).
+        let max_step_rad: f64 = 1e-3;
+        for i in 1..=samples {
+            let t = Duration::from_secs_f64(i as f64 * step_secs);
+            let q = looped.orientation_at(t).unwrap();
+            let step = prev.angle_to(&q);
+            assert!(
+                step < max_step_rad,
+                "pose jump of {step} rad between adjacent samples at t={t:?}"
+            );
+            prev = q;
+        }
+    }
+
+    #[test]
+    fn test_looped_with_multi_waypoint_trajectory() {
+        // Verify the looped helper handles a trajectory with many
+        // existing waypoints across the blend window: the originals in
+        // (start, window_end) are blended and additional samples are
+        // inserted to keep the SLERP between consecutive waypoints
+        // close to the smoothstep curve.
+        let mut waypoints = Vec::new();
+        for i in 0..=10 {
+            let frac = i as f64 / 10.0;
+            let t = Duration::from_secs_f64(10.0 * frac);
+            let ra = 10.0 + 10.0 * frac;
+            waypoints.push(Waypoint::from_pointing(t, make_pointing(ra, 0.0)));
+        }
+        let traj = Trajectory::new(waypoints).unwrap();
+
+        let looped = traj.looped(Duration::from_secs(3));
+
+        // Seam closes exactly.
+        let q_start = looped.orientation_at(Duration::ZERO).unwrap();
+        let q_end = looped.orientation_at(Duration::from_secs(10)).unwrap();
+        assert!(q_start.angle_to(&q_end) < 1e-9);
+
+        // Post-blend behaviour matches raw.
+        let raw_at_7 = Trajectory::from_endpoints(
+            make_pointing(10.0, 0.0),
+            make_pointing(20.0, 0.0),
+            Duration::from_secs(10),
+        )
+        .unwrap()
+        .orientation_at(Duration::from_secs(7))
+        .unwrap();
+        let looped_at_7 = looped.orientation_at(Duration::from_secs(7)).unwrap();
+        // Allow more tolerance here since the dense waypoints introduce
+        // small SLERP-segment differences vs the two-endpoint reference.
+        assert!(raw_at_7.angle_to(&looped_at_7) < 1e-2);
+    }
+
+    #[test]
+    fn test_looped_window_clamped_to_duration() {
+        // smoothing_window > duration is clamped to duration.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 30.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        let looped = traj.looped(Duration::from_secs(100));
+        let q_start = looped.orientation_at(Duration::ZERO).unwrap();
+        let q_end = looped.orientation_at(Duration::from_secs(10)).unwrap();
+        assert!(q_start.angle_to(&q_end) < 1e-9);
+    }
+
+    #[test]
+    fn test_looped_zero_window_snaps_endpoints() {
+        // Degenerate case: zero-window blend just snaps the start
+        // orientation to the end orientation, with no smoothing.
+        let traj = Trajectory::from_endpoints(
+            make_pointing(10.0, 20.0),
+            make_pointing(20.0, 30.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+
+        let looped = traj.looped(Duration::ZERO);
+        let q_start = looped.orientation_at(Duration::ZERO).unwrap();
+        let q_end = looped.orientation_at(Duration::from_secs(10)).unwrap();
+        assert!(q_start.angle_to(&q_end) < 1e-12);
+    }
+
+    #[test]
+    fn test_smoothstep_endpoints_and_midpoint() {
+        assert_abs_diff_eq!(smoothstep(0.0), 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(smoothstep(1.0), 1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(smoothstep(0.5), 0.5, epsilon = 1e-12);
+        // Clamps outside [0, 1].
+        assert_abs_diff_eq!(smoothstep(-0.5), 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(smoothstep(1.5), 1.0, epsilon = 1e-12);
     }
 }
