@@ -483,20 +483,19 @@ const POISSON_DOMAIN: u64 = 0x0000_0000_0000_0000;
 const READ_NOISE_DOMAIN: u64 = 0xA5A5_5A5A_A5A5_5A5A;
 const STAMP_PHASE_DOMAIN: u64 = 0x4D6F_6E74_6543_6172; // "MonteCar" (8 ASCII bytes)
 
-/// Render a single `(frame, sensor)` tile.
+/// Render a single `(frame, sensor)` tile into a quantized `Array2<u16>`.
 ///
 /// Runs one flat stamp loop across the exposure, composes the unified
-/// Poisson lambda, draws Poisson + Gaussian read noise, quantizes,
-/// and saves a PNG.
-fn render_tile(
+/// Poisson lambda, draws Poisson + Gaussian read noise, and quantizes.
+/// No disk I/O — the caller decides what to do with the returned image.
+fn render_tile_array(
     scene: &RenderScene,
     plan: &FramePlan,
     sensor_idx: usize,
     flux_cache: &Arc<Mutex<FluxCache>>,
     satellite: &SatelliteConfig,
     tile_seed: u64,
-    output_path: &Path,
-) -> Result<(), TrajectoryError> {
+) -> Result<Array2<u16>, TrajectoryError> {
     let (width, height) = satellite.sensor.dimensions.get_pixel_width_height();
     let mut accumulator = SensorAccumulator::zero(width, height);
     let aperture = satellite.telescope.clear_aperture_area();
@@ -605,14 +604,10 @@ fn render_tile(
     let quantized = quantize_image(&final_electrons, &satellite.sensor);
     let ms_quantize = t_quantize.elapsed().as_millis();
 
-    let t_save = Instant::now();
-    let result = save_u16_png(&quantized, output_path);
-    let ms_save = t_save.elapsed().as_millis();
-
     debug!(
         "tile-phases frame={} sensor={} \
          splat_stars={}ms splat_galaxies={}ms combined_mean={}ms \
-         poisson={}ms read_noise={}ms quantize={}ms png_save={}ms",
+         poisson={}ms read_noise={}ms quantize={}ms",
         plan.idx,
         sensor_idx,
         ms_splat_stars,
@@ -621,10 +616,210 @@ fn render_tile(
         ms_poisson,
         ms_read_noise,
         ms_quantize,
-        ms_save,
     );
 
-    result
+    Ok(quantized)
+}
+
+/// Shared precomputed inputs for the planning pass and per-frame renders.
+///
+/// Built once per render (or once per `render_one_frame` call) from a
+/// [`FocalPlaneConfig`]: the per-sensor satellite views, the first sensor's
+/// padding budget and pixel scale, and the per-sensor pixel-solid-angle
+/// ratios used to spread the zodiacal rate across heterogeneous sensors.
+struct RenderContext {
+    satellites: Vec<SatelliteConfig>,
+    padding_mm: f64,
+    px_scale: f64,
+    sensor_ratios: Vec<f64>,
+}
+
+impl RenderContext {
+    /// Build the context from a focal plane. Errors when the focal plane
+    /// exposes no sensors.
+    fn from_focal_plane(fp: &FocalPlaneConfig) -> Result<Self, TrajectoryError> {
+        let sensor_count = fp.array.sensor_count();
+        if sensor_count == 0 {
+            return Err(TrajectoryError::NoSensors);
+        }
+        let first_sat = fp
+            .satellite_for_sensor(0)
+            .ok_or(TrajectoryError::NoSensors)?;
+        let airy_pix = first_sat.airy_disk_pixel_space();
+        let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
+        let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
+        let satellites: Vec<SatelliteConfig> = (0..sensor_count)
+            .map(|i| {
+                fp.satellite_for_sensor(i)
+                    .expect("sensor index in range for enumerated sensor_count")
+            })
+            .collect();
+        let sensor_ratios: Vec<f64> = satellites
+            .iter()
+            .map(|sat| per_sensor_pixel_solid_angle_ratio(&satellites[0], sat))
+            .collect();
+        Ok(Self {
+            satellites,
+            padding_mm,
+            px_scale,
+            sensor_ratios,
+        })
+    }
+}
+
+/// Build the per-frame render plan: subsample schedule, prefiltered star
+/// slice, and the per-sensor zodiacal electrons/pixel for the full exposure.
+///
+/// Pure function — no I/O. Used both by the trajectory-level renderer's
+/// serial planning pass and by [`render_one_frame`].
+fn plan_frame<'a>(
+    scene: &'a RenderScene<'a>,
+    ctx: &RenderContext,
+    zlight: &ZodiacalLight,
+    frame_idx: usize,
+    frame_start: Duration,
+    config: &MotionBlurConfig,
+) -> Result<FramePlan<'a>, TrajectoryError> {
+    let exposure = config.exposure;
+    // Clamp the exposure window to the trajectory so we do not try to
+    // sample beyond the defined range.
+    let t_end = (frame_start + exposure).min(scene.trajectory.end_time());
+    let exposure = if t_end > frame_start {
+        t_end - frame_start
+    } else {
+        Duration::ZERO
+    };
+
+    // Mid-frame orientation drives both the envelope-padding peak
+    // excursion calculation and the zodiacal evaluation.
+    let mid_t = (frame_start + exposure / 2)
+        .min(scene.trajectory.end_time())
+        .max(scene.trajectory.start_time());
+    let mid_q = scene.trajectory.orientation_at(mid_t)?;
+    let mid_bore = boresight_of(&mid_q);
+
+    let drift = max_drift_over_window(scene.trajectory, frame_start, t_end)?;
+    let peak_excursion = scene
+        .trajectory
+        .peak_excursion_rad(frame_start, t_end, &mid_q)?;
+
+    let schedule = if config.force_static || exposure.is_zero() {
+        SubsampleSchedule {
+            frame_start,
+            exposure,
+            stamps_per_exposure: 1,
+            envelope_padding_rad: peak_excursion,
+        }
+    } else {
+        SubsampleSchedule::from_drift_budget(
+            frame_start,
+            exposure,
+            drift,
+            peak_excursion,
+            ctx.px_scale,
+            config.max_drift_per_stamp_px,
+        )
+    };
+
+    let first_sat = &ctx.satellites[0];
+    let zodiacal_per_px_per_s =
+        zodiacal_per_px_per_s_at(zlight, first_sat, &scene.zodiacal, &mid_bore);
+    let exposure_s = schedule.exposure.as_secs_f64();
+    let zodiacal_per_px: Vec<f64> = ctx
+        .sensor_ratios
+        .iter()
+        .map(|r| zodiacal_per_px_per_s * r * exposure_s)
+        .collect();
+
+    let stars = envelope_prefilter(
+        scene.trajectory,
+        scene.catalog_stars,
+        &schedule,
+        scene.fp,
+        ctx.padding_mm,
+        ctx.px_scale,
+    )?;
+
+    Ok(FramePlan {
+        idx: frame_idx,
+        schedule,
+        stars,
+        padding_mm: ctx.padding_mm,
+        zodiacal_per_px,
+    })
+}
+
+/// Render a single frame to one `Array2<u16>` per sensor in the focal plane.
+///
+/// In-memory, no disk I/O. The returned vector is indexed by sensor index:
+/// `result[sensor_idx]` is the quantized image for that sensor at the
+/// requested `frame_start`.
+///
+/// Bit-identical to a single iteration of [`render_motion_trajectory`] for
+/// the same `(base_seed, frame_idx)` combination. The deterministic seed
+/// mixing (`tile_seed(base_seed, frame_idx, sensor_idx)`) is preserved, so
+/// callers chaining `render_one_frame` over a sequence of frame times will
+/// reproduce the trajectory renderer's output byte-for-byte.
+///
+/// `frame_start` is the absolute trajectory time at which the exposure
+/// begins. The exposure window is `config.exposure`, clamped to the
+/// trajectory's end. Motion blur stamp count is derived adaptively from
+/// `config.max_drift_per_stamp_px`.
+///
+/// `frame_idx` is mixed into the per-tile seed and into log messages; pass
+/// the frame's position within an outer sequence (or `0` for one-shot use).
+///
+/// `flux_cache` lets the caller share a `(star_id, sensor_idx) -> SourceFlux`
+/// cache across multiple calls (the slow step of star photometry). Pass
+/// `None` for a fresh per-call cache; pass `Some(...)` to reuse a cache
+/// across an outer loop over many frames with the same catalog and
+/// focal plane.
+#[allow(clippy::too_many_arguments)]
+pub fn render_one_frame(
+    trajectory: &Trajectory,
+    catalog_stars: &[StarData],
+    per_sensor_galaxies: &[Vec<GalaxyInFrame>],
+    fp: &FocalPlaneConfig,
+    zodiacal: SolarAngularCoordinates,
+    frame_start: Duration,
+    frame_idx: usize,
+    config: &MotionBlurConfig,
+    flux_cache: Option<Arc<Mutex<FluxCache>>>,
+) -> Result<Vec<Array2<u16>>, TrajectoryError> {
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    let scene = RenderScene {
+        trajectory,
+        catalog_stars,
+        per_sensor_galaxies,
+        fp,
+        zodiacal,
+    };
+    let zlight = ZodiacalLight::new();
+    let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, frame_start, config)?;
+    let cache = flux_cache.unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
+    let base_seed = config.base_seed.unwrap_or(0xDEADBEEF_DEADBEEF);
+    let sensor_count = ctx.satellites.len();
+
+    let results: Vec<Result<(usize, Array2<u16>), TrajectoryError>> = (0..sensor_count)
+        .into_par_iter()
+        .map(|sensor_idx| {
+            let sat = &ctx.satellites[sensor_idx];
+            let seed = tile_seed(base_seed, frame_idx, sensor_idx);
+            let arr = render_tile_array(&scene, &plan, sensor_idx, &cache, sat, seed)?;
+            Ok((sensor_idx, arr))
+        })
+        .collect();
+
+    let mut images: Vec<Option<Array2<u16>>> = (0..sensor_count).map(|_| None).collect();
+    for r in results {
+        let (idx, arr) = r?;
+        images[idx] = Some(arr);
+    }
+    Ok(images
+        .into_iter()
+        .map(|i| i.expect("sensor index covered"))
+        .collect())
 }
 
 /// Render the full trajectory with motion blur, parallel over `(frame, sensor)`.
@@ -647,17 +842,8 @@ pub fn render_motion_trajectory(
     config: &MotionBlurConfig,
     output_dir: &Path,
 ) -> Result<usize, TrajectoryError> {
-    let sensor_count = fp.array.sensor_count();
-    if sensor_count == 0 {
-        return Err(TrajectoryError::NoSensors);
-    }
-    let first_sat = fp
-        .satellite_for_sensor(0)
-        .ok_or(TrajectoryError::NoSensors)?;
-    let airy_pix = first_sat.airy_disk_pixel_space();
-    let pixel_size_mm = first_sat.sensor.pixel_size().as_millimeters();
-    let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
-    let px_scale = pixel_scale_rad(fp).unwrap_or(0.0);
+    let ctx = RenderContext::from_focal_plane(fp)?;
+    let sensor_count = ctx.satellites.len();
 
     let scene = RenderScene {
         trajectory,
@@ -677,20 +863,6 @@ pub fn render_motion_trajectory(
         config.timestep.as_secs_f64(),
         config.max_drift_per_stamp_px,
     );
-
-    // Pre-build per-sensor satellite configs (cheap, avoids lock-free work
-    // per tile). Materialized early so the planning pass can precompute
-    // the per-sensor zodiacal scaling for each frame.
-    let satellites: Vec<SatelliteConfig> = (0..sensor_count)
-        .map(|i| {
-            fp.satellite_for_sensor(i)
-                .expect("sensor index in range for enumerated sensor_count")
-        })
-        .collect();
-    let sensor_ratios: Vec<f64> = satellites
-        .iter()
-        .map(|sat| per_sensor_pixel_solid_angle_ratio(&satellites[0], sat))
-        .collect();
 
     // Progress bar over all (frame, sensor) tiles. `.inc(1)` is called by
     // each worker after the tile's PNG is written. Non-TTY stdout is detected
@@ -714,59 +886,15 @@ pub fn render_motion_trajectory(
     let mut stamps_min = usize::MAX;
     let mut stamps_max = 0usize;
     for (frame_idx, &t) in frame_times.iter().enumerate() {
-        let exposure = config.exposure;
-        // Clamp the exposure window to the trajectory so we do not try to
-        // sample beyond the defined range.
-        let t_end = (t + exposure).min(scene.trajectory.end_time());
-        let exposure = if t_end > t { t_end - t } else { Duration::ZERO };
-
-        // Mid-frame orientation drives both the envelope-padding peak
-        // excursion calculation and the zodiacal evaluation.
-        let mid_t = (t + exposure / 2)
+        let plan = plan_frame(&scene, &ctx, &zlight, frame_idx, t, config)?;
+        let mid_t = plan
+            .schedule
+            .mid_time()
             .min(scene.trajectory.end_time())
             .max(scene.trajectory.start_time());
-        let mid_q = scene.trajectory.orientation_at(mid_t)?;
-        let mid_bore = boresight_of(&mid_q);
-
-        let drift = max_drift_over_window(scene.trajectory, t, t_end)?;
-        let peak_excursion = scene.trajectory.peak_excursion_rad(t, t_end, &mid_q)?;
-
-        let schedule = if config.force_static || exposure.is_zero() {
-            SubsampleSchedule {
-                frame_start: t,
-                exposure,
-                stamps_per_exposure: 1,
-                envelope_padding_rad: peak_excursion,
-            }
-        } else {
-            SubsampleSchedule::from_drift_budget(
-                t,
-                exposure,
-                drift,
-                peak_excursion,
-                px_scale,
-                config.max_drift_per_stamp_px,
-            )
-        };
-        stamps_min = stamps_min.min(schedule.stamps_per_exposure);
-        stamps_max = stamps_max.max(schedule.stamps_per_exposure);
-
-        let zodiacal_per_px_per_s =
-            zodiacal_per_px_per_s_at(&zlight, &first_sat, &scene.zodiacal, &mid_bore);
-        let exposure_s = schedule.exposure.as_secs_f64();
-        let zodiacal_per_px: Vec<f64> = sensor_ratios
-            .iter()
-            .map(|r| zodiacal_per_px_per_s * r * exposure_s)
-            .collect();
-
-        let stars = envelope_prefilter(
-            scene.trajectory,
-            scene.catalog_stars,
-            &schedule,
-            scene.fp,
-            padding_mm,
-            px_scale,
-        )?;
+        let mid_bore = boresight_of(&scene.trajectory.orientation_at(mid_t)?);
+        stamps_min = stamps_min.min(plan.schedule.stamps_per_exposure);
+        stamps_max = stamps_max.max(plan.schedule.stamps_per_exposure);
         // Per-frame summary routed through the bar so it coexists with the
         // live progress line without scrambled output.
         pb.println(format!(
@@ -774,18 +902,12 @@ pub fn render_motion_trajectory(
              stars={}",
             frame_idx,
             t.as_secs_f64(),
-            schedule.stamps_per_exposure,
+            plan.schedule.stamps_per_exposure,
             mid_bore.ra_degrees(),
             mid_bore.dec_degrees(),
-            stars.len(),
+            plan.stars.len(),
         ));
-        plans.push(FramePlan {
-            idx: frame_idx,
-            schedule,
-            stars,
-            padding_mm,
-            zodiacal_per_px,
-        });
+        plans.push(plan);
     }
     if total_frames == 0 {
         stamps_min = 0;
@@ -838,18 +960,11 @@ pub fn render_motion_trajectory(
         .zip(output_paths.par_iter())
         .map(|(tile, out_path)| {
             let plan = &plans[tile.frame_plan_idx];
-            let sat = &satellites[tile.sensor_idx];
+            let sat = &ctx.satellites[tile.sensor_idx];
             let seed = tile_seed(base_seed, plan.idx, tile.sensor_idx);
             let tile_started = Instant::now();
-            let result = render_tile(
-                &scene,
-                plan,
-                tile.sensor_idx,
-                &flux_cache,
-                sat,
-                seed,
-                out_path,
-            );
+            let result = render_tile_array(&scene, plan, tile.sensor_idx, &flux_cache, sat, seed)
+                .and_then(|arr| save_u16_png(&arr, out_path));
             debug!(
                 "tile frame={} sensor={} stamps={} stars={} elapsed={}ms",
                 plan.idx,
@@ -897,7 +1012,7 @@ pub fn render_motion_trajectory(
     // recorded here is relative (forward-slash) to `output_dir`.
     let metadata = build_render_metadata(
         &scene,
-        &satellites,
+        &ctx.satellites,
         config,
         &plans
             .iter()
@@ -1656,6 +1771,143 @@ mod tests {
         assert_ne!(
             coarse, fine,
             "tightening max_drift_per_stamp_px on a moving trajectory must change the rendered streak"
+        );
+    }
+
+    #[test]
+    fn test_render_one_frame_is_deterministic() {
+        // Two calls with the same arguments and the same seed must return
+        // byte-identical arrays. Exercises a drifting trajectory so the
+        // per-stamp loop is active (not the N=1 fallback) and a couple of
+        // stars so the flux cache + envelope prefilter are exercised too.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let drift = Equatorial::from_degrees(45.0 + 0.001, 30.0); // ~3.6"
+        let traj = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(
+                Duration::from_secs(10),
+                orientation_from_pointing(&drift, 0.0),
+            ),
+        ])
+        .unwrap();
+        let stars: Vec<StarData> = (0..3)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.0,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0005 * i as f64,
+                    pointing.dec_degrees(),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.05,
+            base_seed: Some(0xABCD_1234),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+
+        let first = render_one_frame(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+        )
+        .unwrap();
+        let second = render_one_frame(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            Duration::ZERO,
+            0,
+            &cfg,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(first.len(), second.len());
+        assert!(!first.is_empty(), "expected at least one sensor");
+        for (s, (a, b)) in first.iter().zip(second.iter()).enumerate() {
+            assert_eq!(a, b, "sensor {s} arrays differ between identical calls");
+        }
+    }
+
+    #[test]
+    fn test_render_one_frame_matches_render_motion_trajectory_bytes() {
+        // `render_motion_trajectory` is reimplemented in terms of the same
+        // primitives as `render_one_frame`. For any given (base_seed,
+        // frame_idx) the per-sensor quantized arrays must equal the PNG
+        // pixels the trajectory renderer writes for that frame.
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let stars: Vec<StarData> = (0..2)
+            .map(|i| StarData {
+                id: i as u64,
+                magnitude: 7.5,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + 0.0005 * i as f64,
+                    pointing.dec_degrees(),
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let traj = static_trajectory();
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.1,
+            base_seed: Some(54321),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+
+        let frame_idx = 0;
+        let frame_start = Duration::ZERO;
+        let one = render_one_frame(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            frame_start,
+            frame_idx,
+            &cfg,
+            None,
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        render_motion_trajectory(
+            &traj,
+            &stars,
+            &[],
+            &fp,
+            SolarAngularCoordinates::zodiacal_minimum(),
+            &cfg,
+            tmp.path(),
+        )
+        .unwrap();
+
+        let png_path = tmp.path().join(sensor_relative_png_path(0, frame_idx));
+        let img = image::open(&png_path).unwrap().to_luma16();
+        let (w, h) = img.dimensions();
+        let png_arr = Array2::from_shape_vec((h as usize, w as usize), img.into_raw()).unwrap();
+        assert_eq!(
+            one[0], png_arr,
+            "render_one_frame must produce the same pixels render_motion_trajectory writes"
         );
     }
 

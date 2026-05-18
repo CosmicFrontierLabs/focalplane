@@ -17,6 +17,8 @@ use crate::sims::motion_blur::{
 use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
 
+pub use crate::sims::motion_blur::render_one_frame;
+
 #[derive(Debug, Error)]
 pub enum TrajectoryError {
     #[error("trajectory must have at least 2 waypoints, got {0}")]
