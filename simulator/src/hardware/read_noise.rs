@@ -68,28 +68,9 @@ impl ReadNoiseEstimator {
         Self { interpolator }
     }
 
-    /// Create a new HWK4123 read noise estimator with factory calibration data
-    /// Data is from here:
-    /// - <https://drive.google.com/file/d/1hhnfMxPQs3cXautEpjHpIDGkb_bArWdE>
-    /// - <https://docs.google.com/spreadsheets/d/16WdFvMo3rj3Z9252pq32agsLV-wm7YNacvqfkEgSOAI>
-    pub fn hwk4123() -> Self {
-        let frame_rates = vec![5.0, 15.0, 30.0, 60.0, 120.0, 1000.0];
-        let temperatures = vec![-20.0, 20.0];
-
-        // Data indexed as [temp_idx, rate_idx]
-        let data = Array2::from_shape_vec(
-            (2, 6),
-            vec![
-                // -20°C row
-                0.233, 0.263, 0.279, 0.334, 0.381, 0.381, // +20°C row
-                0.301, 0.301, 0.305, 0.371, 0.404, 0.404,
-            ],
-        )
-        .expect("Failed to create HWK4123 noise data");
-
-        let interpolator = BilinearInterpolator::new(frame_rates, temperatures, data)
-            .expect("Failed to create HWK4123 interpolator");
-
+    /// Create a read noise estimator from a bilinear interpolator over
+    /// (frame rate in Hz, temperature in °C) producing read noise in electrons RMS.
+    pub fn from_interpolator(interpolator: BilinearInterpolator) -> Self {
         Self { interpolator }
     }
 
@@ -155,13 +136,32 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
-    fn test_hwk4123() -> ReadNoiseEstimator {
-        ReadNoiseEstimator::hwk4123()
+    /// Representative (frame rate, temperature) calibration table used to exercise
+    /// the generic interpolation, clamping, and bounds behaviour of `estimate()`.
+    fn sample_estimator() -> ReadNoiseEstimator {
+        let frame_rates = vec![5.0, 15.0, 30.0, 60.0, 120.0, 1000.0];
+        let temperatures = vec![-20.0, 20.0];
+
+        // Data indexed as [temp_idx, rate_idx]
+        let data = Array2::from_shape_vec(
+            (2, 6),
+            vec![
+                // -20°C row
+                0.233, 0.263, 0.279, 0.334, 0.381, 0.381, // +20°C row
+                0.301, 0.301, 0.305, 0.371, 0.404, 0.404,
+            ],
+        )
+        .expect("Failed to create sample noise data");
+
+        let interpolator = BilinearInterpolator::new(frame_rates, temperatures, data)
+            .expect("Failed to create sample interpolator");
+
+        ReadNoiseEstimator::from_interpolator(interpolator)
     }
 
     #[test]
     fn test_exact_corner_values() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test exact corner values using Duration
         assert_eq!(
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_temperature_out_of_bounds() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test below minimum temperature
         let result = interp.estimate(-30.0, Duration::from_secs_f64(1.0 / 50.0));
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_frame_rate_out_of_bounds() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test above maximum frame rate (too short exposure)
         let result = interp.estimate(0.0, Duration::from_secs_f64(1.0 / 1500.0));
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_temperature_interpolation() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // At 0°C (midpoint), at 30 fps, should interpolate between 0.279 and 0.305
         let result = interp
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_frame_rate_interpolation() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test interpolation between frame rates at fixed temperature
         let result = interp
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_bilinear_interpolation() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test center point interpolation
         let result = interp
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_boundary_values_exact() {
-        let interp = test_hwk4123();
+        let interp = sample_estimator();
 
         // Test exact boundary values (should be OK)
         assert!(interp
@@ -350,14 +350,18 @@ mod tests {
 
     #[test]
     fn test_different_estimators() {
-        // Test both HWK4123 and constant estimators
-        let hwk = ReadNoiseEstimator::hwk4123();
+        // Test both an interpolated estimator and a constant one
+        let varying = sample_estimator();
         let constant = ReadNoiseEstimator::constant(3.0);
 
-        // HWK4123 should vary with conditions
-        let hwk_cold = hwk.estimate(-20.0, Duration::from_secs_f64(0.2)).unwrap();
-        let hwk_hot = hwk.estimate(20.0, Duration::from_secs_f64(0.2)).unwrap();
-        assert_ne!(hwk_cold, hwk_hot);
+        // The interpolated estimator should vary with conditions
+        let cold = varying
+            .estimate(-20.0, Duration::from_secs_f64(0.2))
+            .unwrap();
+        let hot = varying
+            .estimate(20.0, Duration::from_secs_f64(0.2))
+            .unwrap();
+        assert_ne!(cold, hot);
 
         // Constant should always be same
         let const_cold = constant
@@ -371,9 +375,9 @@ mod tests {
     }
 
     #[test]
-    fn test_hwk4123_oob() {
+    fn test_frame_rate_clamping_below_minimum() {
         // The slowest framerate in the table is 5 hz, which corresponds to a 200 ms exposure
-        let interp = ReadNoiseEstimator::hwk4123();
+        let interp = sample_estimator();
         // Test below minimum frame rate (too long exposure)
         let result_capped = interp.estimate(0.0, Duration::from_secs_f64(1.0)); // 1 Hz
         println!("Result: {result_capped:?}");
