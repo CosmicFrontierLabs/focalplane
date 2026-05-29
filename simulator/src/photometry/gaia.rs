@@ -51,8 +51,9 @@
 //! - **Accuracy**: Validated against in-flight calibration observations
 //! - **Updates**: Reflects post-launch instrument characterization
 
+use std::sync::LazyLock;
+
 use super::QuantumEfficiency;
-use once_cell::sync::Lazy;
 
 /// Official ESA Gaia G-band passband for precision stellar photometry.
 ///
@@ -103,7 +104,7 @@ use once_cell::sync::Lazy;
 /// - Ground-based photometric standards (Landolt, SDSS)
 /// - HST and other space telescope cross-calibrations
 /// - Laboratory measurements of instrument components
-pub static GAIA_PASSBAND: Lazy<QuantumEfficiency> = Lazy::new(|| {
+pub static GAIA_PASSBAND: LazyLock<QuantumEfficiency> = LazyLock::new(|| {
     // Wavelengths in nanometers (nm), stored initially as integers for compactness
     let wavelengths_int: Vec<i32> = vec![
         320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337,

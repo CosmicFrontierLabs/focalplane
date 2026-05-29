@@ -4,8 +4,9 @@
 //! positioned in a focal plane, as commonly used in large astronomical cameras
 //! and survey instruments.
 
+use std::sync::LazyLock;
+
 use crate::hardware::sensor::{models::IMX455, SensorConfig};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use shared::units::LengthExt;
 
@@ -199,7 +200,7 @@ impl SensorArray {
     }
 }
 
-pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
+pub static SPENCER_ARRAY_PLAN: LazyLock<SensorArray> = LazyLock::new(|| {
     /// Outer (low-y) pair |x| offset, mm.
     const OUTER_X_MM: f64 = 61.0;
     /// Inner (high-y) pair |x| offset, mm.
