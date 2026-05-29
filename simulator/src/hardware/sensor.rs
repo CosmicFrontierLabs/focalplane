@@ -39,8 +39,8 @@
 
 #![allow(clippy::approx_constant)]
 
-use once_cell::sync::Lazy;
 use std::fmt;
+use std::sync::LazyLock;
 
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
@@ -533,7 +533,7 @@ pub mod models {
     }
 
     /// GSENSE4040BSI CMOS sensor with detailed QE curve from manufacturer data
-    pub static GSENSE4040BSI: Lazy<SensorConfig> = Lazy::new(|| {
+    pub static GSENSE4040BSI: LazyLock<SensorConfig> = LazyLock::new(|| {
         // QE data from QE-gsense4040bsi.csv (trunced to 3 decimal places)
         // We'll use a subset of the data to keep the vector size reasonable
         // while still capturing the important features of the curve
@@ -598,7 +598,7 @@ pub mod models {
 
     /// GSENSE6510BSI CMOS sensor with detailed QE curve from manufacturer chart found here
     /// <https://www.gpixel.com/en/details_155.html>
-    pub static GSENSE6510BSI: Lazy<SensorConfig> = Lazy::new(|| {
+    pub static GSENSE6510BSI: LazyLock<SensorConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             150.0, 200.0, 210.0, 220.0, 230.0, 240.0, 250.0, 260.0, 270.0, 280.0, 290.0, 300.0,
             310.0, 320.0, 330.0, 340.0, 350.0, 360.0, 370.0, 380.0, 390.0, 400.0, 410.0, 420.0,
@@ -641,7 +641,7 @@ pub mod models {
     });
 
     /// HWK4123 CMOS sensor with detailed QE curve
-    pub static HWK4123: Lazy<SensorConfig> = Lazy::new(|| {
+    pub static HWK4123: LazyLock<SensorConfig> = LazyLock::new(|| {
         // Detailed QE curve data
         let wavelengths = vec![
             200.0, 250.0, 260.0, 270.0, 280.0, 290.0, 300.0, 310.0, 320.0, 330.0, 340.0, 350.0,
@@ -697,7 +697,7 @@ pub mod models {
     /// support a wide range of source brightnesses. See this document for more details:
     /// <https://docs.google.com/spreadsheets/d/16WdFvMo3rj3Z9252pq32agsLV-wm7YNacvqfkEgSOAI/edit?gid=1094380256#gid=1094380256>
     /// QE data from 300-400nm is from Ajay/Tohovavohu, past that is the QXY measurements
-    pub static IMX455: Lazy<SensorConfig> = Lazy::new(|| {
+    pub static IMX455: LazyLock<SensorConfig> = LazyLock::new(|| {
         // QE curve from manufacturer data
         // Note: We already have zero at the endpoints as required by QuantumEfficiency
         let wavelengths = vec![
@@ -741,7 +741,7 @@ pub mod models {
     });
 
     /// Collection of all available sensor models
-    pub static ALL_SENSORS: Lazy<Vec<SensorConfig>> = Lazy::new(|| {
+    pub static ALL_SENSORS: LazyLock<Vec<SensorConfig>> = LazyLock::new(|| {
         vec![
             GSENSE4040BSI.clone(),
             GSENSE6510BSI.clone(),
