@@ -22,7 +22,7 @@ pub struct SensorPosition {
 }
 
 /// A single sensor with its position in the array.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionedSensor {
     /// The sensor configuration
     pub sensor: SensorConfig,
@@ -41,7 +41,7 @@ pub struct PositionedSensor {
 /// - X increases to the right
 /// - Y increases upward
 /// - Positions are in millimeters
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorArray {
     /// Collection of sensors with their positions
     pub sensors: Vec<PositionedSensor>,

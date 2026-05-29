@@ -6,6 +6,7 @@
 //! of pixel values due to thermal fluctuations and electronic readout.
 
 use ndarray::Array2;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use meter_math::bilinear::{BilinearInterpolator, InterpolationError};
@@ -46,7 +47,7 @@ impl std::error::Error for ReadNoiseError {}
 /// - X-axis: Frame rate in Hz
 /// - Y-axis: Temperature in degrees Celsius
 /// - Output: Read noise in electrons RMS
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadNoiseEstimator {
     /// Bilinear interpolator for noise values
     interpolator: BilinearInterpolator,
