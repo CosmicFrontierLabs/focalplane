@@ -28,8 +28,9 @@ use std::collections::BTreeMap;
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 
-use crate::photometry::quantum_efficiency::QuantumEfficiency;
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::photometry::zodiacal::SolarAngularCoordinates;
+use crate::scene_galaxy::Galaxy;
 
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +46,10 @@ pub struct RenderMetadata {
     /// Catalog stars covering the trajectory envelope, recorded verbatim.
     pub stars: Vec<StarMeta>,
     /// Extended (Sérsic) sources covering the trajectory envelope,
-    /// recorded verbatim from the catalog query. Stored flat — symmetric
-    /// with [`RenderMetadata::stars`] — and de-duplicated by `id` if the
-    /// same source was routed onto more than one sensor.
-    pub galaxies: Vec<GalaxyMeta>,
-    /// Telescope + sensor array hardware summary.
-    pub hardware: HardwareMeta,
+    /// recorded verbatim from the catalog query.
+    pub galaxies: Vec<Galaxy>,
+    /// Full focal-plane optical + detector configuration.
+    pub focal_plane: FocalPlaneConfig,
     /// Render knobs (exposure, timestep, seed, etc.).
     pub render_config: RenderConfigMeta,
 }
@@ -75,9 +74,7 @@ pub struct WaypointMeta {
     pub time_s: f64,
     /// Orientation quaternion. Serializes as a 4-element JSON array in
     /// nalgebra's native `[i, j, k, w]` order (imaginary parts first,
-    /// real part last) — same shape as `Quaternion::coords`. Consumers
-    /// reconstructing via `Quaternion::new(w, i, j, k)` must pull `w`
-    /// from index 3, not 0.
+    /// real part last) — same shape as `Quaternion::coords`.
     pub quat: UnitQuaternion<f64>,
     /// Boresight pointing derived from `quat`.
     pub boresight: EquatorialMeta,
@@ -145,141 +142,6 @@ pub struct StarMeta {
 /// information is intentionally **not** recorded here — consumers can
 /// reproject through the same trajectory + focal plane the renderer
 /// used.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GalaxyMeta {
-    /// Catalog galaxy identifier (e.g. NSAID for NSA, hashed name for
-    /// the bright-galaxy catalog).
-    pub id: u64,
-    /// Human-readable catalog name when available (e.g. NGC/Messier
-    /// designation). `None` for catalogs that only carry numeric
-    /// identifiers (e.g. NSAID-keyed entries).
-    pub name: Option<String>,
-    /// Right ascension of the galaxy centre, in degrees (J2000).
-    pub ra_deg: f64,
-    /// Declination of the galaxy centre, in degrees (J2000).
-    pub dec_deg: f64,
-    /// Integrated photoelectron flux rate at the entrance aperture,
-    /// in electrons per second per square centimetre. Equivalent to
-    /// `SourceFlux::electrons.flux`.
-    pub electrons_per_s_per_cm2: f64,
-    /// Elliptical Sérsic profile parameters describing the extended
-    /// surface-brightness shape.
-    pub sersic: SersicMeta,
-}
-
-/// Elliptical Sérsic profile parameters for a [`GalaxyMeta`].
-///
-/// Mirrors `starfield::catalogs::SersicProfile` so downstream consumers
-/// can reconstruct the surface-brightness model without depending on
-/// `starfield`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct SersicMeta {
-    /// Half-light radius along the major axis, in arcseconds.
-    pub theta_half_arcsec: f64,
-    /// Sérsic index n (dimensionless, typically ~0.5 to ~6).
-    pub n: f64,
-    /// Axis ratio b/a, where b ≤ a (`1.0` is circular).
-    pub axis_ratio: f64,
-    /// Position angle of the major axis, degrees east of north (J2000).
-    pub position_angle_deg: f64,
-}
-
-/// Hardware dump: telescope optics + per-sensor configuration.
-///
-/// Carries enough of the `FocalPlaneConfig` to let downstream consumers
-/// reproduce pixel-to-sky projection and electron-to-DN conversion
-/// without re-reading the source library. Curves (QE, dark current,
-/// read noise) are tabulated verbatim from the renderer's interpolators.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HardwareMeta {
-    /// Telescope optical configuration.
-    pub telescope: TelescopeMeta,
-    /// Operating temperature in Celsius (shared across all sensors).
-    pub temperature_c: f64,
-    /// Per-sensor entries in array-index order.
-    pub sensors: Vec<SensorMeta>,
-}
-
-/// Telescope optics and combined-system parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelescopeMeta {
-    /// Telescope model name.
-    pub name: String,
-    /// Clear-aperture diameter in meters.
-    pub aperture_m: f64,
-    /// Effective focal length in meters (including optical train).
-    pub focal_length_m: f64,
-    /// Convenience: focal length divided by aperture.
-    pub f_number: f64,
-    /// Central obscuration ratio (0.0 - 1.0, fraction of aperture
-    /// radius blocked by the secondary).
-    pub obscuration_ratio: f64,
-    /// Reference wavelength for diffraction-limited calculations, in nm.
-    pub corrected_to_nm: f64,
-    /// Wavelength-dependent quantum efficiency of the optical train
-    /// (mirror reflectivity × lens transmission × etc.). Serializes
-    /// as `{wavelengths_nm: [...], efficiencies: [...]}`.
-    pub quantum_efficiency: QuantumEfficiency,
-}
-
-/// Per-sensor entry — geometry, conversion gains, and noise curves.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SensorMeta {
-    /// Sensor index in the array.
-    pub idx: usize,
-    /// Sensor model name.
-    pub name: String,
-    /// Sensor dimensions in pixels, `[width, height]`.
-    pub dimensions_px: [usize; 2],
-    /// Square-pixel physical pitch, in micrometers.
-    pub pixel_pitch_um: f64,
-    /// Sensor centre position on the focal plane, `[x_mm, y_mm]`,
-    /// measured from the optical axis.
-    pub position_mm: [f64; 2],
-    /// ADC bit depth (8, 12, 14, 16 typical).
-    pub bit_depth: u8,
-    /// Gain in DN per electron.
-    pub dn_per_electron: f64,
-    /// Full-well capacity in electrons (saturation limit).
-    pub max_well_depth_e: f64,
-    /// Detector quantum efficiency curve (sensor only, optics excluded).
-    pub quantum_efficiency: QuantumEfficiency,
-    /// Combined telescope × sensor QE, pre-computed by `SatelliteConfig`.
-    /// Equivalent to `QuantumEfficiency::product(telescope_qe, sensor_qe)`.
-    pub combined_qe: QuantumEfficiency,
-    /// Tabulated dark current vs. temperature.
-    pub dark_current: DarkCurrentMeta,
-    /// Tabulated read noise vs. (frame rate, temperature).
-    pub read_noise: ReadNoiseMeta,
-}
-
-/// Tabulated dark current as a function of detector temperature.
-/// Exponential interpolation between samples (the renderer's model
-/// follows the standard 8 °C doubling rule).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DarkCurrentMeta {
-    /// Temperature samples in degrees Celsius, ascending.
-    pub temperatures_c: Vec<f64>,
-    /// Dark current values in electrons per pixel per second,
-    /// aligned with `temperatures_c`.
-    pub dark_currents_e_per_px_per_s: Vec<f64>,
-}
-
-/// Tabulated read noise surface over (frame rate, temperature).
-/// Bilinear interpolation between samples. Matches the underlying
-/// `BilinearInterpolator` axis convention exactly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReadNoiseMeta {
-    /// X-axis grid: frame rates in Hz, ascending.
-    pub frame_rates_hz: Vec<f64>,
-    /// Y-axis grid: temperatures in degrees Celsius, ascending.
-    pub temperatures_c: Vec<f64>,
-    /// Noise surface in electrons RMS, indexed as
-    /// `noise_e_rms[temperature_idx][frame_rate_idx]` (rows align
-    /// with `temperatures_c`, columns with `frame_rates_hz`).
-    pub noise_e_rms: Vec<Vec<f64>>,
-}
-
 /// Render knobs captured for reproducibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderConfigMeta {
@@ -347,22 +209,35 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
-        let galaxies = vec![GalaxyMeta {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
+        use shared::image_proc::airy::PixelScaledAiryDisk;
+        use shared::units::{Length, LengthExt, Temperature, TemperatureExt, Wavelength};
+        use starfield::catalogs::SersicProfile;
+        use starfield::Equatorial;
+
+        let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
+        let spot = SpotFlux {
+            disk: psf,
+            flux: 7.0e-3,
+        };
+        let galaxies = vec![Galaxy {
             id: 12345,
             name: Some("NGC test".to_string()),
-            ra_deg: 187.25,
-            dec_deg: 12.5,
-            electrons_per_s_per_cm2: 7.0e-3,
-            sersic: SersicMeta {
+            position: Equatorial::from_degrees(187.25, 12.5),
+            profile: SersicProfile {
                 theta_half_arcsec: 4.0,
                 n: 1.5,
                 axis_ratio: 0.7,
                 position_angle_deg: 30.0,
             },
+            flux: SourceFlux {
+                photons: spot.clone(),
+                electrons: spot,
+            },
         }];
-        let passband =
-            QuantumEfficiency::from_table(vec![400.0, 550.0, 700.0], vec![0.0, 0.7, 0.0])
-                .expect("test passband should be valid");
         let meta = RenderMetadata {
             version: "1.2".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
@@ -383,39 +258,16 @@ mod tests {
             frames: Vec::new(),
             stars: Vec::new(),
             galaxies,
-            hardware: HardwareMeta {
-                telescope: TelescopeMeta {
-                    name: "Test".to_string(),
-                    aperture_m: 0.5,
-                    focal_length_m: 6.0,
-                    f_number: 12.0,
-                    obscuration_ratio: 0.3,
-                    corrected_to_nm: 550.0,
-                    quantum_efficiency: passband.clone(),
-                },
-                temperature_c: -10.0,
-                sensors: vec![SensorMeta {
-                    idx: 0,
-                    name: "TestSensor".to_string(),
-                    dimensions_px: [64, 64],
-                    pixel_pitch_um: 3.76,
-                    position_mm: [0.0, 0.0],
-                    bit_depth: 16,
-                    dn_per_electron: 0.5,
-                    max_well_depth_e: 51000.0,
-                    quantum_efficiency: passband.clone(),
-                    combined_qe: passband.clone(),
-                    dark_current: DarkCurrentMeta {
-                        temperatures_c: vec![-20.0, 0.0, 20.0],
-                        dark_currents_e_per_px_per_s: vec![0.01, 0.1, 1.0],
-                    },
-                    read_noise: ReadNoiseMeta {
-                        frame_rates_hz: vec![5.0, 1000.0],
-                        temperatures_c: vec![-20.0, 20.0],
-                        noise_e_rms: vec![vec![1.2, 1.5], vec![1.4, 1.7]],
-                    },
-                }],
-            },
+            focal_plane: FocalPlaneConfig::new(
+                TelescopeConfig::new(
+                    "Test",
+                    Length::from_meters(0.5),
+                    Length::from_meters(2.5),
+                    0.8,
+                ),
+                SensorArray::single(GSENSE4040BSI.clone().with_dimensions(64, 64)),
+                Temperature::from_celsius(-10.0),
+            ),
             render_config: RenderConfigMeta {
                 exposure_s: 1.0,
                 timestep_s: 1.0,
@@ -430,23 +282,15 @@ mod tests {
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.version, "1.2");
-        assert_eq!(parsed.hardware.telescope.name, "Test");
-        assert_eq!(parsed.hardware.telescope.aperture_m, 0.5);
+        assert_eq!(parsed.focal_plane.telescope.name, "Test");
+        assert!((parsed.focal_plane.telescope.aperture.as_meters() - 0.5).abs() < 1e-12);
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
-        assert_eq!(g.ra_deg, 187.25);
-        assert_eq!(g.dec_deg, 12.5);
-        assert_eq!(g.sersic.n, 1.5);
-        assert_eq!(g.sersic.axis_ratio, 0.7);
-        // Curve shapes round-trip.
-        let s = &parsed.hardware.sensors[0];
-        assert_eq!(s.pixel_pitch_um, 3.76);
-        assert_eq!(
-            s.quantum_efficiency.wavelengths_nm(),
-            &[400.0_f64, 550.0, 700.0][..]
-        );
-        assert_eq!(s.dark_current.dark_currents_e_per_px_per_s.len(), 3);
-        assert_eq!(s.read_noise.noise_e_rms[0], vec![1.2, 1.5]);
+        assert!((g.position.ra_degrees() - 187.25).abs() < 1e-9);
+        assert!((g.position.dec_degrees() - 12.5).abs() < 1e-9);
+        assert_eq!(g.profile.n, 1.5);
+        assert_eq!(g.profile.axis_ratio, 0.7);
+        assert_eq!(g.flux.electrons.flux, 7.0e-3);
     }
 }

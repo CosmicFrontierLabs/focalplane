@@ -55,9 +55,8 @@ use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::{project_galaxies_to_sensors, Galaxy, GalaxyInFrame};
 use crate::sims::motion_blur_metadata::{
-    sensor_dir_name, sensor_relative_png_path, DarkCurrentMeta, EquatorialMeta, FrameMeta,
-    GalaxyMeta, HardwareMeta, ReadNoiseMeta, RenderConfigMeta, RenderMetadata, SensorMeta,
-    SersicMeta, StarMeta, TelescopeMeta, TrajectoryMeta, WaypointMeta,
+    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, RenderConfigMeta,
+    RenderMetadata, StarMeta, TrajectoryMeta, WaypointMeta,
 };
 use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
@@ -321,7 +320,7 @@ struct TileRenderContext<'a> {
 }
 
 /// Configuration for [`render_motion_trajectory`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MotionBlurConfig {
     /// Time between frames (controls how many output frames are rendered).
     pub timestep: Duration,
@@ -1286,7 +1285,6 @@ pub fn render_motion_trajectory(
     // recorded here is relative (forward-slash) to `output_dir`.
     let metadata = build_render_metadata(
         &scene,
-        &ctx.satellites,
         config,
         &plans
             .iter()
@@ -1317,7 +1315,6 @@ pub fn render_motion_trajectory(
 /// coords) come through the [`RenderScene`] handle.
 fn build_render_metadata(
     scene: &RenderScene,
-    satellites: &[SatelliteConfig],
     config: &MotionBlurConfig,
     frame_plans: &[(usize, SubsampleSchedule)],
     sensor_count: usize,
@@ -1395,79 +1392,9 @@ fn build_render_metadata(
         })
         .collect();
 
-    let galaxies: Vec<GalaxyMeta> = scene
-        .sources
-        .galaxies
-        .iter()
-        .map(|g| GalaxyMeta {
-            id: g.id,
-            name: g.name.clone(),
-            ra_deg: g.position.ra_degrees(),
-            dec_deg: g.position.dec_degrees(),
-            electrons_per_s_per_cm2: g.flux.electrons.flux,
-            sersic: SersicMeta {
-                theta_half_arcsec: g.profile.theta_half_arcsec,
-                n: g.profile.n,
-                axis_ratio: g.profile.axis_ratio,
-                position_angle_deg: g.profile.position_angle_deg,
-            },
-        })
-        .collect();
+    let galaxies: Vec<Galaxy> = scene.sources.galaxies.to_vec();
 
-    let telescope = &scene.fp.telescope;
-    let telescope_meta = TelescopeMeta {
-        name: telescope.name.clone(),
-        aperture_m: telescope.aperture.as_meters(),
-        focal_length_m: telescope.focal_length.as_meters(),
-        f_number: telescope.focal_length.as_meters() / telescope.aperture.as_meters(),
-        obscuration_ratio: telescope.obscuration_ratio,
-        corrected_to_nm: telescope.corrected_to.as_nanometers(),
-        quantum_efficiency: telescope.quantum_efficiency.clone(),
-    };
-
-    let sensors: Vec<SensorMeta> = (0..sensor_count)
-        .map(|i| {
-            let ps = &scene.fp.array.sensors[i];
-            let sat = &satellites[i];
-            let (width, height) = ps.sensor.dimensions.get_pixel_width_height();
-            let read_noise_interp = sat.sensor.read_noise_estimator.interpolator();
-            let nrows = read_noise_interp.y_coords().len();
-            let read_noise_rows: Vec<Vec<f64>> = (0..nrows)
-                .map(|r| read_noise_interp.data().row(r).to_vec())
-                .collect();
-            SensorMeta {
-                idx: i,
-                name: sat.sensor.name.clone(),
-                dimensions_px: [width, height],
-                pixel_pitch_um: ps.sensor.dimensions.pixel_size().as_micrometers(),
-                position_mm: [ps.position.x_mm, ps.position.y_mm],
-                bit_depth: sat.sensor.bit_depth,
-                dn_per_electron: sat.sensor.dn_per_electron,
-                max_well_depth_e: sat.sensor.max_well_depth_e,
-                quantum_efficiency: sat.sensor.quantum_efficiency.clone(),
-                combined_qe: sat.combined_qe.clone(),
-                dark_current: DarkCurrentMeta {
-                    temperatures_c: sat.sensor.dark_current_estimator.temperatures_c().to_vec(),
-                    dark_currents_e_per_px_per_s: sat
-                        .sensor
-                        .dark_current_estimator
-                        .dark_currents_e_per_px_per_s()
-                        .to_vec(),
-                },
-                read_noise: ReadNoiseMeta {
-                    frame_rates_hz: read_noise_interp.x_coords().to_vec(),
-                    temperatures_c: read_noise_interp.y_coords().to_vec(),
-                    noise_e_rms: read_noise_rows,
-                },
-            }
-        })
-        .collect();
-
-    let hardware = HardwareMeta {
-        telescope: telescope_meta,
-        temperature_c: config.temperature_c,
-        sensors,
-    };
+    let focal_plane = scene.fp.clone();
 
     let render_config = RenderConfigMeta {
         exposure_s: config.exposure.as_secs_f64(),
@@ -1486,7 +1413,7 @@ fn build_render_metadata(
         frames,
         stars,
         galaxies,
-        hardware,
+        focal_plane,
         render_config,
     })
 }
@@ -2482,48 +2409,29 @@ mod tests {
 
         assert!(v["stars"].is_array());
 
-        let telescope = &v["hardware"]["telescope"];
-        assert!(telescope["aperture_m"].as_f64().unwrap() > 0.0);
-        assert!(telescope["focal_length_m"].as_f64().unwrap() > 0.0);
-        assert!(telescope["f_number"].as_f64().unwrap() > 0.0);
-        let tele_qe = &telescope["quantum_efficiency"];
+        // focal_plane carries the full FocalPlaneConfig graph (telescope,
+        // sensor array with per-sensor noise / QE / geometry). Shape spot-
+        // check only — uom unit serialization is opaque, so we just verify
+        // the top-level objects exist with the right children.
+        let focal_plane = &v["focal_plane"];
+        assert!(focal_plane["telescope"].is_object());
+        assert!(focal_plane["telescope"]["name"].is_string());
+        let tele_qe = &focal_plane["telescope"]["quantum_efficiency"];
         let tele_wl = tele_qe["wavelengths_nm"].as_array().unwrap();
         let tele_eff = tele_qe["efficiencies"].as_array().unwrap();
         assert_eq!(tele_wl.len(), tele_eff.len());
         assert!(tele_wl.len() >= 2);
-
-        let sensors = v["hardware"]["sensors"].as_array().unwrap();
-        let s0 = &sensors[0];
-        let dims = s0["dimensions_px"].as_array().unwrap();
-        assert_eq!(dims.len(), 2);
-        assert!(dims[0].as_u64().unwrap() > 0);
-        assert!(dims[1].as_u64().unwrap() > 0);
-        assert!(s0["pixel_pitch_um"].as_f64().unwrap() > 0.0);
-        assert!(s0["bit_depth"].as_u64().unwrap() > 0);
-        assert!(s0["dn_per_electron"].as_f64().unwrap() > 0.0);
-        assert!(s0["max_well_depth_e"].as_f64().unwrap() > 0.0);
-        // Combined QE curve is present and the same length as the
-        // per-component curves (it's QuantumEfficiency::product of them).
-        let combined = s0["combined_qe"]["wavelengths_nm"].as_array().unwrap();
-        assert!(combined.len() >= 2);
-        // Dark current curve.
-        let dc = &s0["dark_current"];
+        let sensors = focal_plane["array"]["sensors"].as_array().unwrap();
+        assert!(!sensors.is_empty());
+        let s0_inner = &sensors[0]["sensor"];
+        assert!(s0_inner["name"].is_string());
+        assert!(s0_inner["bit_depth"].as_u64().unwrap() > 0);
+        assert!(s0_inner["dn_per_electron"].as_f64().unwrap() > 0.0);
+        let dc = &s0_inner["dark_current_estimator"];
         let dc_t = dc["temperatures_c"].as_array().unwrap();
         let dc_v = dc["dark_currents_e_per_px_per_s"].as_array().unwrap();
         assert_eq!(dc_t.len(), dc_v.len());
         assert!(dc_t.len() >= 2);
-        // Read noise surface.
-        let rn = &s0["read_noise"];
-        let rn_x = rn["frame_rates_hz"].as_array().unwrap();
-        let rn_y = rn["temperatures_c"].as_array().unwrap();
-        let rn_data = rn["noise_e_rms"].as_array().unwrap();
-        assert!(rn_x.len() >= 2);
-        assert_eq!(rn_data.len(), rn_y.len());
-        assert_eq!(
-            rn_data[0].as_array().unwrap().len(),
-            rn_x.len(),
-            "noise_e_rms columns must align with frame_rates_hz"
-        );
 
         let zodi = &v["render_config"]["zodiacal"];
         assert!(zodi["elongation_deg"].is_number());
@@ -2582,13 +2490,13 @@ mod tests {
         let g = &meta.galaxies[0];
         assert_eq!(g.id, 987654);
         assert_eq!(g.name.as_deref(), Some("M-test"));
-        assert_abs_diff_eq!(g.ra_deg, 123.5, epsilon = 1e-12);
-        assert_abs_diff_eq!(g.dec_deg, -7.25, epsilon = 1e-12);
-        assert_abs_diff_eq!(g.electrons_per_s_per_cm2, 1.25e-2, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.theta_half_arcsec, 3.5, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.n, 2.5, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.axis_ratio, 0.6, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.position_angle_deg, 42.0, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.position.ra_degrees(), 123.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.position.dec_degrees(), -7.25, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.flux.electrons.flux, 1.25e-2, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.theta_half_arcsec, 3.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.n, 2.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.axis_ratio, 0.6, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.position_angle_deg, 42.0, epsilon = 1e-15);
     }
 
     #[test]

@@ -15,12 +15,13 @@ use crate::{
     star_math::star_data_to_fluxes,
 };
 use meter_math::Locatable2d;
+use serde::{Deserialize, Serialize};
 use shared::{
     image_proc::{airy::PixelScaledAiryDisk, noise::apply_poisson_photon_noise},
     units::{Area, LengthExt},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StarInFrame {
     pub x: f64,
     pub y: f64,

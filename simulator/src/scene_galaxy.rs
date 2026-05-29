@@ -19,6 +19,7 @@
 use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
+use serde::{Deserialize, Serialize};
 use shared::units::{Area, LengthExt};
 use starfield::catalogs::{SersicProfile, StarData};
 use starfield::Equatorial;
@@ -94,7 +95,7 @@ impl FrameSource for GalaxyInFrame {
 ///   arrays currently in production. Heterogeneous-array per-sensor
 ///   flux would belong in a render-time cache analogous to stars'
 ///   `FluxCache`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Galaxy {
     pub id: u64,
     pub name: Option<String>,

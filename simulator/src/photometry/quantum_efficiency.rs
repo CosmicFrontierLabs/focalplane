@@ -91,10 +91,10 @@ pub enum QuantumEfficiencyError {
 ///
 /// Serde note: Deserialize bypasses the ascending-wavelength,
 /// boundary-zero, and `[0, 1]` checks that [`QuantumEfficiency::from_table`]
-/// enforces. The metadata round-trip path is the only consumer of
-/// Deserialize today and feeds it data the writer just produced (already
-/// validated by `from_table`), so the bypass is acceptable. Callers
-/// handed an external JSON payload should re-validate via
+/// enforces. The metadata round-trip path is intended for descriptor
+/// JSON written by the same renderer (already validated by
+/// `from_table`); callers handed an external JSON payload should
+/// re-validate via
 /// `from_table(qe.wavelengths_nm().to_vec(), qe.efficiencies().to_vec())`
 /// before using the result in flux integrations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
