@@ -4,6 +4,7 @@
 //! temperatures based on sensor specifications and thermal models.
 
 use crate::algo::misc::{interp, InterpError};
+use serde::{Deserialize, Serialize};
 use shared::units::{Temperature, TemperatureExt};
 
 /// Minimum temperature for dark current interpolation table (°C)
@@ -18,15 +19,28 @@ const INTERPOLATION_POINTS: usize = 100;
 /// Dark current estimator that uses interpolation of temperature vs dark current curves
 /// to predict values at any temperature. Can be initialized either from reference values
 /// (using the 8°C doubling rule) or from explicit temperature/dark current data points.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DarkCurrentEstimator {
     /// Temperature values in degrees Celsius
+    #[serde(rename = "temperatures_c")]
     temperatures: Vec<f64>,
     /// Dark current values in electrons/pixel/second
+    #[serde(rename = "dark_currents_e_per_px_per_s")]
     dark_currents: Vec<f64>,
 }
 
 impl DarkCurrentEstimator {
+    /// Tabulated temperature sample points, in degrees Celsius, ascending.
+    pub fn temperatures_c(&self) -> &[f64] {
+        &self.temperatures
+    }
+
+    /// Tabulated dark-current values in electrons per pixel per second,
+    /// aligned with [`Self::temperatures_c`] index-by-index.
+    pub fn dark_currents_e_per_px_per_s(&self) -> &[f64] {
+        &self.dark_currents
+    }
+
     /// Generate temperature points for interpolation table
     fn generate_temperature_points() -> Vec<f64> {
         let mut temperatures = Vec::with_capacity(INTERPOLATION_POINTS);
