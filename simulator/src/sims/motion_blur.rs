@@ -1514,6 +1514,46 @@ mod tests {
         )
     }
 
+    /// The most common scene: no stars, no galaxies, zodiacal minimum.
+    fn empty_sources() -> LightSources<'static> {
+        LightSources {
+            catalog_stars: &[],
+            galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        }
+    }
+
+    /// Scene carrying only catalog stars over the zodiacal minimum.
+    fn star_sources(stars: &[StarData]) -> LightSources<'_> {
+        LightSources {
+            catalog_stars: stars,
+            galaxies: &[],
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        }
+    }
+
+    /// Scene carrying only extended sources over the zodiacal minimum.
+    fn galaxy_sources(galaxies: &[Galaxy]) -> LightSources<'_> {
+        LightSources {
+            catalog_stars: &[],
+            galaxies,
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        }
+    }
+
+    /// Render a trajectory into a fresh temp dir, returning the dir (so the
+    /// caller can inspect the written PNGs / metadata.json) and the frame count.
+    fn render_to_tmp(
+        fp: &FocalPlaneConfig,
+        traj: &Trajectory,
+        cfg: &MotionBlurConfig,
+        sources: &LightSources,
+    ) -> (tempfile::TempDir, usize) {
+        let tmp = tempfile::tempdir().unwrap();
+        let frames = render_motion_trajectory(traj, sources, fp, cfg, tmp.path()).unwrap();
+        (tmp, frames)
+    }
+
     #[test]
     fn test_from_drift_budget_static_gives_one_stamp() {
         let sched = SubsampleSchedule::from_drift_budget(
@@ -1668,13 +1708,7 @@ mod tests {
             quiet: true,
             ..Default::default()
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        let frames = render_motion_trajectory(&traj, &sources, fp, &cfg, tmp.path()).unwrap();
+        let (_tmp, frames) = render_to_tmp(fp, &traj, &cfg, &empty_sources());
         frames
     }
 
@@ -1708,13 +1742,7 @@ mod tests {
             quiet: true,
             ..Default::default()
         };
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (_tmp, frames) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
         assert!(frames >= 1);
     }
 
@@ -1747,11 +1775,7 @@ mod tests {
             ..Default::default()
         };
         let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         // Render normally to exercise the cache.
         let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
         assert!(frames >= 3);
@@ -1936,15 +1960,9 @@ mod tests {
             quiet: true,
             ..Default::default()
         };
-        let tmp_a = tempfile::tempdir().unwrap();
-        let tmp_b = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
+        let sources = star_sources(&stars);
+        let (tmp_a, _) = render_to_tmp(&fp, &traj, &cfg, &sources);
+        let (tmp_b, _) = render_to_tmp(&fp, &traj, &cfg, &sources);
         let name = "sensor_00/frame_000000.png";
         let a = std::fs::read(tmp_a.path().join(name)).unwrap();
         let b = std::fs::read(tmp_b.path().join(name)).unwrap();
@@ -1990,15 +2008,9 @@ mod tests {
             max_drift_per_stamp_px: 0.05,
             ..cfg_coarse.clone()
         };
-        let tmp_coarse = tempfile::tempdir().unwrap();
-        let tmp_fine = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg_coarse, tmp_coarse.path()).unwrap();
-        render_motion_trajectory(&traj, &sources, &fp, &cfg_fine, tmp_fine.path()).unwrap();
+        let sources = star_sources(&stars);
+        let (tmp_coarse, _) = render_to_tmp(&fp, &traj, &cfg_coarse, &sources);
+        let (tmp_fine, _) = render_to_tmp(&fp, &traj, &cfg_fine, &sources);
         let name = "sensor_00/frame_000000.png";
         let coarse = std::fs::read(tmp_coarse.path().join(name)).unwrap();
         let fine = std::fs::read(tmp_fine.path().join(name)).unwrap();
@@ -2046,11 +2058,7 @@ mod tests {
             ..Default::default()
         };
 
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         let first = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
         let second = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
 
@@ -2093,16 +2101,11 @@ mod tests {
 
         let frame_idx = 0;
         let frame_start = Duration::ZERO;
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         let one =
             render_one_frame(&traj, &sources, &fp, frame_start, frame_idx, &cfg, None).unwrap();
 
-        let tmp = tempfile::tempdir().unwrap();
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, _) = render_to_tmp(&fp, &traj, &cfg, &sources);
 
         let png_path = tmp.path().join(sensor_relative_png_path(0, frame_idx));
         let img = image::open(&png_path).unwrap().to_luma16();
@@ -2156,11 +2159,7 @@ mod tests {
         // the two paths, so the chunk-keyed RNG streams advance through
         // the same pixels in the same order.
         let (fp, stars, traj, cfg) = roi_test_fixture();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         let full = render_one_frame(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
 
         let sat = fp.satellite_for_sensor(0).unwrap();
@@ -2186,11 +2185,7 @@ mod tests {
         // buffer (see render_one_frame_roi docs).
         let (fp, stars, traj, cfg) = roi_test_fixture();
         let ctx = RenderContext::from_focal_plane(&fp).unwrap();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         let scene = RenderScene {
             trajectory: &traj,
             sources,
@@ -2265,11 +2260,7 @@ mod tests {
         let sat = fp.satellite_for_sensor(0).unwrap();
         let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
         let oob = AABB::from_coords(0, 0, h, w); // max equal to dim -> out of bounds (inclusive)
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
+        let sources = star_sources(&stars);
         let err = render_one_frame_roi(&traj, &sources, &fp, Duration::ZERO, 0, &cfg, None, oob, 0)
             .unwrap_err();
         assert!(
@@ -2322,15 +2313,9 @@ mod tests {
             quiet: true,
             ..Default::default()
         };
-        let tmp_a = tempfile::tempdir().unwrap();
-        let tmp_b = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &stars,
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_a.path()).unwrap();
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp_b.path()).unwrap();
+        let sources = star_sources(&stars);
+        let (tmp_a, _) = render_to_tmp(&fp, &traj, &cfg, &sources);
+        let (tmp_b, _) = render_to_tmp(&fp, &traj, &cfg, &sources);
 
         // Compare the PNG bytes of one frame. The new layout routes frame 0
         // of sensor 0 to `sensor_00/frame_000000.png`.
@@ -2369,13 +2354,7 @@ mod tests {
         let fp = tiny_fp();
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(5);
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, frames) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
         assert!(frames >= 2, "expected at least 2 frames, got {}", frames);
 
         let sensor_dir = tmp.path().join("sensor_00");
@@ -2398,13 +2377,7 @@ mod tests {
         let fp = tiny_fp();
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(17);
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        let frames = render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, frames) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
 
@@ -2480,13 +2453,7 @@ mod tests {
         let fp = tiny_fp();
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(29);
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &galaxies,
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, _) = render_to_tmp(&fp, &traj, &cfg, &galaxy_sources(&galaxies));
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
@@ -2512,13 +2479,7 @@ mod tests {
         let fp = tiny_fp();
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(23);
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, _) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
@@ -2572,13 +2533,7 @@ mod tests {
 
         let fp = tiny_fp();
         let cfg = minimal_metadata_cfg(31);
-        let tmp = tempfile::tempdir().unwrap();
-        let sources = LightSources {
-            catalog_stars: &[],
-            galaxies: &[],
-            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
-        };
-        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let (tmp, _) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
