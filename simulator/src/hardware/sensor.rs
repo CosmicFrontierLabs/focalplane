@@ -503,6 +503,35 @@ pub fn create_flat_qe(efficiency: f64) -> QuantumEfficiency {
 pub mod models {
     use super::*;
 
+    use meter_math::bilinear::BilinearInterpolator;
+    use ndarray::Array2;
+
+    /// HWK4123 read noise estimator built from factory calibration data.
+    /// Bilinear over (frame rate in Hz, temperature in °C), read noise in electrons RMS.
+    /// Data is from here:
+    /// - <https://drive.google.com/file/d/1hhnfMxPQs3cXautEpjHpIDGkb_bArWdE>
+    /// - <https://docs.google.com/spreadsheets/d/16WdFvMo3rj3Z9252pq32agsLV-wm7YNacvqfkEgSOAI>
+    fn hwk4123_read_noise_estimator() -> ReadNoiseEstimator {
+        let frame_rates = vec![5.0, 15.0, 30.0, 60.0, 120.0, 1000.0];
+        let temperatures = vec![-20.0, 20.0];
+
+        // Data indexed as [temp_idx, rate_idx]
+        let data = Array2::from_shape_vec(
+            (2, 6),
+            vec![
+                // -20°C row
+                0.233, 0.263, 0.279, 0.334, 0.381, 0.381, // +20°C row
+                0.301, 0.301, 0.305, 0.371, 0.404, 0.404,
+            ],
+        )
+        .expect("Failed to create HWK4123 noise data");
+
+        let interpolator = BilinearInterpolator::new(frame_rates, temperatures, data)
+            .expect("Failed to create HWK4123 interpolator");
+
+        ReadNoiseEstimator::from_interpolator(interpolator)
+    }
+
     /// GSENSE4040BSI CMOS sensor with detailed QE curve from manufacturer data
     pub static GSENSE4040BSI: Lazy<SensorConfig> = Lazy::new(|| {
         // QE data from QE-gsense4040bsi.csv (trunced to 3 decimal places)
@@ -643,7 +672,7 @@ pub mod models {
             name: "HWK4123".into(),
             quantum_efficiency: qe,
             dimensions: geometry,
-            read_noise_estimator: ReadNoiseEstimator::hwk4123(),
+            read_noise_estimator: hwk4123_read_noise_estimator(),
             dark_current_estimator: DarkCurrentEstimator::from_two_points(
                 Temperature::from_celsius(-20.0),
                 0.0198,
