@@ -28,10 +28,12 @@ use std::collections::BTreeMap;
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 
+use crate::scene_galaxy::Galaxy;
+
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderMetadata {
-    /// Schema version for this descriptor. Currently always `"1.0"`.
+    /// Schema version for this descriptor. Currently always `"1.1"`.
     pub version: String,
     /// ISO-8601 UTC timestamp at which the render finished building metadata.
     pub rendered_at: String,
@@ -41,6 +43,9 @@ pub struct RenderMetadata {
     pub frames: Vec<FrameMeta>,
     /// Catalog stars covering the trajectory envelope, recorded verbatim.
     pub stars: Vec<StarMeta>,
+    /// Extended (Sérsic) sources covering the trajectory envelope,
+    /// recorded verbatim from the catalog query.
+    pub galaxies: Vec<Galaxy>,
     /// Telescope + sensor array hardware summary.
     pub hardware: HardwareMeta,
     /// Render knobs (exposure, timestep, seed, etc.).
@@ -67,9 +72,7 @@ pub struct WaypointMeta {
     pub time_s: f64,
     /// Orientation quaternion. Serializes as a 4-element JSON array in
     /// nalgebra's native `[i, j, k, w]` order (imaginary parts first,
-    /// real part last) — same shape as `Quaternion::coords`. Consumers
-    /// reconstructing via `Quaternion::new(w, i, j, k)` must pull `w`
-    /// from index 3, not 0.
+    /// real part last) — same shape as `Quaternion::coords`.
     pub quat: UnitQuaternion<f64>,
     /// Boresight pointing derived from `quat`.
     pub boresight: EquatorialMeta,
@@ -115,6 +118,10 @@ pub struct FrameMeta {
 pub struct StarMeta {
     /// Catalog star identifier.
     pub id: u64,
+    /// Human-readable catalog name when available (e.g. HIP designation,
+    /// variable-star name). `None` for catalogs that only carry numeric
+    /// identifiers.
+    pub name: Option<String>,
     /// Right ascension in degrees.
     pub ra_deg: f64,
     /// Declination in degrees.
@@ -224,8 +231,34 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
+        use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
+        use shared::image_proc::airy::PixelScaledAiryDisk;
+        use shared::units::{LengthExt, Wavelength};
+        use starfield::catalogs::SersicProfile;
+        use starfield::Equatorial;
+
+        let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
+        let spot = SpotFlux {
+            disk: psf,
+            flux: 7.0e-3,
+        };
+        let galaxies = vec![Galaxy {
+            id: 12345,
+            name: Some("NGC test".to_string()),
+            position: Equatorial::from_degrees(187.25, 12.5),
+            profile: SersicProfile {
+                theta_half_arcsec: 4.0,
+                n: 1.5,
+                axis_ratio: 0.7,
+                position_angle_deg: 30.0,
+            },
+            flux: SourceFlux {
+                photons: spot.clone(),
+                electrons: spot,
+            },
+        }];
         let meta = RenderMetadata {
-            version: "1.0".to_string(),
+            version: "1.1".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
             trajectory: TrajectoryMeta {
                 duration_s: 10.0,
@@ -243,6 +276,7 @@ mod tests {
             },
             frames: Vec::new(),
             stars: Vec::new(),
+            galaxies,
             hardware: HardwareMeta {
                 telescope: "Test".to_string(),
                 temperature_c: -10.0,
@@ -263,7 +297,15 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, "1.0");
+        assert_eq!(parsed.version, "1.1");
         assert_eq!(parsed.hardware.telescope, "Test");
+        let g = &parsed.galaxies[0];
+        assert_eq!(g.id, 12345);
+        assert_eq!(g.name.as_deref(), Some("NGC test"));
+        assert!((g.position.ra_degrees() - 187.25).abs() < 1e-9);
+        assert!((g.position.dec_degrees() - 12.5).abs() < 1e-9);
+        assert_eq!(g.profile.n, 1.5);
+        assert_eq!(g.profile.axis_ratio, 0.7);
+        assert_eq!(g.flux.electrons.flux, 7.0e-3);
     }
 }

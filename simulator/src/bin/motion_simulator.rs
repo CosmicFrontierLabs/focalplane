@@ -767,13 +767,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     info!("Cached {} stars for trajectory envelope", stars.len());
 
-    // NSA galaxies (optional). Pre-projected once at the envelope
-    // centre — the per-tile renderer uses the same per-sensor list
-    // for every frame. See `sims::nsa_galaxies` for the loader
-    // documentation. `galaxies_in_field` is a flat sky-position list
-    // for the context-view ellipse overlay (it covers galaxies that
-    // land in sensor gaps too).
-    let (per_sensor_galaxies, galaxies_in_field) = if args.galaxies {
+    // NSA galaxies (optional). Returns a flat sky-truth `Vec<Galaxy>`
+    // — the per-tile renderer projects per sensor at render start,
+    // including halo-aware multi-sensor splatting for galaxies whose
+    // Sérsic footprint subtends more than one sensor. See
+    // `sims::nsa_galaxies` for the loader documentation.
+    // `galaxies_in_field` is a flat sky-position list for the
+    // context-view ellipse overlay (it covers galaxies that land in
+    // sensor gaps too).
+    let (galaxies, galaxies_in_field) = if args.galaxies {
         let path = args
             .galaxy_catalog
             .clone()
@@ -782,7 +784,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use the envelope diameter / 2 as a generous FOV radius
         // around the trajectory centre. The loader applies its own
         // padding on top.
-        let per_sensor = simulator::sims::nsa_galaxies::load_and_route_nsa_galaxies(
+        let galaxies = simulator::sims::nsa_galaxies::load_and_route_nsa_galaxies(
             &path,
             &envelope_center,
             &focal_plane,
@@ -795,12 +797,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             envelope_diameter * 0.5,
             &cfg,
         )?;
-        (per_sensor, in_field)
+        (galaxies, in_field)
     } else {
-        (
-            vec![Vec::new(); focal_plane.array.sensor_count()],
-            Vec::new(),
-        )
+        (Vec::new(), Vec::new())
     };
 
     let output_path = Path::new(&args.output_dir);
@@ -816,7 +815,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             focal_plane: &focal_plane,
             sources: LightSources {
                 catalog_stars: &stars,
-                per_sensor_galaxies: &per_sensor_galaxies,
+                galaxies: &galaxies,
                 zodiacal: args.shared.coordinates,
             },
             output_dir: output_path,

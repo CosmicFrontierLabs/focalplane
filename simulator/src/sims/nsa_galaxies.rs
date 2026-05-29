@@ -1,11 +1,12 @@
-//! NASA-Sloan Atlas (NSA) → `GalaxyInFrame` routing.
+//! NASA-Sloan Atlas (NSA) → flat [`Galaxy`] catalog routing.
 //!
 //! Loads an NSA FITS file (default location: `~/.cache/starfield/nsa/nsa_v0_1_2.fits`,
 //! downloaded on demand via `starfield_nsa::download_nsa()` if absent),
 //! filters to the field of view around a pointing, builds per-galaxy
-//! Sérsic deposits + SDSS-spectrum flux objects, and routes them to
-//! the per-sensor `GalaxyInFrame` lists that `Scene::with_galaxies`
-//! consumes.
+//! Sérsic profiles + SDSS-spectrum flux objects, and returns them as
+//! a flat `Vec<Galaxy>`. Per-sensor projection (with halo padding for
+//! galaxies that subtend multiple sensors) is the motion-blur
+//! renderer's responsibility.
 //!
 //! v1 surface area:
 //!
@@ -31,12 +32,10 @@ use starfield::Equatorial;
 use starfield_datasource_utils::cache_dir;
 use starfield_nsa::{NsaCatalog, NsaEntry};
 
-use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
-use crate::image_proc::sersic_splat::SersicSplat;
+use crate::hardware::satellite::FocalPlaneConfig;
 use crate::photometry::photoconversion::{photon_electron_fluxes, SourceFlux};
 use crate::photometry::{SDSSSpectrum, SdssBand};
-use crate::scene_galaxy::GalaxyInFrame;
-use crate::sims::orientation::orientation_from_pointing;
+use crate::scene_galaxy::Galaxy;
 
 /// Default rejection threshold on `theta_half_arcsec`. NSA's typical
 /// galaxies sit well below 30″; entries above 60″ are almost always
@@ -191,19 +190,25 @@ pub fn load_galaxies_in_fov(
 
 /// Load NSA from `path` (downloading via the NYU mirror if absent),
 /// filter to the field of view around `pointing` plus `fov_pad_deg`
-/// of slack, drop pathological fits, and project to per-sensor
-/// `GalaxyInFrame` lists.
+/// of slack, drop pathological fits, and return a flat `Vec<Galaxy>`
+/// of sky-truth catalog entries.
 ///
-/// The returned `Vec<Vec<GalaxyInFrame>>` matches the indexing of
-/// `Scene::per_sensor_stars` and is the `Vec` that
-/// `Scene::with_galaxies` expects.
+/// Per-sensor projection (including the multi-sensor halo case) is
+/// the motion-blur renderer's job — see
+/// [`crate::scene_galaxy::project_galaxies_to_sensors`].
+///
+/// `flux` is computed using the array's reference satellite (sensor
+/// 0). For the homogeneous arrays currently in production this is
+/// exactly the same flux every sensor would compute itself; for a
+/// hypothetical heterogeneous array, per-sensor flux would belong
+/// in a render-time cache analogous to stars' `FluxCache`.
 pub fn load_and_route_nsa_galaxies(
     path: &Path,
     pointing: &Equatorial,
     fp: &FocalPlaneConfig,
     fov_radius_deg: f64,
     config: &GalaxyLoaderConfig,
-) -> Result<Vec<Vec<GalaxyInFrame>>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Galaxy>, Box<dyn std::error::Error>> {
     info!(
         "loading NSA from {} (download on demand if absent)",
         path.display()
@@ -243,48 +248,35 @@ pub fn load_and_route_nsa_galaxies(
         pointing.dec_degrees()
     );
 
-    let orientation = orientation_from_pointing(pointing, 0.0);
-    let n_sensors = fp.array.sensor_count();
-    let mut per_sensor: Vec<Vec<GalaxyInFrame>> = vec![Vec::new(); n_sensors];
+    // Flux computation uses the array's reference sensor (sensor 0) QE.
+    // Homogeneous arrays — the current production case — share QE across
+    // all sensors, so this is exact for every sensor the galaxy may
+    // land on. For heterogeneous arrays this becomes a small per-sensor
+    // approximation; the proper fix is render-time per-sensor flux
+    // computation (analogous to stars' FluxCache) and is left for a
+    // future PR.
+    let reference_sat = fp
+        .satellite_for_sensor(0)
+        .ok_or("focal plane has no sensors")?;
+    let reference_disk = reference_sat.airy_disk_pixel_space();
+    let qe = &reference_sat.sensor.quantum_efficiency;
 
-    for (sensor_idx, sensor_galaxies) in per_sensor.iter_mut().enumerate() {
-        let sat = match fp.satellite_for_sensor(sensor_idx) {
-            Some(s) => s,
-            None => continue,
-        };
-        let plate_scale_arcsec_per_px = sat.plate_scale_arcsec_per_pixel();
-        let reference_disk = sat.airy_disk_pixel_space();
-        let qe = &sat.sensor.quantum_efficiency;
-
-        for entry in &in_field {
-            let pos = Equatorial::from_degrees(entry.ra, entry.dec);
-            let (px, py) = match fp.project_to_sensor(
-                &starfield::catalogs::StarData::with_position(0, pos, 0.0, None),
-                &orientation,
-                sensor_idx,
-                /* padding_mm */ 0.0,
-            ) {
-                Some(p) => p,
-                None => continue,
-            };
+    let galaxies: Vec<Galaxy> = in_field
+        .iter()
+        .map(|entry| {
+            let position = Equatorial::from_degrees(entry.ra, entry.dec);
             let profile = nsa_to_sersic_profile(entry);
             let spectrum = nsa_to_sdss_spectrum(entry);
             let flux: SourceFlux = photon_electron_fluxes(&reference_disk, &spectrum, qe);
-            let deposit = SersicSplat::new(profile, plate_scale_arcsec_per_px);
-            sensor_galaxies.push(GalaxyInFrame {
-                x: px,
-                y: py,
+            Galaxy {
                 id: entry.nsaid as u64,
+                name: None,
+                position,
+                profile,
                 flux,
-                deposit,
-            });
-        }
-        info!(
-            "sensor {}: {} galaxies routed",
-            sensor_idx,
-            sensor_galaxies.len()
-        );
-    }
-
-    Ok(per_sensor)
+            }
+        })
+        .collect();
+    info!("{} NSA galaxies prepared (flat, sky-truth)", galaxies.len());
+    Ok(galaxies)
 }

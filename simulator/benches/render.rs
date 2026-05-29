@@ -210,7 +210,7 @@ fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
 
     let sources = LightSources {
         catalog_stars: &stars,
-        per_sensor_galaxies: &[],
+        galaxies: &[],
         zodiacal: zodi,
     };
 

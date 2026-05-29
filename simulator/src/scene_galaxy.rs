@@ -1,13 +1,31 @@
-//! `GalaxyInFrame` — the per-sensor representation of a galaxy ready
-//! for splatting onto a pixel buffer. Mirrors `StarInFrame` (in
-//! `image_proc::render`) shape-for-shape so both source kinds flow
-//! through the same `FrameSource`/`MeanFluxDeposit` pipeline.
+//! `Galaxy` (flat, sky-truth catalog entity) and `GalaxyInFrame` (per-
+//! sensor projected wrapper).
+//!
+//! The renderer-facing [`crate::sims::motion_blur::LightSources`] now
+//! carries a flat `&[Galaxy]` slice: one entry per catalog galaxy,
+//! independent of which sensor (or how many) the galaxy projects
+//! onto. The motion-blur renderer expands this into per-sensor
+//! `Vec<GalaxyInFrame>` lists at render start via
+//! [`project_galaxies_to_sensors`], which projects each galaxy onto
+//! every sensor whose extent + halo-aware padding contains the
+//! galaxy's centre. This is how big galaxies that subtend multiple
+//! sensors get rendered on each of them — the renderer sorts out the
+//! per-sensor incidence, callers don't need to.
+//!
+//! `GalaxyInFrame` remains the per-sensor projected representation,
+//! used by the static [`crate::image_proc::render::Renderer`] path
+//! (single-sensor) and as the motion-blur renderer's internal type.
 
 use std::time::Duration;
 
-use shared::units::Area;
+use nalgebra::UnitQuaternion;
+use serde::{Deserialize, Serialize};
+use shared::units::{Area, LengthExt};
+use starfield::catalogs::{SersicProfile, StarData};
+use starfield::Equatorial;
 
-use crate::image_proc::deposit::FrameSource;
+use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
+use crate::image_proc::deposit::{FrameSource, MeanFluxDeposit};
 use crate::image_proc::sersic_splat::SersicSplat;
 use crate::photometry::photoconversion::SourceFlux;
 
@@ -15,9 +33,16 @@ use crate::photometry::photoconversion::SourceFlux;
 /// mean-electron buffer alongside the per-sensor star list.
 ///
 /// Fields parallel `StarInFrame`:
-/// - `(x, y)`: sub-pixel position on the sensor
+/// - `(x, y)`: sub-pixel position on the sensor (derived from
+///   `position` via the trajectory's mid-frame projection)
+/// - `position`: sky coordinates of the galaxy centre — the
+///   catalog-truth location, preserved so the renderer can emit it
+///   into scene metadata without re-querying the catalog
 /// - `id`: catalog ID (NSAID for NSA, etc.) for caching across frames /
 ///   subsamples
+/// - `name`: optional human-readable catalog name (e.g. "M87",
+///   "NGC 4486" for the bright-galaxy catalog); `None` for catalogs
+///   that only carry numeric IDs (NSA)
 /// - `flux`: same `SourceFlux` shape stars use, carrying the chromatic
 ///   electron rate from spectrum × QE; `flux.electrons.disk` is the
 ///   per-galaxy effective Airy disk (used by future PSF-convolved
@@ -29,7 +54,9 @@ use crate::photometry::photoconversion::SourceFlux;
 pub struct GalaxyInFrame {
     pub x: f64,
     pub y: f64,
+    pub position: Equatorial,
     pub id: u64,
+    pub name: Option<String>,
     pub flux: SourceFlux,
     pub deposit: SersicSplat,
 }
@@ -48,6 +75,101 @@ impl FrameSource for GalaxyInFrame {
     fn deposit(&self) -> &Self::Deposit {
         &self.deposit
     }
+}
+
+/// Flat sky-truth representation of one catalog galaxy.
+///
+/// Carries everything needed to deposit the galaxy onto any sensor of
+/// any focal plane, without committing to a specific projection. The
+/// motion-blur renderer projects each `Galaxy` onto every sensor it
+/// subtends (with halo-aware padding) via
+/// [`project_galaxies_to_sensors`] at render start.
+///
+/// Fields:
+/// - `id` / `name`: catalog identifier (numeric + optional human-readable).
+/// - `position`: galaxy centre in equatorial J2000 coordinates.
+/// - `profile`: Sérsic shape (theta_half, n, axis_ratio, position_angle).
+/// - `flux`: integrated photon / photoelectron rate at the entrance
+///   aperture. Computed by the catalog builder using the focal plane's
+///   reference sensor (sensor 0) QE — accurate for the homogeneous
+///   arrays currently in production. Heterogeneous-array per-sensor
+///   flux would belong in a render-time cache analogous to stars'
+///   `FluxCache`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Galaxy {
+    pub id: u64,
+    pub name: Option<String>,
+    pub position: Equatorial,
+    pub profile: SersicProfile,
+    pub flux: SourceFlux,
+}
+
+/// Project each [`Galaxy`] onto every sensor whose extent (plus a
+/// per-sensor halo-aware padding equal to the galaxy's Sérsic
+/// footprint) contains the projected centre.
+///
+/// Returns a per-sensor `Vec<GalaxyInFrame>` list ready to be fed to
+/// the motion-blur renderer's per-tile splat loop. Galaxies whose
+/// halo subtends multiple sensors appear in the lists of every
+/// sensor they touch; galaxies whose entire footprint falls outside
+/// every sensor are dropped.
+///
+/// The `orientation` argument is the spacecraft attitude under which
+/// to project — typically the trajectory's mid-frame pose. Per-frame
+/// re-projection (so galaxies follow the camera through a moving
+/// trajectory) is a future improvement; for now galaxies are
+/// projected once per render call.
+pub fn project_galaxies_to_sensors(
+    galaxies: &[Galaxy],
+    fp: &FocalPlaneConfig,
+    orientation: &UnitQuaternion<f64>,
+) -> Vec<Vec<GalaxyInFrame>> {
+    let n_sensors = fp.array.sensor_count();
+    let mut per_sensor: Vec<Vec<GalaxyInFrame>> = vec![Vec::new(); n_sensors];
+
+    for galaxy in galaxies {
+        for (sensor_idx, sensor_list) in per_sensor.iter_mut().enumerate() {
+            let sat = match fp.satellite_for_sensor(sensor_idx) {
+                Some(s) => s,
+                None => continue,
+            };
+            let plate_scale_arcsec_per_px = sat.plate_scale_arcsec_per_pixel();
+            let deposit = SersicSplat::new(galaxy.profile, plate_scale_arcsec_per_px);
+            let footprint_px = deposit.footprint_pixels() as f64;
+            let pixel_size_mm = sat.sensor.pixel_size().as_millimeters();
+            let padding_mm = footprint_px * pixel_size_mm;
+
+            let probe = StarData::with_position(galaxy.id, galaxy.position, 0.0, None);
+            let (px, py) = match fp.project_to_sensor(&probe, orientation, sensor_idx, padding_mm) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Final AABB test against the (un-padded) sensor extent:
+            // a galaxy whose centre lies within the padded region but
+            // whose footprint AABB does not actually intersect any
+            // pixel contributes nothing and should be dropped.
+            let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+            if px + footprint_px < 0.0
+                || px - footprint_px >= w as f64
+                || py + footprint_px < 0.0
+                || py - footprint_px >= h as f64
+            {
+                continue;
+            }
+
+            sensor_list.push(GalaxyInFrame {
+                x: px,
+                y: py,
+                position: galaxy.position,
+                id: galaxy.id,
+                name: galaxy.name.clone(),
+                flux: galaxy.flux.clone(),
+                deposit,
+            });
+        }
+    }
+    per_sensor
 }
 
 #[cfg(test)]
@@ -108,7 +230,9 @@ mod tests {
         GalaxyInFrame {
             x,
             y,
+            position: Equatorial::from_degrees(0.0, 0.0),
             id: 42,
+            name: None,
             flux,
             deposit,
         }
