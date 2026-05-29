@@ -6,17 +6,18 @@
 
 use crate::hardware::sensor::{models::IMX455, SensorConfig};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use shared::units::LengthExt;
 
 /// Position of a sensor in the array focal plane.
 ///
 /// The x/y coordinates represent the center of the sensor in the array
 /// coordinate system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorPosition {
     /// X offset of sensor center from array origin in millimeters
     pub x_mm: f64,
-    /// Y offset of sensor center from array origin in millimeters  
+    /// Y offset of sensor center from array origin in millimeters
     pub y_mm: f64,
 }
 

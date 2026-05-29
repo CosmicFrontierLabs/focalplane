@@ -2131,7 +2131,7 @@ dependencies = [
 [[package]]
 name = "meter-math"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=7936ec9#7936ec9722786850378eab3373491ae56c741189"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=4c02625#4c02625d5b0eb23dde4d617b8832892cf4c8c27b"
 dependencies = [
  "log",
  "nalgebra",
@@ -2300,6 +2300,7 @@ checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -2358,6 +2359,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -3245,7 +3247,7 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=7936ec9#7936ec9722786850378eab3373491ae56c741189"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=4c02625#4c02625d5b0eb23dde4d617b8832892cf4c8c27b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3286,7 +3288,7 @@ dependencies = [
 [[package]]
 name = "shared-wasm"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=7936ec9#7936ec9722786850378eab3373491ae56c741189"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=4c02625#4c02625d5b0eb23dde4d617b8832892cf4c8c27b"
 dependencies = [
  "num-traits",
  "serde",
@@ -4023,7 +4025,11 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd5cfe7d84f6774726717f358a37f5bca8fca273bed4de40604ad129d1107b49"
 dependencies = [
+ "num-bigint",
+ "num-complex",
+ "num-rational",
  "num-traits",
+ "serde",
  "typenum",
 ]
 

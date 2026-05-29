@@ -309,7 +309,7 @@ struct TileRenderContext<'a> {
 }
 
 /// Configuration for [`render_motion_trajectory`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MotionBlurConfig {
     /// Time between frames (controls how many output frames are rendered).
     pub timestep: Duration,
