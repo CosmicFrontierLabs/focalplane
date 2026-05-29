@@ -231,6 +231,8 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
+        use approx::assert_abs_diff_eq;
+
         use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
         use shared::image_proc::airy::PixelScaledAiryDisk;
         use shared::units::{LengthExt, Wavelength};
@@ -302,8 +304,8 @@ mod tests {
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
-        assert!((g.position.ra_degrees() - 187.25).abs() < 1e-9);
-        assert!((g.position.dec_degrees() - 12.5).abs() < 1e-9);
+        assert_abs_diff_eq!(g.position.ra_degrees(), 187.25, epsilon = 1e-9);
+        assert_abs_diff_eq!(g.position.dec_degrees(), 12.5, epsilon = 1e-9);
         assert_eq!(g.profile.n, 1.5);
         assert_eq!(g.profile.axis_ratio, 0.7);
         assert_eq!(g.flux.electrons.flux, 7.0e-3);
