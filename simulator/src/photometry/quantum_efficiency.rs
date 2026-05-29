@@ -50,6 +50,7 @@
 //! - **Numerical stability**: Robust handling of edge cases and extrapolation
 //! - **Integration accuracy**: Trapezoidal rule for photometric calculations
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::Band;
@@ -87,9 +88,19 @@ pub enum QuantumEfficiencyError {
 /// - **Wavelengths**: Ascending-ordered array in nanometers
 /// - **Efficiencies**: Corresponding QE values in [0, 1] range
 /// - **Interpolation**: Linear between data points, zero outside range
-#[derive(Debug, Clone)]
+///
+/// Serde note: Deserialize bypasses the ascending-wavelength,
+/// boundary-zero, and `[0, 1]` checks that [`QuantumEfficiency::from_table`]
+/// enforces. The metadata round-trip path is the only consumer of
+/// Deserialize today and feeds it data the writer just produced (already
+/// validated by `from_table`), so the bypass is acceptable. Callers
+/// handed an external JSON payload should re-validate via
+/// `from_table(qe.wavelengths_nm().to_vec(), qe.efficiencies().to_vec())`
+/// before using the result in flux integrations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantumEfficiency {
     /// Wavelengths in nanometers (nm)
+    #[serde(rename = "wavelengths_nm")]
     wavelengths: Vec<f64>,
 
     /// Efficiency values (0.0 to 1.0) corresponding to each wavelength

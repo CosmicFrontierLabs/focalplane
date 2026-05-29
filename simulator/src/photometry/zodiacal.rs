@@ -121,6 +121,7 @@
 //! **Related Work**: Wright, E.L. (1998), Kelsall, T. et al. (1998)
 
 use ndarray::Array2;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -231,7 +232,15 @@ pub enum ZodiacalError {
 /// # Usage
 /// Create solar angular coordinates for bright, dark, and opposition regions
 /// with component access for zodiacal light brightness calculations.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// Serde note: Deserialize bypasses the range validation that
+/// [`SolarAngularCoordinates::new`] enforces. The metadata round-trip
+/// path is the only consumer of Deserialize today and feeds it data
+/// the writer just produced (already validated by `new`), so the
+/// bypass is acceptable. Callers handed an external JSON payload
+/// should re-validate via `new(coords.elongation(), coords.latitude())`
+/// before using the result in zodiacal-light queries.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SolarAngularCoordinates {
     /// Solar elongation angle in degrees [0°, 180°].
     ///
@@ -240,6 +249,7 @@ pub struct SolarAngularCoordinates {
     /// - **0°**: Target at Sun (infinite zodiacal light, unobservable)
     /// - **90°**: Target at quadrature (high zodiacal light)
     /// - **180°**: Target at anti-Sun (moderate zodiacal light with opposition effect)
+    #[serde(rename = "elongation_deg")]
     elongation: f64,
 
     /// Ecliptic latitude in degrees [-90°, +90°].
@@ -249,6 +259,7 @@ pub struct SolarAngularCoordinates {
     /// - **0°**: On ecliptic plane (maximum zodiacal light)
     /// - **±45°**: Intermediate zodiacal light levels
     /// - **±90°**: At ecliptic poles (minimum zodiacal light)
+    #[serde(rename = "latitude_deg")]
     latitude: f64,
 }
 

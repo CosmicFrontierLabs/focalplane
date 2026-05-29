@@ -27,6 +27,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::photometry::quantum_efficiency::QuantumEfficiency;
+use crate::photometry::zodiacal::SolarAngularCoordinates;
+
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderMetadata {
@@ -208,8 +211,9 @@ pub struct TelescopeMeta {
     /// Reference wavelength for diffraction-limited calculations, in nm.
     pub corrected_to_nm: f64,
     /// Wavelength-dependent quantum efficiency of the optical train
-    /// (mirror reflectivity × lens transmission × etc.).
-    pub quantum_efficiency: PassbandMeta,
+    /// (mirror reflectivity × lens transmission × etc.). Serializes
+    /// as `{wavelengths_nm: [...], efficiencies: [...]}`.
+    pub quantum_efficiency: QuantumEfficiency,
 }
 
 /// Per-sensor entry — geometry, conversion gains, and noise curves.
@@ -233,25 +237,14 @@ pub struct SensorMeta {
     /// Full-well capacity in electrons (saturation limit).
     pub max_well_depth_e: f64,
     /// Detector quantum efficiency curve (sensor only, optics excluded).
-    pub quantum_efficiency: PassbandMeta,
+    pub quantum_efficiency: QuantumEfficiency,
     /// Combined telescope × sensor QE, pre-computed by `SatelliteConfig`.
     /// Equivalent to `QuantumEfficiency::product(telescope_qe, sensor_qe)`.
-    pub combined_qe: PassbandMeta,
+    pub combined_qe: QuantumEfficiency,
     /// Tabulated dark current vs. temperature.
     pub dark_current: DarkCurrentMeta,
     /// Tabulated read noise vs. (frame rate, temperature).
     pub read_noise: ReadNoiseMeta,
-}
-
-/// Tabulated wavelength-dependent throughput (QE / transmission /
-/// passband). Linear interpolation between samples; zero outside the
-/// tabulated range.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PassbandMeta {
-    /// Sample wavelengths in nanometers, ascending.
-    pub wavelengths_nm: Vec<f64>,
-    /// Throughput values in `[0, 1]`, aligned with `wavelengths_nm`.
-    pub efficiencies: Vec<f64>,
 }
 
 /// Tabulated dark current as a function of detector temperature.
@@ -297,16 +290,8 @@ pub struct RenderConfigMeta {
     /// Catalog path the run was configured with.
     pub catalog_path: String,
     /// Solar angular coordinates used for zodiacal-light evaluation.
-    pub zodiacal: ZodiacalMeta,
-}
-
-/// Solar angular coordinate pair in degrees.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ZodiacalMeta {
-    /// Solar elongation in degrees.
-    pub elongation_deg: f64,
-    /// Ecliptic latitude in degrees.
-    pub latitude_deg: f64,
+    /// Serializes as `{elongation_deg, latitude_deg}`.
+    pub zodiacal: SolarAngularCoordinates,
 }
 
 /// Relative PNG path for a given sensor index, using forward slashes.
@@ -369,10 +354,9 @@ mod tests {
                 position_angle_deg: 30.0,
             },
         }];
-        let passband = PassbandMeta {
-            wavelengths_nm: vec![400.0, 550.0, 700.0],
-            efficiencies: vec![0.0, 0.7, 0.0],
-        };
+        let passband =
+            QuantumEfficiency::from_table(vec![400.0, 550.0, 700.0], vec![0.0, 0.7, 0.0])
+                .expect("test passband should be valid");
         let meta = RenderMetadata {
             version: "1.2".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
@@ -433,10 +417,8 @@ mod tests {
                 seed: 42,
                 force_static: false,
                 catalog_path: "catalog.bin".to_string(),
-                zodiacal: ZodiacalMeta {
-                    elongation_deg: 90.0,
-                    latitude_deg: 45.0,
-                },
+                zodiacal: SolarAngularCoordinates::new(90.0, 45.0)
+                    .expect("test zodiacal coords should be valid"),
             },
         };
         let json = serde_json::to_string(&meta).unwrap();
@@ -455,8 +437,8 @@ mod tests {
         let s = &parsed.hardware.sensors[0];
         assert_eq!(s.pixel_pitch_um, 3.76);
         assert_eq!(
-            s.quantum_efficiency.wavelengths_nm,
-            vec![400.0, 550.0, 700.0]
+            s.quantum_efficiency.wavelengths_nm(),
+            &[400.0_f64, 550.0, 700.0][..]
         );
         assert_eq!(s.dark_current.dark_currents_e_per_px_per_s.len(), 3);
         assert_eq!(s.read_noise.noise_e_rms[0], vec![1.2, 1.5]);

@@ -56,8 +56,8 @@ use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::GalaxyInFrame;
 use crate::sims::motion_blur_metadata::{
     sensor_dir_name, sensor_relative_png_path, DarkCurrentMeta, EquatorialMeta, FrameMeta,
-    GalaxyMeta, HardwareMeta, PassbandMeta, ReadNoiseMeta, RenderConfigMeta, RenderMetadata,
-    SensorMeta, SersicMeta, StarMeta, TelescopeMeta, TrajectoryMeta, WaypointMeta, ZodiacalMeta,
+    GalaxyMeta, HardwareMeta, ReadNoiseMeta, RenderConfigMeta, RenderMetadata, SensorMeta,
+    SersicMeta, StarMeta, TelescopeMeta, TrajectoryMeta, WaypointMeta,
 };
 use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
@@ -1382,7 +1382,7 @@ fn build_render_metadata(
         f_number: telescope.focal_length.as_meters() / telescope.aperture.as_meters(),
         obscuration_ratio: telescope.obscuration_ratio,
         corrected_to_nm: telescope.corrected_to.as_nanometers(),
-        quantum_efficiency: passband_meta(&telescope.quantum_efficiency),
+        quantum_efficiency: telescope.quantum_efficiency.clone(),
     };
 
     let sensors: Vec<SensorMeta> = (0..sensor_count)
@@ -1404,8 +1404,8 @@ fn build_render_metadata(
                 bit_depth: sat.sensor.bit_depth,
                 dn_per_electron: sat.sensor.dn_per_electron,
                 max_well_depth_e: sat.sensor.max_well_depth_e,
-                quantum_efficiency: passband_meta(&sat.sensor.quantum_efficiency),
-                combined_qe: passband_meta(&sat.combined_qe),
+                quantum_efficiency: sat.sensor.quantum_efficiency.clone(),
+                combined_qe: sat.combined_qe.clone(),
                 dark_current: DarkCurrentMeta {
                     temperatures_c: sat.sensor.dark_current_estimator.temperatures_c().to_vec(),
                     dark_currents_e_per_px_per_s: sat
@@ -1436,10 +1436,7 @@ fn build_render_metadata(
         seed: config.base_seed.unwrap_or(0),
         force_static: config.force_static,
         catalog_path: config.catalog_path.to_string_lossy().into_owned(),
-        zodiacal: ZodiacalMeta {
-            elongation_deg: scene.sources.zodiacal.elongation(),
-            latitude_deg: scene.sources.zodiacal.latitude(),
-        },
+        zodiacal: scene.sources.zodiacal,
     };
 
     Ok(RenderMetadata {
@@ -1452,16 +1449,6 @@ fn build_render_metadata(
         hardware,
         render_config,
     })
-}
-
-/// Snapshot a [`QuantumEfficiency`] curve into the serializable
-/// [`PassbandMeta`] shape (parallel `wavelengths_nm` + `efficiencies`
-/// arrays).
-fn passband_meta(qe: &crate::photometry::quantum_efficiency::QuantumEfficiency) -> PassbandMeta {
-    PassbandMeta {
-        wavelengths_nm: qe.wavelengths_nm().to_vec(),
-        efficiencies: qe.efficiencies().to_vec(),
-    }
 }
 
 /// Per-pixel-per-second zodiacal electron rate at a given boresight for a
