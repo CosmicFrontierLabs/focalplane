@@ -97,6 +97,17 @@ pub struct QuantumEfficiency {
 }
 
 impl QuantumEfficiency {
+    /// Tabulated wavelength sample points, in nanometers, ascending.
+    pub fn wavelengths_nm(&self) -> &[f64] {
+        &self.wavelengths
+    }
+
+    /// Tabulated efficiency values in `[0, 1]`, aligned with
+    /// [`Self::wavelengths_nm`] index-by-index.
+    pub fn efficiencies(&self) -> &[f64] {
+        &self.efficiencies
+    }
+
     /// Create quantum efficiency model for a rectangular passband (notch filter).
     ///
     /// Generates a simple rectangular response with sharp cutoffs at band edges,

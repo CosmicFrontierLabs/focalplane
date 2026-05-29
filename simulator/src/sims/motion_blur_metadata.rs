@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderMetadata {
-    /// Schema version for this descriptor. Currently always `"1.1"`.
+    /// Schema version for this descriptor. Currently always `"1.2"`.
     pub version: String,
     /// ISO-8601 UTC timestamp at which the render finished building metadata.
     pub rendered_at: String,
@@ -175,18 +175,44 @@ pub struct SersicMeta {
     pub position_angle_deg: f64,
 }
 
-/// Hardware summary: telescope + per-sensor layout.
+/// Hardware dump: telescope optics + per-sensor configuration.
+///
+/// Carries enough of the `FocalPlaneConfig` to let downstream consumers
+/// reproduce pixel-to-sky projection and electron-to-DN conversion
+/// without re-reading the source library. Curves (QE, dark current,
+/// read noise) are tabulated verbatim from the renderer's interpolators.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HardwareMeta {
-    /// Telescope name.
-    pub telescope: String,
-    /// Operating temperature in Celsius.
+    /// Telescope optical configuration.
+    pub telescope: TelescopeMeta,
+    /// Operating temperature in Celsius (shared across all sensors).
     pub temperature_c: f64,
     /// Per-sensor entries in array-index order.
     pub sensors: Vec<SensorMeta>,
 }
 
-/// Per-sensor layout entry.
+/// Telescope optics and combined-system parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelescopeMeta {
+    /// Telescope model name.
+    pub name: String,
+    /// Clear-aperture diameter in meters.
+    pub aperture_m: f64,
+    /// Effective focal length in meters (including optical train).
+    pub focal_length_m: f64,
+    /// Convenience: focal length divided by aperture.
+    pub f_number: f64,
+    /// Central obscuration ratio (0.0 - 1.0, fraction of aperture
+    /// radius blocked by the secondary).
+    pub obscuration_ratio: f64,
+    /// Reference wavelength for diffraction-limited calculations, in nm.
+    pub corrected_to_nm: f64,
+    /// Wavelength-dependent quantum efficiency of the optical train
+    /// (mirror reflectivity × lens transmission × etc.).
+    pub quantum_efficiency: PassbandMeta,
+}
+
+/// Per-sensor entry — geometry, conversion gains, and noise curves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorMeta {
     /// Sensor index in the array.
@@ -195,8 +221,64 @@ pub struct SensorMeta {
     pub name: String,
     /// Sensor dimensions in pixels, `[width, height]`.
     pub dimensions_px: [usize; 2],
-    /// Sensor center position in the focal plane, `[x_mm, y_mm]`.
+    /// Square-pixel physical pitch, in micrometers.
+    pub pixel_pitch_um: f64,
+    /// Sensor centre position on the focal plane, `[x_mm, y_mm]`,
+    /// measured from the optical axis.
     pub position_mm: [f64; 2],
+    /// ADC bit depth (8, 12, 14, 16 typical).
+    pub bit_depth: u8,
+    /// Gain in DN per electron.
+    pub dn_per_electron: f64,
+    /// Full-well capacity in electrons (saturation limit).
+    pub max_well_depth_e: f64,
+    /// Detector quantum efficiency curve (sensor only, optics excluded).
+    pub quantum_efficiency: PassbandMeta,
+    /// Combined telescope × sensor QE, pre-computed by `SatelliteConfig`.
+    /// Equivalent to `QuantumEfficiency::product(telescope_qe, sensor_qe)`.
+    pub combined_qe: PassbandMeta,
+    /// Tabulated dark current vs. temperature.
+    pub dark_current: DarkCurrentMeta,
+    /// Tabulated read noise vs. (frame rate, temperature).
+    pub read_noise: ReadNoiseMeta,
+}
+
+/// Tabulated wavelength-dependent throughput (QE / transmission /
+/// passband). Linear interpolation between samples; zero outside the
+/// tabulated range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PassbandMeta {
+    /// Sample wavelengths in nanometers, ascending.
+    pub wavelengths_nm: Vec<f64>,
+    /// Throughput values in `[0, 1]`, aligned with `wavelengths_nm`.
+    pub efficiencies: Vec<f64>,
+}
+
+/// Tabulated dark current as a function of detector temperature.
+/// Exponential interpolation between samples (the renderer's model
+/// follows the standard 8 °C doubling rule).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DarkCurrentMeta {
+    /// Temperature samples in degrees Celsius, ascending.
+    pub temperatures_c: Vec<f64>,
+    /// Dark current values in electrons per pixel per second,
+    /// aligned with `temperatures_c`.
+    pub dark_currents_e_per_px_per_s: Vec<f64>,
+}
+
+/// Tabulated read noise surface over (frame rate, temperature).
+/// Bilinear interpolation between samples. Matches the underlying
+/// `BilinearInterpolator` axis convention exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadNoiseMeta {
+    /// X-axis grid: frame rates in Hz, ascending.
+    pub frame_rates_hz: Vec<f64>,
+    /// Y-axis grid: temperatures in degrees Celsius, ascending.
+    pub temperatures_c: Vec<f64>,
+    /// Noise surface in electrons RMS, indexed as
+    /// `noise_e_rms[temperature_idx][frame_rate_idx]` (rows align
+    /// with `temperatures_c`, columns with `frame_rates_hz`).
+    pub noise_e_rms: Vec<Vec<f64>>,
 }
 
 /// Render knobs captured for reproducibility.
@@ -287,8 +369,12 @@ mod tests {
                 position_angle_deg: 30.0,
             },
         }];
+        let passband = PassbandMeta {
+            wavelengths_nm: vec![400.0, 550.0, 700.0],
+            efficiencies: vec![0.0, 0.7, 0.0],
+        };
         let meta = RenderMetadata {
-            version: "1.1".to_string(),
+            version: "1.2".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
             trajectory: TrajectoryMeta {
                 duration_s: 10.0,
@@ -308,9 +394,37 @@ mod tests {
             stars: Vec::new(),
             galaxies,
             hardware: HardwareMeta {
-                telescope: "Test".to_string(),
+                telescope: TelescopeMeta {
+                    name: "Test".to_string(),
+                    aperture_m: 0.5,
+                    focal_length_m: 6.0,
+                    f_number: 12.0,
+                    obscuration_ratio: 0.3,
+                    corrected_to_nm: 550.0,
+                    quantum_efficiency: passband.clone(),
+                },
                 temperature_c: -10.0,
-                sensors: Vec::new(),
+                sensors: vec![SensorMeta {
+                    idx: 0,
+                    name: "TestSensor".to_string(),
+                    dimensions_px: [64, 64],
+                    pixel_pitch_um: 3.76,
+                    position_mm: [0.0, 0.0],
+                    bit_depth: 16,
+                    dn_per_electron: 0.5,
+                    max_well_depth_e: 51000.0,
+                    quantum_efficiency: passband.clone(),
+                    combined_qe: passband.clone(),
+                    dark_current: DarkCurrentMeta {
+                        temperatures_c: vec![-20.0, 0.0, 20.0],
+                        dark_currents_e_per_px_per_s: vec![0.01, 0.1, 1.0],
+                    },
+                    read_noise: ReadNoiseMeta {
+                        frame_rates_hz: vec![5.0, 1000.0],
+                        temperatures_c: vec![-20.0, 20.0],
+                        noise_e_rms: vec![vec![1.2, 1.5], vec![1.4, 1.7]],
+                    },
+                }],
             },
             render_config: RenderConfigMeta {
                 exposure_s: 1.0,
@@ -327,8 +441,9 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, "1.1");
-        assert_eq!(parsed.hardware.telescope, "Test");
+        assert_eq!(parsed.version, "1.2");
+        assert_eq!(parsed.hardware.telescope.name, "Test");
+        assert_eq!(parsed.hardware.telescope.aperture_m, 0.5);
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
@@ -336,5 +451,14 @@ mod tests {
         assert_eq!(g.dec_deg, 12.5);
         assert_eq!(g.sersic.n, 1.5);
         assert_eq!(g.sersic.axis_ratio, 0.7);
+        // Curve shapes round-trip.
+        let s = &parsed.hardware.sensors[0];
+        assert_eq!(s.pixel_pitch_um, 3.76);
+        assert_eq!(
+            s.quantum_efficiency.wavelengths_nm,
+            vec![400.0, 550.0, 700.0]
+        );
+        assert_eq!(s.dark_current.dark_currents_e_per_px_per_s.len(), 3);
+        assert_eq!(s.read_noise.noise_e_rms[0], vec![1.2, 1.5]);
     }
 }

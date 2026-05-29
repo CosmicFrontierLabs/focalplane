@@ -29,6 +29,17 @@ pub struct DarkCurrentEstimator {
 }
 
 impl DarkCurrentEstimator {
+    /// Tabulated temperature sample points, in degrees Celsius, ascending.
+    pub fn temperatures_c(&self) -> &[f64] {
+        &self.temperatures
+    }
+
+    /// Tabulated dark-current values in electrons per pixel per second,
+    /// aligned with [`Self::temperatures_c`] index-by-index.
+    pub fn dark_currents_e_per_px_per_s(&self) -> &[f64] {
+        &self.dark_currents
+    }
+
     /// Generate temperature points for interpolation table
     fn generate_temperature_points() -> Vec<f64> {
         let mut temperatures = Vec::with_capacity(INTERPOLATION_POINTS);
