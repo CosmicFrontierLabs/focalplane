@@ -15,12 +15,12 @@
 //! stars render as larger, more saturated Gaussian blobs.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use ab_glyph::{FontRef, PxScale};
 use image::{ImageBuffer, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use nalgebra::UnitQuaternion;
-use once_cell::sync::Lazy;
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 
@@ -36,8 +36,8 @@ type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
 /// Embedded DejaVu Sans Mono Bold — used for all context-view labels.
 /// Bold weight keeps thin strokes readable at small px scales.
 static FONT_DATA: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono-Bold.ttf");
-static FONT: Lazy<FontRef<'static>> =
-    Lazy::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
+static FONT: LazyLock<FontRef<'static>> =
+    LazyLock::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
 
 /// Configuration for the context-view renderer.
 #[derive(Debug, Clone)]
