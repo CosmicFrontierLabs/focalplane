@@ -72,9 +72,7 @@ pub struct WaypointMeta {
     pub time_s: f64,
     /// Orientation quaternion. Serializes as a 4-element JSON array in
     /// nalgebra's native `[i, j, k, w]` order (imaginary parts first,
-    /// real part last) — same shape as `Quaternion::coords`. Consumers
-    /// reconstructing via `Quaternion::new(w, i, j, k)` must pull `w`
-    /// from index 3, not 0.
+    /// real part last) — same shape as `Quaternion::coords`.
     pub quat: UnitQuaternion<f64>,
     /// Boresight pointing derived from `quat`.
     pub boresight: EquatorialMeta,
