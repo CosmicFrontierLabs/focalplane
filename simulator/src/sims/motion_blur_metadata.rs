@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderMetadata {
-    /// Schema version for this descriptor. Currently always `"1.0"`.
+    /// Schema version for this descriptor. Currently always `"1.1"`.
     pub version: String,
     /// ISO-8601 UTC timestamp at which the render finished building metadata.
     pub rendered_at: String,
@@ -40,6 +40,11 @@ pub struct RenderMetadata {
     pub frames: Vec<FrameMeta>,
     /// Catalog stars covering the trajectory envelope, recorded verbatim.
     pub stars: Vec<StarMeta>,
+    /// Extended (Sérsic) sources covering the trajectory envelope,
+    /// recorded verbatim from the catalog query. Stored flat — symmetric
+    /// with [`RenderMetadata::stars`] — and de-duplicated by `id` if the
+    /// same source was routed onto more than one sensor.
+    pub galaxies: Vec<GalaxyMeta>,
     /// Telescope + sensor array hardware summary.
     pub hardware: HardwareMeta,
     /// Render knobs (exposure, timestep, seed, etc.).
@@ -109,6 +114,10 @@ pub struct FrameMeta {
 pub struct StarMeta {
     /// Catalog star identifier.
     pub id: u64,
+    /// Human-readable catalog name when available (e.g. HIP designation,
+    /// variable-star name). `None` for catalogs that only carry numeric
+    /// identifiers.
+    pub name: Option<String>,
     /// Right ascension in degrees.
     pub ra_deg: f64,
     /// Declination in degrees.
@@ -117,6 +126,53 @@ pub struct StarMeta {
     pub magnitude: f64,
     /// Optional color index (`B - V`, a.k.a. `bp_rp` for Gaia-style catalogs).
     pub color_index: Option<f64>,
+}
+
+/// Extended (Sérsic) catalog source.
+///
+/// Mirrors [`StarMeta`] for sky-position semantics: `(ra_deg, dec_deg)`
+/// is the catalog-truth centre, independent of which sensor (if any)
+/// the source projects onto under any given trajectory pose. Pixel-frame
+/// information is intentionally **not** recorded here — consumers can
+/// reproject through the same trajectory + focal plane the renderer
+/// used.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GalaxyMeta {
+    /// Catalog galaxy identifier (e.g. NSAID for NSA, hashed name for
+    /// the bright-galaxy catalog).
+    pub id: u64,
+    /// Human-readable catalog name when available (e.g. NGC/Messier
+    /// designation). `None` for catalogs that only carry numeric
+    /// identifiers (e.g. NSAID-keyed entries).
+    pub name: Option<String>,
+    /// Right ascension of the galaxy centre, in degrees (J2000).
+    pub ra_deg: f64,
+    /// Declination of the galaxy centre, in degrees (J2000).
+    pub dec_deg: f64,
+    /// Integrated photoelectron flux rate at the entrance aperture,
+    /// in electrons per second per square centimetre. Equivalent to
+    /// `SourceFlux::electrons.flux`.
+    pub electrons_per_s_per_cm2: f64,
+    /// Elliptical Sérsic profile parameters describing the extended
+    /// surface-brightness shape.
+    pub sersic: SersicMeta,
+}
+
+/// Elliptical Sérsic profile parameters for a [`GalaxyMeta`].
+///
+/// Mirrors `starfield::catalogs::SersicProfile` so downstream consumers
+/// can reconstruct the surface-brightness model without depending on
+/// `starfield`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SersicMeta {
+    /// Half-light radius along the major axis, in arcseconds.
+    pub theta_half_arcsec: f64,
+    /// Sérsic index n (dimensionless, typically ~0.5 to ~6).
+    pub n: f64,
+    /// Axis ratio b/a, where b ≤ a (`1.0` is circular).
+    pub axis_ratio: f64,
+    /// Position angle of the major axis, degrees east of north (J2000).
+    pub position_angle_deg: f64,
 }
 
 /// Hardware summary: telescope + per-sensor layout.
@@ -218,8 +274,21 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
+        let galaxies = vec![GalaxyMeta {
+            id: 12345,
+            name: Some("NGC test".to_string()),
+            ra_deg: 187.25,
+            dec_deg: 12.5,
+            electrons_per_s_per_cm2: 7.0e-3,
+            sersic: SersicMeta {
+                theta_half_arcsec: 4.0,
+                n: 1.5,
+                axis_ratio: 0.7,
+                position_angle_deg: 30.0,
+            },
+        }];
         let meta = RenderMetadata {
-            version: "1.0".to_string(),
+            version: "1.1".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
             trajectory: TrajectoryMeta {
                 duration_s: 10.0,
@@ -237,6 +306,7 @@ mod tests {
             },
             frames: Vec::new(),
             stars: Vec::new(),
+            galaxies,
             hardware: HardwareMeta {
                 telescope: "Test".to_string(),
                 temperature_c: -10.0,
@@ -257,7 +327,14 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, "1.0");
+        assert_eq!(parsed.version, "1.1");
         assert_eq!(parsed.hardware.telescope, "Test");
+        let g = &parsed.galaxies[0];
+        assert_eq!(g.id, 12345);
+        assert_eq!(g.name.as_deref(), Some("NGC test"));
+        assert_eq!(g.ra_deg, 187.25);
+        assert_eq!(g.dec_deg, 12.5);
+        assert_eq!(g.sersic.n, 1.5);
+        assert_eq!(g.sersic.axis_ratio, 0.7);
     }
 }

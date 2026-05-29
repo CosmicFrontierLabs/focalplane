@@ -55,9 +55,9 @@ use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::GalaxyInFrame;
 use crate::sims::motion_blur_metadata::{
-    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, HardwareMeta,
-    RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
-    ZodiacalMeta,
+    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, GalaxyMeta, HardwareMeta,
+    RenderConfigMeta, RenderMetadata, SensorMeta, SersicMeta, StarMeta, TrajectoryMeta,
+    WaypointMeta, ZodiacalMeta,
 };
 use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
@@ -1336,12 +1336,43 @@ fn build_render_metadata(
         .iter()
         .map(|s| StarMeta {
             id: s.id,
+            // starfield::StarData does not currently expose a name
+            // field; left None until an upstream catalog wires it in.
+            name: None,
             ra_deg: s.position.ra_degrees(),
             dec_deg: s.position.dec_degrees(),
             magnitude: s.magnitude,
             color_index: s.b_v,
         })
         .collect();
+
+    // Flatten the per-sensor galaxy lists into a single ordered Vec
+    // de-duplicated by catalog id. A galaxy is typically routed to
+    // exactly one sensor (the projection clips to a single sensor
+    // rectangle), but the dedup is cheap and keeps the metadata sane
+    // if a future projection mode allows overlap.
+    let mut galaxies_by_id: BTreeMap<u64, GalaxyMeta> = BTreeMap::new();
+    for sensor_galaxies in scene.sources.per_sensor_galaxies.iter() {
+        for g in sensor_galaxies {
+            galaxies_by_id.entry(g.id).or_insert_with(|| {
+                let p = g.deposit.profile();
+                GalaxyMeta {
+                    id: g.id,
+                    name: g.name.clone(),
+                    ra_deg: g.position.ra_degrees(),
+                    dec_deg: g.position.dec_degrees(),
+                    electrons_per_s_per_cm2: g.flux.electrons.flux,
+                    sersic: SersicMeta {
+                        theta_half_arcsec: p.theta_half_arcsec,
+                        n: p.n,
+                        axis_ratio: p.axis_ratio,
+                        position_angle_deg: p.position_angle_deg,
+                    },
+                }
+            });
+        }
+    }
+    let galaxies: Vec<GalaxyMeta> = galaxies_by_id.into_values().collect();
 
     let sensors: Vec<SensorMeta> = (0..sensor_count)
         .map(|i| {
@@ -1376,11 +1407,12 @@ fn build_render_metadata(
     };
 
     Ok(RenderMetadata {
-        version: "1.0".to_string(),
+        version: "1.1".to_string(),
         rendered_at,
         trajectory: trajectory_meta,
         frames,
         stars,
+        galaxies,
         hardware,
         render_config,
     })
@@ -2352,7 +2384,9 @@ mod tests {
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
 
-        assert_eq!(v["version"], "1.0");
+        assert_eq!(v["version"], "1.1");
+        // With no extended sources the galaxies list is present and empty.
+        assert!(v["galaxies"].as_array().unwrap().is_empty());
         let frames_arr = v["frames"].as_array().unwrap();
         assert_eq!(frames_arr.len(), frames);
         assert!(frames_arr[0]["paths"]
@@ -2383,6 +2417,71 @@ mod tests {
         let zodi = &v["render_config"]["zodiacal"];
         assert!(zodi["elongation_deg"].is_number());
         assert!(zodi["latitude_deg"].is_number());
+    }
+
+    #[test]
+    fn test_metadata_includes_extended_sources_at_sky_coords() {
+        // A LightSources carrying galaxies must surface them under
+        // metadata.galaxies — flat, like stars — with sky coordinates,
+        // integrated electron rate, and the full Sérsic shape.
+        use crate::image_proc::sersic_splat::SersicSplat;
+        use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
+        use shared::image_proc::airy::PixelScaledAiryDisk;
+        use shared::units::Wavelength;
+        use starfield::catalogs::SersicProfile;
+
+        let profile = SersicProfile {
+            theta_half_arcsec: 3.5,
+            n: 2.5,
+            axis_ratio: 0.6,
+            position_angle_deg: 42.0,
+        };
+        let deposit = SersicSplat::new(profile, 0.5);
+        let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
+        let spot = SpotFlux {
+            disk: psf,
+            flux: 1.25e-2,
+        };
+        let flux = SourceFlux {
+            photons: spot.clone(),
+            electrons: spot,
+        };
+        let galaxy = GalaxyInFrame {
+            x: 17.5,
+            y: 23.25,
+            position: Equatorial::from_degrees(123.5, -7.25),
+            id: 987654,
+            name: Some("M-test".to_string()),
+            flux,
+            deposit,
+        };
+        let per_sensor_galaxies = vec![vec![galaxy]];
+
+        let fp = tiny_fp();
+        let traj = static_trajectory();
+        let cfg = minimal_metadata_cfg(29);
+        let tmp = tempfile::tempdir().unwrap();
+        let sources = LightSources {
+            catalog_stars: &[],
+            per_sensor_galaxies: &per_sensor_galaxies,
+            zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+        };
+        render_motion_trajectory(&traj, &sources, &fp, &cfg, tmp.path()).unwrap();
+        let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
+        let meta: crate::sims::motion_blur_metadata::RenderMetadata =
+            serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(meta.galaxies.len(), 1);
+        let g = &meta.galaxies[0];
+        assert_eq!(g.id, 987654);
+        assert_eq!(g.name.as_deref(), Some("M-test"));
+        assert_abs_diff_eq!(g.ra_deg, 123.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.dec_deg, -7.25, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.electrons_per_s_per_cm2, 1.25e-2, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.sersic.theta_half_arcsec, 3.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.sersic.n, 2.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.sersic.axis_ratio, 0.6, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.sersic.position_angle_deg, 42.0, epsilon = 1e-15);
     }
 
     #[test]

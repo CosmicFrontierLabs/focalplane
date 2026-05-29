@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use shared::units::Area;
+use starfield::Equatorial;
 
 use crate::image_proc::deposit::FrameSource;
 use crate::image_proc::sersic_splat::SersicSplat;
@@ -15,9 +16,16 @@ use crate::photometry::photoconversion::SourceFlux;
 /// mean-electron buffer alongside the per-sensor star list.
 ///
 /// Fields parallel `StarInFrame`:
-/// - `(x, y)`: sub-pixel position on the sensor
+/// - `(x, y)`: sub-pixel position on the sensor (derived from
+///   `position` via the trajectory's mid-frame projection)
+/// - `position`: sky coordinates of the galaxy centre — the
+///   catalog-truth location, preserved so the renderer can emit it
+///   into scene metadata without re-querying the catalog
 /// - `id`: catalog ID (NSAID for NSA, etc.) for caching across frames /
 ///   subsamples
+/// - `name`: optional human-readable catalog name (e.g. "M87",
+///   "NGC 4486" for the bright-galaxy catalog); `None` for catalogs
+///   that only carry numeric IDs (NSA)
 /// - `flux`: same `SourceFlux` shape stars use, carrying the chromatic
 ///   electron rate from spectrum × QE; `flux.electrons.disk` is the
 ///   per-galaxy effective Airy disk (used by future PSF-convolved
@@ -29,7 +37,9 @@ use crate::photometry::photoconversion::SourceFlux;
 pub struct GalaxyInFrame {
     pub x: f64,
     pub y: f64,
+    pub position: Equatorial,
     pub id: u64,
+    pub name: Option<String>,
     pub flux: SourceFlux,
     pub deposit: SersicSplat,
 }
@@ -108,7 +118,9 @@ mod tests {
         GalaxyInFrame {
             x,
             y,
+            position: Equatorial::from_degrees(0.0, 0.0),
             id: 42,
+            name: None,
             flux,
             deposit,
         }

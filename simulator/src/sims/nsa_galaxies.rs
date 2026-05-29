@@ -274,7 +274,9 @@ pub fn load_and_route_nsa_galaxies(
             sensor_galaxies.push(GalaxyInFrame {
                 x: px,
                 y: py,
+                position: pos,
                 id: entry.nsaid as u64,
+                name: None,
                 flux,
                 deposit,
             });
