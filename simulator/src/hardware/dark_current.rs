@@ -24,8 +24,6 @@ pub struct DarkCurrentEstimator {
     temperatures: Vec<f64>,
     /// Dark current values in electrons/pixel/second
     dark_currents: Vec<f64>,
-    /// Log of dark current values for exponential interpolation
-    log_dark_currents: Vec<f64>,
 }
 
 impl DarkCurrentEstimator {
@@ -64,11 +62,9 @@ impl DarkCurrentEstimator {
             })
             .collect();
 
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -115,11 +111,9 @@ impl DarkCurrentEstimator {
             })
             .collect();
 
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -129,11 +123,9 @@ impl DarkCurrentEstimator {
     /// * `temperatures` - Temperature values in degrees Celsius (must be sorted ascending)
     /// * `dark_currents` - Dark current values in electrons/pixel/second
     pub fn from_curve(temperatures: Vec<f64>, dark_currents: Vec<f64>) -> Self {
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -149,9 +141,15 @@ impl DarkCurrentEstimator {
     /// * `Ok(f64)` - Estimated dark current in electrons/pixel/second at target temperature
     /// * `Err(InterpError)` - If interpolation fails (e.g., out of bounds)
     pub fn estimate_at_temperature(&self, temperature: Temperature) -> Result<f64, InterpError> {
-        // Interpolate in log space to preserve exponential nature
+        // Interpolate in log space to preserve exponential nature. The log
+        // table is computed on the fly: this is the only caller that needs
+        // log values, and it's called O(frames × sensors) per render — a
+        // few hundred ln() evaluations swamped by the rest of the per-frame
+        // work. Storing a cached log_dark_currents Vec would save
+        // microseconds and force a serde adapter to round-trip it.
         let target_temp_c = temperature.as_celsius();
-        let log_result = interp(target_temp_c, &self.temperatures, &self.log_dark_currents)?;
+        let log_dark_currents: Vec<f64> = self.dark_currents.iter().map(|&dc| dc.ln()).collect();
+        let log_result = interp(target_temp_c, &self.temperatures, &log_dark_currents)?;
         // Convert back from log space
         Ok(log_result.exp())
     }
