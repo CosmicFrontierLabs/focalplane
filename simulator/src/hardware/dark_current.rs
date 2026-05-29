@@ -4,6 +4,7 @@
 //! temperatures based on sensor specifications and thermal models.
 
 use crate::algo::misc::{interp, InterpError};
+use serde::{Deserialize, Serialize};
 use shared::units::{Temperature, TemperatureExt};
 
 /// Minimum temperature for dark current interpolation table (°C)
@@ -18,17 +19,28 @@ const INTERPOLATION_POINTS: usize = 100;
 /// Dark current estimator that uses interpolation of temperature vs dark current curves
 /// to predict values at any temperature. Can be initialized either from reference values
 /// (using the 8°C doubling rule) or from explicit temperature/dark current data points.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DarkCurrentEstimator {
     /// Temperature values in degrees Celsius
+    #[serde(rename = "temperatures_c")]
     temperatures: Vec<f64>,
     /// Dark current values in electrons/pixel/second
+    #[serde(rename = "dark_currents_e_per_px_per_s")]
     dark_currents: Vec<f64>,
-    /// Log of dark current values for exponential interpolation
-    log_dark_currents: Vec<f64>,
 }
 
 impl DarkCurrentEstimator {
+    /// Tabulated temperature sample points, in degrees Celsius, ascending.
+    pub fn temperatures_c(&self) -> &[f64] {
+        &self.temperatures
+    }
+
+    /// Tabulated dark-current values in electrons per pixel per second,
+    /// aligned with [`Self::temperatures_c`] index-by-index.
+    pub fn dark_currents_e_per_px_per_s(&self) -> &[f64] {
+        &self.dark_currents
+    }
+
     /// Generate temperature points for interpolation table
     fn generate_temperature_points() -> Vec<f64> {
         let mut temperatures = Vec::with_capacity(INTERPOLATION_POINTS);
@@ -64,11 +76,9 @@ impl DarkCurrentEstimator {
             })
             .collect();
 
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -115,11 +125,9 @@ impl DarkCurrentEstimator {
             })
             .collect();
 
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -129,11 +137,9 @@ impl DarkCurrentEstimator {
     /// * `temperatures` - Temperature values in degrees Celsius (must be sorted ascending)
     /// * `dark_currents` - Dark current values in electrons/pixel/second
     pub fn from_curve(temperatures: Vec<f64>, dark_currents: Vec<f64>) -> Self {
-        let log_dark_currents = dark_currents.iter().map(|&dc| dc.ln()).collect();
         Self {
             temperatures,
             dark_currents,
-            log_dark_currents,
         }
     }
 
@@ -149,9 +155,10 @@ impl DarkCurrentEstimator {
     /// * `Ok(f64)` - Estimated dark current in electrons/pixel/second at target temperature
     /// * `Err(InterpError)` - If interpolation fails (e.g., out of bounds)
     pub fn estimate_at_temperature(&self, temperature: Temperature) -> Result<f64, InterpError> {
-        // Interpolate in log space to preserve exponential nature
+        // Interpolate in log space to preserve exponential nature.
         let target_temp_c = temperature.as_celsius();
-        let log_result = interp(target_temp_c, &self.temperatures, &self.log_dark_currents)?;
+        let log_dark_currents: Vec<f64> = self.dark_currents.iter().map(|&dc| dc.ln()).collect();
+        let log_result = interp(target_temp_c, &self.temperatures, &log_dark_currents)?;
         // Convert back from log space
         Ok(log_result.exp())
     }

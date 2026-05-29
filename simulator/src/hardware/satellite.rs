@@ -1,4 +1,5 @@
 use nalgebra::UnitQuaternion;
+use serde::{Deserialize, Serialize};
 use starfield::{catalogs::StarData, Equatorial};
 
 use super::{sensor::SensorConfig, sensor_array::SensorArray, telescope::TelescopeConfig};
@@ -29,7 +30,7 @@ use shared::units::{Angle, AngleExt, Length, LengthExt, Temperature};
 /// - Temperature-dependent dark current
 /// - Geometric field-of-view calculations
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SatelliteConfig {
     /// Telescope optical configuration (aperture, focal length, efficiency)
     pub telescope: TelescopeConfig,
@@ -237,7 +238,7 @@ impl SatelliteConfig {
 ///
 /// Use `satellite_for_sensor` to get a per-sensor `SatelliteConfig` for
 /// rendering, flux calculation, and noise generation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FocalPlaneConfig {
     /// Telescope optical configuration (shared across all sensors)
     pub telescope: TelescopeConfig,

@@ -135,7 +135,7 @@ impl fmt::Display for SensorGeometry {
 /// - **Dynamic range**: Well depth, bit depth, and gain characteristics
 /// - **Thermal modeling**: Temperature-dependent dark current
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorConfig {
     /// Wavelength-dependent quantum efficiency curve from manufacturer data
     pub quantum_efficiency: QuantumEfficiency,
