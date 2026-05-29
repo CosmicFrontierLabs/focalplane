@@ -36,6 +36,7 @@
 //!
 
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
 use crate::photometry::QuantumEfficiency;
@@ -56,7 +57,7 @@ use shared::units::{Angle, AngleExt, Area, AreaExt, Length, LengthExt, Wavelengt
 /// - **Sampling optimization**: Focal length adjustment for optimal detector sampling
 /// - **Wavelength response**: Quantum efficiency curves for optical system
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelescopeConfig {
     /// Primary mirror or lens diameter (clear aperture)
     pub aperture: Length,

@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
 use crate::photometry::spectrum::FlatSpectrum;
 use crate::photometry::{
     spectrum::{wavelength_to_ergs, Band},
