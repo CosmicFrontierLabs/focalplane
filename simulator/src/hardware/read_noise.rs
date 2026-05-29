@@ -54,6 +54,15 @@ pub struct ReadNoiseEstimator {
 }
 
 impl ReadNoiseEstimator {
+    /// Access the underlying bilinear interpolator over
+    /// (frame_rate_hz, temperature_c). Lets consumers introspect the
+    /// calibration grid + noise surface via `BilinearInterpolator`'s
+    /// `x_coords()` / `y_coords()` / `data()` accessors — e.g. to dump
+    /// the full read-noise table into render metadata.
+    pub fn interpolator(&self) -> &BilinearInterpolator {
+        &self.interpolator
+    }
+
     /// Create a constant read noise estimator that returns the same value regardless of conditions
     /// This is a model for sensors where the read noise is not a strong function of temperature
     /// or frame rate.

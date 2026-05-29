@@ -55,9 +55,7 @@ use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::{project_galaxies_to_sensors, Galaxy, GalaxyInFrame};
 use crate::sims::motion_blur_metadata::{
-    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, HardwareMeta,
-    RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
-    ZodiacalMeta,
+    sensor_dir_name, sensor_relative_png_path, FrameMeta, RenderMetadata,
 };
 use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
@@ -1286,7 +1284,6 @@ pub fn render_motion_trajectory(
     // recorded here is relative (forward-slash) to `output_dir`.
     let metadata = build_render_metadata(
         &scene,
-        &ctx.satellites,
         config,
         &plans
             .iter()
@@ -1317,38 +1314,13 @@ pub fn render_motion_trajectory(
 /// coords) come through the [`RenderScene`] handle.
 fn build_render_metadata(
     scene: &RenderScene,
-    satellites: &[SatelliteConfig],
     config: &MotionBlurConfig,
     frame_plans: &[(usize, SubsampleSchedule)],
     sensor_count: usize,
 ) -> Result<RenderMetadata, TrajectoryError> {
     let rendered_at = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
-    let start = scene.trajectory.start_time();
-    let end = scene.trajectory.end_time();
-    let trajectory_meta = TrajectoryMeta {
-        duration_s: (end - start).as_secs_f64(),
-        start_time_s: start.as_secs_f64(),
-        end_time_s: end.as_secs_f64(),
-        waypoints: scene
-            .trajectory
-            .waypoints()
-            .iter()
-            .map(|wp| {
-                let q = wp.orientation;
-                let bore = boresight_of(&q);
-                WaypointMeta {
-                    time_s: wp.time.as_secs_f64(),
-                    quat: q,
-                    boresight: EquatorialMeta {
-                        ra_deg: bore.ra_degrees(),
-                        dec_deg: bore.dec_degrees(),
-                    },
-                    roll_deg: roll_of(&q).to_degrees(),
-                }
-            })
-            .collect(),
-    };
+    let trajectory = scene.trajectory.clone();
 
     let mut frames: Vec<FrameMeta> = Vec::with_capacity(frame_plans.len());
     for (frame_idx, schedule) in frame_plans {
@@ -1369,74 +1341,29 @@ fn build_render_metadata(
             t_s: schedule.frame_start.as_secs_f64(),
             exposure_s: schedule.exposure.as_secs_f64(),
             quat: q,
-            boresight: EquatorialMeta {
-                ra_deg: bore.ra_degrees(),
-                dec_deg: bore.dec_degrees(),
-            },
+            boresight_ra_deg: bore.ra_degrees(),
+            boresight_dec_deg: bore.dec_degrees(),
             roll_deg: roll_of(&q).to_degrees(),
             n_stamps: schedule.stamps_per_exposure,
             paths,
         });
     }
 
-    let stars: Vec<StarMeta> = scene
-        .sources
-        .catalog_stars
-        .iter()
-        .map(|s| StarMeta {
-            id: s.id,
-            // starfield::StarData does not currently expose a name
-            // field; left None until an upstream catalog wires it in.
-            name: None,
-            ra_deg: s.position.ra_degrees(),
-            dec_deg: s.position.dec_degrees(),
-            magnitude: s.magnitude,
-            color_index: s.b_v,
-        })
-        .collect();
-
+    let stars: Vec<StarData> = scene.sources.catalog_stars.to_vec();
     let galaxies: Vec<Galaxy> = scene.sources.galaxies.to_vec();
-
-    let sensors: Vec<SensorMeta> = (0..sensor_count)
-        .map(|i| {
-            let ps = &scene.fp.array.sensors[i];
-            let (width, height) = ps.sensor.dimensions.get_pixel_width_height();
-            SensorMeta {
-                idx: i,
-                name: satellites[i].sensor.name.clone(),
-                dimensions_px: [width, height],
-                position_mm: [ps.position.x_mm, ps.position.y_mm],
-            }
-        })
-        .collect();
-
-    let hardware = HardwareMeta {
-        telescope: config.telescope_name.clone(),
-        temperature_c: config.temperature_c,
-        sensors,
-    };
-
-    let render_config = RenderConfigMeta {
-        exposure_s: config.exposure.as_secs_f64(),
-        timestep_s: config.timestep.as_secs_f64(),
-        max_drift_per_stamp_px: config.max_drift_per_stamp_px,
-        seed: config.base_seed.unwrap_or(0),
-        force_static: config.force_static,
-        catalog_path: config.catalog_path.to_string_lossy().into_owned(),
-        zodiacal: ZodiacalMeta {
-            elongation_deg: scene.sources.zodiacal.elongation(),
-            latitude_deg: scene.sources.zodiacal.latitude(),
-        },
-    };
+    let focal_plane = scene.fp.clone();
+    let zodiacal = scene.sources.zodiacal;
+    let render_config = config.clone();
 
     Ok(RenderMetadata {
-        version: "1.1".to_string(),
+        version: "1.2".to_string(),
         rendered_at,
-        trajectory: trajectory_meta,
+        trajectory,
         frames,
         stars,
         galaxies,
-        hardware,
+        focal_plane,
+        zodiacal,
         render_config,
     })
 }
@@ -2381,7 +2308,7 @@ mod tests {
         let raw = std::fs::read_to_string(tmp.path().join("metadata.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
 
-        assert_eq!(v["version"], "1.1");
+        assert_eq!(v["version"], "1.2");
         // With no extended sources the galaxies list is present and empty.
         assert!(v["galaxies"].as_array().unwrap().is_empty());
         let frames_arr = v["frames"].as_array().unwrap();
@@ -2400,18 +2327,37 @@ mod tests {
             waypoints.len() >= 2,
             "trajectory must expose >= 2 waypoints"
         );
-        // quat is [w, x, y, z] — 4 elements.
-        assert_eq!(waypoints[0]["quat"].as_array().unwrap().len(), 4);
+        // Waypoint::orientation serializes via nalgebra as a 4-element
+        // array in [i, j, k, w] order.
+        assert_eq!(waypoints[0]["orientation"].as_array().unwrap().len(), 4);
 
         assert!(v["stars"].is_array());
 
-        let sensors = v["hardware"]["sensors"].as_array().unwrap();
-        let dims = sensors[0]["dimensions_px"].as_array().unwrap();
-        assert_eq!(dims.len(), 2);
-        assert!(dims[0].as_u64().unwrap() > 0);
-        assert!(dims[1].as_u64().unwrap() > 0);
+        // focal_plane carries the full FocalPlaneConfig graph (telescope,
+        // sensor array with per-sensor noise / QE / geometry). Shape spot-
+        // check only — uom unit serialization is opaque, so we just verify
+        // the top-level objects exist with the right children.
+        let focal_plane = &v["focal_plane"];
+        assert!(focal_plane["telescope"].is_object());
+        assert!(focal_plane["telescope"]["name"].is_string());
+        let tele_qe = &focal_plane["telescope"]["quantum_efficiency"];
+        let tele_wl = tele_qe["wavelengths_nm"].as_array().unwrap();
+        let tele_eff = tele_qe["efficiencies"].as_array().unwrap();
+        assert_eq!(tele_wl.len(), tele_eff.len());
+        assert!(tele_wl.len() >= 2);
+        let sensors = focal_plane["array"]["sensors"].as_array().unwrap();
+        assert!(!sensors.is_empty());
+        let s0_inner = &sensors[0]["sensor"];
+        assert!(s0_inner["name"].is_string());
+        assert!(s0_inner["bit_depth"].as_u64().unwrap() > 0);
+        assert!(s0_inner["dn_per_electron"].as_f64().unwrap() > 0.0);
+        let dc = &s0_inner["dark_current_estimator"];
+        let dc_t = dc["temperatures_c"].as_array().unwrap();
+        let dc_v = dc["dark_currents_e_per_px_per_s"].as_array().unwrap();
+        assert_eq!(dc_t.len(), dc_v.len());
+        assert!(dc_t.len() >= 2);
 
-        let zodi = &v["render_config"]["zodiacal"];
+        let zodi = &v["zodiacal"];
         assert!(zodi["elongation_deg"].is_number());
         assert!(zodi["latitude_deg"].is_number());
     }
@@ -2494,17 +2440,17 @@ mod tests {
             let q = traj.orientation_at(mid_t).unwrap();
             let expected = boresight_of(&q);
             assert!(
-                (frame.boresight.ra_deg - expected.ra_degrees()).abs() < 1e-9,
+                (frame.boresight_ra_deg - expected.ra_degrees()).abs() < 1e-9,
                 "frame {} RA mismatch: meta={} expected={}",
                 frame.idx,
-                frame.boresight.ra_deg,
+                frame.boresight_ra_deg,
                 expected.ra_degrees()
             );
             assert!(
-                (frame.boresight.dec_deg - expected.dec_degrees()).abs() < 1e-9,
+                (frame.boresight_dec_deg - expected.dec_degrees()).abs() < 1e-9,
                 "frame {} Dec mismatch: meta={} expected={}",
                 frame.idx,
-                frame.boresight.dec_deg,
+                frame.boresight_dec_deg,
                 expected.dec_degrees()
             );
         }
@@ -2539,15 +2485,15 @@ mod tests {
             serde_json::from_str(&raw).unwrap();
 
         let q_expected = orientation_from_pointing(&pointing, roll);
-        let wp0 = &meta.trajectory.waypoints[0];
-        assert_abs_diff_eq!(wp0.quat.w, q_expected.w, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.i, q_expected.i, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.j, q_expected.j, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.k, q_expected.k, epsilon = 1e-12);
+        let wp0 = &meta.trajectory.waypoints()[0];
+        assert_abs_diff_eq!(wp0.orientation.w, q_expected.w, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.orientation.i, q_expected.i, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.orientation.j, q_expected.j, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.orientation.k, q_expected.k, epsilon = 1e-12);
 
         // Round-trip: roll_of evaluated on the deserialized quaternion
         // recovers the original roll angle.
-        let recovered = roll_of(&wp0.quat);
+        let recovered = roll_of(&wp0.orientation);
         assert_abs_diff_eq!(recovered, roll, epsilon = 1e-9);
     }
 
