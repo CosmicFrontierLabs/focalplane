@@ -55,7 +55,7 @@ use crate::photometry::spectrum::Spectrum;
 use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::{project_galaxies_to_sensors, Galaxy, GalaxyInFrame};
 use crate::sims::motion_blur_metadata::{
-    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, GalaxyMeta, HardwareMeta,
+    sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, HardwareMeta,
     RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
     ZodiacalMeta,
 };
@@ -1395,19 +1395,7 @@ fn build_render_metadata(
         })
         .collect();
 
-    let galaxies: Vec<GalaxyMeta> = scene
-        .sources
-        .galaxies
-        .iter()
-        .map(|g| GalaxyMeta {
-            id: g.id,
-            name: g.name.clone(),
-            ra_deg: g.position.ra_degrees(),
-            dec_deg: g.position.dec_degrees(),
-            electrons_per_s_per_cm2: g.flux.electrons.flux,
-            sersic: g.profile,
-        })
-        .collect();
+    let galaxies: Vec<Galaxy> = scene.sources.galaxies.to_vec();
 
     let sensors: Vec<SensorMeta> = (0..sensor_count)
         .map(|i| {
@@ -2507,13 +2495,13 @@ mod tests {
         let g = &meta.galaxies[0];
         assert_eq!(g.id, 987654);
         assert_eq!(g.name.as_deref(), Some("M-test"));
-        assert_abs_diff_eq!(g.ra_deg, 123.5, epsilon = 1e-12);
-        assert_abs_diff_eq!(g.dec_deg, -7.25, epsilon = 1e-12);
-        assert_abs_diff_eq!(g.electrons_per_s_per_cm2, 1.25e-2, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.theta_half_arcsec, 3.5, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.n, 2.5, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.axis_ratio, 0.6, epsilon = 1e-15);
-        assert_abs_diff_eq!(g.sersic.position_angle_deg, 42.0, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.position.ra_degrees(), 123.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.position.dec_degrees(), -7.25, epsilon = 1e-12);
+        assert_abs_diff_eq!(g.flux.electrons.flux, 1.25e-2, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.theta_half_arcsec, 3.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.n, 2.5, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.axis_ratio, 0.6, epsilon = 1e-15);
+        assert_abs_diff_eq!(g.profile.position_angle_deg, 42.0, epsilon = 1e-15);
     }
 
     #[test]

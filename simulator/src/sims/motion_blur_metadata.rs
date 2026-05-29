@@ -27,7 +27,8 @@ use std::collections::BTreeMap;
 
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
-use starfield::catalogs::SersicProfile;
+
+use crate::scene_galaxy::Galaxy;
 
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,10 +44,8 @@ pub struct RenderMetadata {
     /// Catalog stars covering the trajectory envelope, recorded verbatim.
     pub stars: Vec<StarMeta>,
     /// Extended (Sérsic) sources covering the trajectory envelope,
-    /// recorded verbatim from the catalog query. Stored flat — symmetric
-    /// with [`RenderMetadata::stars`] — and de-duplicated by `id` if the
-    /// same source was routed onto more than one sensor.
-    pub galaxies: Vec<GalaxyMeta>,
+    /// recorded verbatim from the catalog query.
+    pub galaxies: Vec<Galaxy>,
     /// Telescope + sensor array hardware summary.
     pub hardware: HardwareMeta,
     /// Render knobs (exposure, timestep, seed, etc.).
@@ -133,37 +132,6 @@ pub struct StarMeta {
     pub magnitude: f64,
     /// Optional color index (`B - V`, a.k.a. `bp_rp` for Gaia-style catalogs).
     pub color_index: Option<f64>,
-}
-
-/// Extended (Sérsic) catalog source.
-///
-/// Mirrors [`StarMeta`] for sky-position semantics: `(ra_deg, dec_deg)`
-/// is the catalog-truth centre, independent of which sensor (if any)
-/// the source projects onto under any given trajectory pose. Pixel-frame
-/// information is intentionally **not** recorded here — consumers can
-/// reproject through the same trajectory + focal plane the renderer
-/// used.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GalaxyMeta {
-    /// Catalog galaxy identifier (e.g. NSAID for NSA, hashed name for
-    /// the bright-galaxy catalog).
-    pub id: u64,
-    /// Human-readable catalog name when available (e.g. NGC/Messier
-    /// designation). `None` for catalogs that only carry numeric
-    /// identifiers (e.g. NSAID-keyed entries).
-    pub name: Option<String>,
-    /// Right ascension of the galaxy centre, in degrees (J2000).
-    pub ra_deg: f64,
-    /// Declination of the galaxy centre, in degrees (J2000).
-    pub dec_deg: f64,
-    /// Integrated photoelectron flux rate at the entrance aperture,
-    /// in electrons per second per square centimetre. Equivalent to
-    /// `SourceFlux::electrons.flux`.
-    pub electrons_per_s_per_cm2: f64,
-    /// Elliptical Sérsic profile parameters describing the extended
-    /// surface-brightness shape. Serializes as
-    /// `{theta_half_arcsec, n, axis_ratio, position_angle_deg}`.
-    pub sersic: SersicProfile,
 }
 
 /// Hardware summary: telescope + per-sensor layout.
@@ -265,17 +233,30 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
-        let galaxies = vec![GalaxyMeta {
+        use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
+        use shared::image_proc::airy::PixelScaledAiryDisk;
+        use shared::units::{LengthExt, Wavelength};
+        use starfield::catalogs::SersicProfile;
+        use starfield::Equatorial;
+
+        let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
+        let spot = SpotFlux {
+            disk: psf,
+            flux: 7.0e-3,
+        };
+        let galaxies = vec![Galaxy {
             id: 12345,
             name: Some("NGC test".to_string()),
-            ra_deg: 187.25,
-            dec_deg: 12.5,
-            electrons_per_s_per_cm2: 7.0e-3,
-            sersic: SersicProfile {
+            position: Equatorial::from_degrees(187.25, 12.5),
+            profile: SersicProfile {
                 theta_half_arcsec: 4.0,
                 n: 1.5,
                 axis_ratio: 0.7,
                 position_angle_deg: 30.0,
+            },
+            flux: SourceFlux {
+                photons: spot.clone(),
+                electrons: spot,
             },
         }];
         let meta = RenderMetadata {
@@ -323,9 +304,10 @@ mod tests {
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
-        assert_eq!(g.ra_deg, 187.25);
-        assert_eq!(g.dec_deg, 12.5);
-        assert_eq!(g.sersic.n, 1.5);
-        assert_eq!(g.sersic.axis_ratio, 0.7);
+        assert!((g.position.ra_degrees() - 187.25).abs() < 1e-9);
+        assert!((g.position.dec_degrees() - 12.5).abs() < 1e-9);
+        assert_eq!(g.profile.n, 1.5);
+        assert_eq!(g.profile.axis_ratio, 0.7);
+        assert_eq!(g.flux.electrons.flux, 7.0e-3);
     }
 }
