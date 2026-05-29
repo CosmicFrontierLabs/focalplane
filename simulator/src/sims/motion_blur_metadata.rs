@@ -25,7 +25,6 @@
 
 use std::collections::BTreeMap;
 
-use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
@@ -73,12 +72,9 @@ pub struct TrajectoryMeta {
 pub struct WaypointMeta {
     /// Waypoint time (seconds from trajectory origin).
     pub time_s: f64,
-    /// Orientation quaternion. Serializes as a 4-element JSON array in
-    /// nalgebra's native `[i, j, k, w]` order (imaginary parts first,
-    /// real part last) — same shape as `Quaternion::coords`. Consumers
-    /// reconstructing via `Quaternion::new(w, i, j, k)` must remember
-    /// to pull `w` from index 3, not 0.
-    pub quat: UnitQuaternion<f64>,
+    /// Orientation quaternion in `[w, x, y, z]` order (nalgebra's
+    /// `UnitQuaternion::{w, i, j, k}` maps directly to this layout).
+    pub quat: [f64; 4],
     /// Boresight pointing derived from `quat`.
     pub boresight: EquatorialMeta,
     /// Roll angle derived from `quat`, in degrees.
@@ -103,10 +99,8 @@ pub struct FrameMeta {
     pub t_s: f64,
     /// Exposure duration for this frame, in seconds.
     pub exposure_s: f64,
-    /// Mid-frame orientation quaternion. Serializes as a 4-element
-    /// JSON array in nalgebra's native `[i, j, k, w]` order (imaginary
-    /// parts first, real part last).
-    pub quat: UnitQuaternion<f64>,
+    /// Mid-frame orientation quaternion in `[w, x, y, z]` order.
+    pub quat: [f64; 4],
     /// Mid-frame boresight pointing derived from `quat`.
     pub boresight: EquatorialMeta,
     /// Mid-frame roll angle derived from `quat`, in degrees.
@@ -372,7 +366,7 @@ mod tests {
                 end_time_s: 10.0,
                 waypoints: vec![WaypointMeta {
                     time_s: 0.0,
-                    quat: UnitQuaternion::identity(),
+                    quat: [1.0, 0.0, 0.0, 0.0],
                     boresight: EquatorialMeta {
                         ra_deg: 0.0,
                         dec_deg: 0.0,

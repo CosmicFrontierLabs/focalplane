@@ -1290,7 +1290,7 @@ fn build_render_metadata(
                 let bore = boresight_of(&q);
                 WaypointMeta {
                     time_s: wp.time.as_secs_f64(),
-                    quat: q,
+                    quat: [q.w, q.i, q.j, q.k],
                     boresight: EquatorialMeta {
                         ra_deg: bore.ra_degrees(),
                         dec_deg: bore.dec_degrees(),
@@ -1319,7 +1319,7 @@ fn build_render_metadata(
             idx: *frame_idx,
             t_s: schedule.frame_start.as_secs_f64(),
             exposure_s: schedule.exposure.as_secs_f64(),
-            quat: q,
+            quat: [q.w, q.i, q.j, q.k],
             boresight: EquatorialMeta {
                 ra_deg: bore.ra_degrees(),
                 dec_deg: bore.dec_degrees(),
@@ -2600,11 +2600,12 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_quat_round_trips_via_serde() {
+    fn test_metadata_quat_is_wxyz_order() {
         // Build a trajectory whose first waypoint has a known roll about the
-        // boresight, then verify the metadata round-trips that quaternion
-        // exactly (component-for-component) and reproduces the original roll
-        // when re-evaluated through `roll_of`.
+        // boresight. The UnitQuaternion for a rotation of angle θ about a
+        // unit axis has w = cos(θ/2). We emit quat = [w, x, y, z], so
+        // meta.waypoints[0].quat[0] must match cos(θ/2) under the composed
+        // orientation.
         use crate::sims::orientation::orientation_from_pointing;
 
         let pointing = Equatorial::from_degrees(45.0, 30.0);
@@ -2631,16 +2632,24 @@ mod tests {
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
 
+        // Expected quat comes directly from nalgebra's constructor to avoid
+        // re-deriving the half-angle formula under roll composition.
         let q_expected = orientation_from_pointing(&pointing, roll);
         let wp0 = &meta.trajectory.waypoints[0];
-        assert_abs_diff_eq!(wp0.quat.w, q_expected.w, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.i, q_expected.i, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.j, q_expected.j, epsilon = 1e-12);
-        assert_abs_diff_eq!(wp0.quat.k, q_expected.k, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[0], q_expected.w, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[1], q_expected.i, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[2], q_expected.j, epsilon = 1e-12);
+        assert_abs_diff_eq!(wp0.quat[3], q_expected.k, epsilon = 1e-12);
 
-        // Round-trip: roll_of evaluated on the deserialized quaternion
-        // recovers the original roll angle.
-        let recovered = roll_of(&wp0.quat);
+        // Round-trip: reconstruct a UnitQuaternion from [w, x, y, z] and
+        // check that roll_of recovers the original roll.
+        let q_round = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            wp0.quat[0],
+            wp0.quat[1],
+            wp0.quat[2],
+            wp0.quat[3],
+        ));
+        let recovered = roll_of(&q_round);
         assert_abs_diff_eq!(recovered, roll, epsilon = 1e-9);
     }
 
