@@ -263,6 +263,32 @@ impl Trajectory {
         Ok(boresight_of(&q))
     }
 
+    /// Look up the pose at time `t` and post-compose `delta` onto it,
+    /// returning the result as a [`Waypoint`] stamped at `t`.
+    ///
+    /// The composition is `base * delta` in nalgebra's convention,
+    /// where `base = self.orientation_at(t)?`. Applied to a vector `v`,
+    /// the resulting rotation is `base * (delta * v)`: `delta` rotates
+    /// first (interpreted as a body-frame offset), then `base` takes the
+    /// body-frame vector into world coordinates. This matches the
+    /// per-frame FSM offset injection used by the `scene-camera` ROI
+    /// pipeline, where the closed-loop controller supplies a small
+    /// body-frame angular offset between frames:
+    ///
+    /// ```text
+    /// pose_for_render = trajectory(t) ⊗ fsm_offset
+    /// ```
+    ///
+    /// The returned `Waypoint`'s `time` field equals the input `t`.
+    pub fn waypoint_with_offset(
+        &self,
+        t: Duration,
+        delta: UnitQuaternion<f64>,
+    ) -> Result<Waypoint, TrajectoryError> {
+        let base = self.orientation_at(t)?;
+        Ok(Waypoint::new(t, base * delta))
+    }
+
     /// Maximum angular distance (radians) between any waypoint
     /// orientation in `[t_start, t_end]` and a chosen `reference`
     /// orientation. Scans every waypoint inside the window plus the
@@ -865,6 +891,48 @@ mod tests {
         let err = traj
             .orientation_at(traj.end_time() + Duration::from_millis(1))
             .expect_err("non-periodic must error on out-of-range");
+        assert!(matches!(err, TrajectoryError::TimeOutOfRange(_, _, _)));
+    }
+
+    #[test]
+    fn waypoint_with_offset_post_composes_delta_onto_base() {
+        // Static trajectory so `orientation_at(mid)` is well-defined and
+        // unambiguous. Compose a 30 deg rotation about the body +Z axis
+        // and verify the result is bit-equal to base * delta with the
+        // input time preserved.
+        let pointing = make_pointing(10.0, 20.0);
+        let traj = Trajectory::from_endpoints(pointing, pointing, Duration::from_secs(10)).unwrap();
+        let mid = Duration::from_secs(5);
+        let base = traj.orientation_at(mid).unwrap();
+
+        let delta = UnitQuaternion::from_axis_angle(
+            &nalgebra::Vector3::z_axis(),
+            std::f64::consts::FRAC_PI_6, // 30 degrees
+        );
+        let expected = base * delta;
+
+        let wp = traj.waypoint_with_offset(mid, delta).unwrap();
+        assert_eq!(wp.time, mid);
+        assert_abs_diff_eq!(wp.orientation.angle_to(&expected), 0.0, epsilon = 1e-15);
+
+        // Sanity check: order matters. delta * base should not match
+        // unless base and delta commute (they do not here).
+        let wrong_order = delta * base;
+        assert!(wp.orientation.angle_to(&wrong_order) > 1e-6);
+    }
+
+    #[test]
+    fn waypoint_with_offset_propagates_out_of_range_error() {
+        let traj = Trajectory::from_endpoints(
+            make_pointing(0.0, 0.0),
+            make_pointing(1.0, 0.0),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let delta = UnitQuaternion::identity();
+        let err = traj
+            .waypoint_with_offset(Duration::from_secs(11), delta)
+            .expect_err("out-of-range time must error");
         assert!(matches!(err, TrajectoryError::TimeOutOfRange(_, _, _)));
     }
 
