@@ -541,7 +541,7 @@ impl std::fmt::Display for TelescopeModel {
 impl SensorModel {
     /// Get the corresponding SensorConfig for the selected model
     pub fn to_config(&self) -> &'static SensorConfig {
-        use crate::hardware::sensor::models::*;
+        use crate::hardware::sensor::models::{GSENSE4040BSI, GSENSE6510BSI, HWK4123, IMX455};
         match self {
             SensorModel::Gsense4040bsi => &GSENSE4040BSI,
             SensorModel::Gsense6510bsi => &GSENSE6510BSI,
@@ -554,7 +554,11 @@ impl SensorModel {
 impl TelescopeModel {
     /// Get the corresponding TelescopeConfig for the selected model
     pub fn to_config(&self) -> &'static TelescopeConfig {
-        use crate::hardware::telescope::models::*;
+        use crate::hardware::telescope::models::{
+            COSMIC_FRONTIER_JBT_1M, COSMIC_FRONTIER_JBT_50CM, COSMIC_FRONTIER_JBT_MAX, IDEAL_100CM,
+            IDEAL_50CM, OFFICINA_STELLARE_WEASEL, OPTECH_LINA_LS35, OPTECH_LINA_LS50, SMALL_50MM,
+            WEASEL,
+        };
         match self {
             TelescopeModel::Small50mm => &SMALL_50MM,
             TelescopeModel::Demo50cm => &IDEAL_50CM,
