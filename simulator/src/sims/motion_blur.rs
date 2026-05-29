@@ -56,8 +56,8 @@ use crate::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use crate::scene_galaxy::{project_galaxies_to_sensors, Galaxy, GalaxyInFrame};
 use crate::sims::motion_blur_metadata::{
     sensor_dir_name, sensor_relative_png_path, EquatorialMeta, FrameMeta, GalaxyMeta, HardwareMeta,
-    RenderConfigMeta, RenderMetadata, SensorMeta, SersicMeta, StarMeta, TrajectoryMeta,
-    WaypointMeta, ZodiacalMeta,
+    RenderConfigMeta, RenderMetadata, SensorMeta, StarMeta, TrajectoryMeta, WaypointMeta,
+    ZodiacalMeta,
 };
 use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
@@ -1405,12 +1405,7 @@ fn build_render_metadata(
             ra_deg: g.position.ra_degrees(),
             dec_deg: g.position.dec_degrees(),
             electrons_per_s_per_cm2: g.flux.electrons.flux,
-            sersic: SersicMeta {
-                theta_half_arcsec: g.profile.theta_half_arcsec,
-                n: g.profile.n,
-                axis_ratio: g.profile.axis_ratio,
-                position_angle_deg: g.profile.position_angle_deg,
-            },
+            sersic: g.profile,
         })
         .collect();
 

@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
+use starfield::catalogs::SersicProfile;
 
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,25 +161,9 @@ pub struct GalaxyMeta {
     /// `SourceFlux::electrons.flux`.
     pub electrons_per_s_per_cm2: f64,
     /// Elliptical Sérsic profile parameters describing the extended
-    /// surface-brightness shape.
-    pub sersic: SersicMeta,
-}
-
-/// Elliptical Sérsic profile parameters for a [`GalaxyMeta`].
-///
-/// Mirrors `starfield::catalogs::SersicProfile` so downstream consumers
-/// can reconstruct the surface-brightness model without depending on
-/// `starfield`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct SersicMeta {
-    /// Half-light radius along the major axis, in arcseconds.
-    pub theta_half_arcsec: f64,
-    /// Sérsic index n (dimensionless, typically ~0.5 to ~6).
-    pub n: f64,
-    /// Axis ratio b/a, where b ≤ a (`1.0` is circular).
-    pub axis_ratio: f64,
-    /// Position angle of the major axis, degrees east of north (J2000).
-    pub position_angle_deg: f64,
+    /// surface-brightness shape. Serializes as
+    /// `{theta_half_arcsec, n, axis_ratio, position_angle_deg}`.
+    pub sersic: SersicProfile,
 }
 
 /// Hardware summary: telescope + per-sensor layout.
@@ -286,7 +271,7 @@ mod tests {
             ra_deg: 187.25,
             dec_deg: 12.5,
             electrons_per_s_per_cm2: 7.0e-3,
-            sersic: SersicMeta {
+            sersic: SersicProfile {
                 theta_half_arcsec: 4.0,
                 n: 1.5,
                 axis_ratio: 0.7,
