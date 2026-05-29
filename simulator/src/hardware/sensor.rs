@@ -45,11 +45,12 @@ use std::fmt;
 use crate::hardware::dark_current::DarkCurrentEstimator;
 use crate::hardware::read_noise::ReadNoiseEstimator;
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
+use serde::{Deserialize, Serialize};
 use shared::image_size::PixelShape;
 use shared::units::{Area, AreaExt, Length, LengthExt, Temperature, TemperatureExt};
 
 /// Sensor dimensions in pixels and physical size
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SensorGeometry {
     /// Image dimensions in pixels
     size: PixelShape,
@@ -134,7 +135,7 @@ impl fmt::Display for SensorGeometry {
 /// - **Dynamic range**: Well depth, bit depth, and gain characteristics
 /// - **Thermal modeling**: Temperature-dependent dark current
 ///
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SensorConfig {
     /// Wavelength-dependent quantum efficiency curve from manufacturer data
     pub quantum_efficiency: QuantumEfficiency,

@@ -1,5 +1,7 @@
 //! Photon to electron conversion utilities for detector modeling.
 
+use serde::{Deserialize, Serialize};
+
 #[cfg(test)]
 use crate::photometry::spectrum::FlatSpectrum;
 use crate::photometry::{
@@ -47,7 +49,7 @@ pub fn sub_band_photon_fluxes<'a, S: Spectrum + ?Sized>(
 /// # Usage
 /// Use `integrated_over()` to calculate total particle counts for a given
 /// exposure time and telescope aperture area.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotFlux {
     pub disk: PixelScaledAiryDisk,
 
@@ -86,7 +88,7 @@ impl SpotFlux {
 ///
 /// The effective PSFs may also differ since QE weighting changes the
 /// relative contribution of different wavelengths to the final PSF shape.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceFlux {
     /// Effective PSF/flux for photon flux
     pub photons: SpotFlux,

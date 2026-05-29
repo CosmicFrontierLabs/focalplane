@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
+use serde::{Deserialize, Serialize};
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield::Equatorial;
 use thiserror::Error;
@@ -51,7 +52,7 @@ pub enum TrajectoryError {
     ImageWrite(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Waypoint {
     pub time: Duration,
     pub orientation: UnitQuaternion<f64>,
@@ -80,7 +81,16 @@ impl Waypoint {
     }
 }
 
-#[derive(Debug, Clone)]
+///
+/// Serde note: Deserialize bypasses the sorted-time / two-waypoint-
+/// minimum invariants that [`Trajectory::new`] enforces. The serde
+/// round-trip path is intended for run-descriptor JSON written by
+/// the same renderer (already validated by `new`); callers handed an
+/// external JSON payload should rebuild via
+/// `Trajectory::new(traj.waypoints().to_vec())` (and `with_period` if
+/// the deserialized `period` was `Some`) before driving the render
+/// pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trajectory {
     waypoints: Vec<Waypoint>,
     /// When `Some`, calls to [`Trajectory::orientation_at`] treat `t` modulo
