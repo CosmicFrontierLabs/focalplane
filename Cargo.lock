@@ -3401,7 +3401,6 @@ dependencies = [
  "nalgebra",
  "ndarray",
  "num_cpus",
- "once_cell",
  "plotters",
  "rand 0.9.4",
  "rand_distr 0.5.1",

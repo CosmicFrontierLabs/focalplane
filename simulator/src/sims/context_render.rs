@@ -15,12 +15,12 @@
 //! stars render as larger, more saturated Gaussian blobs.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use ab_glyph::{FontRef, PxScale};
 use image::{ImageBuffer, Rgb};
 use imageproc::drawing::{draw_text_mut, text_size};
 use nalgebra::UnitQuaternion;
-use once_cell::sync::Lazy;
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 
@@ -36,8 +36,8 @@ type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
 /// Embedded DejaVu Sans Mono Bold — used for all context-view labels.
 /// Bold weight keeps thin strokes readable at small px scales.
 static FONT_DATA: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono-Bold.ttf");
-static FONT: Lazy<FontRef<'static>> =
-    Lazy::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
+static FONT: LazyLock<FontRef<'static>> =
+    LazyLock::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
 
 /// Configuration for the context-view renderer.
 #[derive(Debug, Clone)]
@@ -552,6 +552,7 @@ mod tests {
     use crate::hardware::sensor_array::SensorArray;
     use crate::hardware::telescope::TelescopeConfig;
     use crate::sims::orientation::orientation_from_pointing;
+    use approx::assert_abs_diff_eq;
     use shared::units::{Length, LengthExt, TemperatureExt};
     use starfield::Equatorial;
 
@@ -581,7 +582,7 @@ mod tests {
         assert!(bright > dim, "brighter stars must render larger");
         // Bright-end saturation: stars at or beyond mag_bright hit the max radius.
         let too_bright = mag_to_radius(Some(-5.0), &cfg);
-        assert!((too_bright - cfg.star_radius_max_px).abs() < 1e-9);
+        assert_abs_diff_eq!(too_bright, cfg.star_radius_max_px, epsilon = 1e-9);
         // Dim-end: beyond-mag_dim stars never render smaller than the floor
         // and never larger than the mag_dim star.
         let too_dim = mag_to_radius(Some(30.0), &cfg);

@@ -27,69 +27,42 @@ use std::collections::BTreeMap;
 
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
+use starfield::catalogs::StarData;
 
+use crate::hardware::satellite::FocalPlaneConfig;
+use crate::photometry::zodiacal::SolarAngularCoordinates;
 use crate::scene_galaxy::Galaxy;
+use crate::sims::motion_blur::MotionBlurConfig;
+use crate::sims::trajectory::Trajectory;
 
 /// Root descriptor written as `metadata.json` at the output-directory root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderMetadata {
-    /// Schema version for this descriptor. Currently always `"1.1"`.
+    /// Schema version for this descriptor. Currently always `"1.2"`.
     pub version: String,
     /// ISO-8601 UTC timestamp at which the render finished building metadata.
     pub rendered_at: String,
-    /// Trajectory-level summary (duration and waypoints).
-    pub trajectory: TrajectoryMeta,
+    /// Trajectory carrying the waypoints used by the render.
+    pub trajectory: Trajectory,
     /// One entry per rendered frame.
     pub frames: Vec<FrameMeta>,
     /// Catalog stars covering the trajectory envelope, recorded verbatim.
-    pub stars: Vec<StarMeta>,
+    pub stars: Vec<StarData>,
     /// Extended (Sérsic) sources covering the trajectory envelope,
     /// recorded verbatim from the catalog query.
     pub galaxies: Vec<Galaxy>,
-    /// Telescope + sensor array hardware summary.
-    pub hardware: HardwareMeta,
-    /// Render knobs (exposure, timestep, seed, etc.).
-    pub render_config: RenderConfigMeta,
+    /// Full focal-plane optical + detector configuration.
+    pub focal_plane: FocalPlaneConfig,
+    /// Solar angular coordinates used for zodiacal-light evaluation.
+    pub zodiacal: SolarAngularCoordinates,
+    /// Render knobs (exposure, timestep, seed, etc.) — the full
+    /// [`MotionBlurConfig`] passed to the renderer.
+    pub render_config: MotionBlurConfig,
 }
 
-/// Summary of the trajectory: duration and its waypoints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrajectoryMeta {
-    /// End time minus start time, in seconds.
-    pub duration_s: f64,
-    /// Trajectory start time (seconds from trajectory origin).
-    pub start_time_s: f64,
-    /// Trajectory end time (seconds from trajectory origin).
-    pub end_time_s: f64,
-    /// Ordered list of waypoints, matching the input trajectory.
-    pub waypoints: Vec<WaypointMeta>,
-}
-
-/// Single trajectory waypoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WaypointMeta {
-    /// Waypoint time (seconds from trajectory origin).
-    pub time_s: f64,
-    /// Orientation quaternion. Serializes as a 4-element JSON array in
-    /// nalgebra's native `[i, j, k, w]` order (imaginary parts first,
-    /// real part last) — same shape as `Quaternion::coords`.
-    pub quat: UnitQuaternion<f64>,
-    /// Boresight pointing derived from `quat`.
-    pub boresight: EquatorialMeta,
-    /// Roll angle derived from `quat`, in degrees.
-    pub roll_deg: f64,
-}
-
-/// Equatorial coordinate pair in degrees.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct EquatorialMeta {
-    /// Right ascension in degrees.
-    pub ra_deg: f64,
-    /// Declination in degrees.
-    pub dec_deg: f64,
-}
-
-/// Per-frame metadata.
+/// Per-frame metadata. Composite of render-schedule fields
+/// (`idx`, `n_stamps`), the mid-frame pose, and the file-system layout
+/// (`paths`) — no single production type covers all of these together.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameMeta {
     /// Frame index (0-based).
@@ -102,8 +75,10 @@ pub struct FrameMeta {
     /// JSON array in nalgebra's native `[i, j, k, w]` order (imaginary
     /// parts first, real part last).
     pub quat: UnitQuaternion<f64>,
-    /// Mid-frame boresight pointing derived from `quat`.
-    pub boresight: EquatorialMeta,
+    /// Mid-frame boresight right ascension, in degrees (derived from `quat`).
+    pub boresight_ra_deg: f64,
+    /// Mid-frame boresight declination, in degrees (derived from `quat`).
+    pub boresight_dec_deg: f64,
     /// Mid-frame roll angle derived from `quat`, in degrees.
     pub roll_deg: f64,
     /// Total number of stratified-MC PSF stamps deposited across this exposure.
@@ -111,77 +86,6 @@ pub struct FrameMeta {
     /// Map from `"sensor_NN"` (zero-padded sensor index) to the relative
     /// forward-slash PNG path, e.g. `"sensor_00/frame_000000.png"`.
     pub paths: BTreeMap<String, String>,
-}
-
-/// Catalog star recorded verbatim from the trajectory envelope query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StarMeta {
-    /// Catalog star identifier.
-    pub id: u64,
-    /// Human-readable catalog name when available (e.g. HIP designation,
-    /// variable-star name). `None` for catalogs that only carry numeric
-    /// identifiers.
-    pub name: Option<String>,
-    /// Right ascension in degrees.
-    pub ra_deg: f64,
-    /// Declination in degrees.
-    pub dec_deg: f64,
-    /// Apparent magnitude (catalog-defined band).
-    pub magnitude: f64,
-    /// Optional color index (`B - V`, a.k.a. `bp_rp` for Gaia-style catalogs).
-    pub color_index: Option<f64>,
-}
-
-/// Hardware summary: telescope + per-sensor layout.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HardwareMeta {
-    /// Telescope name.
-    pub telescope: String,
-    /// Operating temperature in Celsius.
-    pub temperature_c: f64,
-    /// Per-sensor entries in array-index order.
-    pub sensors: Vec<SensorMeta>,
-}
-
-/// Per-sensor layout entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SensorMeta {
-    /// Sensor index in the array.
-    pub idx: usize,
-    /// Sensor model name.
-    pub name: String,
-    /// Sensor dimensions in pixels, `[width, height]`.
-    pub dimensions_px: [usize; 2],
-    /// Sensor center position in the focal plane, `[x_mm, y_mm]`.
-    pub position_mm: [f64; 2],
-}
-
-/// Render knobs captured for reproducibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RenderConfigMeta {
-    /// Exposure duration per frame, in seconds.
-    pub exposure_s: f64,
-    /// Time between successive frame start times, in seconds.
-    pub timestep_s: f64,
-    /// Per-stamp drift budget in pixels.
-    pub max_drift_per_stamp_px: f64,
-    /// Base RNG seed used to derive per-tile seeds.
-    pub seed: u64,
-    /// If true, the adaptive scheduler was bypassed (a single PSF stamp per frame).
-    pub force_static: bool,
-    /// Catalog path the run was configured with.
-    pub catalog_path: String,
-    /// Solar angular coordinates used for zodiacal-light evaluation.
-    pub zodiacal: ZodiacalMeta,
-}
-
-/// Solar angular coordinate pair in degrees.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ZodiacalMeta {
-    /// Solar elongation in degrees.
-    pub elongation_deg: f64,
-    /// Ecliptic latitude in degrees.
-    pub latitude_deg: f64,
 }
 
 /// Relative PNG path for a given sensor index, using forward slashes.
@@ -231,13 +135,21 @@ mod tests {
 
     #[test]
     fn test_render_metadata_round_trip_via_serde() {
-        use approx::assert_abs_diff_eq;
-
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
         use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
+        use crate::sims::trajectory::Waypoint;
+        use approx::assert_abs_diff_eq;
         use shared::image_proc::airy::PixelScaledAiryDisk;
-        use shared::units::{LengthExt, Wavelength};
+        use shared::units::{Length, LengthExt, Temperature, TemperatureExt, Wavelength};
         use starfield::catalogs::SersicProfile;
         use starfield::Equatorial;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let zodiacal_for_test =
+            SolarAngularCoordinates::new(90.0, 45.0).expect("test zodiacal coords should be valid");
 
         let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
         let spot = SpotFlux {
@@ -259,48 +171,52 @@ mod tests {
                 electrons: spot,
             },
         }];
+        let trajectory = Trajectory::new(vec![
+            Waypoint::new(Duration::ZERO, UnitQuaternion::identity()),
+            Waypoint::new(Duration::from_secs(10), UnitQuaternion::identity()),
+        ])
+        .expect("test trajectory should be valid");
         let meta = RenderMetadata {
-            version: "1.1".to_string(),
+            version: "1.2".to_string(),
             rendered_at: "2026-04-22T00:00:00Z".to_string(),
-            trajectory: TrajectoryMeta {
-                duration_s: 10.0,
-                start_time_s: 0.0,
-                end_time_s: 10.0,
-                waypoints: vec![WaypointMeta {
-                    time_s: 0.0,
-                    quat: UnitQuaternion::identity(),
-                    boresight: EquatorialMeta {
-                        ra_deg: 0.0,
-                        dec_deg: 0.0,
-                    },
-                    roll_deg: 0.0,
-                }],
-            },
+            trajectory,
             frames: Vec::new(),
             stars: Vec::new(),
             galaxies,
-            hardware: HardwareMeta {
-                telescope: "Test".to_string(),
-                temperature_c: -10.0,
-                sensors: Vec::new(),
-            },
-            render_config: RenderConfigMeta {
-                exposure_s: 1.0,
-                timestep_s: 1.0,
+            focal_plane: FocalPlaneConfig::new(
+                TelescopeConfig::new(
+                    "Test",
+                    Length::from_meters(0.5),
+                    Length::from_meters(2.5),
+                    0.8,
+                ),
+                SensorArray::single(GSENSE4040BSI.clone().with_dimensions(64, 64)),
+                Temperature::from_celsius(-10.0),
+            ),
+            zodiacal: zodiacal_for_test,
+            render_config: MotionBlurConfig {
+                timestep: Duration::from_secs(1),
+                exposure: Duration::from_secs(1),
                 max_drift_per_stamp_px: 0.1,
-                seed: 42,
+                base_seed: Some(42),
                 force_static: false,
-                catalog_path: "catalog.bin".to_string(),
-                zodiacal: ZodiacalMeta {
-                    elongation_deg: 90.0,
-                    latitude_deg: 45.0,
-                },
+                quiet: true,
+                telescope_name: "Test".to_string(),
+                catalog_path: PathBuf::from("catalog.bin"),
+                temperature_c: -10.0,
             },
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, "1.1");
-        assert_eq!(parsed.hardware.telescope, "Test");
+        assert_eq!(parsed.version, "1.2");
+        assert_eq!(parsed.focal_plane.telescope.name, "Test");
+        assert_abs_diff_eq!(
+            parsed.focal_plane.telescope.aperture.as_meters(),
+            0.5,
+            epsilon = 1e-12
+        );
+        assert_eq!(parsed.render_config.base_seed, Some(42));
+        assert_eq!(parsed.trajectory.waypoints().len(), 2);
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
