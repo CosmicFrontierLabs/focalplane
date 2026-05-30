@@ -482,7 +482,7 @@ pub fn build_trajectory_from_los_psd(
 mod tests {
     use super::*;
 
-    use approx::assert_relative_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use rand::SeedableRng;
     use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -655,7 +655,7 @@ mod tests {
         let var = series.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / n_samples as f64;
 
         // Mean should be ~0 (DC bin zeroed).
-        assert!(mean.abs() < 1.0e-7, "mean={mean:e}");
+        assert_abs_diff_eq!(mean, 0.0, epsilon = 1.0e-7);
         // Variance should be within 10% of S0 * B (statistical fluctuation).
         let rel_err = (var - expected_var).abs() / expected_var;
         assert!(

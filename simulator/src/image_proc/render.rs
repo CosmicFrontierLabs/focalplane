@@ -551,7 +551,7 @@ pub fn route_stars_to_sensors(
 
 #[cfg(test)]
 mod tests {
-    use approx::assert_relative_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -1176,7 +1176,7 @@ mod tests {
         assert_eq!(unrolled.len(), 1);
         let (x0, y0) = (unrolled[0].x_mm, unrolled[0].y_mm);
         assert!(x0.abs() > 0.05, "expected meaningful x offset, got {x0}");
-        assert!(y0.abs() < 0.05, "expected near-zero y offset, got {y0}");
+        assert_abs_diff_eq!(y0, 0.0, epsilon = 0.05);
 
         // Roll by +pi/2 -> right-hand rule about +Z sends (x, 0) to (0, x).
         let rolled = project_stars_to_focal_plane_oriented(
