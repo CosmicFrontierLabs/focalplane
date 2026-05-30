@@ -140,6 +140,7 @@ mod tests {
         use crate::hardware::telescope::TelescopeConfig;
         use crate::photometry::photoconversion::{SourceFlux, SpotFlux};
         use crate::sims::trajectory::Waypoint;
+        use approx::assert_abs_diff_eq;
         use shared::image_proc::airy::PixelScaledAiryDisk;
         use shared::units::{Length, LengthExt, Temperature, TemperatureExt, Wavelength};
         use starfield::catalogs::SersicProfile;
@@ -209,14 +210,18 @@ mod tests {
         let parsed: RenderMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.version, "1.2");
         assert_eq!(parsed.focal_plane.telescope.name, "Test");
-        assert!((parsed.focal_plane.telescope.aperture.as_meters() - 0.5).abs() < 1e-12);
+        assert_abs_diff_eq!(
+            parsed.focal_plane.telescope.aperture.as_meters(),
+            0.5,
+            epsilon = 1e-12
+        );
         assert_eq!(parsed.render_config.base_seed, Some(42));
         assert_eq!(parsed.trajectory.waypoints().len(), 2);
         let g = &parsed.galaxies[0];
         assert_eq!(g.id, 12345);
         assert_eq!(g.name.as_deref(), Some("NGC test"));
-        assert!((g.position.ra_degrees() - 187.25).abs() < 1e-9);
-        assert!((g.position.dec_degrees() - 12.5).abs() < 1e-9);
+        assert_abs_diff_eq!(g.position.ra_degrees(), 187.25, epsilon = 1e-9);
+        assert_abs_diff_eq!(g.position.dec_degrees(), 12.5, epsilon = 1e-9);
         assert_eq!(g.profile.n, 1.5);
         assert_eq!(g.profile.axis_ratio, 0.7);
         assert_eq!(g.flux.electrons.flux, 7.0e-3);
