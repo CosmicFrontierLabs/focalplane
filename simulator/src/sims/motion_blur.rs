@@ -1608,7 +1608,7 @@ mod tests {
     fn test_max_drift_over_window_static_is_zero() {
         let traj = static_trajectory();
         let drift = max_drift_over_window(&traj, Duration::ZERO, Duration::from_secs(5)).unwrap();
-        assert!(drift.abs() < 1e-12);
+        assert_abs_diff_eq!(drift, 0.0, epsilon = 1e-12);
     }
 
     #[test]

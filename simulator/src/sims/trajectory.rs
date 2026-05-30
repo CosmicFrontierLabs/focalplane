@@ -777,7 +777,7 @@ mod tests {
     fn test_angular_distance_same_point() {
         let a = make_pointing(45.0, 30.0);
         let dist = angular_distance_deg(&a, &a);
-        assert!(dist.abs() < 1e-10);
+        assert_abs_diff_eq!(dist, 0.0, epsilon = 1e-10);
     }
 
     #[test]
