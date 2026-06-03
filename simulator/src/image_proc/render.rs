@@ -370,8 +370,8 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
     Zip::from(&mut quantized)
         .and(electron_img)
         .par_for_each(|out, &total_e| {
-            let clipped_e = total_e.clamp(0.0, well_depth);
-            let dn = clipped_e * dn_per_e + black_level_dn;
+            let capped_e = total_e.min(well_depth);
+            let dn = capped_e * dn_per_e + black_level_dn;
             *out = dn.clamp(0.0, max_dn).round() as u16;
         });
     quantized
@@ -901,6 +901,29 @@ mod tests {
         let quantized = quantize_image(&electron_img, &sensor);
 
         assert_eq!(quantized[[0, 0]], 255);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_preserves_sub_floor_noise() {
+        // The pedestal is an analog, pre-ADC bias: it must be applied before the
+        // 0 floor so sub-zero read-noise excursions survive as spread, not collapse
+        // onto a single flat value. With bias 50 DN and gain 2.5, a symmetric dip
+        // and peak about a zero-mean background must land on distinct DN values.
+        let mut sensor = create_test_sensor(12, 2.5, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 3));
+        electron_img[[0, 0]] = -2.0; // noise dip below background: -2*2.5+50 = 45
+        electron_img[[0, 1]] = 0.0; //  background mean:            0*2.5+50 = 50
+        electron_img[[0, 2]] = 2.0; //  noise peak above background:  2*2.5+50 = 55
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 45);
+        assert_eq!(quantized[[0, 1]], 50);
+        assert_eq!(quantized[[0, 2]], 55);
+        // The dip is preserved (not flattened to 50), so a background built from
+        // such excursions has MAD > 0 rather than the degenerate MAD = 0.
+        assert_ne!(quantized[[0, 0]], quantized[[0, 1]]);
     }
 
     #[test]
