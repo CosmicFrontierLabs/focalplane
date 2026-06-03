@@ -314,6 +314,7 @@ mod tests {
             bit_depth: 16,
             dn_per_electron: 1.0,
             max_well_depth_e: 1e20,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
         SatelliteConfig::new(telescope, sensor, Temperature::from_celsius(-10.0))

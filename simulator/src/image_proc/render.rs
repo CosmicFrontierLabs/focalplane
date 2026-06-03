@@ -364,13 +364,14 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
     let max_dn = ((1 << sensor.bit_depth) - 1) as f64;
     let well_depth = sensor.max_well_depth_e;
     let dn_per_e = sensor.dn_per_electron;
+    let black_level_dn = sensor.black_level_dn as f64;
 
     let mut quantized = Array2::<u16>::zeros(electron_img.raw_dim());
     Zip::from(&mut quantized)
         .and(electron_img)
         .par_for_each(|out, &total_e| {
             let clipped_e = total_e.clamp(0.0, well_depth);
-            let dn = clipped_e * dn_per_e;
+            let dn = clipped_e * dn_per_e + black_level_dn;
             *out = dn.clamp(0.0, max_dn).round() as u16;
         });
     quantized
@@ -608,6 +609,7 @@ mod tests {
             bit_depth,
             dn_per_electron,
             max_well_depth_e,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         }
     }
@@ -868,6 +870,37 @@ mod tests {
 
         assert_eq!(quantized[[0, 0]], 5);
         assert_eq!(quantized[[0, 1]], 50);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_pedestal() {
+        // 12-bit sensor (max 4095), unity gain, well depth 1000 e-, 50 DN pedestal.
+        let mut sensor = create_test_sensor(12, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((2, 2));
+
+        electron_img[[0, 0]] = 0.0; // Floor lifted to the pedestal
+        electron_img[[0, 1]] = 100.0; // Signal sits on top of the pedestal
+        electron_img[[1, 0]] = 2000.0; // Above well: clamps to well, then adds pedestal
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 50);
+        assert_eq!(quantized[[0, 1]], 150);
+        assert_eq!(quantized[[1, 0]], 1050);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_clamps_to_adc_max() {
+        // Pedestal pushing signal past the ADC ceiling clamps to max_dn (255 at 8-bit).
+        let mut sensor = create_test_sensor(8, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 1));
+        electron_img[[0, 0]] = 250.0; // 250 + 50 = 300, clamps to 255
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 255);
     }
 
     #[test]

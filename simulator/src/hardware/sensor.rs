@@ -161,6 +161,13 @@ pub struct SensorConfig {
     /// Full well capacity in electrons (saturation limit)
     pub max_well_depth_e: f64,
 
+    /// Constant black-level / bias pedestal in DN, added to every pixel as the
+    /// final additive offset before ADC clamping. Lifts the background off the
+    /// quantization floor so the noise distribution stays well-defined at low
+    /// signal. A value of 0 disables the pedestal.
+    #[serde(default)]
+    pub black_level_dn: u16,
+
     /// Maximum sustainable frame rate in Hz
     pub max_frame_rate_fps: f64,
 }
@@ -231,6 +238,7 @@ mod tests {
             bit_depth: 8,
             dn_per_electron: 3.0,
             max_well_depth_e: 1e20,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
 
@@ -264,6 +272,7 @@ mod tests {
             bit_depth: 8,
             dn_per_electron: 3.0,
             max_well_depth_e: 1e20,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
         let (width, height) = sensor.dimensions.get_width_height();
@@ -400,6 +409,7 @@ mod tests {
             bit_depth: 8,
             dn_per_electron: 3.0,
             max_well_depth_e: 1e20,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
 
@@ -458,6 +468,7 @@ mod tests {
             bit_depth: 16,
             dn_per_electron: 0.5,
             max_well_depth_e: 10_000.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
         assert_relative_eq!(
@@ -478,6 +489,7 @@ mod tests {
             bit_depth: 12,
             dn_per_electron: 1.0,
             max_well_depth_e: 10_000.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         };
         assert_relative_eq!(
@@ -592,6 +604,7 @@ pub mod models {
             bit_depth: 12,
             dn_per_electron: 0.35,
             max_well_depth_e: 39_200.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 24.0,
         }
     });
@@ -636,6 +649,7 @@ pub mod models {
             bit_depth: 12,
             dn_per_electron: 0.35,
             max_well_depth_e: 21_000.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 88.0,
         }
     });
@@ -682,6 +696,7 @@ pub mod models {
             bit_depth: 12,
             dn_per_electron: 7.42,
             max_well_depth_e: 7_500.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 120.0,
         }
     });
@@ -736,6 +751,7 @@ pub mod models {
             bit_depth: 16,
             dn_per_electron: 1.0 / 0.4,
             max_well_depth_e: 26_000.0,
+            black_level_dn: 0,
             max_frame_rate_fps: 21.33,
         }
     });
