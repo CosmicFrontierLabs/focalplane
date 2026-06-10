@@ -9,12 +9,12 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-starfield = { version = "0.12", features = ["photometry"] }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "262051c" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "262051c" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "262051c" }
+starfield = { version = "0.13", features = ["photometry"] }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 image = "0.25" # Image processing
-ndarray = { version = "0.16", features = [
+ndarray = { version = "0.17", features = [
     "rayon",
 ] } # Multidimensional arrays with parallel computing
 rayon = "1.7" # Parallel computing
@@ -28,9 +28,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3b3aa27", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3b3aa27" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3b3aa27" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "5e0a0bb", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "5e0a0bb" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "5e0a0bb" }
 
 rand = "0.9"
 rand_distr = "0.5"
