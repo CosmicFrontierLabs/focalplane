@@ -364,13 +364,14 @@ pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Arra
     let max_dn = ((1 << sensor.bit_depth) - 1) as f64;
     let well_depth = sensor.max_well_depth_e;
     let dn_per_e = sensor.dn_per_electron;
+    let black_level_dn = sensor.black_level_dn as f64;
 
     let mut quantized = Array2::<u16>::zeros(electron_img.raw_dim());
     Zip::from(&mut quantized)
         .and(electron_img)
         .par_for_each(|out, &total_e| {
-            let clipped_e = total_e.clamp(0.0, well_depth);
-            let dn = clipped_e * dn_per_e;
+            let capped_e = total_e.min(well_depth);
+            let dn = capped_e * dn_per_e + black_level_dn;
             *out = dn.clamp(0.0, max_dn).round() as u16;
         });
     quantized
@@ -551,7 +552,7 @@ pub fn route_stars_to_sensors(
 
 #[cfg(test)]
 mod tests {
-    use approx::assert_relative_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -608,6 +609,7 @@ mod tests {
             bit_depth,
             dn_per_electron,
             max_well_depth_e,
+            black_level_dn: 0,
             max_frame_rate_fps: 30.0,
         }
     }
@@ -868,6 +870,60 @@ mod tests {
 
         assert_eq!(quantized[[0, 0]], 5);
         assert_eq!(quantized[[0, 1]], 50);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_pedestal() {
+        // 12-bit sensor (max 4095), unity gain, well depth 1000 e-, 50 DN pedestal.
+        let mut sensor = create_test_sensor(12, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((2, 2));
+
+        electron_img[[0, 0]] = 0.0; // Floor lifted to the pedestal
+        electron_img[[0, 1]] = 100.0; // Signal sits on top of the pedestal
+        electron_img[[1, 0]] = 2000.0; // Above well: clamps to well, then adds pedestal
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 50);
+        assert_eq!(quantized[[0, 1]], 150);
+        assert_eq!(quantized[[1, 0]], 1050);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_clamps_to_adc_max() {
+        // Pedestal pushing signal past the ADC ceiling clamps to max_dn (255 at 8-bit).
+        let mut sensor = create_test_sensor(8, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 1));
+        electron_img[[0, 0]] = 250.0; // 250 + 50 = 300, clamps to 255
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 255);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_preserves_sub_floor_noise() {
+        // The pedestal is an analog, pre-ADC bias: it must be applied before the
+        // 0 floor so sub-zero read-noise excursions survive as spread, not collapse
+        // onto a single flat value. With bias 50 DN and gain 2.5, a symmetric dip
+        // and peak about a zero-mean background must land on distinct DN values.
+        let mut sensor = create_test_sensor(12, 2.5, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 3));
+        electron_img[[0, 0]] = -2.0; // noise dip below background: -2*2.5+50 = 45
+        electron_img[[0, 1]] = 0.0; //  background mean:            0*2.5+50 = 50
+        electron_img[[0, 2]] = 2.0; //  noise peak above background:  2*2.5+50 = 55
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 45);
+        assert_eq!(quantized[[0, 1]], 50);
+        assert_eq!(quantized[[0, 2]], 55);
+        // The dip is preserved (not flattened to 50), so a background built from
+        // such excursions has MAD > 0 rather than the degenerate MAD = 0.
+        assert_ne!(quantized[[0, 0]], quantized[[0, 1]]);
     }
 
     #[test]
@@ -1176,7 +1232,7 @@ mod tests {
         assert_eq!(unrolled.len(), 1);
         let (x0, y0) = (unrolled[0].x_mm, unrolled[0].y_mm);
         assert!(x0.abs() > 0.05, "expected meaningful x offset, got {x0}");
-        assert!(y0.abs() < 0.05, "expected near-zero y offset, got {y0}");
+        assert_abs_diff_eq!(y0, 0.0, epsilon = 0.05);
 
         // Roll by +pi/2 -> right-hand rule about +Z sends (x, 0) to (0, x).
         let rolled = project_stars_to_focal_plane_oriented(

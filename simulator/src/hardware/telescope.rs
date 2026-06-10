@@ -35,9 +35,9 @@
 //! - **WEASEL**: Multi-spectral Earth observation system
 //!
 
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
+use std::sync::LazyLock;
 
 use crate::photometry::QuantumEfficiency;
 use shared::units::{Angle, AngleExt, Area, AreaExt, Length, LengthExt, Wavelength};
@@ -344,7 +344,7 @@ mod tests {
 pub mod models {
     use super::*;
 
-    pub static SMALL_50MM: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static SMALL_50MM: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         TelescopeConfig::new(
             "50mm",
             Length::from_meters(0.05), // 50mm aperture
@@ -354,7 +354,7 @@ pub mod models {
     });
 
     /// 50cm Demo telescope
-    pub static IDEAL_50CM: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static IDEAL_50CM: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         TelescopeConfig::new(
             "Ideal 50cm",
             Length::from_meters(0.5),  // 50cm aperture
@@ -364,7 +364,7 @@ pub mod models {
     });
 
     /// 1m Final telescope
-    pub static IDEAL_100CM: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static IDEAL_100CM: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         TelescopeConfig::new(
             "Ideal 100cm",
             Length::from_meters(1.0),  // 1m aperture
@@ -375,7 +375,7 @@ pub mod models {
 
     /// Officina Stellare Weasel - 50cm f/6.9 Catadioptric
     /// Bandpass: 450nm-900nm, 0.8 Strehl at 800nm, 42% obscuration ratio
-    pub static OFFICINA_STELLARE_WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static OFFICINA_STELLARE_WEASEL: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         // Create QE curve for Weasel based on spectral data
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 450.0, 545.0, 680.0, 820.0, 900.0, 1050.0, 1400.0, 1800.0,
@@ -399,7 +399,7 @@ pub mod models {
 
     /// Optech/Lina LS50 - 50cm f/10 Catadioptric  
     /// Bandpass: 400-1100nm, 0.8 Strehl at 833nm, 37% obscuration ratio
-    pub static OPTECH_LINA_LS50: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static OPTECH_LINA_LS50: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 400.0, 545.0, 680.0, 820.0, 1050.0, 1100.0, 1400.0, 1800.0,
             1801.0,
@@ -422,7 +422,7 @@ pub mod models {
 
     /// Optech/Lina LS35 - 35cm f/10 Catadioptric
     /// Bandpass: 400-1100nm, 0.8 Strehl at 833nm, 37% obscuration ratio  
-    pub static OPTECH_LINA_LS35: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static OPTECH_LINA_LS35: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 400.0, 545.0, 680.0, 820.0, 1050.0, 1100.0, 1400.0, 1800.0,
             1801.0,
@@ -445,7 +445,7 @@ pub mod models {
 
     /// Cosmic Frontier JBT .5m - 48.5cm f/12.3 Reflective
     /// Bandpass: broad spectrum, 0.8 Strehl at 550nm
-    pub static COSMIC_FRONTIER_JBT_50CM: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static COSMIC_FRONTIER_JBT_50CM: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
         ];
@@ -467,7 +467,7 @@ pub mod models {
 
     /// Cosmic Frontier JBT MAX - 65cm f/12.3 Reflective
     /// Bandpass: broad spectrum, 0.8 Strehl at 550nm
-    pub static COSMIC_FRONTIER_JBT_MAX: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static COSMIC_FRONTIER_JBT_MAX: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
         ];
@@ -489,7 +489,7 @@ pub mod models {
 
     /// Cosmic Frontier JBT 1.0m - 100cm f/12.3 Reflective
     /// Bandpass: broad spectrum, 0.8 Strehl at 550nm
-    pub static COSMIC_FRONTIER_JBT_1M: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static COSMIC_FRONTIER_JBT_1M: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         let wavelengths = vec![
             149.0, 175.0, 300.0, 395.0, 545.0, 680.0, 820.0, 1050.0, 1400.0, 1800.0, 1801.0,
         ];
@@ -511,7 +511,7 @@ pub mod models {
 
     /// Legacy Weasel telescope (keeping for backwards compatibility)
     /// Spectral ranges: PAN: 0.45 – 0.9 um, RGB: 0.45 – 0.68 um, SWIR: 0.9 – 1.7 um
-    pub static WEASEL: Lazy<TelescopeConfig> = Lazy::new(|| {
+    pub static WEASEL: LazyLock<TelescopeConfig> = LazyLock::new(|| {
         TelescopeConfig::new(
             "Weasel",
             Length::from_meters(0.47), // 470mm aperture

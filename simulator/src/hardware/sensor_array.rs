@@ -4,8 +4,9 @@
 //! positioned in a focal plane, as commonly used in large astronomical cameras
 //! and survey instruments.
 
+use std::sync::LazyLock;
+
 use crate::hardware::sensor::{models::IMX455, SensorConfig};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use shared::units::LengthExt;
 
@@ -199,7 +200,7 @@ impl SensorArray {
     }
 }
 
-pub static SPENCER_ARRAY_PLAN: Lazy<SensorArray> = Lazy::new(|| {
+pub static SPENCER_ARRAY_PLAN: LazyLock<SensorArray> = LazyLock::new(|| {
     /// Outer (low-y) pair |x| offset, mm.
     const OUTER_X_MM: f64 = 61.0;
     /// Inner (high-y) pair |x| offset, mm.
@@ -391,6 +392,39 @@ mod tests {
         let results = array.mm_to_pixels_padded(x_outside, 0.0, 2.0);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].2, 0);
+    }
+
+    #[test]
+    fn test_sensor_array_json_round_trip() {
+        // The full SensorArray field chain (PositionedSensor -> SensorConfig ->
+        // QuantumEfficiency / ReadNoiseEstimator / DarkCurrentEstimator / SensorGeometry
+        // -> shared unit types) must survive a disk-shaped JSON round-trip so the
+        // focal-plane config can be persisted and shipped to the frontend without a
+        // hand-rolled mirror DTO.
+        let original = SPENCER_ARRAY_PLAN.clone();
+
+        let json = serde_json::to_string(&original).expect("serialize SensorArray");
+        let restored: SensorArray = serde_json::from_str(&json).expect("deserialize SensorArray");
+
+        assert_eq!(restored.sensor_count(), original.sensor_count());
+        assert_eq!(restored.total_pixel_count(), original.total_pixel_count());
+        for (orig, back) in original.sensors.iter().zip(restored.sensors.iter()) {
+            assert_eq!(back.sensor.name, orig.sensor.name);
+            assert_eq!(back.position.x_mm, orig.position.x_mm);
+            assert_eq!(back.position.y_mm, orig.position.y_mm);
+            assert_eq!(
+                back.sensor.dimensions.get_pixel_width_height(),
+                orig.sensor.dimensions.get_pixel_width_height()
+            );
+            assert_eq!(back.sensor.bit_depth, orig.sensor.bit_depth);
+        }
+
+        // Re-serializing the restored array yields byte-identical JSON, which exercises
+        // the entire nested chain (QE curve, noise/dark-current estimators, unit types)
+        // and fails loudly if a future field is not serde round-trippable. Bit-exact f64
+        // round-tripping relies on serde_json's `float_roundtrip` feature (Cargo.toml).
+        let json_again = serde_json::to_string(&restored).expect("re-serialize SensorArray");
+        assert_eq!(json, json_again);
     }
 
     #[test]
