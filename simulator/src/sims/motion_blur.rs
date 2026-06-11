@@ -585,7 +585,6 @@ fn build_tile_mean_image(
 
     let schedule = &plan.schedule;
     let dt = schedule.dt();
-    let stamp_weight = 1.0 / schedule.stamps_per_exposure.max(1) as f64;
 
     // Per-tile R2 phase derived deterministically from the tile
     // seed: shifts the golden-ratio stamp sequence so different
@@ -636,7 +635,7 @@ fn build_tile_mean_image(
             // Per-stamp electron contribution: flux rate × per-stamp
             // dt (= exposure / stamps_per_exposure) × aperture. Sum
             // over all stamps reproduces the full exposure budget.
-            let total_electrons = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+            let total_electrons = flux.electrons.integrated_over(&dt, aperture);
             accumulator.splat_psf(
                 hit.0 - x_off,
                 hit.1 - y_off,
@@ -2548,7 +2547,6 @@ mod tests {
         let aperture = first_sat.telescope.clear_aperture_area();
         let flux = star_data_to_fluxes(star, &first_sat);
         let dt = schedule.dt();
-        let stamp_weight = 1.0 / schedule.stamps_per_exposure.max(1) as f64;
         let stamp_phase = quasi_random::phase_from_seed(seed ^ STAMP_PHASE_DOMAIN);
         for stamp_t in schedule.stamp_times(stamp_phase) {
             let t_clamped = stamp_t
@@ -2556,7 +2554,7 @@ mod tests {
                 .max(trajectory.start_time());
             let q = trajectory.orientation_at(t_clamped).unwrap();
             if let Some((px, py)) = fp.project_to_sensor(star, &q, 0, padding_mm) {
-                let total = flux.electrons.integrated_over(&dt, aperture) * stamp_weight;
+                let total = flux.electrons.integrated_over(&dt, aperture);
                 acc.splat_psf(px, py, total, &flux.electrons.disk);
             }
         }
@@ -2631,6 +2629,82 @@ mod tests {
             })
             .collect();
         Trajectory::new(waypoints).unwrap()
+    }
+
+    /// Regression test for stamp-count flux conservation: each stamp
+    /// integrates `exposure / stamps_per_exposure` of flux, so the total
+    /// deposited electrons must be independent of how many stamps the
+    /// drift budget demands. A double normalization (per-stamp dt *and*
+    /// a 1/stamps weight) divides star flux by the stamp count — correct
+    /// for static scenes (1 stamp) and arbitrarily dim for smeared ones.
+    ///
+    /// The comparison renders the *same tone trajectory* under two
+    /// per-stamp drift budgets (≈500 vs ≈2000 stamps) so the average
+    /// sub-pixel Simpson capture is identical on both sides and only the
+    /// stamp normalization differs. (A static-vs-tone comparison would
+    /// confound the check: on an undersampled PSF the 3-point Simpson
+    /// capture varies with sub-pixel phase, so a moving star legitimately
+    /// integrates a different capture average than a pinned one.)
+    #[test]
+    fn total_flux_is_independent_of_stamp_count() {
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let star = StarData {
+            id: 0,
+            magnitude: 5.0,
+            position: pointing,
+            b_v: Some(0.6),
+        };
+        let exposure = Duration::from_millis(250);
+        let px_scale = pixel_scale_rad(&fp).unwrap();
+        let traj_end = exposure + Duration::from_millis(50);
+
+        let tone_traj = build_pure_tone_trajectory(
+            pointing,
+            2.0 * px_scale,
+            100.0,
+            traj_end,
+            nalgebra::Vector3::x(),
+        );
+
+        let cfg_with_budget = |budget: f64| MotionBlurConfig {
+            timestep: exposure,
+            exposure,
+            max_drift_per_stamp_px: budget,
+            base_seed: Some(7),
+            force_static: false,
+            quiet: true,
+            ..Default::default()
+        };
+        let seed = tile_seed(7, 0, 0);
+
+        let coarse = simulate_tile_accumulator_stratified(
+            &tone_traj,
+            &star,
+            &fp,
+            &cfg_with_budget(0.05),
+            seed,
+        );
+        let fine = simulate_tile_accumulator_stratified(
+            &tone_traj,
+            &star,
+            &fp,
+            &cfg_with_budget(0.0125),
+            seed,
+        );
+
+        let total = |acc: &SensorAccumulator| -> f64 { acc.star_mean_electrons.iter().sum() };
+        let t_coarse = total(&coarse);
+        let t_fine = total(&fine);
+        assert!(t_coarse > 0.0, "render must deposit flux, got {t_coarse}");
+        // 4x the stamps must deposit the same total. Under the
+        // double-normalization bug this ratio reads ~4.0.
+        let ratio = t_coarse / t_fine;
+        assert!(
+            (ratio - 1.0).abs() < 0.02,
+            "total deposited flux must not depend on stamp count: \
+             coarse-budget={t_coarse:.1} e-, fine-budget={t_fine:.1} e- (ratio {ratio:.3})"
+        );
     }
 
     /// Run the variance-addition identity check for a pure sinusoidal
