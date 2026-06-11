@@ -1421,7 +1421,7 @@ mod tests {
     use crate::hardware::telescope::TelescopeConfig;
     use crate::sims::orientation::orientation_from_pointing;
     use crate::sims::trajectory::Waypoint;
-    use approx::assert_abs_diff_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use nalgebra::UnitQuaternion;
     use shared::units::{Length, LengthExt, Temperature, TemperatureExt};
     use std::f64::consts::PI;
@@ -2698,13 +2698,8 @@ mod tests {
         let t_fine = total(&fine);
         assert!(t_coarse > 0.0, "render must deposit flux, got {t_coarse}");
         // 4x the stamps must deposit the same total. Under the
-        // double-normalization bug this ratio reads ~4.0.
-        let ratio = t_coarse / t_fine;
-        assert!(
-            (ratio - 1.0).abs() < 0.02,
-            "total deposited flux must not depend on stamp count: \
-             coarse-budget={t_coarse:.1} e-, fine-budget={t_fine:.1} e- (ratio {ratio:.3})"
-        );
+        // double-normalization bug t_coarse reads ~4x t_fine.
+        assert_relative_eq!(t_coarse, t_fine, max_relative = 0.02);
     }
 
     /// Run the variance-addition identity check for a pure sinusoidal
