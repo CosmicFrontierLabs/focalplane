@@ -62,7 +62,7 @@ pub fn pink_noise_series(n: usize, rng: &mut impl Rng) -> Vec<f64> {
     out
 }
 
-/// Generate a 2-D pink-noise offset series (RA, Dec) in arcseconds,
+/// Generate a 2-D pink-noise offset series (east, north) in arcseconds,
 /// scaled so the mean magnitude `mean(|offset|)` equals
 /// `target_mean_arcsec`. Centered at zero after generation.
 pub fn pink_noise_2d_arcsec(n: usize, target_mean_arcsec: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
@@ -95,6 +95,11 @@ pub fn pink_noise_2d_arcsec(n: usize, target_mean_arcsec: f64, seed: u64) -> (Ve
 /// `mean_arcsec`. The residual is spread over `segments` waypoints
 /// across `duration`, with roll interpolated linearly from
 /// `start_roll_deg` to `start_roll_deg + total_roll_deg`.
+///
+/// The east/north offsets are applied as small rotations about the body
+/// X/Y axes composed onto the zero-roll boresight quaternion (see
+/// [`nominal_body_to_world`]), so the synthesis has no RA `1/cos(dec)`
+/// pole singularity and is valid at any declination.
 pub fn build_pink_trajectory(
     pointing: Equatorial,
     mean_arcsec: f64,
@@ -105,21 +110,23 @@ pub fn build_pink_trajectory(
     total_roll_deg: f64,
 ) -> Result<Trajectory, TrajectoryError> {
     let segments = segments.max(8);
-    let (ra_offset_arcsec, dec_offset_arcsec) =
+    let (east_offset_arcsec, north_offset_arcsec) =
         pink_noise_2d_arcsec(segments + 1, mean_arcsec, seed);
-    let ra0 = pointing.ra_degrees();
-    let dec0 = pointing.dec_degrees();
-    let cos_dec0 = dec0.to_radians().cos().max(1e-6);
+    let base = nominal_body_to_world(pointing.ra_degrees(), pointing.dec_degrees(), 0.0);
     let duration_s = duration.as_secs_f64();
     let waypoints: Vec<Waypoint> = (0..=segments)
         .map(|i| {
             let frac = i as f64 / segments as f64;
             let t = Duration::from_secs_f64(duration_s * frac);
-            let ra = ra0 + (ra_offset_arcsec[i] / 3600.0) / cos_dec0;
-            let dec = dec0 + dec_offset_arcsec[i] / 3600.0;
-            let eq = Equatorial::from_degrees(ra, dec);
-            let roll_deg = start_roll_deg + frac * total_roll_deg;
-            Waypoint::from_pointing_and_roll(t, eq, roll_deg.to_radians())
+            let east = (east_offset_arcsec[i] / 3600.0).to_radians();
+            let north = (north_offset_arcsec[i] / 3600.0).to_radians();
+            // A rotation about body +Y tips the boresight (+Z) toward
+            // body +X (sky east); a rotation about body -X tips it
+            // toward body +Y (sky north).
+            let perturb = UnitQuaternion::from_scaled_axis(Vector3::new(-north, east, 0.0));
+            let roll_rad = (start_roll_deg + frac * total_roll_deg).to_radians();
+            let twist = UnitQuaternion::from_scaled_axis(Vector3::new(0.0, 0.0, roll_rad));
+            Waypoint::new(t, base * perturb * twist)
         })
         .collect();
     Trajectory::new(waypoints)
@@ -566,6 +573,95 @@ mod tests {
         // segments + 1 waypoints
         assert_eq!(traj.waypoints().len(), 129);
         assert_relative_eq!(traj.end_time().as_secs_f64(), 10.0, epsilon = 1e-9);
+    }
+
+    /// Regression for the pole singularity (issue #134): a pink
+    /// trajectory 0.36 arcsec from the celestial pole must stay within
+    /// jitter scale of the nominal orientation, with no giant
+    /// inter-waypoint field rotations.
+    #[test]
+    fn build_pink_trajectory_is_pole_safe() {
+        let pointing = Equatorial::from_degrees(0.0, 89.9999);
+        let traj = build_pink_trajectory(pointing, 4.0, 1024, 7, Duration::from_secs(60), 0.0, 0.0)
+            .expect("pink trajectory builds at the pole");
+
+        let nominal = nominal_body_to_world(0.0, 89.9999, 0.0);
+        let arcsec = (1.0_f64 / 3600.0).to_radians();
+        let mut max_excursion = 0.0_f64;
+        let mut max_step = 0.0_f64;
+        for pair in traj.waypoints().windows(2) {
+            max_excursion = max_excursion.max(nominal.angle_to(&pair[0].orientation));
+            max_step = max_step.max(pair[0].orientation.angle_to(&pair[1].orientation));
+        }
+        // Pink noise with a 4-arcsec mean magnitude peaks at a few tens
+        // of arcsec; anything near a degree means the pole singularity
+        // is back.
+        assert!(
+            max_excursion < 120.0 * arcsec,
+            "peak excursion {:.1} arcsec exceeds 120 arcsec",
+            max_excursion / arcsec
+        );
+        assert!(
+            max_step < 120.0 * arcsec,
+            "peak inter-waypoint rotation {:.1} arcsec exceeds 120 arcsec",
+            max_step / arcsec
+        );
+    }
+
+    /// The on-sky offset pattern must be independent of declination:
+    /// the same seed yields identical per-waypoint angular offsets at
+    /// the equator and at the pole, with mean magnitude `mean_arcsec`.
+    #[test]
+    fn build_pink_trajectory_offsets_match_at_all_declinations() {
+        let mean_arcsec = 4.0;
+        let build = |dec_deg: f64| {
+            build_pink_trajectory(
+                Equatorial::from_degrees(10.0, dec_deg),
+                mean_arcsec,
+                256,
+                11,
+                Duration::from_secs(30),
+                0.0,
+                0.0,
+            )
+            .expect("pink trajectory builds")
+        };
+        let offsets = |dec_deg: f64| -> Vec<f64> {
+            let nominal = nominal_body_to_world(10.0, dec_deg, 0.0);
+            build(dec_deg)
+                .waypoints()
+                .iter()
+                .map(|wp| nominal.angle_to(&wp.orientation))
+                .collect()
+        };
+
+        let at_equator = offsets(0.0);
+        let at_pole = offsets(89.9999);
+        for (a, b) in at_equator.iter().zip(&at_pole) {
+            assert_abs_diff_eq!(a, b, epsilon = 1e-12);
+        }
+
+        let arcsec = (1.0_f64 / 3600.0).to_radians();
+        let mean = at_equator.iter().sum::<f64>() / at_equator.len() as f64;
+        assert_relative_eq!(mean / arcsec, mean_arcsec, epsilon = 1e-6);
+    }
+
+    /// Roll interpolation must survive the body-axis composition: away
+    /// from the pole the recovered roll of each waypoint tracks the
+    /// linear start→end ramp.
+    #[test]
+    fn build_pink_trajectory_interpolates_roll() {
+        use crate::sims::orientation::roll_of;
+
+        let pointing = Equatorial::from_degrees(80.0, 35.0);
+        let traj = build_pink_trajectory(pointing, 2.0, 64, 3, Duration::from_secs(20), 10.0, 30.0)
+            .expect("pink trajectory builds");
+        let n = traj.waypoints().len();
+        for (i, wp) in traj.waypoints().iter().enumerate() {
+            let frac = i as f64 / (n - 1) as f64;
+            let expected = (10.0 + frac * 30.0).to_radians();
+            assert_abs_diff_eq!(roll_of(&wp.orientation), expected, epsilon = 1e-4);
+        }
     }
 
     use std::io::Write;
