@@ -26,6 +26,7 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use rayon::prelude::*;
+use serde::Serialize;
 use shared::star_projector::StarProjector;
 use shared::units::{Angle, AngleExt, LengthExt, Temperature, TemperatureExt};
 use simulator::hardware::SatelliteConfig;
@@ -35,9 +36,7 @@ use starfield::catalogs::minimal_catalog::MinimalCatalog;
 use starfield::catalogs::StarPosition;
 use starfield::framelib::random::RandomEquatorial;
 use starfield::Equatorial;
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// Configuration for one projector (pointing only, single satellite)
@@ -202,90 +201,34 @@ fn organize_results(
 fn write_results_to_csv(
     results: &[SkyPointingResult],
     args: &Args,
-    satellite: &SatelliteConfig,
-    fov_deg: Angle,
+    _satellite: &SatelliteConfig,
+    _fov_deg: Angle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let csv_path = Path::new(&args.output_csv);
-    let mut csv_file = File::create(csv_path)
-        .unwrap_or_else(|_| panic!("Failed to create CSV file: {}", args.output_csv));
-
     info!("Writing results to CSV file: {}", args.output_csv);
-
-    // Write CSV header with configuration information
-    writeln!(csv_file, "Sensor View Statistics Results")?;
-    writeln!(csv_file, "Configuration Parameters:")?;
-    writeln!(csv_file, "Number of sky pointings: {}", args.pointings)?;
-    writeln!(csv_file, "Random seed: {}", args.seed)?;
-    writeln!(csv_file, "Star catalog: {}", args.catalog.display())?;
-    writeln!(csv_file)?;
-
-    // Write satellite information
-    writeln!(csv_file, "Satellite Configuration:")?;
-    writeln!(
-        csv_file,
-        "Sensor: {} - FOV: {:.4}° - Focal Length: {:.2}m - Aperture: {:.2}m",
-        satellite.sensor.name,
-        fov_deg.as_degrees(),
-        satellite.telescope.focal_length.as_meters(),
-        satellite.telescope.aperture.as_meters()
-    )?;
-    writeln!(csv_file)?;
-
-    // Write detailed data header
-    writeln!(csv_file, "Detailed Results:")?;
-    writeln!(
-        csv_file,
-        "pointing_num,ra_degrees,dec_degrees,total_stars_on_sensor,star_magnitudes"
-    )?;
-
-    // Write detailed results
-    for result in results {
-        let magnitudes_str = result
-            .star_magnitudes
-            .iter()
-            .map(|m| format!("{m:.2}"))
-            .collect::<Vec<_>>()
-            .join(";");
-
-        writeln!(
-            csv_file,
-            "{},{:.6},{:.6},{},\"{}\"",
-            result.pointing_num,
-            result.coordinates.ra_degrees(),
-            result.coordinates.dec_degrees(),
-            result.total_stars_on_sensor,
-            magnitudes_str
-        )?;
+    #[derive(Serialize)]
+    struct CsvRow {
+        pointing_num: u32,
+        ra_degrees: f64,
+        dec_degrees: f64,
+        total_stars_on_sensor: usize,
+        star_magnitudes: String,
     }
-
-    writeln!(csv_file)?;
-
-    // Write summary statistics
-    writeln!(csv_file, "Summary Statistics:")?;
-    writeln!(
-        csv_file,
-        "mean_total_stars,std_total_stars,min_total_stars,max_total_stars"
-    )?;
-
-    let total_stars: Vec<usize> = results.iter().map(|r| r.total_stars_on_sensor).collect();
-
-    let mean_total = total_stars.iter().sum::<usize>() as f64 / total_stars.len() as f64;
-
-    let var_total = total_stars
-        .iter()
-        .map(|&x| (x as f64 - mean_total).powi(2))
-        .sum::<f64>()
-        / total_stars.len() as f64;
-    let std_total = var_total.sqrt();
-
-    let min_total = *total_stars.iter().min().unwrap();
-    let max_total = *total_stars.iter().max().unwrap();
-
-    writeln!(
-        csv_file,
-        "{mean_total:.2},{std_total:.2},{min_total},{max_total}"
-    )?;
-
+    let mut writer = csv::Writer::from_path(&args.output_csv)?;
+    for result in results {
+        writer.serialize(CsvRow {
+            pointing_num: result.pointing_num,
+            ra_degrees: result.coordinates.ra_degrees(),
+            dec_degrees: result.coordinates.dec_degrees(),
+            total_stars_on_sensor: result.total_stars_on_sensor,
+            star_magnitudes: result
+                .star_magnitudes
+                .iter()
+                .map(|m| format!("{m:.2}"))
+                .collect::<Vec<_>>()
+                .join(";"),
+        })?;
+    }
+    writer.flush()?;
     Ok(())
 }
 

@@ -16,7 +16,6 @@
 //!    The CSV loader [`load_los_psd_csv`] parses the same file format
 //!    used by `scripts/los_psd_to_trajectory_csv.py`.
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,6 +24,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
+use serde::{Deserialize, Serialize};
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -187,6 +187,13 @@ pub enum LosPsdLoadError {
         #[source]
         source: std::num::ParseFloatError,
     },
+    #[error("{path}: CSV record at line {line}: {source}")]
+    Csv {
+        path: PathBuf,
+        line: u64,
+        #[source]
+        source: csv::Error,
+    },
     #[error("{path}: needs at least 2 frequency rows, found {found}")]
     TooFewRows { path: PathBuf, found: usize },
     #[error("{path}: line {line}: `freq_hz` is not strictly ascending")]
@@ -218,60 +225,42 @@ pub fn load_los_psd_csv(path: impl AsRef<Path>) -> Result<LosPsd, LosPsdLoadErro
         path: path_ref.to_path_buf(),
         source,
     })?;
-    let reader = BufReader::new(file);
-
-    let mut header: Option<Vec<String>> = None;
+    let mut reader = csv::ReaderBuilder::new()
+        .comment(Some(b'#'))
+        .trim(csv::Trim::All)
+        .from_reader(file);
+    let headers = reader
+        .headers()
+        .map_err(|source| LosPsdLoadError::Csv {
+            path: path_ref.to_path_buf(),
+            line: source.position().map_or(1, |p| p.line()),
+            source,
+        })?
+        .clone();
+    if headers.is_empty() {
+        return Err(LosPsdLoadError::EmptyFile {
+            path: path_ref.to_path_buf(),
+        });
+    }
+    for column in ["freq_hz", "psd_los_x_rad2_per_hz", "psd_los_y_rad2_per_hz"] {
+        if !headers.iter().any(|header| header == column) {
+            return Err(LosPsdLoadError::MissingColumn {
+                path: path_ref.to_path_buf(),
+                column: column.to_owned(),
+            });
+        }
+    }
     let mut freq_hz: Vec<f64> = Vec::new();
     let mut psd_x: Vec<f64> = Vec::new();
     let mut psd_y: Vec<f64> = Vec::new();
-    let mut i_f = 0;
-    let mut i_x = 0;
-    let mut i_y = 0;
-
-    for (line_idx, line_result) in reader.lines().enumerate() {
-        let line_no = line_idx + 1;
-        let line = line_result.map_err(|source| LosPsdLoadError::Io {
+    while let Some(row) = reader.deserialize::<LosPsdCsvRow>().next() {
+        let row = row.map_err(|source| LosPsdLoadError::Csv {
             path: path_ref.to_path_buf(),
+            line: source.position().map_or(0, |p| p.line()),
             source,
         })?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let cells: Vec<&str> = trimmed.split(',').map(str::trim).collect();
-
-        if header.is_none() {
-            let cols: Vec<String> = cells.iter().map(|c| c.to_string()).collect();
-            let find = |name: &str| -> Result<usize, LosPsdLoadError> {
-                cols.iter()
-                    .position(|c| c == name)
-                    .ok_or_else(|| LosPsdLoadError::MissingColumn {
-                        path: path_ref.to_path_buf(),
-                        column: name.to_string(),
-                    })
-            };
-            i_f = find("freq_hz")?;
-            i_x = find("psd_los_x_rad2_per_hz")?;
-            i_y = find("psd_los_y_rad2_per_hz")?;
-            header = Some(cols);
-            continue;
-        }
-
-        let parse_cell = |idx: usize, column: &str| -> Result<f64, LosPsdLoadError> {
-            let cell = cells.get(idx).ok_or_else(|| LosPsdLoadError::MissingCell {
-                path: path_ref.to_path_buf(),
-                line: line_no,
-                column: column.to_string(),
-            })?;
-            cell.parse::<f64>()
-                .map_err(|source| LosPsdLoadError::BadCell {
-                    path: path_ref.to_path_buf(),
-                    line: line_no,
-                    column: column.to_string(),
-                    source,
-                })
-        };
-        let f = parse_cell(i_f, "freq_hz")?;
+        let line_no = reader.position().line() as usize;
+        let f = row.freq_hz;
         if let Some(&prev) = freq_hz.last() {
             if f <= prev {
                 return Err(LosPsdLoadError::FrequencyNotAscending {
@@ -281,14 +270,8 @@ pub fn load_los_psd_csv(path: impl AsRef<Path>) -> Result<LosPsd, LosPsdLoadErro
             }
         }
         freq_hz.push(f);
-        psd_x.push(parse_cell(i_x, "psd_los_x_rad2_per_hz")?);
-        psd_y.push(parse_cell(i_y, "psd_los_y_rad2_per_hz")?);
-    }
-
-    if header.is_none() {
-        return Err(LosPsdLoadError::EmptyFile {
-            path: path_ref.to_path_buf(),
-        });
+        psd_x.push(row.psd_los_x_rad2_per_hz);
+        psd_y.push(row.psd_los_y_rad2_per_hz);
     }
     if freq_hz.len() < 2 {
         return Err(LosPsdLoadError::TooFewRows {
@@ -302,6 +285,13 @@ pub fn load_los_psd_csv(path: impl AsRef<Path>) -> Result<LosPsd, LosPsdLoadErro
         psd_x_rad2_per_hz: psd_x,
         psd_y_rad2_per_hz: psd_y,
     })
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LosPsdCsvRow {
+    freq_hz: f64,
+    psd_los_x_rad2_per_hz: f64,
+    psd_los_y_rad2_per_hz: f64,
 }
 
 /// Body→world rotation defining the simulator body frame at the nominal
@@ -673,9 +663,18 @@ mod tests {
         let mut f = NamedTempFile::new().expect("tempfile");
         writeln!(f, "# synthetic LOS PSD for test").unwrap();
         writeln!(f, "# generated by jitter::tests::write_psd_csv").unwrap();
-        writeln!(f, "freq_hz,psd_los_x_rad2_per_hz,psd_los_y_rad2_per_hz").unwrap();
-        for (freq, px, py) in rows {
-            writeln!(f, "{},{:e},{:e}", freq, px, py).unwrap();
+        {
+            let mut writer = csv::Writer::from_writer(&mut f);
+            for &(freq_hz, psd_los_x_rad2_per_hz, psd_los_y_rad2_per_hz) in rows {
+                writer
+                    .serialize(LosPsdCsvRow {
+                        freq_hz,
+                        psd_los_x_rad2_per_hz,
+                        psd_los_y_rad2_per_hz,
+                    })
+                    .unwrap();
+            }
+            writer.flush().unwrap();
         }
         f.flush().unwrap();
         f
