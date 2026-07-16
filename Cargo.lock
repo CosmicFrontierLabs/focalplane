@@ -3391,6 +3391,7 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
+ "csv",
  "env_logger",
  "float-cmp",
  "image",

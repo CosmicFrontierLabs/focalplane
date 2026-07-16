@@ -313,44 +313,29 @@ const ADDITIONAL_BRIGHT_STARS_CSV: &str = include_str!("../data/missing_bright_s
 /// - This ensures no ID collisions when merging with primary catalogs
 /// - Returns an error if CSV format is invalid or coordinates are out of bounds
 pub fn parse_additional_stars() -> Result<Vec<MinimalStar>, Box<dyn std::error::Error>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct AdditionalStarRow {
+        #[serde(rename = "RA_deg")]
+        ra_deg: f64,
+        #[serde(rename = "Dec_deg")]
+        dec_deg: f64,
+        #[serde(rename = "Gaia_magnitude")]
+        gaia_magnitude: f64,
+    }
     let mut stars = Vec::new();
     let mut current_id = u64::MAX; // Start from maximum possible value and count backwards
-
-    for (line_num, line) in ADDITIONAL_BRIGHT_STARS_CSV.lines().enumerate() {
-        // Skip header line
-        if line_num == 0 {
-            continue;
-        }
-
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() != 3 {
-            return Err(format!(
-                "Invalid CSV format at line {}: expected 3 columns, got {}",
-                line_num + 1,
-                parts.len()
-            )
-            .into());
-        }
-
-        let ra_deg = parts[0]
-            .trim()
-            .parse::<f64>()
-            .map_err(|e| format!("Invalid RA at line {}: {}", line_num + 1, e))?;
-        let dec_deg = parts[1]
-            .trim()
-            .parse::<f64>()
-            .map_err(|e| format!("Invalid Dec at line {}: {}", line_num + 1, e))?;
-        let magnitude = parts[2]
-            .trim()
-            .parse::<f64>()
-            .map_err(|e| format!("Invalid magnitude at line {}: {}", line_num + 1, e))?;
-
-        stars.push(MinimalStar::new(current_id, ra_deg, dec_deg, magnitude));
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(ADDITIONAL_BRIGHT_STARS_CSV.as_bytes());
+    for row in reader.deserialize::<AdditionalStarRow>() {
+        let row = row?;
+        stars.push(MinimalStar::new(
+            current_id,
+            row.ra_deg,
+            row.dec_deg,
+            row.gaia_magnitude,
+        ));
         current_id = current_id.saturating_sub(1); // Count backwards, protecting against underflow
     }
 
