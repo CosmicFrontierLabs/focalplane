@@ -285,6 +285,17 @@ impl FocalPlaneConfig {
         self.telescope.plate_scale().as_radians() / 1000.0
     }
 
+    /// On-sky angle subtended by one pixel on a selected sensor, in radians.
+    ///
+    /// Pixel pitches may differ between sensors in an array, so callers must
+    /// identify the sensor whose sampling they need. Returns `None` when the
+    /// sensor index is out of bounds.
+    pub fn plate_scale_rad_per_px(&self, sensor_index: usize) -> Option<f64> {
+        self.array.sensors.get(sensor_index).map(|positioned| {
+            self.telescope.plate_scale().as_radians() * positioned.sensor.pixel_size().as_meters()
+        })
+    }
+
     /// Get the total AABB of the sensor array in mm.
     pub fn total_aabb_mm(&self) -> Option<(f64, f64, f64, f64)> {
         self.array.total_aabb_mm()
@@ -764,6 +775,47 @@ mod tests {
         // plate_scale = 1/focal_length_m = 1.0 rad/m
         // rad_per_mm = 1.0 / 1000 = 0.001
         assert_relative_eq!(fp.plate_scale_rad_per_mm(), 0.001, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_focal_plane_plate_scale_rad_per_px() {
+        use crate::hardware::sensor_array::{PositionedSensor, SensorPosition};
+
+        let telescope = TelescopeConfig::new(
+            "Test Scope",
+            Length::from_meters(0.1),
+            Length::from_meters(2.0),
+            0.8,
+        );
+        let array = SensorArray::new(vec![
+            PositionedSensor {
+                sensor: crate::hardware::sensor::models::GSENSE4040BSI.clone(),
+                position: SensorPosition {
+                    x_mm: -1.0,
+                    y_mm: 0.0,
+                },
+            },
+            PositionedSensor {
+                sensor: crate::hardware::sensor::models::IMX455.clone(),
+                position: SensorPosition {
+                    x_mm: 1.0,
+                    y_mm: 0.0,
+                },
+            },
+        ]);
+        let fp = FocalPlaneConfig::new(telescope, array, Temperature::from_celsius(-10.0));
+
+        assert_relative_eq!(
+            fp.plate_scale_rad_per_px(0).unwrap(),
+            9.0e-6 / 2.0,
+            epsilon = 1e-15
+        );
+        assert_relative_eq!(
+            fp.plate_scale_rad_per_px(1).unwrap(),
+            3.76e-6 / 2.0,
+            epsilon = 1e-15
+        );
+        assert_eq!(fp.plate_scale_rad_per_px(2), None);
     }
 
     #[test]
