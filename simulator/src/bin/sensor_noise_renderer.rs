@@ -15,7 +15,7 @@ use simulator::hardware::{
     sensor::models as sensor_models, SatelliteConfig, SensorConfig, TelescopeConfig,
 };
 use simulator::image_proc::render::{Renderer, StarInFrame};
-use simulator::photometry::zodiacal::SolarAngularCoordinates;
+use simulator::photometry::zodiacal::{SolarAngularCoordinates, ZodiacalLight};
 use simulator::units::{Length, LengthExt, Temperature, TemperatureExt};
 use std::time::Duration;
 
@@ -73,6 +73,28 @@ fn create_minimal_telescope() -> TelescopeConfig {
         Length::from_meters(0.5), // 500mm focal length
         0.9,                      // 90% light efficiency
     )
+}
+
+/// Return the mean zodiacal photoelectrons in one pixel for an exposure.
+fn zodiacal_electrons_per_pixel(
+    satellite_config: &SatelliteConfig,
+    exposure: Duration,
+    zodiacal_coords: &SolarAngularCoordinates,
+) -> f64 {
+    // Zodiacal illumination is uniform across the current model, so a one-pixel
+    // sensor avoids allocating a full-resolution background image.
+    let sensor = satellite_config.sensor.with_dimensions(1, 1);
+    let satellite = SatelliteConfig::new(
+        satellite_config.telescope.clone(),
+        sensor,
+        satellite_config.temperature,
+    );
+    ZodiacalLight::default().generate_zodiacal_background(&satellite, &exposure, zodiacal_coords)
+        [[0, 0]]
+}
+
+fn total_expected_noise(read_noise: f64, dark_electrons: f64, zodiacal_electrons: f64) -> f64 {
+    (read_noise.powi(2) + dark_electrons + zodiacal_electrons).sqrt()
 }
 
 /// Generate an empty sensor image using the renderer (includes zodiacal background)
@@ -230,8 +252,11 @@ fn main() {
         let dark_current = sensor_config.dark_current_at_temperature(temperature);
         let exposure_s = args.exposure_ms as f64 / 1000.0;
         let dark_electrons = dark_current * exposure_s;
-
-        let total_expected_noise = (read_noise.powi(2) + dark_electrons).sqrt();
+        let exposure = Duration::from_millis(args.exposure_ms);
+        let zodiacal_electrons =
+            zodiacal_electrons_per_pixel(&satellite_config, exposure, &zodiacal_coords);
+        let total_expected_noise =
+            total_expected_noise(read_noise, dark_electrons, zodiacal_electrons);
 
         println!("Expected noise components:");
         println!("  Read noise: {read_noise:.2} e-");
@@ -243,7 +268,8 @@ fn main() {
             "  Dark electrons: {:.2} e- ({} ms exposure)",
             dark_electrons, args.exposure_ms
         );
-        println!("  Total expected (without zodiacal): {total_expected_noise:.2} e- RMS");
+        println!("  Zodiacal electrons: {zodiacal_electrons:.2} e-/pixel");
+        println!("  Total expected: {total_expected_noise:.2} e- RMS");
         println!();
 
         // Analyze noise from rendered images
@@ -266,9 +292,21 @@ fn main() {
         println!("  Mean: {mean_noise:.2} e- RMS");
         println!("  Std dev: {std_dev:.2} e-");
         println!(
-            "  Ratio to expected (without zodiacal): {:.2}%",
+            "  Ratio to expected: {:.2}%",
             (mean_noise / total_expected_noise) * 100.0
         );
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::total_expected_noise;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn expected_noise_combines_independent_variances() {
+        let noise = total_expected_noise(3.0, 4.0, 12.0);
+        assert_abs_diff_eq!(noise, 5.0, epsilon = f64::EPSILON);
     }
 }
