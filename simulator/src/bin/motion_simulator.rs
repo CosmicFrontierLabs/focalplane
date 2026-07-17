@@ -100,51 +100,33 @@ fn build_line_trajectory(
 /// load; non-monotonic `time_s` is rejected.
 fn build_csv_trajectory(path: &std::path::Path) -> Result<Trajectory, Box<dyn std::error::Error>> {
     use nalgebra::{Quaternion, UnitQuaternion};
-    use std::io::{BufRead, BufReader};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct CsvWaypoint {
+        time_s: f64,
+        qw: f64,
+        qx: f64,
+        qy: f64,
+        qz: f64,
+    }
 
     let file = std::fs::File::open(path).map_err(|e| format!("opening {}: {e}", path.display()))?;
-    let mut lines = BufReader::new(file).lines();
-
-    let header = lines
-        .next()
-        .ok_or_else(|| format!("{} is empty", path.display()))?
-        .map_err(|e| e.to_string())?;
-    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
-    let idx = |name: &str| -> Result<usize, String> {
-        columns
-            .iter()
-            .position(|c| *c == name)
-            .ok_or_else(|| format!("{} is missing column `{name}`", path.display()))
-    };
-    let (i_t, i_qw, i_qx, i_qy, i_qz) = (
-        idx("time_s")?,
-        idx("qw")?,
-        idx("qx")?,
-        idx("qy")?,
-        idx("qz")?,
-    );
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(file);
 
     let mut waypoints: Vec<Waypoint> = Vec::new();
     let mut last_t = f64::NEG_INFINITY;
-    for (line_no, line) in lines.enumerate() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let cells: Vec<&str> = line.split(',').map(str::trim).collect();
-        let parse = |i: usize, name: &str| -> Result<f64, String> {
-            cells
-                .get(i)
-                .ok_or_else(|| format!("line {}: missing `{name}` cell", line_no + 2))?
-                .parse::<f64>()
-                .map_err(|e| format!("line {}: bad `{name}` value: {e}", line_no + 2))
-        };
-        let t_s = parse(i_t, "time_s")?;
+    while let Some(record) = reader.deserialize::<CsvWaypoint>().next() {
+        let record = record.map_err(|e| format!("{}: {e}", path.display()))?;
+        let line_no = reader.position().line();
+        let t_s = record.time_s;
         if t_s <= last_t {
             return Err(format!(
                 "{}: `time_s` must be strictly increasing (line {} has {} ≤ previous {})",
                 path.display(),
-                line_no + 2,
+                line_no,
                 t_s,
                 last_t,
             )
@@ -153,10 +135,7 @@ fn build_csv_trajectory(path: &std::path::Path) -> Result<Trajectory, Box<dyn st
         last_t = t_s;
 
         let q = UnitQuaternion::from_quaternion(Quaternion::new(
-            parse(i_qw, "qw")?,
-            parse(i_qx, "qx")?,
-            parse(i_qy, "qy")?,
-            parse(i_qz, "qz")?,
+            record.qw, record.qx, record.qy, record.qz,
         ));
         waypoints.push(Waypoint::new(
             std::time::Duration::from_secs_f64(t_s.max(0.0)),

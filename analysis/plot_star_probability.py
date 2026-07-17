@@ -38,22 +38,8 @@ Path(args.output).parent.mkdir(parents=True, exist_ok=True)
 # Load CSV file
 print(f"Loading data from: {args.input}")
 
-# Read CSV, skipping header lines until we find "Detailed Results:"
-with open(args.input, 'r') as f:
-    lines = f.readlines()
-
-# Find the line with "Detailed Results:"
-data_start = None
-for i, line in enumerate(lines):
-    if 'Detailed Results:' in line:
-        data_start = i + 1
-        break
-
-if data_start is None:
-    raise ValueError("Could not find 'Detailed Results:' section in CSV")
-
-# Read the actual data
-df = pd.read_csv(args.input, skiprows=data_start)
+# The output is a standard CSV with a single header row.
+df = pd.read_csv(args.input)
 
 print(f"Loaded {len(df)} pointings")
 
