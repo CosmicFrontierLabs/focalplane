@@ -16,6 +16,7 @@ use core::f64;
 use image::DynamicImage;
 use log::{debug, info, warn};
 use meter_math::icp::{icp_match_indices, Locatable2d};
+use serde::Serialize;
 use shared::frame_writer::{FrameFormat, FrameWriterHandle};
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::image_proc::detection::{detect_stars_unified, StarFinder};
@@ -42,43 +43,41 @@ impl Locatable2d for LocatableStellarSource<'_> {
 }
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Thread-safe CSV writer for experiment results
+#[derive(Serialize)]
+struct CsvResultRow<'a> {
+    experiment_num: u32,
+    trial_num: u32,
+    ra: f64,
+    dec: f64,
+    focal_length_m: f64,
+    sensor: &'a str,
+    exposure_ms: u128,
+    star_count: usize,
+    brightest_mag: f64,
+    faintest_mag: f64,
+    pixel_error: f64,
+    translation_x: f64,
+    translation_y: f64,
+    rotation_deg: f64,
+    brightest_star_pixel_error: f64,
+    brightest_star_dx: f64,
+    brightest_star_dy: f64,
+}
+
 #[derive(Debug)]
 pub struct CsvWriter {
-    file: Arc<Mutex<File>>,
+    writer: Arc<Mutex<csv::Writer<File>>>,
 }
 
 impl CsvWriter {
     pub fn new(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut file = File::create(path)?;
-        // Write header
-        let headers = vec![
-            "experiment_num",
-            "trial_num",
-            "ra",
-            "dec",
-            "focal_length_m",
-            "sensor",
-            "exposure_ms",
-            "star_count",
-            "brightest_mag",
-            "faintest_mag",
-            "pixel_error",
-            "translation_x",
-            "translation_y",
-            "rotation_deg",
-            "brightest_star_pixel_error",
-            "brightest_star_dx",
-            "brightest_star_dy",
-        ];
-        writeln!(file, "{}", headers.join(","))?;
         Ok(CsvWriter {
-            file: Arc::new(Mutex::new(file)),
+            writer: Arc::new(Mutex::new(csv::Writer::from_path(path)?)),
         })
     }
 
@@ -87,34 +86,33 @@ impl CsvWriter {
         result: &ExperimentResult,
         aperture_m: f64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = self.file.lock().unwrap();
+        let mut writer = self.writer.lock().unwrap();
         let focal_length_m = result.f_number * aperture_m;
 
         // Write one row per exposure
         for (duration, exposure_result) in result.exposure_results.iter() {
             let exposure_ms = duration.as_millis();
-            writeln!(
-                file,
-                "{},{},{:.6},{:.6},{:.2},{},{},{},{:.2},{:.2},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
-                result.experiment_num,
-                result.trial_num,
-                result.coordinates.ra_degrees(),
-                result.coordinates.dec_degrees(),
+            writer.serialize(CsvResultRow {
+                experiment_num: result.experiment_num,
+                trial_num: result.trial_num,
+                ra: result.coordinates.ra_degrees(),
+                dec: result.coordinates.dec_degrees(),
                 focal_length_m,
-                result.sensor_name,
+                sensor: &result.sensor_name,
                 exposure_ms,
-                exposure_result.detected_count,
-                exposure_result.brightest_magnitude,
-                exposure_result.faintest_magnitude,
-                exposure_result.alignment_error,
-                exposure_result.translation_x,
-                exposure_result.translation_y,
-                exposure_result.rotation_deg,
-                exposure_result.brightest_star_pixel_error,
-                exposure_result.brightest_star_dx,
-                exposure_result.brightest_star_dy
-            )?;
+                star_count: exposure_result.detected_count,
+                brightest_mag: exposure_result.brightest_magnitude,
+                faintest_mag: exposure_result.faintest_magnitude,
+                pixel_error: exposure_result.alignment_error,
+                translation_x: exposure_result.translation_x,
+                translation_y: exposure_result.translation_y,
+                rotation_deg: exposure_result.rotation_deg,
+                brightest_star_pixel_error: exposure_result.brightest_star_pixel_error,
+                brightest_star_dx: exposure_result.brightest_star_dx,
+                brightest_star_dy: exposure_result.brightest_star_dy,
+            })?;
         }
+        writer.flush()?;
         Ok(())
     }
 }
@@ -777,19 +775,12 @@ mod tests {
     }
 
     #[test]
-    fn test_csv_writer_creation_and_header() {
+    fn test_csv_writer_creation() {
         let temp_dir = TempDir::new().unwrap();
         let csv_path = temp_dir.path().join("test.csv");
 
         let _writer = CsvWriter::new(csv_path.to_str().unwrap()).unwrap();
-
-        // Check file was created with header
-        let contents = fs::read_to_string(&csv_path).unwrap();
-        assert!(contents.contains("experiment_num"));
-        assert!(contents.contains("star_count"));
-        assert!(contents.contains("brightest_mag"));
-        assert!(contents.contains("translation_x"));
-        assert!(contents.contains("rotation_deg"));
+        assert!(csv_path.exists());
     }
 
     #[test]
@@ -820,7 +811,7 @@ mod tests {
         let result = ExperimentResult {
             experiment_num: 1,
             trial_num: 0,
-            sensor_name: "Test Sensor".to_string(),
+            sensor_name: "Test, Sensor".to_string(),
             f_number: 10.0,
             coordinates: Equatorial::from_degrees(45.0, 30.0),
             exposure_results,
@@ -833,9 +824,18 @@ mod tests {
         let contents = fs::read_to_string(&csv_path).unwrap();
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2); // Header + 1 data row
-        assert!(lines[1].contains("1,0")); // experiment_num, trial_num
-        assert!(lines[1].contains("Test Sensor"));
-        assert!(lines[1].contains("100")); // exposure_ms
+        assert_eq!(
+            lines[0],
+            "experiment_num,trial_num,ra,dec,focal_length_m,sensor,exposure_ms,star_count,brightest_mag,faintest_mag,pixel_error,translation_x,translation_y,rotation_deg,brightest_star_pixel_error,brightest_star_dx,brightest_star_dy"
+        );
+
+        let mut reader = csv::Reader::from_path(&csv_path).unwrap();
+        let record = reader.records().next().unwrap().unwrap();
+        assert_eq!(&record[0], "1");
+        assert_eq!(&record[1], "0");
+        assert_eq!(&record[5], "Test, Sensor");
+        assert_eq!(&record[6], "100");
+        assert_eq!(record.len(), 17);
     }
 
     #[test]
