@@ -2,9 +2,9 @@
 //! galaxy profile rendered onto a pixel grid at a known plate scale.
 //!
 //! Wraps a [`SersicProfile`] together with the per-pixel arcsecond
-//! scale and the precomputed analytic-integral normalisation so the
-//! per-pixel inner loop is allocation-free and transcendental-free
-//! (the gamma function call happens once at construction).
+//! scale and the precomputed analytic-integral normalisation. Surface
+//! brightness is evaluated directly with 2×2 subpixel quadrature, so
+//! memory use is independent of a galaxy's angular footprint.
 //!
 //! # Math
 //!
@@ -56,47 +56,16 @@
 //! square edges around large n=4 galaxies; this profile-aware
 //! truncation eliminates that artifact.
 //!
-//! # Thumbnail-cached evaluation
+//! # Pixel integration
 //!
-//! `pixel_flux` is a bilinear interpolation into a `THUMB_OVERSAMPLE`×
-//! oversampled SB thumbnail computed once at construction. The
-//! thumbnail evaluates `SersicProfile::surface_brightness_at` at every
-//! cell centre on a grid that's `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE`
-//! finer than the sensor pixel grid; subsequent splat lookups touch
-//! four neighbouring cells and combine them with bilinear weights.
-//!
-//! Cost vs. earlier per-pixel Simpson rendering: thumbnail builds
-//! in `(2·footprint·OS+1)²` SB evaluations once, then every pixel in
-//! the deposit footprint is a handful of array reads + multiplies.
-//! For an NSA-typical galaxy footprint of `N²` pixels the per-render
-//! cost drops from `~9N²` SB evaluations (3×3 Simpson + adaptive
-//! refinement) to `~OS²·N²` SB evaluations *at construction* + `O(N²)`
-//! near-free interpolations at splat — ~5–10× faster end-to-end at
-//! `OS = 2`.
-//!
-//! Bias / accuracy: the bilinear interpolant approximates a
-//! pixel-mean SB by averaging the four `OS²`-finer cells around the
-//! pixel centre. For NSA-typical plate scales (θ_eff covering many
-//! pixels) the SB pattern is smooth on cell scales and the
-//! interpolant matches Simpson within the truncation budget — see
-//! the `n=1` and `n=4` flux-conservation tests. For pathologically
-//! under-resolved galaxies (θ_eff < pixel) some residual peak
-//! overcount remains; the test
-//! `under_resolved_galaxy_overestimates_flux_documenting_v1_limitation`
-//! pins the bias direction (always over).
+//! `pixel_flux` averages the profile at the four quarter-pixel
+//! quadrature points. This avoids sampling the singularly bright
+//! centre of a high-index profile while keeping each deposit at
+//! constant memory, including sensor-spanning catalog profiles.
 
-use ndarray::Array2;
 use starfield::catalogs::SersicProfile;
 
 use crate::image_proc::deposit::MeanFluxDeposit;
-
-/// Thumbnail oversampling factor: each sensor pixel covers
-/// `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE` thumbnail cells. Bilinear
-/// interpolation at the sensor pixel centre then averages four
-/// neighbouring thumbnail cells, which approximates the pixel-mean SB
-/// well enough for NSA-typical galaxies (θ_eff covering many sensor
-/// pixels) without the per-pixel Simpson cost.
-const THUMB_OVERSAMPLE: i32 = 2;
 
 /// `MeanFluxDeposit` impl for an elliptical Sérsic profile at a given
 /// plate scale. See module-level docs for the math.
@@ -117,21 +86,6 @@ pub struct SersicSplat {
     /// so the truncation remainder stays well below the per-pixel
     /// noise floor for the deposit.
     footprint_px: i32,
-    /// `THUMB_OVERSAMPLE`× oversampled SB pattern over the deposit's
-    /// footprint, evaluated once at construction time. Each cell
-    /// stores `SersicProfile::surface_brightness_at(cx, cy)` at the
-    /// cell centre. `pixel_flux` bilinear-interpolates this thumbnail
-    /// instead of re-evaluating the SB function per pixel.
-    thumb: Array2<f64>,
-    /// Cell width in arcsec: `arcsec_per_pixel / THUMB_OVERSAMPLE`.
-    thumb_arcsec_per_cell: f64,
-    /// Half-extent of the thumbnail in arcsec: positions outside
-    /// `[-thumb_half_extent, +thumb_half_extent]` on either axis are
-    /// outside the rendered footprint and return zero contribution.
-    thumb_half_extent_arcsec: f64,
-    /// Cell offset of the centre cell. Lookup index along an axis
-    /// is `(c_arcsec / thumb_arcsec_per_cell) + thumb_centre_cell`.
-    thumb_centre_cell: f64,
 }
 
 /// Radius (in arcsec along the major axis) at which the Sérsic SB
@@ -154,12 +108,7 @@ const TRUNCATION_SB_FRACTION: f64 = 1e-4;
 
 impl SersicSplat {
     /// Build a deposit for `profile` at the given plate scale.
-    /// Precomputes the analytic normalisation, the truncation
-    /// footprint, and a `THUMB_OVERSAMPLE`× oversampled SB thumbnail
-    /// covering the entire footprint. The thumbnail bake is the only
-    /// place `SersicProfile::surface_brightness_at` is called — every
-    /// subsequent `pixel_flux` lookup is a bilinear interpolation
-    /// from the cached array.
+    /// Precompute the analytic normalisation and truncation footprint.
     pub fn new(profile: SersicProfile, arcsec_per_pixel: f64) -> Self {
         // K = 2π · n · b_n^(-2n) · Γ(2n) · q · θ_eff² · exp(b_n) —
         // see SersicProfile::total_flux_per_ie upstream for the
@@ -170,40 +119,12 @@ impl SersicSplat {
         // still drops a single pixel of light.
         let footprint_px = ((footprint_arcsec / arcsec_per_pixel).ceil() as i32).max(1);
 
-        // Build the THUMB_OVERSAMPLE-oversampled SB thumbnail.
-        // **Cell-centered grid**: cell k along each axis has its
-        // sample centre at `(k + 0.5 - centre) · cell_size`. The
-        // galaxy origin (`cx = cy = 0`) deliberately falls *between*
-        // cells, so a sensor pixel centred on the galaxy reads four
-        // off-centre cells via bilinear interpolation rather than
-        // sampling the central SB peak directly. Without this
-        // half-cell offset, bilinear at a galaxy-centred pixel would
-        // return the peak SB exactly and over-count flux by
-        // `exp(b_n)` (~2140 at n=4) compared to the true pixel-mean.
-        let thumb_arcsec_per_cell = arcsec_per_pixel / THUMB_OVERSAMPLE as f64;
-        let footprint_cells = footprint_px * THUMB_OVERSAMPLE;
-        let thumb_size = (footprint_cells * 2) as usize;
-        let thumb_centre = footprint_cells as f64; // cell-coordinate of galaxy origin
-        let thumb_half_extent_arcsec = footprint_cells as f64 * thumb_arcsec_per_cell;
-        let mut thumb = Array2::<f64>::zeros((thumb_size, thumb_size));
-        for tr in 0..thumb_size {
-            let cy = (tr as f64 + 0.5 - thumb_centre) * thumb_arcsec_per_cell;
-            for tc in 0..thumb_size {
-                let cx = (tc as f64 + 0.5 - thumb_centre) * thumb_arcsec_per_cell;
-                thumb[[tr, tc]] = profile.surface_brightness_at(cx, cy);
-            }
-        }
-
         Self {
             profile,
             arcsec_per_pixel,
             inv_analytic_norm: analytic_norm.recip(),
             pixel_area_arcsec2: arcsec_per_pixel * arcsec_per_pixel,
             footprint_px,
-            thumb,
-            thumb_arcsec_per_cell,
-            thumb_half_extent_arcsec,
-            thumb_centre_cell: thumb_centre,
         }
     }
 
@@ -234,37 +155,19 @@ impl MeanFluxDeposit for SersicSplat {
         // SB evaluator's +y_sky = north convention. Without this
         // flip, elliptical galaxies render mirrored about the
         // horizontal axis vs. AstroPy `Sersic2D`.
+        let quarter = 0.25 * s;
         let cx = dx * s;
         let cy = -dy * s;
-
-        // Bilinear interpolation into the precomputed thumbnail. The
-        // thumbnail covers `[-thumb_half_extent, +thumb_half_extent]`
-        // on each axis at `THUMB_OVERSAMPLE × THUMB_OVERSAMPLE` cells
-        // per sensor pixel. Outside that extent the deposit is below
-        // the truncation budget; return zero.
-        if cx.abs() > self.thumb_half_extent_arcsec || cy.abs() > self.thumb_half_extent_arcsec {
-            return 0.0;
-        }
-        // Cell-centered grid: cell k centre is at
-        // `(k + 0.5 - thumb_centre_cell) · thumb_arcsec_per_cell`.
-        // For a query at `cx`, the fractional cell index is
-        // `cx / cell_size + thumb_centre - 0.5`.
-        let tx = cx / self.thumb_arcsec_per_cell + self.thumb_centre_cell - 0.5;
-        let ty = cy / self.thumb_arcsec_per_cell + self.thumb_centre_cell - 0.5;
-        let last = self.thumb.shape()[0] - 1;
-        let tx0 = (tx.floor() as isize).clamp(0, last as isize - 1) as usize;
-        let ty0 = (ty.floor() as isize).clamp(0, last as isize - 1) as usize;
-        let tx1 = tx0 + 1;
-        let ty1 = ty0 + 1;
-        let fx = (tx - tx0 as f64).clamp(0.0, 1.0);
-        let fy = (ty - ty0 as f64).clamp(0.0, 1.0);
-        let s00 = self.thumb[[ty0, tx0]];
-        let s01 = self.thumb[[ty0, tx1]];
-        let s10 = self.thumb[[ty1, tx0]];
-        let s11 = self.thumb[[ty1, tx1]];
-        let s0 = s00 * (1.0 - fx) + s01 * fx;
-        let s1 = s10 * (1.0 - fx) + s11 * fx;
-        let sb = s0 * (1.0 - fy) + s1 * fy;
+        let sb = [
+            (-quarter, -quarter),
+            (-quarter, quarter),
+            (quarter, -quarter),
+            (quarter, quarter),
+        ]
+        .iter()
+        .map(|(ox, oy)| self.profile.surface_brightness_at(cx + ox, cy + oy))
+        .sum::<f64>()
+            * 0.25;
 
         total_flux * self.inv_analytic_norm * sb * self.pixel_area_arcsec2
     }
@@ -289,15 +192,14 @@ mod tests {
     /// `total_flux = 1.0` of a well-resolved circular Sérsic onto a
     /// generous box must integrate back to within the truncation
     /// budget. "Well-resolved" means `θ_eff` covers many pixels so
-    /// the single-point pixel-centre SB sampling is a good
-    /// approximation to the true pixel integral.
+    /// the 2×2 quadrature approximates the true pixel integral.
     ///
     /// For a circular Sérsic, the fraction of total flux enclosed
     /// within radius `R` along the major axis is
     /// `γ(2n, b_n · (R/θ_eff)^(1/n)) / Γ(2n)`. At the truncation
     /// radius `radius_at_fraction(p, 1e-4)`, this fraction is
-    /// > 0.99 for n=1 and ~0.97 for n=4 (the n=4 wings carry more
-    /// of the total light).
+    /// The enclosed fractions exceed 0.99 for n=1 and reach about
+    /// 0.97 for n=4, whose wings carry more of the total light.
     #[test]
     fn sersic_deposit_conserves_flux_within_truncation_budget_n_equals_1() {
         // Well-resolved: θ_eff = 5", arcsec_per_pixel = 0.25 → 20 px per θ_eff.
@@ -367,8 +269,8 @@ mod tests {
 
     /// **Documents the v1 resolution limitation**: pathologically
     /// under-resolved galaxies (θ_eff smaller than a sensor pixel)
-    /// under-count their flux because the cell-centered thumbnail
-    /// samples SB at offsets ≥ 0.25 pixels from the galaxy centre,
+    /// under-count their flux because quarter-pixel quadrature
+    /// samples SB away from the galaxy centre,
     /// missing most of the peak when the entire profile fits inside
     /// a single pixel.
     ///
@@ -448,9 +350,18 @@ mod tests {
         );
     }
 
+    /// A catalog-scale, high-index profile must stay cheap to construct
+    /// even when its halo is wider than the sensor.
+    #[test]
+    fn sensor_spanning_profile_has_constant_memory_construction() {
+        let splat = SersicSplat::new(sersic(5.67, 0.78, 30.0, 58.8), 0.129475);
+        assert!(splat.footprint_pixels() > 9568);
+        assert!(splat.pixel_flux(100.0, 100.0, 1.0).is_finite());
+    }
+
     /// **Anchor on a flat-SB region** — at a pixel far from the
     /// centre but within the truncation radius, SB varies slowly
-    /// over the pixel so the 3×3 Simpson sub-sample converges to
+    /// over the pixel so the 2×2 quadrature converges to
     /// the centre-evaluated value. Locks the (b_n, K, pixel_area)
     /// chain in a regime where sub-pixel curvature isn't a factor.
     #[test]
@@ -467,16 +378,16 @@ mod tests {
         // I_e from upstream's closed-form K = total_flux_per_ie. Same
         // formula SersicSplat::new uses internally — anchors the
         // pixel-flux output against the analytic expectation in a
-        // slowly-varying region where 3×3 Simpson sub-sampling
-        // converges to centre-sampling to O(h^4).
+        // slowly-varying region where subpixel quadrature converges
+        // to centre sampling.
         let i_e = total / p.total_flux_per_ie();
         // Pass the same (cx, cy) sign convention as SersicSplat::pixel_flux:
         // +cx = east (col offset), +cy = north (negated row offset).
         let sb_centre =
             p.surface_brightness_at(dx_pix * arcsec_per_pixel, -dy_pix * arcsec_per_pixel);
         let expected = i_e * sb_centre * arcsec_per_pixel * arcsec_per_pixel;
-        // 3×3 Simpson on a slowly-varying region matches centre-
-        // sampling to O(h^4) — for our setup well below 1%.
+        // Quarter-pixel quadrature on a slowly-varying region matches
+        // centre sampling well below 1% for this setup.
         let rel = (pixel - expected).abs() / expected;
         assert!(
             rel < 1e-2,

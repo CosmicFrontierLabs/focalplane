@@ -106,14 +106,18 @@ pub fn splat_deposit<D: MeanFluxDeposit>(
         return;
     }
     let (height, width) = buf.dim();
+    if height == 0 || width == 0 {
+        return;
+    }
     let footprint = deposit.footprint_pixels();
     let xc = px.round() as i32;
     let yc = py.round() as i32;
-    for x in (xc - footprint)..=(xc + footprint) {
-        for y in (yc - footprint)..=(yc + footprint) {
-            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                continue;
-            }
+    let min_x = (xc - footprint).max(0);
+    let max_x = (xc + footprint).min(width as i32 - 1);
+    let min_y = (yc - footprint).max(0);
+    let max_y = (yc + footprint).min(height as i32 - 1);
+    for x in min_x..=max_x {
+        for y in min_y..=max_y {
             let dx = x as f64 - px;
             let dy = y as f64 - py;
             buf[[y as usize, x as usize]] += deposit.pixel_flux(dx, dy, total_flux);
@@ -160,6 +164,22 @@ mod tests {
     use super::*;
     use shared::image_proc::airy::PixelScaledAiryDisk;
     use shared::units::{LengthExt, Wavelength};
+    use std::cell::Cell;
+
+    struct CountingDeposit {
+        calls: Cell<usize>,
+    }
+
+    impl MeanFluxDeposit for CountingDeposit {
+        fn footprint_pixels(&self) -> i32 {
+            1_000_000
+        }
+
+        fn pixel_flux(&self, _dx: f64, _dy: f64, total_flux: f64) -> f64 {
+            self.calls.set(self.calls.get() + 1);
+            total_flux
+        }
+    }
 
     /// `splat_deposit` with `total_flux == 0` must be a no-op. Locks the
     /// "zero exposure budget = no work" early return — important for the
@@ -184,6 +204,16 @@ mod tests {
         // is bounds-rejected, but the function must complete cleanly.
         splat_deposit(&mut buf, 1000.0, 1000.0, 100.0, &psf);
         assert!(buf.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn sensor_spanning_footprint_only_visits_buffer_pixels() {
+        let deposit = CountingDeposit {
+            calls: Cell::new(0),
+        };
+        let mut buf = Array2::<f64>::zeros((5, 5));
+        splat_deposit(&mut buf, 2.0, 2.0, 1.0, &deposit);
+        assert_eq!(deposit.calls.get(), 25);
     }
 
     /// **Physics anchor**: depositing `T` electrons via an Airy disk into a
