@@ -106,6 +106,12 @@ fn radius_at_fraction(profile: &SersicProfile, frac: f64) -> f64 {
 /// per-profile via [`radius_at_fraction`].
 const TRUNCATION_SB_FRACTION: f64 = 1e-4;
 
+/// Major-axis radius in arcseconds at the renderer's surface-brightness
+/// truncation threshold.
+pub fn truncation_radius_arcsec(profile: &SersicProfile) -> f64 {
+    radius_at_fraction(profile, TRUNCATION_SB_FRACTION)
+}
+
 impl SersicSplat {
     /// Build a deposit for `profile` at the given plate scale.
     /// Precompute the analytic normalisation and truncation footprint.
@@ -114,7 +120,7 @@ impl SersicSplat {
         // see SersicProfile::total_flux_per_ie upstream for the
         // derivation and Graham & Driver (2005) reference.
         let analytic_norm = profile.total_flux_per_ie();
-        let footprint_arcsec = radius_at_fraction(&profile, TRUNCATION_SB_FRACTION);
+        let footprint_arcsec = truncation_radius_arcsec(&profile);
         // ceil to int pixels; clamp to at least 1 so a sub-pixel galaxy
         // still drops a single pixel of light.
         let footprint_px = ((footprint_arcsec / arcsec_per_pixel).ceil() as i32).max(1);
