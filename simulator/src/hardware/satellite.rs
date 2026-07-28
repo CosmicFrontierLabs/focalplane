@@ -5,8 +5,8 @@ use starfield::{catalogs::StarData, Equatorial};
 use super::{sensor::SensorConfig, sensor_array::SensorArray, telescope::TelescopeConfig};
 use crate::photometry::QuantumEfficiency;
 use crate::sims::orientation::{boresight_of, roll_of};
+use crate::star_projector::StarProjector;
 use shared::image_proc::airy::PixelScaledAiryDisk;
-use shared::star_projector::StarProjector;
 use shared::units::{Angle, AngleExt, Length, LengthExt, Temperature};
 
 /// Complete satellite configuration combining telescope optics and sensor.

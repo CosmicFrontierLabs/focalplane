@@ -78,6 +78,7 @@ pub mod scene_galaxy;
 pub mod shared_args;
 pub mod sims;
 pub mod star_math;
+pub mod star_projector;
 
 // Re-export from shared for compatibility
 pub use shared::units;
