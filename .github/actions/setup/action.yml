@@ -1,0 +1,23 @@
+name: 'Rust Setup'
+description: 'Setup Rust environment with dependencies and caching'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfontconfig1-dev
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@1.88.0
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ runner.os }}-rust-cache
+        cache-targets: true
+        cache-all-crates: true

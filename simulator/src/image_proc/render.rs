@@ -1,0 +1,1295 @@
+use std::time::Duration;
+
+use nalgebra::UnitQuaternion;
+use ndarray::{Array2, Zip};
+use starfield::{catalogs::StarData, Equatorial};
+
+use crate::{
+    hardware::{
+        satellite::FocalPlaneConfig, sensor_noise::generate_sensor_noise, SatelliteConfig,
+        SensorConfig,
+    },
+    image_proc::deposit::{render_sources, FrameSource},
+    photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
+    sims::orientation::orientation_from_pointing,
+    star_math::star_data_to_fluxes,
+};
+use meter_math::Locatable2d;
+use serde::{Deserialize, Serialize};
+use shared::{
+    image_proc::{airy::PixelScaledAiryDisk, noise::apply_poisson_photon_noise},
+    units::{Area, LengthExt},
+};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StarInFrame {
+    pub x: f64,
+    pub y: f64,
+    pub spot: SourceFlux,
+    pub star: StarData,
+}
+
+// Implement locatable so we can ICP them together with the segmentation results
+impl Locatable2d for StarInFrame {
+    fn x(&self) -> f64 {
+        self.x
+    }
+
+    fn y(&self) -> f64 {
+        self.y
+    }
+}
+
+/// `FrameSource` impl for star-in-frame: the deposit is the chromatic
+/// effective Airy disk attached to the star's photoelectron flux, and
+/// the per-frame electron count comes from `SpotFlux::integrated_over`.
+impl FrameSource for StarInFrame {
+    type Deposit = PixelScaledAiryDisk;
+
+    fn position_pixels(&self) -> (f64, f64) {
+        (self.x, self.y)
+    }
+
+    fn total_electrons(&self, dt: Duration, aperture: Area) -> f64 {
+        self.spot.electrons.integrated_over(&dt, aperture)
+    }
+
+    fn deposit(&self) -> &Self::Deposit {
+        &self.spot.electrons.disk
+    }
+}
+
+#[derive(Clone)]
+pub struct RenderingResult {
+    /// The final quantized image (u16)
+    pub quantized_image: Array2<u16>,
+
+    /// Star contribution to the image (in electron counts)
+    pub star_image: Array2<f64>,
+
+    /// Zodiacal light background (in electron counts)
+    pub zodiacal_image: Array2<f64>,
+
+    /// Sensor noise including read noise and dark current (in electron counts)
+    pub sensor_noise_image: Array2<f64>,
+
+    /// The stars that were rendered in the image (not clipped)
+    pub rendered_stars: Vec<StarInFrame>,
+
+    /// Sensor configuration for lazy computation
+    pub sensor_config: SensorConfig,
+}
+
+impl RenderingResult {
+    /// Lazily compute the total electron image from all components
+    pub fn mean_electron_image(&self) -> Array2<f64> {
+        &self.star_image + &self.zodiacal_image + &self.sensor_noise_image
+    }
+
+    /// Lazily compute quantized image from total electron image  
+    pub fn compute_quantized_image(&self) -> Array2<u16> {
+        let electron_img = self.mean_electron_image();
+        quantize_image(&electron_img, &self.sensor_config)
+    }
+
+    /// Calculate the background RMS noise in DN units
+    ///
+    /// This combines sensor noise (read noise + dark current) and zodiacal light,
+    /// converts from electrons to DN units using the sensor's DN per electron factor.
+    ///
+    /// # Returns
+    /// The RMS (root mean square) noise level in DN units
+    pub fn background_rms(&self) -> f64 {
+        // Combine noise sources (sensor noise + zodiacal background)
+        let noise_electrons = &self.sensor_noise_image + &self.zodiacal_image;
+
+        // Calculate RMS (root mean square) of the noise
+        let noise_rms_electrons = noise_electrons.std(0.0);
+
+        // Convert from electrons to DN units
+        noise_rms_electrons * self.sensor_config.dn_per_electron
+    }
+}
+
+/// Star field renderer that caches star projections for efficient multi-exposure rendering.
+///
+/// The Renderer pre-computes star positions and a base 1-second exposure image,
+/// enabling efficient generation of images at different exposure times without
+/// re-calculating star projections or PSF convolutions. Only the exposure scaling
+/// and noise generation are performed per render call.
+///
+/// # Inner Workings
+///
+/// ## One-Time Initialization (Expensive Operations)
+/// 1. **Star Projection**: Convert celestial coordinates (RA/Dec) to pixel coordinates
+/// 2. **Flux Calculation**: Compute photon flux for each star based on magnitude and spectrum
+/// 3. **PSF Rendering**: Apply Airy disk point spread function to each star
+/// 4. **Base Image Creation**: Render all stars into a single 1-second exposure image
+///
+/// These expensive operations involve:
+/// - Spherical trigonometry for coordinate transformation
+/// - Simpson's rule integration over stellar spectra and quantum efficiency curves
+/// - Bessel function evaluation for realistic Airy disk patterns
+/// - Sub-pixel positioning with analytical PSF integration
+///
+/// ## Per-Exposure Rendering (Fast Operations)
+/// 1. **Linear Scaling**: Multiply base image by `exposure_time / 1_second`
+/// 2. **Zodiacal Light**: Add background light scaled to exposure duration
+/// 3. **Noise Generation**: Apply Poisson noise to photon counts, add read noise and dark current
+/// 4. **Quantization**: Convert from electrons to ADU using sensor gain
+///
+/// The key insight is that photon arrival is a linear process - doubling exposure time
+/// doubles the collected photons. This allows us to render once and scale many times.
+///
+/// # Architecture
+/// - **One-time setup**: Star projection and base image creation (O(N) for N stars)
+/// - **Per-exposure**: Linear scaling and noise generation (O(pixels))
+/// - **Memory efficient**: Single base image reused for all exposures
+/// - **Thread safe**: Immutable base data allows concurrent rendering
+///
+/// # Performance Benefits
+/// When rendering multiple exposures of the same field:
+/// - 10-100x faster than re-projecting stars each time
+/// - Consistent star positions across exposure series
+/// - Minimal memory overhead (one base image)
+/// - Enables Monte Carlo analysis with fixed star fields
+#[derive(Clone)]
+pub struct Renderer {
+    /// Satellite configuration (telescope + sensor + environment)
+    pub satellite_config: SatelliteConfig,
+
+    /// Base star image for 1 second exposure (in electrons)
+    pub base_star_image: Array2<f64>,
+
+    /// Stars that were rendered in the base image (not clipped)
+    pub rendered_stars: Vec<StarInFrame>,
+}
+
+impl Renderer {
+    /// Create a new renderer from a star catalog and satellite configuration.
+    ///
+    /// Projects stars through the focal-plane-mm pipeline and creates a base
+    /// 1-second exposure image. The single sensor is treated as a 1-element array.
+    pub fn from_catalog(
+        stars: &Vec<&StarData>,
+        center: &Equatorial,
+        satellite_config: SatelliteConfig,
+    ) -> Self {
+        let fp = FocalPlaneConfig::from_satellite(&satellite_config);
+        let airy_pix = satellite_config.airy_disk_pixel_space();
+        let pixel_size_mm = satellite_config.sensor.pixel_size().as_millimeters();
+        let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
+
+        let fp_stars = project_stars_to_focal_plane(stars, center, &fp, padding_mm);
+        let mut per_sensor = route_stars_to_sensors(&fp_stars, &fp, padding_mm);
+        let rendered_stars = per_sensor.remove(0);
+
+        let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
+        let base_star_image = add_stars_to_image(
+            width,
+            height,
+            &rendered_stars,
+            &Duration::from_secs(1),
+            satellite_config.telescope.clear_aperture_area(),
+        );
+
+        Self {
+            satellite_config,
+            base_star_image,
+            rendered_stars,
+        }
+    }
+
+    /// Create a new renderer from pre-computed stars with known pixel positions.
+    ///
+    /// This constructor allows direct creation of a renderer from stars that have
+    /// already been positioned in pixel coordinates, bypassing the catalog projection
+    /// step. Useful for controlled experiments and testing scenarios.
+    ///
+    /// # Arguments
+    /// * `stars` - Pre-computed stars with pixel positions and 1-second fluxes
+    /// * `satellite_config` - Satellite configuration for rendering parameters
+    ///
+    /// # Returns
+    /// A new Renderer with the base star image pre-computed
+    ///
+    pub fn from_stars(stars: &[StarInFrame], satellite_config: SatelliteConfig) -> Self {
+        Self::from_stars_and_galaxies(stars, &[], satellite_config)
+    }
+
+    /// Create a renderer from pre-computed stars *and* pre-computed
+    /// galaxies. Both source kinds splat into the same 1-second base
+    /// image; per-exposure scaling and Poisson sampling apply to the
+    /// combined buffer (single-Poisson invariant — INVARIANTS §1).
+    ///
+    /// Galaxies use the `SersicSplat` deposit, stars use the chromatic
+    /// Airy disk. Both run through the shared `render_sources` helper
+    /// so the splat math is identical apart from the per-source
+    /// `MeanFluxDeposit` impl.
+    pub fn from_stars_and_galaxies(
+        stars: &[StarInFrame],
+        galaxies: &[crate::scene_galaxy::GalaxyInFrame],
+        satellite_config: SatelliteConfig,
+    ) -> Self {
+        let (width, height) = satellite_config.sensor.dimensions.get_pixel_width_height();
+        let aperture = satellite_config.telescope.clear_aperture_area();
+        let one_second = Duration::from_secs(1);
+        let mut base_star_image = add_stars_to_image(width, height, stars, &one_second, aperture);
+        add_galaxies_to_image(&mut base_star_image, galaxies, &one_second, aperture);
+
+        Self {
+            satellite_config,
+            base_star_image,
+            rendered_stars: stars.to_vec(),
+        }
+    }
+
+    /// Render an image with specified exposure duration and zodiacal coordinates.
+    ///
+    /// This method efficiently generates images by:
+    /// 1. Scaling the pre-computed base star image by exposure time (O(pixels))
+    /// 2. Generating fresh noise components (read noise, dark current, Poisson)
+    /// 3. Computing zodiacal background based on solar coordinates
+    /// 4. Combining all components and quantizing to detector units
+    ///
+    /// # Performance
+    /// Since star positions and PSF convolutions are pre-computed in the base image,
+    /// this method is extremely fast - typically 10-100x faster than re-projecting
+    /// stars for each exposure. Perfect for time series or Monte Carlo simulations.
+    ///
+    /// # Arguments
+    /// * `exposure` - Integration time for the image
+    /// * `zodiacal_coords` - Solar position for background light calculation
+    ///
+    /// # Returns
+    /// Complete `RenderingResult` with separate star, background, and noise components
+    pub fn render(
+        &self,
+        exposure: &Duration,
+        zodiacal_coords: &SolarAngularCoordinates,
+    ) -> RenderingResult {
+        self.render_with_options(exposure, zodiacal_coords, true, None)
+    }
+
+    /// Render an image with a specific RNG seed for reproducible results
+    pub fn render_with_seed(
+        &self,
+        exposure: &Duration,
+        zodiacal_coords: &SolarAngularCoordinates,
+        seed: Option<u64>,
+    ) -> RenderingResult {
+        self.render_with_options(exposure, zodiacal_coords, true, seed)
+    }
+
+    /// Render an image with full control over noise generation and reproducibility.
+    ///
+    /// This is the core rendering method that all other render methods delegate to.
+    /// It leverages the pre-computed base star image to efficiently generate realistic
+    /// astronomical images with proper noise characteristics.
+    ///
+    /// # Rendering Pipeline
+    /// 1. **Star scaling**: Base image multiplied by exposure time (linear photon accumulation)
+    /// 2. **Poisson sampling**: Optional photon arrival statistics for star light
+    /// 3. **Sensor noise**: Read noise + dark current based on temperature and exposure
+    /// 4. **Zodiacal light**: Sky background from solar system dust
+    /// 5. **Quantization**: Convert electrons to ADU with realistic bit depth
+    ///
+    /// # Arguments
+    /// * `exposure` - Exposure duration
+    /// * `zodiacal_coords` - Solar angular coordinates for zodiacal light
+    /// * `apply_poisson` - Whether to apply Poisson arrival statistics to star photons
+    /// * `rng_seed` - Optional seed for random number generation
+    ///
+    /// # Noise Models
+    /// - **Poisson noise**: Shot noise on photon arrivals (stars and background)
+    /// - **Read noise**: Gaussian electronic noise from sensor readout
+    /// - **Dark current**: Temperature-dependent thermal electrons
+    /// - **Quantization**: ADC discretization effects
+    pub fn render_with_options(
+        &self,
+        exposure: &Duration,
+        zodiacal_coords: &SolarAngularCoordinates,
+        apply_poisson: bool,
+        rng_seed: Option<u64>,
+    ) -> RenderingResult {
+        let exposure_factor = exposure.as_secs_f64();
+
+        // Scale star image by exposure duration
+        let scaled_star_image = &self.base_star_image * exposure_factor;
+
+        // Apply Poisson arrival time statistics to star photons if requested
+        let star_image = if apply_poisson {
+            apply_poisson_photon_noise(scaled_star_image, rng_seed)
+        } else {
+            scaled_star_image
+        };
+
+        // Generate sensor noise
+        let sensor_noise_image = generate_sensor_noise(
+            &self.satellite_config.sensor,
+            exposure,
+            self.satellite_config.temperature,
+            rng_seed,
+        );
+
+        // Generate zodiacal background
+        let z_light = ZodiacalLight::new();
+
+        let zodiacal_mean =
+            z_light.generate_zodiacal_background(&self.satellite_config, exposure, zodiacal_coords);
+
+        let zodiacal_image = if apply_poisson {
+            let new_seed = rng_seed.map(|val| val + 1);
+            apply_poisson_photon_noise(zodiacal_mean, new_seed)
+        } else {
+            zodiacal_mean
+        };
+
+        // Compute final electron and quantized images
+        let total_electrons = &star_image + &zodiacal_image + &sensor_noise_image;
+        let quantized_image = quantize_image(&total_electrons, &self.satellite_config.sensor);
+
+        RenderingResult {
+            quantized_image,
+            star_image,
+            zodiacal_image,
+            sensor_noise_image,
+            rendered_stars: self.rendered_stars.clone(),
+            sensor_config: self.satellite_config.sensor.clone(),
+        }
+    }
+}
+
+pub fn quantize_image(electron_img: &Array2<f64>, sensor: &SensorConfig) -> Array2<u16> {
+    let max_dn = ((1 << sensor.bit_depth) - 1) as f64;
+    let well_depth = sensor.max_well_depth_e;
+    let dn_per_e = sensor.dn_per_electron;
+    let black_level_dn = sensor.black_level_dn as f64;
+
+    let mut quantized = Array2::<u16>::zeros(electron_img.raw_dim());
+    Zip::from(&mut quantized)
+        .and(electron_img)
+        .par_for_each(|out, &total_e| {
+            let capped_e = total_e.min(well_depth);
+            let dn = capped_e * dn_per_e + black_level_dn;
+            *out = dn.clamp(0.0, max_dn).round() as u16;
+        });
+    quantized
+}
+
+/// Creates an image with stars using Simpson's rule integration for the Airy disk PSF.
+///
+/// This function creates a new image and adds the flux contribution
+/// of each star to the appropriate pixels using 3x3 Simpson's rule integration
+/// for accurate flux assignment based on the Airy disk point spread function.
+///
+/// # Arguments
+/// * `width` - Width of the image in pixels
+/// * `height` - Height of the image in pixels
+/// * `stars` - A vector of StarInFrame objects containing position and flux information
+/// * `airy_pix` - The scaled Airy disk for PSF calculation
+///
+/// # Returns
+/// * `Array2<f64>` - A new 2D array representing the image with stars
+pub fn add_stars_to_image(
+    width: usize,
+    height: usize,
+    stars: &[StarInFrame],
+    exposure: &Duration,
+    aperture: Area,
+) -> Array2<f64> {
+    let mut image = Array2::zeros((height, width));
+    render_sources(&mut image, stars, *exposure, aperture);
+    image
+}
+
+/// Splat a slice of galaxies onto an existing mean-electron buffer
+/// using their `SersicSplat` deposits. Uses the same `render_sources`
+/// helper as stars — i.e., zero new bounding-box-loop code, and
+/// galaxy contributions land on the same buffer as star contributions
+/// so the downstream Poisson stage applies once to the combined mean.
+///
+/// Caller must size `image` to match the sensor's pixel grid.
+pub fn add_galaxies_to_image(
+    image: &mut Array2<f64>,
+    galaxies: &[crate::scene_galaxy::GalaxyInFrame],
+    exposure: &Duration,
+    aperture: Area,
+) {
+    render_sources(image, galaxies, *exposure, aperture);
+}
+
+/// A star projected to focal plane millimeter coordinates.
+///
+/// Intermediate representation between celestial coordinates and per-sensor
+/// pixel coordinates. Used when projecting stars across an entire sensor array
+/// before routing to individual sensors.
+#[derive(Clone, Debug)]
+pub struct StarInFocalPlane {
+    /// X position in focal plane array coordinates (millimeters)
+    pub x_mm: f64,
+    /// Y position in focal plane array coordinates (millimeters)
+    pub y_mm: f64,
+    /// Original catalog star data
+    pub star: StarData,
+}
+
+/// Project stars from celestial coordinates to focal plane mm coordinates.
+///
+/// Thin backwards-compatible wrapper around
+/// [`project_stars_to_focal_plane_oriented`] using zero roll. Uses
+/// `StarProjector` in mm-space mode (radians_per_pixel = radians_per_mm)
+/// to project all catalog stars onto the focal plane. Stars outside the padded
+/// AABB are filtered out.
+///
+/// # Arguments
+/// * `stars` - Catalog stars to project
+/// * `center` - Telescope pointing direction
+/// * `focal_plane` - Focal plane / telescope config (for plate scale / focal length)
+/// * `padding_mm` - PSF bleed padding around the AABB in mm
+pub fn project_stars_to_focal_plane(
+    stars: &[&StarData],
+    center: &Equatorial,
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<StarInFocalPlane> {
+    let orientation = orientation_from_pointing(center, 0.0);
+    project_stars_to_focal_plane_oriented(stars, &orientation, focal_plane, padding_mm)
+}
+
+/// Orientation-aware variant of [`project_stars_to_focal_plane`] that applies
+/// the waypoint roll as a 2D rotation in mm-space about the focal-plane AABB
+/// center before bounds-checking.
+///
+/// Motion-blur and multi-frame renderers should prefer this entry point so
+/// that roll participates end-to-end in the mm-space pipeline.
+pub fn project_stars_to_focal_plane_oriented(
+    stars: &[&StarData],
+    orientation: &UnitQuaternion<f64>,
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<StarInFocalPlane> {
+    let (min_x, min_y, max_x, max_y) = match focal_plane.total_aabb_mm() {
+        Some(aabb) => aabb,
+        None => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    for &star in stars {
+        let (x_mm, y_mm) = match focal_plane.sky_to_mm(&star.position, orientation) {
+            Some(coords) => coords,
+            None => continue,
+        };
+
+        // Bounds check against padded AABB
+        if x_mm < min_x - padding_mm
+            || x_mm > max_x + padding_mm
+            || y_mm < min_y - padding_mm
+            || y_mm > max_y + padding_mm
+        {
+            continue;
+        }
+
+        result.push(StarInFocalPlane {
+            x_mm,
+            y_mm,
+            star: *star,
+        });
+    }
+    result
+}
+
+/// Route focal-plane stars to individual sensors with pixel coordinates and flux.
+///
+/// For each star in focal plane mm coordinates, determines which sensor(s) it
+/// falls on (with PSF padding), computes the flux using that sensor's QE curve,
+/// and returns per-sensor lists of `StarInFrame` ready for rendering.
+///
+/// # Returns
+/// A `Vec<Vec<StarInFrame>>` indexed by sensor index in the array.
+pub fn route_stars_to_sensors(
+    fp_stars: &[StarInFocalPlane],
+    focal_plane: &FocalPlaneConfig,
+    padding_mm: f64,
+) -> Vec<Vec<StarInFrame>> {
+    let sensor_count = focal_plane.array.sensor_count();
+    let mut per_sensor_stars: Vec<Vec<StarInFrame>> =
+        (0..sensor_count).map(|_| Vec::new()).collect();
+
+    // Pre-build SatelliteConfig for each sensor (for flux calculation)
+    let satellites: Vec<SatelliteConfig> = (0..sensor_count)
+        .filter_map(|i| focal_plane.satellite_for_sensor(i))
+        .collect();
+
+    for fp_star in fp_stars {
+        let hits = focal_plane
+            .array
+            .mm_to_pixels_padded(fp_star.x_mm, fp_star.y_mm, padding_mm);
+        for (pixel_x, pixel_y, sensor_idx) in hits {
+            let flux = star_data_to_fluxes(&fp_star.star, &satellites[sensor_idx]);
+            per_sensor_stars[sensor_idx].push(StarInFrame {
+                x: pixel_x,
+                y: pixel_y,
+                spot: flux,
+                star: fp_star.star,
+            });
+        }
+    }
+
+    // Sort each sensor's stars by flux for consistent rendering
+    for stars in &mut per_sensor_stars {
+        stars.sort_by(|a, b| {
+            a.spot
+                .electrons
+                .flux
+                .partial_cmp(&b.spot.electrons.flux)
+                .unwrap()
+        });
+    }
+
+    per_sensor_stars
+}
+
+#[cfg(test)]
+mod tests {
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::hardware::{
+        dark_current::DarkCurrentEstimator,
+        read_noise::ReadNoiseEstimator,
+        sensor::{create_flat_qe, SensorGeometry},
+    };
+    use crate::photometry::photoconversion::SpotFlux;
+    use shared::image_proc::airy::PixelScaledAiryDisk;
+    use shared::image_proc::noise::simple_normal_array;
+    use shared::units::{Area, AreaExt, Length, LengthExt, Temperature, TemperatureExt};
+
+    fn test_star_data() -> StarData {
+        StarData {
+            id: 0,
+            magnitude: 10.0,
+            position: Equatorial::from_degrees(0.0, 0.0),
+            b_v: None,
+        }
+    }
+
+    fn create_star_in_frame(x: f64, y: f64, sigma: f64, flux: f64) -> StarInFrame {
+        let disk =
+            PixelScaledAiryDisk::with_fwhm(sigma, crate::units::Wavelength::from_nanometers(550.0));
+
+        StarInFrame {
+            x,
+            y,
+            spot: SourceFlux {
+                photons: SpotFlux { disk, flux },
+                electrons: SpotFlux { disk, flux },
+            },
+            star: test_star_data(),
+        }
+    }
+
+    fn create_test_sensor(
+        bit_depth: u8,
+        dn_per_electron: f64,
+        max_well_depth_e: f64,
+    ) -> SensorConfig {
+        let geometry = SensorGeometry::of_width_height(1024, 1024, Length::from_micrometers(5.5));
+        SensorConfig {
+            name: "Test".into(),
+            quantum_efficiency: create_flat_qe(0.5),
+            dimensions: geometry,
+            read_noise_estimator: ReadNoiseEstimator::constant(2.0),
+            dark_current_estimator: DarkCurrentEstimator::from_reference_point(
+                0.01,
+                Temperature::from_celsius(20.0),
+            ),
+            bit_depth,
+            dn_per_electron,
+            max_well_depth_e,
+            black_level_dn: 0,
+            max_frame_rate_fps: 30.0,
+        }
+    }
+
+    #[test]
+    fn test_add_stars_centering_is_very_correct() {
+        let psf =
+            PixelScaledAiryDisk::with_fwhm(2.5, crate::units::Wavelength::from_nanometers(550.0));
+        let source_flux = SourceFlux {
+            photons: SpotFlux {
+                disk: psf,
+                flux: 10000.0,
+            },
+            electrons: SpotFlux {
+                disk: psf,
+                flux: 10000.0,
+            },
+        };
+
+        let mut seeded_rng = StdRng::seed_from_u64(42);
+
+        for _ in 0..100 {
+            let x_loc = seeded_rng.random_range(5.0..45.0);
+            let y_loc = seeded_rng.random_range(5.0..45.0);
+
+            let stars = vec![StarInFrame {
+                x: x_loc,
+                y: y_loc,
+                spot: source_flux.clone(),
+                star: test_star_data(),
+            }];
+
+            let image = add_stars_to_image(
+                50,
+                50,
+                &stars,
+                &Duration::from_secs(1),
+                Area::from_square_centimeters(1.0),
+            );
+            // Compute the weighted center of mass
+            let mut total_flux = 0.0;
+            let mut x_cm = 0.0;
+            let mut y_cm = 0.0;
+            for ((y, x), &value) in image.indexed_iter() {
+                total_flux += value;
+                x_cm += x as f64 * value;
+                y_cm += y as f64 * value;
+            }
+            x_cm /= total_flux;
+            y_cm /= total_flux;
+
+            assert_relative_eq!(x_cm, x_loc, epsilon = 1e-4);
+            assert_relative_eq!(y_cm, y_loc, epsilon = 1e-4);
+        }
+    }
+
+    #[test]
+    fn test_add_star_total_flux() {
+        for sigma_pix in [2.0, 4.0, 8.0] {
+            let total_flux = 1000.0;
+
+            let stars = vec![create_star_in_frame(25.0, 25.0, sigma_pix, total_flux)];
+            let image = add_stars_to_image(
+                50,
+                50,
+                &stars,
+                &Duration::from_secs(1),
+                Area::from_square_centimeters(1.0),
+            );
+            let added_flux = image.sum();
+            println!("Sigma: {sigma_pix}, Added Flux: {added_flux}");
+            assert_relative_eq!(added_flux, total_flux, epsilon = 1e-6 * total_flux);
+        }
+    }
+
+    #[test]
+    fn test_add_star_oob() {
+        let sigma_pix = 2.0;
+        let total_flux = 1000.0;
+
+        let stars = vec![create_star_in_frame(60.0, 60.0, sigma_pix, total_flux)];
+        let image = add_stars_to_image(
+            50,
+            50,
+            &stars,
+            &Duration::from_secs(1),
+            Area::from_square_centimeters(1.0),
+        );
+        let added_flux = image.sum();
+        // With Simpson's rule, some flux can still be captured even when star center is outside
+        // Expect very small flux contribution
+        assert!(
+            added_flux < 100.0,
+            "Out of bounds star flux too high: {added_flux}"
+        );
+    }
+
+    #[test]
+    fn test_add_star_edge() {
+        let sigma_pix = 4.0;
+        let total_flux = 1000.0;
+
+        let stars = vec![create_star_in_frame(-0.5, 25.0, sigma_pix, total_flux)];
+        let image = add_stars_to_image(
+            50,
+            50,
+            &stars,
+            &Duration::from_secs(1),
+            Area::from_square_centimeters(1.0),
+        );
+        let added_flux = image.sum();
+        assert_relative_eq!(added_flux * 2.0, total_flux, epsilon = total_flux * 0.01);
+    }
+
+    #[test]
+    fn test_add_four_stars_corners() {
+        let sigma_pix = 2.0;
+        let total_flux = 250.0;
+
+        let stars = vec![
+            create_star_in_frame(-0.5, -0.5, sigma_pix, total_flux),
+            create_star_in_frame(-0.5, 49.5, sigma_pix, total_flux),
+            create_star_in_frame(49.5, -0.5, sigma_pix, total_flux),
+            create_star_in_frame(49.5, 49.5, sigma_pix, total_flux),
+        ];
+
+        let image = add_stars_to_image(
+            50,
+            50,
+            &stars,
+            &Duration::from_secs(1),
+            Area::from_square_centimeters(1.0),
+        );
+        let added_flux = image.sum();
+
+        // The total flux should be about 1 star flux value, because we see 1/4 of each star
+        assert_relative_eq!(added_flux, total_flux, epsilon = total_flux * 0.01);
+    }
+
+    #[test]
+    fn test_fuzz() {
+        let sigma_pix = 2.0;
+        let total_flux = 100.0;
+
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let mut stars = Vec::new();
+        for _ in 0..100 {
+            let x = rng.random_range(-50.0..150.0);
+            let y = rng.random_range(-50.0..150.0);
+            stars.push(create_star_in_frame(x, y, sigma_pix, total_flux));
+        }
+
+        let image = add_stars_to_image(
+            50,
+            50,
+            &stars,
+            &Duration::from_secs(1),
+            Area::from_square_centimeters(1.0),
+        );
+        let added_flux = image.sum();
+
+        // Very loose bounds, but should catch egregious errors
+        assert!(added_flux > 0.0);
+    }
+
+    #[test]
+    fn test_fuzz_aspected() {
+        let sigma_pix = 2.0;
+        let total_flux = 100.0;
+
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let mut stars = Vec::new();
+        for _ in 0..1000 {
+            let x = rng.random_range(-50.0..150.0);
+            let y = rng.random_range(-50.0..150.0);
+            stars.push(create_star_in_frame(x, y, sigma_pix, total_flux));
+        }
+
+        let image = add_stars_to_image(
+            23,
+            57,
+            &stars,
+            &Duration::from_secs(1),
+            Area::from_square_centimeters(1.0),
+        );
+        let added_flux = image.sum();
+
+        // Very loose bounds, but should catch egregious errors
+        assert!(added_flux > 0.0);
+    }
+
+    #[test]
+    fn test_quantize_image_basic() {
+        let sensor = create_test_sensor(8, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 0.0; // Min value - should be 0 DN
+        electron_img[[0, 1]] = 100.0; // Middle value - should be 100 DN
+        electron_img[[0, 2]] = 200.0; // Higher value - should be 200 DN
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 0);
+        assert_eq!(quantized[[0, 1]], 100);
+        assert_eq!(quantized[[0, 2]], 200);
+    }
+
+    #[test]
+    fn test_quantize_image_saturation() {
+        let sensor = create_test_sensor(8, 1.0, 200.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 100.0; // Within well depth
+        electron_img[[0, 1]] = 200.0; // At well depth limit
+        electron_img[[0, 2]] = 300.0; // Exceeds well depth - should be clamped
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 100);
+        assert_eq!(quantized[[0, 1]], 200);
+        assert_eq!(quantized[[0, 2]], 200); // Clamped to well depth
+    }
+
+    #[test]
+    fn test_quantize_image_bit_depth() {
+        // Test with 10-bit sensor
+        let sensor = create_test_sensor(10, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 0.0;
+        electron_img[[0, 1]] = 500.0;
+        electron_img[[0, 2]] = 1500.0; // Above max well depth
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        // Max value for 10-bit is 1023
+        assert_eq!(quantized[[0, 0]], 0);
+        assert_eq!(quantized[[0, 1]], 500);
+        assert_eq!(quantized[[0, 2]], 1000); // Clamped to well depth
+    }
+
+    #[test]
+    fn test_quantize_image_dn_conversion() {
+        // Test with different DN per electron values
+        let sensor = create_test_sensor(12, 0.5, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set known electron values
+        electron_img[[0, 0]] = 10.0; // 10 * 0.5 = 5 DN
+        electron_img[[0, 1]] = 100.0; // 100 * 0.5 = 50 DN
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 5);
+        assert_eq!(quantized[[0, 1]], 50);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_pedestal() {
+        // 12-bit sensor (max 4095), unity gain, well depth 1000 e-, 50 DN pedestal.
+        let mut sensor = create_test_sensor(12, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((2, 2));
+
+        electron_img[[0, 0]] = 0.0; // Floor lifted to the pedestal
+        electron_img[[0, 1]] = 100.0; // Signal sits on top of the pedestal
+        electron_img[[1, 0]] = 2000.0; // Above well: clamps to well, then adds pedestal
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 50);
+        assert_eq!(quantized[[0, 1]], 150);
+        assert_eq!(quantized[[1, 0]], 1050);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_clamps_to_adc_max() {
+        // Pedestal pushing signal past the ADC ceiling clamps to max_dn (255 at 8-bit).
+        let mut sensor = create_test_sensor(8, 1.0, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 1));
+        electron_img[[0, 0]] = 250.0; // 250 + 50 = 300, clamps to 255
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 255);
+    }
+
+    #[test]
+    fn test_quantize_image_black_level_preserves_sub_floor_noise() {
+        // The pedestal is an analog, pre-ADC bias: it must be applied before the
+        // 0 floor so sub-zero read-noise excursions survive as spread, not collapse
+        // onto a single flat value. With bias 50 DN and gain 2.5, a symmetric dip
+        // and peak about a zero-mean background must land on distinct DN values.
+        let mut sensor = create_test_sensor(12, 2.5, 1000.0);
+        sensor.black_level_dn = 50;
+        let mut electron_img = Array2::<f64>::zeros((1, 3));
+        electron_img[[0, 0]] = -2.0; // noise dip below background: -2*2.5+50 = 45
+        electron_img[[0, 1]] = 0.0; //  background mean:            0*2.5+50 = 50
+        electron_img[[0, 2]] = 2.0; //  noise peak above background:  2*2.5+50 = 55
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 45);
+        assert_eq!(quantized[[0, 1]], 50);
+        assert_eq!(quantized[[0, 2]], 55);
+        // The dip is preserved (not flattened to 50), so a background built from
+        // such excursions has MAD > 0 rather than the degenerate MAD = 0.
+        assert_ne!(quantized[[0, 0]], quantized[[0, 1]]);
+    }
+
+    #[test]
+    fn test_quantize_image_rounding() {
+        // Test rounding behavior
+        let sensor = create_test_sensor(12, 0.3, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set electron values that will require rounding
+        electron_img[[0, 0]] = 10.0; // 10 * 0.3 = 3.0 DN
+        electron_img[[0, 1]] = 15.0; // 15 * 0.3 = 4.5 DN -> should round to 5
+        electron_img[[0, 2]] = 16.0; // 16 * 0.3 = 4.8 DN -> should round to 5
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 3);
+        assert_eq!(quantized[[0, 1]], 5); // Rounded up
+        assert_eq!(quantized[[0, 2]], 5); // Rounded up
+    }
+
+    #[test]
+    fn test_quantize_image_negative_values() {
+        // Test handling of negative electron values (shouldn't happen in practice but test defense)
+        let sensor = create_test_sensor(8, 1.0, 1000.0);
+        let mut electron_img = Array2::<f64>::zeros((3, 3));
+
+        // Set some negative values
+        electron_img[[0, 0]] = -10.0; // Should be clamped to 0
+
+        let quantized = quantize_image(&electron_img, &sensor);
+
+        assert_eq!(quantized[[0, 0]], 0);
+    }
+
+    #[test]
+    fn test_background_rms_zero_noise() {
+        // Test with zero noise - should return 0
+        let sensor = create_test_sensor(12, 1.0, 1000.0);
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((10, 10)),
+            star_image: Array2::zeros((10, 10)),
+            zodiacal_image: Array2::zeros((10, 10)),
+            sensor_noise_image: Array2::zeros((10, 10)),
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        assert_eq!(result.background_rms(), 0.0);
+    }
+
+    #[test]
+    fn test_background_rms_constant_noise() {
+        // Test with uniform noise values
+        let sensor = create_test_sensor(12, 1.0, 1000.0);
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((10, 10)),
+            star_image: Array2::zeros((10, 10)),
+            zodiacal_image: Array2::from_elem((10, 10), 5.0), // 5 electrons per pixel
+            sensor_noise_image: Array2::from_elem((10, 10), 3.0), // 3 electrons per pixel
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        assert_eq!(result.background_rms(), 0.0);
+    }
+
+    #[test]
+    fn test_background_rms_normal() {
+        for std_dev in [4.0, 8.0, 10.0] {
+            // Test DN conversion factor
+            let sensor = create_test_sensor(12, 1.0, 10000.0); // 0.5 DN per electron
+
+            let result = RenderingResult {
+                quantized_image: Array2::zeros((100, 100)),
+                star_image: Array2::zeros((100, 100)),
+                zodiacal_image: Array2::zeros((100, 100)),
+                sensor_noise_image: simple_normal_array((100, 100), 1000.0, std_dev, 33),
+                rendered_stars: vec![],
+                sensor_config: sensor,
+            };
+
+            println!("std_dev: {std_dev}. Result: {:?}", result.background_rms());
+            assert_relative_eq!(result.background_rms(), std_dev, epsilon = 0.1);
+        }
+    }
+
+    #[test]
+    fn test_background_rms_with_dn_conversion() {
+        let std_dev = 5.0;
+        for dn in [4.0, 8.0, 10.0] {
+            // Test DN conversion factor
+            let sensor = create_test_sensor(12, dn, 10000.0); // 0.5 DN per electron
+
+            let result = RenderingResult {
+                quantized_image: Array2::zeros((100, 100)),
+                star_image: Array2::zeros((100, 100)),
+                zodiacal_image: Array2::zeros((100, 100)),
+                sensor_noise_image: simple_normal_array((100, 100), 1000.0, std_dev, 33),
+                rendered_stars: vec![],
+                sensor_config: sensor,
+            };
+
+            println!(
+                "Testing with DN conversion: {dn}, std_dev: {std_dev}. Result: {:?}",
+                result.background_rms()
+            );
+            assert_relative_eq!(result.background_rms() / dn, std_dev, epsilon = 0.1);
+        }
+    }
+
+    #[test]
+    fn test_background_rms_realistic_values() {
+        // Test with realistic noise values from a sensor
+        let sensor = create_test_sensor(12, 1.0, 50000.0); // 0.25 DN/e-, 50k well depth
+
+        let zodical_std = 1.0;
+        let sensor_std = 5.0;
+
+        let result = RenderingResult {
+            quantized_image: Array2::zeros((100, 100)),
+            star_image: Array2::zeros((100, 100)),
+            zodiacal_image: simple_normal_array((100, 100), 100.0, zodical_std, 7),
+            sensor_noise_image: simple_normal_array((100, 100), 100.0, sensor_std, 8),
+            rendered_stars: vec![],
+            sensor_config: sensor,
+        };
+
+        let rms = result.background_rms();
+        assert_relative_eq!(
+            rms,
+            (sensor_std.powf(2.0) + zodical_std.powf(2.0)).sqrt(),
+            epsilon = 0.1
+        );
+    }
+
+    #[test]
+    fn test_project_stars_to_focal_plane_center() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Star at the pointing center should project to (0, 0) mm
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let center_star = StarData {
+            id: 1,
+            magnitude: 10.0,
+            position: pointing,
+            b_v: Some(0.6),
+        };
+        let stars = vec![&center_star];
+        let fp_stars = project_stars_to_focal_plane(&stars, &pointing, &fp, 5.0);
+
+        assert_eq!(fp_stars.len(), 1);
+        assert_relative_eq!(fp_stars[0].x_mm, 0.0, epsilon = 0.2);
+        assert_relative_eq!(fp_stars[0].y_mm, 0.0, epsilon = 0.2);
+    }
+
+    #[test]
+    fn test_route_stars_to_single_sensor() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Star at array center should route to sensor 0 at its pixel center
+        let fp_stars = vec![StarInFocalPlane {
+            x_mm: 0.0,
+            y_mm: 0.0,
+            star: StarData {
+                id: 1,
+                magnitude: 10.0,
+                position: Equatorial::from_degrees(0.0, 0.0),
+                b_v: Some(0.6),
+            },
+        }];
+
+        let routed = route_stars_to_sensors(&fp_stars, &fp, 0.0);
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].len(), 1);
+
+        let (w, h) = GSENSE4040BSI.dimensions.get_pixel_width_height();
+        assert_relative_eq!(routed[0][0].x, w as f64 / 2.0, epsilon = 1.0);
+        assert_relative_eq!(routed[0][0].y, h as f64 / 2.0, epsilon = 1.0);
+    }
+
+    #[test]
+    fn test_zero_roll_matches_unoriented_path() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        let pointing = Equatorial::from_degrees(123.0, 15.0);
+        // Place a small catalog of offset stars around the pointing.
+        let offsets_deg = [(0.0, 0.0), (0.1, 0.05), (-0.2, 0.15), (0.05, -0.12)];
+        let stars: Vec<StarData> = offsets_deg
+            .iter()
+            .enumerate()
+            .map(|(i, (dra, ddec))| StarData {
+                id: i as u64,
+                magnitude: 10.0,
+                position: Equatorial::from_degrees(
+                    pointing.ra_degrees() + dra,
+                    pointing.dec_degrees() + ddec,
+                ),
+                b_v: Some(0.6),
+            })
+            .collect();
+        let refs: Vec<&StarData> = stars.iter().collect();
+
+        let padding_mm = 2.0;
+        let legacy = project_stars_to_focal_plane(&refs, &pointing, &fp, padding_mm);
+        let oriented = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, 0.0),
+            &fp,
+            padding_mm,
+        );
+
+        assert_eq!(legacy.len(), oriented.len());
+        for (a, b) in legacy.iter().zip(oriented.iter()) {
+            assert_relative_eq!(a.x_mm, b.x_mm, epsilon = 1e-12);
+            assert_relative_eq!(a.y_mm, b.y_mm, epsilon = 1e-12);
+            assert_eq!(a.star.id, b.star.id);
+        }
+    }
+
+    #[test]
+    fn test_focal_plane_roll_rotates_star_position() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+
+        // Single-sensor array at the origin -> AABB is centered on (0, 0)
+        // in mm, so the 2D roll rotation pivots about (0, 0).
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        // Small RA offset gives a star at roughly (r_mm, 0) relative to the
+        // AABB center at zero roll.
+        let offset_star = StarData {
+            id: 1,
+            magnitude: 10.0,
+            position: Equatorial::from_degrees(pointing.ra_degrees() + 0.1, pointing.dec_degrees()),
+            b_v: Some(0.6),
+        };
+        let refs = vec![&offset_star];
+        let padding_mm = 5.0;
+
+        let unrolled = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, 0.0),
+            &fp,
+            padding_mm,
+        );
+        assert_eq!(unrolled.len(), 1);
+        let (x0, y0) = (unrolled[0].x_mm, unrolled[0].y_mm);
+        assert!(x0.abs() > 0.05, "expected meaningful x offset, got {x0}");
+        assert_abs_diff_eq!(y0, 0.0, epsilon = 0.05);
+
+        // Roll by +pi/2 -> right-hand rule about +Z sends (x, 0) to (0, x).
+        let rolled = project_stars_to_focal_plane_oriented(
+            &refs,
+            &orientation_from_pointing(&pointing, std::f64::consts::FRAC_PI_2),
+            &fp,
+            padding_mm,
+        );
+        assert_eq!(rolled.len(), 1);
+        let (x1, y1) = (rolled[0].x_mm, rolled[0].y_mm);
+        assert_relative_eq!(x1, -y0, epsilon = 1e-9);
+        assert_relative_eq!(y1, x0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_focal_plane_config_projector_matches_batch_oriented() {
+        use crate::hardware::sensor::models::GSENSE4040BSI;
+        use crate::hardware::sensor_array::SensorArray;
+        use crate::hardware::telescope::TelescopeConfig;
+        use crate::hardware::FocalPlaneProjector;
+        use shared::units::{LengthExt, TemperatureExt};
+
+        let telescope = TelescopeConfig::new(
+            "Test",
+            shared::units::Length::from_meters(0.5),
+            shared::units::Length::from_meters(2.5),
+            0.8,
+        );
+        let fp = FocalPlaneConfig::new(
+            telescope,
+            SensorArray::single(GSENSE4040BSI.clone()),
+            shared::units::Temperature::from_celsius(-10.0),
+        );
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let star = StarData {
+            id: 7,
+            magnitude: 10.0,
+            position: Equatorial::from_degrees(
+                pointing.ra_degrees() + 0.05,
+                pointing.dec_degrees() - 0.02,
+            ),
+            b_v: Some(0.6),
+        };
+        let orientation = orientation_from_pointing(&pointing, 0.3);
+        let padding_mm = 3.0;
+
+        assert_eq!(fp.sensor_count(), 1);
+        let hit = fp
+            .project_to_sensor(&star, &orientation, 0, padding_mm)
+            .unwrap();
+
+        // Compare against the batch path routed to the same sensor.
+        let refs = vec![&star];
+        let fp_stars = project_stars_to_focal_plane_oriented(&refs, &orientation, &fp, padding_mm);
+        let routed = route_stars_to_sensors(&fp_stars, &fp, padding_mm);
+        assert_eq!(routed[0].len(), 1);
+        assert_relative_eq!(hit.0, routed[0][0].x, epsilon = 1e-9);
+        assert_relative_eq!(hit.1, routed[0][0].y, epsilon = 1e-9);
+    }
+}

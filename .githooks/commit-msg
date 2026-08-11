@@ -1,0 +1,14 @@
+#!/bin/bash
+# Reject commits with AI attribution mentions
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+if echo "$COMMIT_MSG" | grep -iE "(claude\.com|@claude|co-authored-by.*claude|generated.*with.*claude|created.*with.*claude)" > /dev/null 2>&1; then
+    echo "❌ AI attribution detected in commit message."
+    echo "This repository does not include AI attribution in commits."
+    echo "You prompted it, you reviewed it, you own it."
+    exit 1
+fi
+
+exit 0

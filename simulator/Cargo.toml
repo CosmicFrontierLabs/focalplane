@@ -1,0 +1,70 @@
+[package]
+name = "simulator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Space telescope optical and sensor simulation"
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+starfield = { version = "0.13", features = ["photometry"] }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+image = "0.25" # Image processing
+ndarray = { version = "0.17", features = [
+    "rayon",
+] } # Multidimensional arrays with parallel computing
+rayon = "1.7" # Parallel computing
+float-cmp = "0.9" # Approximate floating point comparisons
+thiserror = "2.0" # Error handling
+clap = { version = "4.5", features = [
+    "derive",
+] } # Command line argument parsing
+log = "0.4"                   # Logging facade
+env_logger = "0.11"           # Environment-based logger
+url = "2.5"                   # URL parsing and manipulation
+nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
+# Foundation crates from cfl-foundations.
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3db3f41", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3db3f41" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "3db3f41" }
+
+rand = "0.9"
+rand_distr = "0.5"
+indicatif = "0.17"
+num_cpus = "1.16"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+csv = "1.3"
+
+plotters = { version = "0.3", default-features = false, features = [
+    "bitmap_backend",
+    "svg_backend",
+    "chrono",
+    "ttf",
+    "all_series",
+    "all_elements",
+    "full_palette",
+    "colormaps",
+] }
+chrono = "0.4.41"
+ab_glyph = "0.2"           # TTF glyph rasterization for context-view labels
+imageproc = { version = "0.25.1", default-features = false } # draw_text_mut over `image`
+realfft = "3.4"                                              # IRFFT for jitter PSD synthesis
+rustfft = "6.2"                                              # complex FFT backing realfft (re-exports num-complex)
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = [
+    "rayon",
+    "cargo_bench_support",
+    "html_reports",
+] } # Benchmarking (no plotters: criterion's plotters feature pulls image 0.24)
+approx = "0.5"                                               # Approximate floating point comparisons
+tempfile = "3.10"                                            # Temporary file handling
+
+[[bench]]
+name = "render"
+harness = false

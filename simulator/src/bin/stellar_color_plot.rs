@@ -1,0 +1,317 @@
+//! Plot stellar spectra with human-perceived colors
+//!
+//! This tool generates plots of stellar spectra at different temperatures,
+//! using human vision models to determine the perceived color of each spectrum.
+//!
+//! Usage:
+//! ```
+//! cargo run --bin stellar_color_plot -- [OPTIONS]
+//! ```
+//!
+//! See --help for detailed options.
+
+use clap::Parser;
+use plotters::prelude::*;
+use rayon::prelude::*;
+use shared::units::{LengthExt, Wavelength};
+use shared_wasm::StatsScan;
+use simulator::photometry::color::SpectralClass;
+use simulator::photometry::spectrum::Spectrum;
+use simulator::photometry::stellar::BlackbodyStellarSpectrum;
+use simulator::photometry::{
+    generate_temperature_sequence, spectrum_to_rgb_values, temperature_to_spectral_class,
+};
+use simulator::plotting::save_plot_png;
+use std::error::Error;
+
+/// Command line arguments for stellar spectrum plotting
+#[derive(Parser, Debug)]
+#[command(
+    name = "Stellar Color Plotter",
+    about = "Plots stellar spectra at different temperatures with human-perceived colors",
+    long_about = None
+)]
+struct Args {
+    /// Number of spectra to plot
+    #[arg(short, long, default_value_t = 5)]
+    n_spectra: usize,
+
+    /// Minimum stellar temperature in Kelvin
+    #[arg(long, default_value_t = 4000.0)]
+    min_temp: f64,
+
+    /// Maximum stellar temperature in Kelvin
+    #[arg(long, default_value_t = 10000.0)]
+    max_temp: f64,
+
+    /// Output file path
+    #[arg(short, long, default_value = "plots/stellar_spectrum.png")]
+    output: String,
+
+    /// Wavelength range minimum (nm)
+    #[arg(long, default_value_t = 200.0)]
+    wavelength_min: f64,
+
+    /// Wavelength range maximum (nm)
+    #[arg(long, default_value_t = 2000.0)]
+    wavelength_max: f64,
+
+    /// Number of sample points for spectra
+    #[arg(long, default_value_t = 100)]
+    sample_points: usize,
+}
+
+/// Information about a stellar spectrum and its visual properties.
+///
+/// Contains both the physical blackbody spectrum model and the calculated
+/// human-perceived color for visualization purposes. Used to correlate
+/// stellar temperature with observable color in plots.
+///
+/// # Examples
+///
+/// ```
+/// let info = StellarInfo {
+///     temperature: 5778.0,    // Sun-like star
+///     spectral_class: SpectralClass::G,
+///     spectrum: BlackbodyStellarSpectrum::new(5778.0, 1.0),
+///     color: RGBColor(255, 255, 192),  // Yellowish-white
+/// };
+/// ```
+struct StellarInfo {
+    /// Effective temperature in Kelvin (determines spectrum shape)
+    temperature: f64,
+    /// Morgan-Keenan spectral class (O, B, A, F, G, K, M)
+    spectral_class: SpectralClass,
+    /// Blackbody stellar spectrum model for computing irradiance
+    spectrum: BlackbodyStellarSpectrum,
+    /// Human-perceived RGB color derived from spectrum
+    color: RGBColor,
+}
+
+/// Convert RGB floating point values to RGBColor for plotting.
+///
+/// Transforms normalized RGB values (0.0-1.0) into the discrete 8-bit
+/// RGB format required by the plotters library. Values are clamped
+/// to prevent overflow during conversion.
+///
+/// # Arguments
+/// * `r` - Red component (0.0-1.0)
+/// * `g` - Green component (0.0-1.0)
+/// * `b` - Blue component (0.0-1.0)
+///
+/// # Returns
+/// RGBColor value for plotters with components scaled to 0-255
+///
+/// # Examples
+/// ```
+/// let white = rgb_values_to_color(1.0, 1.0, 1.0);
+/// let red = rgb_values_to_color(1.0, 0.0, 0.0);
+/// let dim_blue = rgb_values_to_color(0.0, 0.0, 0.5);
+/// ```
+fn rgb_values_to_color(r: f64, g: f64, b: f64) -> RGBColor {
+    RGBColor(
+        (r * 255.0).min(255.0) as u8,
+        (g * 255.0).min(255.0) as u8,
+        (b * 255.0).min(255.0) as u8,
+    )
+}
+
+/// Create stellar spectra for plotting across a temperature range.
+///
+/// Generates a logarithmically-spaced sequence of stellar temperatures
+/// and computes the corresponding blackbody spectra and human-perceived
+/// colors. Uses parallel processing for efficient computation.
+///
+/// # Arguments
+/// * `args` - Command-line arguments including temperature range and count
+///
+/// # Returns
+/// Vector of StellarInfo containing spectrum and color information,
+/// sorted by increasing temperature
+///
+/// # Examples
+/// ```
+/// let args = Args {
+///     min_temp: 3000.0,  // Cool M dwarf
+///     max_temp: 40000.0, // Hot O star
+///     n_spectra: 7,      // One per spectral class
+///     // ... other fields
+/// };
+/// let spectra = create_stellar_spectra(&args);
+/// assert_eq!(spectra.len(), 7);
+/// ```
+fn create_stellar_spectra(args: &Args) -> Vec<StellarInfo> {
+    // Generate logarithmically spaced temperatures
+    let temperatures = generate_temperature_sequence(args.min_temp, args.max_temp, args.n_spectra);
+
+    // Create spectra with calculated colors
+    temperatures
+        .into_par_iter()
+        .map(|temp| {
+            // Create blackbody spectrum for this temperature
+            let spectrum = BlackbodyStellarSpectrum::new(temp, 1.0);
+
+            // Calculate visual color based on human vision
+            let (r, g, b) = spectrum_to_rgb_values(&spectrum);
+            let color = rgb_values_to_color(r, g, b);
+
+            // Determine spectral class from temperature
+            let spectral_class = temperature_to_spectral_class(temp);
+
+            StellarInfo {
+                temperature: temp,
+                spectral_class,
+                spectrum,
+                color,
+            }
+        })
+        .collect()
+}
+
+/// Main function to generate stellar spectrum plot.
+///
+/// Orchestrates the complete workflow:
+/// 1. Parse command line arguments
+/// 2. Generate stellar spectra with temperature-dependent colors
+/// 3. Create professional visualization with proper scaling and legends
+/// 4. Save plot to specified output file
+///
+/// The generated plot shows normalized spectral irradiance vs wavelength
+/// for multiple stellar temperatures, with each curve colored according
+/// to human visual perception of that star's color.
+fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize logging from environment variables
+    env_logger::init();
+
+    // Parse command line arguments
+    let args = Args::parse();
+
+    println!(
+        "Generating stellar spectra plot with temperatures from {}K to {}K...",
+        args.min_temp, args.max_temp
+    );
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all("plots")?;
+
+    // Generate the plot
+    generate_stellar_plot(&args)?;
+
+    println!("Plot saved to: {}", args.output);
+    Ok(())
+}
+
+/// Generate the stellar spectra plot with temperature-based coloring.
+///
+/// Creates a professional scientific visualization showing multiple stellar
+/// blackbody spectra plotted with their human-perceived colors. The plot
+/// includes proper normalization, grid lines, axis labels, and a legend
+/// showing temperature and spectral class for each curve.
+///
+/// # Arguments
+/// * `args` - Configuration parameters including output path, wavelength range,
+///   temperature range, and sampling parameters
+///
+/// # Returns
+/// * `Result<(), Box<dyn Error>>` - Success or plotting error
+///
+/// # Plot Features
+/// - Black background for astronomical visualization aesthetics
+/// - Normalized spectral irradiance on Y-axis (0.0-1.0)
+/// - Wavelength in nanometers on X-axis
+/// - Each spectrum colored according to human visual perception
+/// - Legend showing temperature and spectral class
+/// - Grid lines for easy value reading
+fn generate_stellar_plot(args: &Args) -> Result<(), Box<dyn Error>> {
+    // Generate spectral info including human-perceived colors
+    let stellar_info = create_stellar_spectra(args);
+
+    save_plot_png(&args.output, (1024, 768), |root| {
+        root.fill(&BLACK)?;
+
+        let mut chart = ChartBuilder::on(root)
+            .caption(
+                "Stellar Spectra by Temperature",
+                ("sans-serif", 30).into_font().color(&WHITE),
+            )
+            .margin(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(args.wavelength_min..args.wavelength_max, 0.0f64..1.0f64)?;
+
+        let x_grid_spacing = 500.0;
+        let y_grid_spacing = 0.25;
+
+        fn ceil_div(a: f64, b: f64) -> usize {
+            (a / b).ceil() as usize
+        }
+
+        let x_label_count = ceil_div(args.wavelength_max - args.wavelength_min, x_grid_spacing) + 1;
+        let y_label_count = ceil_div(1.0, y_grid_spacing) + 1;
+
+        chart
+            .configure_mesh()
+            .x_labels(x_label_count)
+            .y_labels(y_label_count)
+            .x_label_formatter(&|x| format!("{}", *x as i32))
+            .y_label_formatter(&|y| format!("{y:.1}"))
+            .axis_desc_style(("sans-serif", 18).into_font().color(&WHITE))
+            .label_style(("sans-serif", 14).into_font().color(&WHITE))
+            .x_desc("Wavelength (nm)")
+            .y_desc("Normalized Spectral Irradiance")
+            .light_line_style(WHITE.mix(0.4))
+            .draw()?;
+
+        let wavelengths: Vec<f64> = (0..args.sample_points)
+            .map(|i| {
+                args.wavelength_min
+                    + (args.wavelength_max - args.wavelength_min) * (i as f64)
+                        / (args.sample_points as f64 - 1.0)
+            })
+            .collect();
+
+        let all_irradiances: Vec<f64> = stellar_info
+            .iter()
+            .flat_map(|info| {
+                wavelengths.iter().map(|&wl| {
+                    info.spectrum
+                        .spectral_irradiance(Wavelength::from_nanometers(wl))
+                })
+            })
+            .collect();
+        let irr_scan = StatsScan::new(&all_irradiances);
+        let max_irr = irr_scan.max().unwrap_or(1.0);
+
+        for star in &stellar_info {
+            let data_points: Vec<(f64, f64)> = wavelengths
+                .iter()
+                .map(|&wavelength| {
+                    let irradiance = star
+                        .spectrum
+                        .spectral_irradiance(Wavelength::from_nanometers(wavelength));
+                    (wavelength, irradiance / max_irr)
+                })
+                .collect();
+
+            let label = format!(
+                "{}K (Class {})",
+                star.temperature as u32, star.spectral_class
+            );
+
+            chart
+                .draw_series(LineSeries::new(data_points, &star.color))?
+                .label(label)
+                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], star.color));
+        }
+
+        chart
+            .configure_series_labels()
+            .background_style(BLACK.mix(0.7))
+            .border_style(WHITE)
+            .label_font(("sans-serif", 14).into_font().color(&WHITE))
+            .position(SeriesLabelPosition::UpperRight)
+            .draw()?;
+
+        Ok(())
+    })
+}
