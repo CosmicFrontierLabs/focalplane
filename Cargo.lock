@@ -3413,6 +3413,7 @@ dependencies = [
  "shared",
  "shared-wasm",
  "starfield",
+ "starfield-bright-galaxies",
  "starfield-datasource-utils",
  "starfield-gaia",
  "starfield-nsa",
@@ -3494,6 +3495,16 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "uom",
+]
+
+[[package]]
+name = "starfield-bright-galaxies"
+version = "0.1.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=3613f1c#3613f1c663f3c35ce22ed09bb355029c1d5fc5b0"
+dependencies = [
+ "serde",
+ "starfield",
+ "starfield-gaia",
 ]
 
 [[package]]
