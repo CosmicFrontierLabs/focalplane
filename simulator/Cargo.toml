@@ -12,6 +12,7 @@ license.workspace = true
 starfield = { version = "0.13", features = ["photometry"] }
 starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [

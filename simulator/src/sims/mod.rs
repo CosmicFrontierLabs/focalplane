@@ -1,5 +1,6 @@
 //! Simulation modules for various experiments
 
+pub mod bright_galaxies;
 pub mod context_render;
 pub mod gaia_dr3;
 pub mod jitter;
