@@ -93,6 +93,11 @@ scripts/install-hooks.sh
 - Always check `git status` before committing to ensure no unwanted files are staged
 - **After pushing work to a branch, share the PR link directly** - Don't share diff/compare links, just the PR URL
 
+## Git Branches
+- Name branches using the `<username>/<branch-description>` scheme (for example, `meawoppl/branch-naming-guidance`)
+- `<username>` must be the GitHub username of the user requesting the work, not the name of an agent, model, tool, or service
+- Keep `<branch-description>` short, lowercase, and hyphen-separated
+
 ## Monitoring CI Status
 When waiting for CI checks on a PR, use `gh pr checks` with `--watch` or `--fail-fast`:
 ```bash
