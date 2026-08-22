@@ -12,6 +12,7 @@ license.workspace = true
 starfield = { version = "0.13", features = ["photometry"] }
 starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
@@ -28,9 +29,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4bb8287", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4bb8287" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4bb8287" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
 
 rand = "0.9"
 rand_distr = "0.5"

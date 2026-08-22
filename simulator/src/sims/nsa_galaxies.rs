@@ -33,6 +33,7 @@ use starfield_datasource_utils::cache_dir;
 use starfield_nsa::{NsaCatalog, NsaEntry};
 
 use crate::hardware::satellite::FocalPlaneConfig;
+use crate::image_proc::sersic_splat::truncation_radius_arcsec;
 use crate::photometry::photoconversion::{photon_electron_fluxes, SourceFlux};
 use crate::photometry::{SDSSSpectrum, SdssBand};
 use crate::scene_galaxy::Galaxy;
@@ -105,10 +106,6 @@ pub struct GalaxyLoaderConfig {
     /// Reject entries with Sérsic index outside `[min_n, max_n]`.
     pub min_n: f64,
     pub max_n: f64,
-    /// Pad the field-of-view filter by this many degrees so a galaxy
-    /// whose centre falls just outside the sensor footprint but whose
-    /// outer envelope reaches in is still rendered.
-    pub fov_pad_deg: f64,
 }
 
 impl Default for GalaxyLoaderConfig {
@@ -117,9 +114,32 @@ impl Default for GalaxyLoaderConfig {
             max_theta_eff: DEFAULT_MAX_THETA_EFF_ARCSEC,
             min_n: DEFAULT_MIN_N,
             max_n: DEFAULT_MAX_N,
-            fov_pad_deg: 0.5,
         }
     }
+}
+
+impl GalaxyLoaderConfig {
+    /// Largest possible rendered major-axis radius admitted by these
+    /// morphology rails, in degrees.
+    pub fn max_visual_radius_deg(&self) -> f64 {
+        let profile = SersicProfile {
+            theta_half_arcsec: self.max_theta_eff,
+            n: self.max_n,
+            axis_ratio: 1.0,
+            position_angle_deg: 0.0,
+        };
+        truncation_radius_arcsec(&profile) / 3600.0
+    }
+}
+
+fn profile_overlaps_fov(
+    profile: &SersicProfile,
+    position: &Equatorial,
+    pointing: &Equatorial,
+    fov_radius_deg: f64,
+) -> bool {
+    let visual_radius_deg = truncation_radius_arcsec(profile) / 3600.0;
+    pointing.angular_distance(position).to_degrees() <= fov_radius_deg + visual_radius_deg
 }
 
 /// Default cache path for the NSA FITS file:
@@ -141,8 +161,8 @@ pub struct GalaxyInField {
 }
 
 /// Load NSA from `path` (downloading if absent), filter to the angular
-/// box around `pointing` plus `config.fov_pad_deg`, drop pathological
-/// fits, and return a flat list of `GalaxyInField` entries.
+/// search region around `pointing`, drop pathological fits, clip each
+/// candidate by its rendered radius, and return `GalaxyInField` entries.
 ///
 /// Mirrors the in-FOV pre-filter in [`load_and_route_nsa_galaxies`] but
 /// stops short of per-sensor projection — the context-view renderer
@@ -162,7 +182,7 @@ pub fn load_galaxies_in_fov(
     };
     let cat = NsaCatalog::from_fits_file(&path)?;
     let cos_dec0 = pointing.dec_degrees().to_radians().cos();
-    let half_box_deg = fov_radius_deg + config.fov_pad_deg;
+    let half_box_deg = fov_radius_deg + config.max_visual_radius_deg();
     let out: Vec<GalaxyInField> = cat
         .stars()
         .filter(|e| {
@@ -171,6 +191,11 @@ pub fn load_galaxies_in_fov(
             dra.abs() < half_box_deg && ddec.abs() < half_box_deg
         })
         .filter(|e| is_well_fit(e, config.min_n, config.max_n, config.max_theta_eff))
+        .filter(|e| {
+            let profile = nsa_to_sersic_profile(e);
+            let position = Equatorial::from_degrees(e.ra, e.dec);
+            profile_overlaps_fov(&profile, &position, pointing, fov_radius_deg)
+        })
         .map(|e| GalaxyInField {
             position: Equatorial::from_degrees(e.ra, e.dec),
             theta_half_arcsec: e.sersic_th50 as f64,
@@ -189,9 +214,9 @@ pub fn load_galaxies_in_fov(
 }
 
 /// Load NSA from `path` (downloading via the NYU mirror if absent),
-/// filter to the field of view around `pointing` plus `fov_pad_deg`
-/// of slack, drop pathological fits, and return a flat `Vec<Galaxy>`
-/// of sky-truth catalog entries.
+/// search out to the largest admitted rendered radius, drop pathological
+/// fits, clip each candidate by its own radius, and return a flat
+/// `Vec<Galaxy>` of sky-truth catalog entries.
 ///
 /// Per-sensor projection (including the multi-sensor halo case) is
 /// the motion-blur renderer's job — see
@@ -226,11 +251,11 @@ pub fn load_and_route_nsa_galaxies(
         cat.version()
     );
 
-    // Conservative angular pre-filter on the catalog before per-sensor
-    // projection. fov_radius_deg + fov_pad_deg padding catches any
-    // galaxy whose centre lies within reach of the array.
+    // Conservative broad-phase box reaches as far as the largest
+    // profile admitted by the morphology rails. The following exact
+    // angular test uses each candidate's own rendered radius.
     let cos_dec0 = pointing.dec_degrees().to_radians().cos();
-    let half_box_deg = fov_radius_deg + config.fov_pad_deg;
+    let half_box_deg = fov_radius_deg + config.max_visual_radius_deg();
     let in_field: Vec<&NsaEntry> = cat
         .stars()
         .filter(|e| {
@@ -239,9 +264,14 @@ pub fn load_and_route_nsa_galaxies(
             dra.abs() < half_box_deg && ddec.abs() < half_box_deg
         })
         .filter(|e| is_well_fit(e, config.min_n, config.max_n, config.max_theta_eff))
+        .filter(|e| {
+            let profile = nsa_to_sersic_profile(e);
+            let position = Equatorial::from_degrees(e.ra, e.dec);
+            profile_overlaps_fov(&profile, &position, pointing, fov_radius_deg)
+        })
         .collect();
     info!(
-        "{} NSA galaxies in {:.2}° box around ({:.4}, {:.4}) after well-fit filter",
+        "{} NSA galaxies in {:.2}° box around ({:.4}, {:.4}) after fit and extent filters",
         in_field.len(),
         half_box_deg * 2.0,
         pointing.ra_degrees(),
@@ -279,4 +309,52 @@ pub fn load_and_route_nsa_galaxies(
         .collect();
     info!("{} NSA galaxies prepared (flat, sky-truth)", galaxies.len());
     Ok(galaxies)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(theta_half_arcsec: f64, n: f64) -> SersicProfile {
+        SersicProfile {
+            theta_half_arcsec,
+            n,
+            axis_ratio: 0.7,
+            position_angle_deg: 20.0,
+        }
+    }
+
+    #[test]
+    fn search_bound_covers_largest_admitted_profile() {
+        let config = GalaxyLoaderConfig::default();
+        let largest = profile(config.max_theta_eff, config.max_n);
+        let actual_deg = truncation_radius_arcsec(&largest) / 3600.0;
+        assert!(config.max_visual_radius_deg() >= actual_deg);
+        assert!(config.max_visual_radius_deg() > 0.5);
+    }
+
+    #[test]
+    fn off_sensor_centre_is_kept_when_halo_overlaps_fov() {
+        let pointing = Equatorial::from_degrees(10.0, 0.0);
+        let galaxy_profile = profile(30.0, 4.0);
+        let visual_radius_deg = truncation_radius_arcsec(&galaxy_profile) / 3600.0;
+        let fov_radius_deg = 0.2;
+        let overlapping =
+            Equatorial::from_degrees(10.0 + fov_radius_deg + visual_radius_deg * 0.5, 0.0);
+        let separated =
+            Equatorial::from_degrees(10.0 + fov_radius_deg + visual_radius_deg + 0.01, 0.0);
+
+        assert!(profile_overlaps_fov(
+            &galaxy_profile,
+            &overlapping,
+            &pointing,
+            fov_radius_deg,
+        ));
+        assert!(!profile_overlaps_fov(
+            &galaxy_profile,
+            &separated,
+            &pointing,
+            fov_radius_deg,
+        ));
+    }
 }
