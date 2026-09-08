@@ -86,15 +86,22 @@
 //! - **Performance metrics**: Signal-to-noise, limiting magnitudes
 //! - **Diagnostic data**: Background levels, noise contributions
 
-use crate::hardware::satellite::FocalPlaneConfig;
-use crate::image_proc::render::{
-    project_stars_to_focal_plane, route_stars_to_sensors, Renderer, RenderingResult, StarInFrame,
-};
-use crate::photometry::zodiacal::SolarAngularCoordinates;
+use std::sync::Arc;
+use std::time::Duration;
+
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
-use std::time::Duration;
+
+use crate::epoch::Epoch;
+use crate::hardware::satellite::FocalPlaneConfig;
+use crate::image_proc::compose::SecondPass;
+use crate::image_proc::render::{
+    project_stars_to_focal_plane, route_stars_to_sensors, Renderer, RenderingResult,
+    SecondPassBinding, StarInFrame,
+};
+use crate::photometry::zodiacal::SolarAngularCoordinates;
+use crate::sims::orientation::orientation_from_pointing;
 
 /// Complete astronomical observation scene for single or multi-sensor focal planes.
 ///
@@ -138,6 +145,15 @@ pub struct Scene {
 
     /// Solar angular coordinates for zodiacal light calculation.
     pub zodiacal_coordinates: SolarAngularCoordinates,
+
+    /// Optional opaque-body compositing pass (see
+    /// [`crate::image_proc::compose`]). Evaluated at the scene's
+    /// pointing with zero roll. `None` renders exactly as if the pass
+    /// did not exist.
+    pub second_pass: Option<Arc<dyn SecondPass>>,
+
+    /// Absolute time of the exposure start, if the scene has one.
+    pub epoch: Option<Epoch>,
 }
 
 impl Scene {
@@ -177,6 +193,8 @@ impl Scene {
             per_sensor_galaxies: vec![Vec::new(); n_sensors],
             pointing_center,
             zodiacal_coordinates,
+            second_pass: None,
+            epoch: None,
         }
     }
 
@@ -198,6 +216,8 @@ impl Scene {
             per_sensor_galaxies: vec![Vec::new(); n_sensors],
             pointing_center,
             zodiacal_coordinates,
+            second_pass: None,
+            epoch: None,
         }
     }
 
@@ -220,6 +240,14 @@ impl Scene {
             self.per_sensor_stars.len()
         );
         self.per_sensor_galaxies = per_sensor_galaxies;
+        self
+    }
+
+    /// Attach an opaque-body second pass and the epoch it should be
+    /// evaluated at. Builder method; chains off the constructors.
+    pub fn with_second_pass(mut self, pass: Arc<dyn SecondPass>, epoch: Option<Epoch>) -> Self {
+        self.second_pass = Some(pass);
+        self.epoch = epoch;
         self
     }
 
@@ -246,11 +274,20 @@ impl Scene {
                 .satellite_for_sensor(sensor_idx)
                 .expect("sensor index in range");
 
-            let renderer = Renderer::from_stars_and_galaxies(
+            let mut renderer = Renderer::from_stars_and_galaxies(
                 &self.per_sensor_stars[sensor_idx],
                 &self.per_sensor_galaxies[sensor_idx],
                 sat,
             );
+            if let Some(pass) = &self.second_pass {
+                renderer = renderer.with_second_pass(SecondPassBinding {
+                    pass: Arc::clone(pass),
+                    orientation: orientation_from_pointing(&self.pointing_center, 0.0),
+                    epoch: self.epoch.clone(),
+                    sensor_idx,
+                    focal_plane: self.focal_plane.clone(),
+                });
+            }
 
             let seed = base_seed.map(|s| s + sensor_idx as u64);
             let rendered = renderer.render_with_seed(exposure, &self.zodiacal_coordinates, seed);
@@ -271,5 +308,63 @@ impl Scene {
     /// Get the number of sensors in the array.
     pub fn sensor_count(&self) -> usize {
         self.focal_plane.array.sensor_count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hardware::satellite::SatelliteConfig;
+    use crate::hardware::sensor::models::IMX455;
+    use crate::hardware::telescope::models::SMALL_50MM;
+    use crate::image_proc::compose::NoopPass;
+    use shared::units::{Temperature, TemperatureExt};
+
+    fn one_star_scene() -> Scene {
+        let sat = SatelliteConfig::new(
+            SMALL_50MM.clone(),
+            IMX455.with_dimensions(64, 64),
+            Temperature::from_celsius(-10.0),
+        );
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let star = StarData {
+            id: 1,
+            magnitude: 8.0,
+            position: pointing,
+            b_v: Some(0.6),
+        };
+        Scene::from_catalog(
+            FocalPlaneConfig::from_satellite(&sat),
+            vec![star],
+            pointing,
+            SolarAngularCoordinates::zodiacal_minimum(),
+        )
+    }
+
+    #[test]
+    fn scene_without_second_pass_has_none() {
+        let scene = one_star_scene();
+        assert!(scene.second_pass.is_none());
+        assert!(scene.epoch.is_none());
+        assert_eq!(scene.per_sensor_stars[0].len(), 1);
+    }
+
+    #[test]
+    fn noop_second_pass_renders_byte_identical() {
+        let plain = one_star_scene();
+        let epoch = Epoch::parse("2027-06-01T00:00:00Z").unwrap();
+        let with_noop = plain
+            .clone()
+            .with_second_pass(Arc::new(NoopPass), Some(epoch.clone()));
+        assert_eq!(with_noop.epoch, Some(epoch));
+
+        let exposure = Duration::from_millis(250);
+        let a = plain.render_with_seed(&exposure, Some(5));
+        let b = with_noop.render_with_seed(&exposure, Some(5));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.quantized_image, y.quantized_image);
+            assert_eq!(x.star_image, y.star_image);
+        }
     }
 }

@@ -796,6 +796,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 catalog_stars: &stars,
                 galaxies: &galaxies,
                 zodiacal: args.shared.coordinates,
+                second_pass: None,
+                epoch: None,
             },
             output_dir: output_path,
             base_seed: Some(args.seed),
