@@ -108,10 +108,13 @@ impl Epoch {
         (other.jd_tdb() - self.jd_tdb()) * SECONDS_PER_DAY
     }
 
-    /// UTC calendar string with millisecond precision, or the TDB
-    /// Julian date if the UTC conversion is unavailable.
+    /// UTC calendar string rounded to the millisecond, or the TDB Julian
+    /// date if the UTC conversion is unavailable.
     pub fn utc_string(&self) -> String {
-        self.time
+        // starfield's `utc_iso` truncates the fractional second, so bias
+        // by half a millisecond to round to the nearest one.
+        let rounded = self.time.clone() + 0.5e-3 / SECONDS_PER_DAY;
+        rounded
             .utc_iso('T', 3)
             .unwrap_or_else(|_| format!("JD {:.8} TDB", self.jd_tdb()))
     }
@@ -230,5 +233,18 @@ mod tests {
     fn display_is_utc_calendar() {
         let epoch = Epoch::parse("2027-06-01T00:00:00Z").unwrap();
         assert!(epoch.to_string().starts_with("2027-06-01T00:00:00"));
+    }
+
+    #[test]
+    fn utc_round_trips_across_leap_second_history() {
+        for iso in [
+            "2007-10-03T05:30:00Z",
+            "1999-12-31T23:59:59Z",
+            "2016-12-31T12:00:00Z",
+        ] {
+            let epoch = Epoch::parse(iso).unwrap();
+            let shown = epoch.utc_string();
+            assert!(shown.starts_with(&iso[..19]), "{iso} displayed as {shown}");
+        }
     }
 }
