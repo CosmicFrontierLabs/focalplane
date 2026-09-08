@@ -69,6 +69,7 @@
 //! - **Education**: Understand space telescope physics and image processing
 
 pub mod algo; // misc module lives here
+pub mod epoch;
 pub mod hardware;
 pub mod image_proc; // render module lives here
 pub mod photometry;
