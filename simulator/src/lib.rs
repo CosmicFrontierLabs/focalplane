@@ -80,6 +80,8 @@ pub mod scene;
 pub mod scene_galaxy;
 pub mod shared_args;
 pub mod sims;
+#[cfg(feature = "solar-system")]
+pub mod solar_system;
 pub mod star_math;
 pub mod star_projector;
 

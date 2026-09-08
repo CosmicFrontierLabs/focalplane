@@ -38,10 +38,11 @@ solar glare). Circular-orbit geometry (a_E = 1 AU, a_M = 1.524 AU):
 | 2.00 AU | 8.8″ | 48° | 29° | −2.1 |
 | 2.50 AU | 7.0″ | 10° | 6° | −2.0 |
 
-- **Maximum elongation from the Sun is ~41°** (asin(1/1.524)). Any
-  telescope guiding on Earth from Mars is *always* pointed within 41° of
-  the Sun. Stray light and baffle performance are first-order for this
-  study, not an afterthought.
+- **Maximum elongation from the Sun is ~41°** for circular orbits
+  (asin(1/1.524)) and **~47°** at the eccentricity extremes (Earth at
+  aphelion, Mars at perihelion). Any telescope guiding on Earth from
+  Mars is *always* pointed within 47° of the Sun. Stray light and baffle
+  performance are first-order for this study, not an afterthought.
 - Mallama & Hilton (2018) put Earth's brightest from Mars at
   **V = −2.55** (α ≈ 96°). Their Earth model uses V₁(0) = −3.99
   (geometric albedo 0.434, from EPOXI). A 2025 reanalysis
@@ -202,7 +203,7 @@ once per exposure.
 | Galaxies not re-projected per stamp | Earth moves relative to stars at up to ~0.1″/min from Mars, and the spacecraft jitters; the planet deposit must be re-splatted per stamp like stars |
 | Saturation = hard clip | Need blooming / charge bleed for honest saturated Earth images |
 | Zodiacal table is Earth-based (1 AU) | Scale by heliocentric distance, ≈ r^−2.3 (Leinert et al. 1998) |
-| No stray light model | Guiding always within 41° of the Sun; need at least a PST(θ_sun)-driven uniform background term |
+| No stray light model | Guiding always within 47° of the Sun; need at least a PST(θ_sun)-driven uniform background term |
 | `SolarAngularCoordinates` is a CLI input | Derive from epoch + observer + pointing |
 | Detection/centroiding is star-oriented (`shared` DAO/IRAF) | Need limb detection, photocentre correction, template correlation |
 | Context render has no planet marker | Add disk outline + terminator to `context_render` |
@@ -517,7 +518,7 @@ known trap; encode the convention in the map metadata).
   is tested on fiction.
 - **Stray light**: a user-supplied point-source-transmittance curve
   PST(θ☉) → uniform background electrons/s/px; plus a ghost-free
-  assumption documented. This is the dominant background at 30–41°
+  assumption documented. This is the dominant background at 30–47°
   from the Sun for most baffle designs and it must be in the SNR budget.
 - **Zodiacal at Mars**: scale the STIS template by (r/1 AU)^−2.3.
 
@@ -532,7 +533,7 @@ boresight, the Sun's angular radius (32′ at 1 AU, 21′ = 0.35° at Mars),
 whether any body in the field is in transit across or occulted by the
 Sun, and the stray-light background via the PST(θ☉) term. This is the
 part the Earth-limb study actually needs: it is always working within
-41° of the Sun, and Earth transits of the Sun as seen from Mars are
+47° of the Sun, and Earth transits of the Sun as seen from Mars are
 real events (next 2084-11-10) that a general tool should predict rather
 than mis-render. Also drives the `SolarAngularCoordinates` derivation
 for zodiacal light.
@@ -766,7 +767,7 @@ if a polarising element is in the optical train); asteroids via
 - **Weather is not knowable in advance.** Any template method must be
   evaluated against clouds it did not see; the stochastic field
   generator is essential, not optional.
-- **Stray light dominates the SNR budget** at 30–41° from the Sun and
+- **Stray light dominates the SNR budget** at 30–47° from the Sun and
   is entirely design-dependent. The plan makes PST an input; someone
   has to supply realistic curves for the candidate baffles.
 - **Saturation management**: with ms exposures, read noise and frame
