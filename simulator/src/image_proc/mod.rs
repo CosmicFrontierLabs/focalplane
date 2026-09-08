@@ -3,6 +3,8 @@
 //! This module contains image processing functions that depend on
 //! simulator-specific types and are not suitable for the shared module.
 
+#[cfg(feature = "solar-system")]
+pub mod body_stamp;
 pub mod compose;
 pub mod deposit;
 pub mod render;

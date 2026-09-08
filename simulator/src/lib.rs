@@ -71,6 +71,8 @@
 pub mod algo; // misc module lives here
 #[cfg(feature = "solar-system")]
 pub mod bodies;
+#[cfg(feature = "solar-system")]
+pub mod body_pass;
 pub mod epoch;
 pub mod hardware;
 pub mod image_proc; // render module lives here
