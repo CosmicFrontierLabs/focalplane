@@ -31,6 +31,9 @@ use simulator::scene::Scene;
 use simulator::shared_args::{SensorModel, TelescopeModel};
 use simulator::solar_system::{BodyId, BodyState, Observer, SolarSystem};
 
+/// Smallest solar elongation with zodiacal-light table coverage.
+const MIN_ZODIACAL_ELONGATION_DEG: f64 = 15.0;
+
 #[derive(Parser, Debug)]
 #[command(about = "Render solar-system bodies from a spacecraft at one epoch")]
 struct Args {
@@ -211,8 +214,12 @@ fn main() -> Result<(), String> {
     let pass = BodyPass::new(Arc::clone(&system), observer, scene_bodies)
         .with_oversampling(args.oversampling);
 
-    let zodiacal = SolarAngularCoordinates::new(target_elongation.clamp(0.0, 180.0), 0.0)
-        .map_err(|e| e.to_string())?;
+    // The zodiacal table has no data inside the solar exclusion zone;
+    // inside it the true background is stray light, which is not
+    // modelled, so the nearest tabulated elongation is used.
+    let zodiacal_elongation = target_elongation.clamp(MIN_ZODIACAL_ELONGATION_DEG, 180.0);
+    let zodiacal =
+        SolarAngularCoordinates::new(zodiacal_elongation, 0.0).map_err(|e| e.to_string())?;
     let scene = Scene::from_catalog(focal_plane, Vec::new(), pointing, zodiacal)
         .with_second_pass(Arc::new(pass), Some(epoch));
 
