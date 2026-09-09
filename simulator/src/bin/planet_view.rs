@@ -21,14 +21,16 @@ use clap::Parser;
 use image::{ImageBuffer, Luma};
 use ndarray::Array2;
 use shared::units::{Temperature, TemperatureExt};
+use starfield::catalogs::StarData;
 
 use simulator::bodies::brdf::{Brdf, Hapke, Lambert};
 use simulator::body_pass::{BodyPass, SceneBody};
 use simulator::epoch::Epoch;
-use simulator::hardware::satellite::{FocalPlaneConfig, SatelliteConfig};
+use simulator::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{SensorModel, TelescopeModel};
+use simulator::sims::orientation::orientation_from_pointing;
 use simulator::solar_system::{BodyId, BodyState, Observer, SolarSystem};
 
 /// Smallest solar elongation with zodiacal-light table coverage.
@@ -241,6 +243,19 @@ fn main() -> Result<(), String> {
         target,
         (target_state.angular_diameter_arcsec() / satellite.plate_scale_arcsec_per_pixel()).round()
     );
+    // Geometric centre of each body on the sensor, through the same
+    // projector the second pass uses (pixel index = pixel centre).
+    let orientation = orientation_from_pointing(&pointing, 0.0);
+    for (state, _) in &states {
+        let probe = StarData::with_position(0, state.direction, 0.0, None);
+        match scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0)
+        {
+            Some((x, y)) => println!("{} centre px {x:.4} {y:.4}", state.body),
+            None => println!("{} centre px off-sensor", state.body),
+        }
+    }
 
     let png = args.out.with_extension("png");
     let preview = PathBuf::from(format!("{}_preview.png", args.out.display()));
