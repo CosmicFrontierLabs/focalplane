@@ -759,7 +759,7 @@ Interface decisions agreed with the datasources side (2026-09-09):
 | F3.1 | `bodies/brdf.rs` (Lambert, L-S, Minnaert, Hapke, Cox–Munk) with unit tests against published values | M |
 | F3.2 | `image_proc/planet_disk.rs` (`BodyStamp`: coverage + radiance) + `compose.rs` second pass + `scene_planet.rs` + static `Renderer` wiring; **uniform Lambert sphere first**; occultation-of-stars test; INVARIANTS §1/§2 tests; integrated V vs Mallama test | L |
 | F3.3 | Motion-blur wiring: `LightSources.bodies`, per-stamp re-projection, stamp cache, depth-sorted compositing | M |
-| F3.4 | Textured airless bodies: Moon (Hapke × WAC), Mercury, Mars (L-S + haze) | M |
+| F3.4 | Textured surfaces: `SurfaceRadiance`/`SurfaceModel` in `bodies/surface.rs` bind composition tiers to the sensor band with `w = F☉·QE·λ` weights (clipped to endmember coverage, ≤ 5 % uncovered response); Earth renders from the MODIS composition tier and Mars from the Viking albedo tier through a unit-albedo Lambert law. Still to do: Moon tier (datasources PR pending), Lommel–Seeliger + haze for Mars, Hapke for the Moon and Mercury, calibrated Mars and lunar spectra (#65, #66) | Earth/Mars textured |
 | F3.5 | `atmosphere/`: Rayleigh/Mie/ozone LUTs, spherical-shell single + multiple scattering, limb integrator; Earth/Mars/Venus presets; limb-height test | L |
 | F3.6 | `bodies/earth.rs`: endmember surface, cloud layer (climatology + stochastic), glint, atmosphere; colour validation tests | L |
 | F3.7 | Venus, gas giants (no rings) | M |
