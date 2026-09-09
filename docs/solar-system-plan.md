@@ -709,7 +709,7 @@ Starfield issues filed for Phase 0 (OrbitalCommons/starfield):
 
 | # | Item | Size |
 |---|---|---|
-| D1.1 | `starfield-solar-spectrum`: embedded 1 nm TSIS-1 HSRS v2 | S |
+| D1.1 | `starfield-solar-spectrum`: embedded 1 nm box means of TSIS-1 HSRS v2, 202–2730 nm, built from the native-resolution product (the 0.1 nm pre-smoothed LISIRD file is biased up to 1.1 % across Fraunhofer lines); 300–1100 nm integrates to 1002.2 W m⁻² | done (PR open) |
 | D1.2 | `starfield-reflectance-library`: embedded endmember spectra with provenance | M |
 | D1.3 | `starfield-planet-maps`: downloader + cache + SHA-256 + equirect sampler; Earth land cover/snow/cloud, Moon, Mars, Mercury, OPAL maps at coarse tiers | L |
 | D1.4 | SHA-256 verification helper in `datasource-utils` | S |
