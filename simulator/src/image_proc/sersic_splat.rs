@@ -155,14 +155,14 @@ impl MeanFluxDeposit for SersicSplat {
             return 0.0;
         }
         let s = self.arcsec_per_pixel;
-        // Image coordinates: +dx (col offset) maps to +x_sky = east.
-        // +dy (row offset) maps to *south* (row index grows downward
-        // in standard image display), so cy = -dy*s to align with the
-        // SB evaluator's +y_sky = north convention. Without this
-        // flip, elliptical galaxies render mirrored about the
-        // horizontal axis vs. AstroPy `Sersic2D`.
+        // Image coordinates follow the sky's parity: +dx (col offset)
+        // maps to *west* and +dy (row offset) to *south*, since the
+        // renderer displays north up with east on the left. The SB
+        // evaluator uses +x_sky = east, +y_sky = north, so both offsets
+        // are negated. Either sign wrong renders elliptical galaxies
+        // mirrored relative to AstroPy `Sersic2D`.
         let quarter = 0.25 * s;
-        let cx = dx * s;
+        let cx = -dx * s;
         let cy = -dy * s;
         let sb = [
             (-quarter, -quarter),
@@ -408,19 +408,18 @@ mod orientation_diag {
     use crate::image_proc::deposit::splat_deposit;
     use ndarray::Array2;
 
-    /// **Orientation regression** — locks the y-axis sign convention
+    /// **Orientation regression** — locks both axis sign conventions
     /// in `SersicSplat::pixel_flux` against AstroPy's `Sersic2D` for
-    /// PA=45° east-of-north (major axis NE-SW). Image convention:
-    /// row 0 = top = north, col 0 = left = west, east on the right.
+    /// PA=45° east-of-north (major axis NE-SW). Image convention has
+    /// the sky's parity: row 0 = top = north, col 0 = left = east.
     ///
-    /// PA=45 east-of-north (major axis NE-SW) means high SB on the
-    /// "/" diagonal: bright at NE corner (row<center, col>center)
-    /// and SW corner (row>center, col<center); low SB at NW and SE
-    /// corners.
+    /// PA=45 east-of-north (major axis NE-SW) means high SB at the NE
+    /// corner (row<center, col<center) and the SW corner (row>center,
+    /// col>center); low SB at NW and SE.
     ///
-    /// If anyone removes the `cy = -dy*s` sign flip in `pixel_flux`,
-    /// this test fires immediately — galaxies would render mirrored
-    /// about the horizontal axis, swapping "/" and "\" elongation.
+    /// If either sign flip in `pixel_flux` is removed, this test fires
+    /// immediately — galaxies would render mirrored, swapping the
+    /// elongation diagonal.
     #[test]
     fn pa45_orientation_matches_astropy_ne_sw_major_axis() {
         let profile = SersicProfile {
@@ -437,10 +436,11 @@ mod orientation_diag {
         // Sample 30px in from each corner.
         let off = 30;
         let c = n / 2;
-        let nw = buf[[c - off, c - off]];
-        let ne = buf[[c - off, c + off]];
-        let sw = buf[[c + off, c - off]];
-        let se = buf[[c + off, c + off]];
+        // East is on the left: NE is (row above, column left of) centre.
+        let ne = buf[[c - off, c - off]];
+        let nw = buf[[c - off, c + off]];
+        let se = buf[[c + off, c - off]];
+        let sw = buf[[c + off, c + off]];
 
         // PA=45 east-of-north → "/" diagonal: NE+SW high, NW+SE low.
         assert!(

@@ -33,6 +33,13 @@ use shared::image_size::PixelShape;
 /// - **Camera frame**: Right-handed system aligned with detector
 /// - **Output**: Pixel coordinates with (0,0) at detector corner
 ///
+/// # Image Parity
+/// With row 0 at the top and columns increasing to the right, a rendered
+/// image has celestial north up and east to the **left**: the parity of the
+/// sky as an observer sees it and of any real detector image up to a 180°
+/// rotation. Increasing right ascension therefore moves a source toward
+/// smaller pixel `x`.
+///
 /// # Accuracy Specifications
 /// - **Sub-pixel precision**: <0.01 pixel coordinate accuracy
 /// - **Angular accuracy**: Limited by double-precision (~1 microarcsec)
@@ -177,8 +184,11 @@ impl StarProjector {
         let x_proj = camera_coords.x / camera_coords.z;
         let y_proj = camera_coords.y / camera_coords.z;
 
-        // Convert to pixel coordinates
-        let pixel_x = (self.sensor_size.width as f64 / 2.0) + (x_proj / self.radians_per_pixel);
+        // Convert to pixel coordinates. Camera +X is east and +Y north. An
+        // image displayed with row 0 at the top and columns increasing to
+        // the right shows north up and east to the *left*, the same parity
+        // as the sky itself, so both axes are negated here.
+        let pixel_x = (self.sensor_size.width as f64 / 2.0) - (x_proj / self.radians_per_pixel);
         let pixel_y = (self.sensor_size.height as f64 / 2.0) - (y_proj / self.radians_per_pixel);
 
         Some((pixel_x, pixel_y))
@@ -278,33 +288,34 @@ mod tests {
     fn test_four_corner_projection_easy() {
         let projector = StarProjector::new(&ZERO_ZERO, 0.01, 100, 100);
 
-        // Define stars at each corner of a 2x2 degree square centered on 0,0
-        let star_top_left = Equatorial { ra: -0.1, dec: 0.1 };
-        let star_top_right = Equatorial { ra: 0.1, dec: 0.1 };
-        let star_bottom_left = Equatorial {
+        // Stars at the corners of a square centred on (0, 0), named by sky
+        // direction. Sky parity: north is up (smaller row) and east is to
+        // the left (smaller column), as an observer sees it.
+        let star_north_west = Equatorial { ra: -0.1, dec: 0.1 };
+        let star_north_east = Equatorial { ra: 0.1, dec: 0.1 };
+        let star_south_west = Equatorial {
             ra: -0.1,
             dec: -0.1,
         };
-        let star_bottom_right = Equatorial { ra: 0.1, dec: -0.1 };
+        let star_south_east = Equatorial { ra: 0.1, dec: -0.1 };
 
-        // Project each star
-        let pixel_top_left = projector.project(&star_top_left).unwrap();
-        let pixel_top_right = projector.project(&star_top_right).unwrap();
-        let pixel_bottom_left = projector.project(&star_bottom_left).unwrap();
-        let pixel_bottom_right = projector.project(&star_bottom_right).unwrap();
+        let pixel_north_west = projector.project(&star_north_west).unwrap();
+        let pixel_north_east = projector.project(&star_north_east).unwrap();
+        let pixel_south_west = projector.project(&star_south_west).unwrap();
+        let pixel_south_east = projector.project(&star_south_east).unwrap();
 
-        // Assert that the projected pixels are close to the expected locations
-        assert_relative_eq!(pixel_bottom_left.0, 40.0, epsilon = 0.1);
-        assert_relative_eq!(pixel_bottom_left.1, 60.0, epsilon = 0.1);
+        // West lands on the right, east on the left.
+        assert_relative_eq!(pixel_south_west.0, 60.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_south_west.1, 60.0, epsilon = 0.1);
 
-        assert_relative_eq!(pixel_top_left.0, 40.0, epsilon = 0.1);
-        assert_relative_eq!(pixel_top_left.1, 40.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_north_west.0, 60.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_north_west.1, 40.0, epsilon = 0.1);
 
-        assert_relative_eq!(pixel_top_right.0, 60.0, epsilon = 0.1);
-        assert_relative_eq!(pixel_top_right.1, 40.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_north_east.0, 40.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_north_east.1, 40.0, epsilon = 0.1);
 
-        assert_relative_eq!(pixel_bottom_right.0, 60.0, epsilon = 0.1);
-        assert_relative_eq!(pixel_bottom_right.1, 60.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_south_east.0, 40.0, epsilon = 0.1);
+        assert_relative_eq!(pixel_south_east.1, 60.0, epsilon = 0.1);
     }
 
     #[test]
