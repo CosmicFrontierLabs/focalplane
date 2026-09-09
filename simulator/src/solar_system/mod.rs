@@ -326,8 +326,8 @@ pub struct BodyState {
     pub angular_semi_diameter: f64,
     /// Sun and observer directions, phase, limb orientation.
     pub illumination: IlluminationGeometry,
-    /// Apparent V magnitude from Mallama & Hilton (2018) when starfield
-    /// has a formula for the body; `None` for the Sun and Moon.
+    /// Apparent V magnitude from Mallama & Hilton (2018), or the lunar
+    /// phase curve for the Moon; `None` for the Sun.
     pub v_magnitude: Option<f64>,
 }
 
@@ -556,7 +556,12 @@ mod tests {
         );
         let v = earth.v_magnitude.expect("Mallama & Hilton covers Earth");
         assert!((-3.0..-1.5).contains(&v), "Earth V from Mars = {v:.2}");
-        assert!(moon.v_magnitude.is_none());
+        // The Moon is ~4–5 mag fainter than Earth at the same phase.
+        let moon_v = moon.v_magnitude.expect("starfield covers the Moon");
+        assert!(
+            (1.0..4.5).contains(&moon_v),
+            "Moon V from Mars = {moon_v:.2} (Earth {v:.2})"
+        );
 
         let elongation = system
             .solar_elongation(&earth.direction, &mars, &epoch)

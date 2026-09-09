@@ -15,11 +15,11 @@ license.workspace = true
 solar-system = []
 
 [dependencies]
-starfield = { version = "0.13", features = ["photometry"] }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield = { version = "0.16", features = ["photometry"] }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",
@@ -35,9 +35,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d" }
 
 rand = "0.9"
 rand_distr = "0.5"
