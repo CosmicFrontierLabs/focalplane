@@ -22,8 +22,10 @@
 //!   body; the body's own motion relative to the stars within an
 //!   exposure is negligible.
 //! - The Sun is not rendered; configuring it is an error.
-//! - Disks are spheres of the equatorial radius; oblateness and body
-//!   rotation wait on starfield's PCK support.
+//! - Disks are spheres of the equatorial radius; oblateness is not yet
+//!   rasterised although the apparent ellipse is known.
+//! - Surfaces are bound to the sensor band per composite call; the
+//!   per-endmember band weights are a few thousand multiplies per body.
 
 use std::sync::{Arc, OnceLock};
 
@@ -33,6 +35,7 @@ use starfield::catalogs::StarData;
 use starfield::Equatorial;
 
 use crate::bodies::brdf::Brdf;
+use crate::bodies::surface::{SensorBand, SurfaceModel};
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
 use crate::image_proc::body_stamp::{BodyStamp, StampGeometry, DEFAULT_OVERSAMPLING};
 use crate::image_proc::compose::{ComposeError, Composite, PassContext, SecondPass};
@@ -47,13 +50,28 @@ const JACOBIAN_STEP_RAD: f64 = 1e-5;
 pub struct SceneBody {
     /// Which body.
     pub id: BodyId,
-    /// Surface reflectance law.
-    pub brdf: Arc<dyn Brdf>,
+    /// Surface description, bound to each sensor band at render time.
+    pub surface: Arc<dyn SurfaceModel>,
+}
+
+impl SceneBody {
+    /// A body with any surface model.
+    pub fn new(id: BodyId, surface: Arc<dyn SurfaceModel>) -> Self {
+        Self { id, surface }
+    }
+
+    /// A body whose whole surface follows one reflectance law.
+    pub fn brdf<B: Brdf + Clone + std::fmt::Debug + 'static>(id: BodyId, law: B) -> Self {
+        Self {
+            id,
+            surface: Arc::new(law),
+        }
+    }
 }
 
 impl std::fmt::Debug for SceneBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SceneBody({})", self.id)
+        write!(f, "SceneBody({}, {})", self.id, self.surface.label())
     }
 }
 
@@ -208,9 +226,17 @@ impl SecondPass for BodyPass {
         let pixel_mm = satellite.sensor.pixel_size().as_millimeters();
         let exposure_s = ctx.exposure.as_secs_f64();
         let solar_rate = self.solar_electron_rate(satellite)?;
+        let band = SensorBand {
+            qe: &satellite.combined_qe,
+            solar: self.solar()?,
+        };
 
         let mut layers: Vec<(f64, BodyStamp)> = Vec::new();
         for (body, state) in self.bodies.iter().zip(states.iter()) {
+            let surface = body
+                .surface
+                .bind(&band)
+                .map_err(|e| ComposeError::Failed(format!("{}: {e}", body.id)))?;
             let rad_per_px = ctx
                 .focal_plane
                 .plate_scale_rad_per_px(ctx.sensor_idx)
@@ -236,8 +262,16 @@ impl SecondPass for BodyPass {
                 phase_angle: illumination.phase_angle,
                 electrons_per_sr: exposure_s * solar_rate
                     / illumination.heliocentric_distance_au.powi(2),
+                sky_to_body_fixed: state.sky_to_body_fixed,
             };
-            let stamp = BodyStamp::build(&geometry, body.brdf.as_ref(), &psf, self.oversampling);
+            let stamp = BodyStamp::build(&geometry, surface.as_ref(), &psf, self.oversampling);
+            let no_data = surface.no_data_samples();
+            if no_data > 0 {
+                log::warn!(
+                    "{}: {no_data} sub-samples fell on unmapped terrain and rendered dark",
+                    body.id
+                );
+            }
             layers.push((state.distance_au, stamp));
         }
 
@@ -325,6 +359,7 @@ mod tests {
             sub_solar: None,
             north_pole_position_angle: 0.0,
             apparent_ellipse: (0.0, 0.0, 0.0),
+            sky_to_body_fixed: nalgebra::Matrix3::identity(),
         }
     }
 
@@ -346,10 +381,7 @@ mod tests {
         let state = fixed_earth(pointing);
         let albedo = 0.3;
         let pass = BodyPass::with_fixed_states(
-            vec![SceneBody {
-                id: BodyId::Earth,
-                brdf: Arc::new(Lambert { albedo }),
-            }],
+            vec![SceneBody::brdf(BodyId::Earth, Lambert { albedo })],
             vec![state.clone()],
         );
 
@@ -401,10 +433,7 @@ mod tests {
         let sat = satellite();
         let fp = FocalPlaneConfig::from_satellite(&sat);
         let pass = BodyPass::with_fixed_states(
-            vec![SceneBody {
-                id: BodyId::Sun,
-                brdf: Arc::new(Lambert { albedo: 1.0 }),
-            }],
+            vec![SceneBody::brdf(BodyId::Sun, Lambert { albedo: 1.0 })],
             vec![fixed_earth(Equatorial::from_degrees(0.0, 0.0))],
         );
         let samples = [crate::image_proc::compose::OrientationSample {
@@ -461,14 +490,19 @@ mod tests {
             system,
             observer,
             vec![
-                SceneBody {
-                    id: BodyId::Earth,
-                    brdf: Arc::new(Lambert { albedo: 0.3 }),
-                },
-                SceneBody {
-                    id: BodyId::Moon,
-                    brdf: Arc::new(crate::bodies::brdf::Hapke::lunar_average()),
-                },
+                SceneBody::new(
+                    BodyId::Earth,
+                    Arc::new(crate::bodies::surface::TexturedSurfaceModel::new(
+                        Arc::new(starfield_planet_maps::earth_tier().unwrap()),
+                        Arc::new(Lambert { albedo: 1.0 }),
+                        Arc::new(
+                            starfield_reflectance_library::ReflectanceLibrary::load_embedded()
+                                .unwrap(),
+                        ),
+                        "Earth MCD12C1 0.25°",
+                    )),
+                ),
+                SceneBody::brdf(BodyId::Moon, crate::bodies::brdf::Hapke::lunar_average()),
             ],
         );
         let scene = Scene::from_catalog(

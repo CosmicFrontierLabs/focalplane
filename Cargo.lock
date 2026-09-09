@@ -3481,6 +3481,8 @@ dependencies = [
  "starfield-datasource-utils",
  "starfield-gaia",
  "starfield-nsa",
+ "starfield-planet-maps",
+ "starfield-reflectance-library",
  "starfield-solar-spectrum",
  "tempfile",
  "thiserror 2.0.18",
@@ -3614,6 +3616,26 @@ dependencies = [
  "starfield",
  "starfield-datasource-utils",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "starfield-planet-maps"
+version = "0.1.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=e18af6c65417ec79e4eaedff0aea4a2fe0f81a81#e18af6c65417ec79e4eaedff0aea4a2fe0f81a81"
+dependencies = [
+ "flate2",
+ "starfield",
+ "starfield-datasource-utils",
+ "starfield-reflectance-library",
+]
+
+[[package]]
+name = "starfield-reflectance-library"
+version = "0.1.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=e18af6c65417ec79e4eaedff0aea4a2fe0f81a81#e18af6c65417ec79e4eaedff0aea4a2fe0f81a81"
+dependencies = [
+ "starfield",
+ "starfield-datasource-utils",
 ]
 
 [[package]]

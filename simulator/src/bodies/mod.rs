@@ -9,3 +9,4 @@
 //! the loop.
 
 pub mod brdf;
+pub mod surface;

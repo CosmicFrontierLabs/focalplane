@@ -20,7 +20,7 @@
 use std::fmt;
 use std::sync::Mutex;
 
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 use starfield::framelib::Frame;
 use starfield::jplephem::{JplephemError, SpiceKernel};
 use starfield::jplephem_ext::SpiceKernelExt;
@@ -343,6 +343,11 @@ pub struct BodyState {
     /// Projected ellipse of the oblate body: `(semi_major_rad,
     /// semi_minor_rad, position_angle_rad)`.
     pub apparent_ellipse: (f64, f64, f64),
+    /// Rotation from the body's sky frame `(east, north, toward observer)`
+    /// into body-fixed coordinates at the light-time-corrected epoch. A
+    /// surface normal expressed in the sky frame becomes the body-fixed
+    /// direction a texture is sampled at.
+    pub sky_to_body_fixed: Matrix3<f64>,
 }
 
 impl BodyState {
@@ -456,6 +461,14 @@ impl SolarSystem {
         let north_pole_position_angle = astrometric.north_pole_position_angle(frame.as_ref(), t);
         let apparent_ellipse = astrometric.apparent_ellipse(frame.as_ref(), radii, t);
 
+        // Body-fixed orientation when the light left the body, composed
+        // with the same sky basis the illumination geometry uses.
+        let icrf_to_body_fixed = frame.rotation_at(emission.time());
+        let toward_observer = illumination.observer_direction;
+        let (east, north) = sky_basis(&-toward_observer);
+        let sky_to_icrf = Matrix3::from_columns(&[east, north, toward_observer]);
+        let sky_to_body_fixed = icrf_to_body_fixed * sky_to_icrf;
+
         Ok(BodyState {
             body,
             direction,
@@ -468,6 +481,7 @@ impl SolarSystem {
             sub_solar,
             north_pole_position_angle,
             apparent_ellipse,
+            sky_to_body_fixed,
         })
     }
 
@@ -578,6 +592,7 @@ mod tests {
             sub_solar: None,
             north_pole_position_angle: 0.0,
             apparent_ellipse: (0.0, 0.0, 0.0),
+            sky_to_body_fixed: Matrix3::identity(),
         };
         // Earth's equatorial radius subtends 8.794″ at 1 AU (the solar
         // parallax), so its diameter is 17.59″.
@@ -657,6 +672,44 @@ mod tests {
             "sub-point longitude gap {dlon:.1}°"
         );
         assert!(earth.north_pole_position_angle.is_finite());
+        // The sky-frame "toward observer" axis maps to the sub-observer
+        // direction in body-fixed coordinates, and the matrix is a
+        // rotation.
+        let disk_centre = earth.sky_to_body_fixed * Vector3::z();
+        let lon = disk_centre
+            .y
+            .atan2(disk_centre.x)
+            .rem_euclid(std::f64::consts::TAU);
+        let lat = disk_centre.z.asin();
+        let dlon_centre = (lon - earth.sub_observer.lon_rad)
+            .rem_euclid(std::f64::consts::TAU)
+            .min(
+                std::f64::consts::TAU
+                    - (lon - earth.sub_observer.lon_rad).rem_euclid(std::f64::consts::TAU),
+            );
+        assert_abs_diff_eq!(dlon_centre, 0.0, epsilon = 2e-4);
+        assert_abs_diff_eq!(lat, earth.sub_observer.lat_rad, epsilon = 2e-4);
+        // Orthonormal; the sky basis (east, north, toward observer) is
+        // left-handed, so the determinant is −1, which is a valid change
+        // of basis rather than a mirrored texture.
+        assert_abs_diff_eq!(
+            earth.sky_to_body_fixed.determinant().abs(),
+            1.0,
+            epsilon = 1e-9
+        );
+        let east_bf = earth.sky_to_body_fixed * Vector3::x();
+        let north_bf = earth.sky_to_body_fixed * Vector3::y();
+        assert_abs_diff_eq!(east_bf.dot(&north_bf), 0.0, epsilon = 1e-9);
+        // Seen from outside, a body's east longitude increases toward
+        // sky *west* (the Moon's Mare Crisium limb is IAU east and sky
+        // west), so the sky-east axis projects negatively onto the local
+        // east tangent at the sub-observer point. A mirrored texture
+        // would flip this sign.
+        let local_east = Vector3::new(-disk_centre.y, disk_centre.x, 0.0).normalize();
+        assert!(
+            east_bf.dot(&local_east) < 0.0,
+            "sky east should map to decreasing body longitude"
+        );
         let (major, minor, _) = earth.apparent_ellipse;
         assert_abs_diff_eq!(major, earth.angular_semi_diameter, epsilon = 1e-9);
         assert!(minor <= major && minor > 0.99 * major);

@@ -27,12 +27,14 @@
 //! projection so that roll, axis flips and anisotropic plate scale need
 //! no special handling here.
 
-use nalgebra::{Matrix2, Vector2, Vector3};
+use std::f64::consts::PI;
+
+use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
 use ndarray::Array2;
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::image_proc::convolve2d::{convolve2d, ConvolveMode, ConvolveOptions};
 
-use crate::bodies::brdf::Brdf;
+use crate::bodies::surface::{SurfacePoint, SurfaceRadiance};
 use crate::image_proc::compose::BodyComposite;
 
 /// Default sub-samples per pixel edge.
@@ -55,6 +57,9 @@ pub struct StampGeometry {
     /// `T · Ė☉(1 AU) / d☉²`: electrons per steradian per unit
     /// reflectance over the exposure.
     pub electrons_per_sr: f64,
+    /// Rotation from the sky frame `(east, north, toward observer)` to
+    /// body-fixed coordinates, for texture lookup.
+    pub sky_to_body_fixed: Matrix3<f64>,
 }
 
 /// Coverage and electron stamps for one body, PSF-blurred.
@@ -69,12 +74,12 @@ pub struct BodyStamp {
 }
 
 impl BodyStamp {
-    /// Rasterise `brdf` over the disk described by `geometry`, blur with
-    /// `psf`, and return the stamps. `oversampling` sub-samples per pixel
-    /// edge (at least 2; 4 is a good default).
+    /// Rasterise `surface` over the disk described by `geometry`, blur
+    /// with `psf`, and return the stamps. `oversampling` sub-samples per
+    /// pixel edge (at least 2; 4 is a good default).
     pub fn build(
         geometry: &StampGeometry,
-        brdf: &dyn Brdf,
+        surface: &dyn SurfaceRadiance,
         psf: &PixelScaledAiryDisk,
         oversampling: usize,
     ) -> Self {
@@ -85,6 +90,8 @@ impl BodyStamp {
             .expect("projection Jacobian must be invertible");
         let sr_per_px = inv_j.determinant().abs();
         let sr_per_sub = sr_per_px / (s * s) as f64;
+        // Sky footprint of one sub-sample as an equivalent-area disk.
+        let sub_radius_rad = (sr_per_sub / PI).sqrt();
 
         // Disk radius in pixels along the larger axis, for the footprint.
         let px_per_rad = geometry.jacobian.norm();
@@ -126,7 +133,14 @@ impl BodyStamp {
                         let mu = (1.0 - rho2).sqrt();
                         let normal = Vector3::new(xi, eta, mu);
                         let mu0 = normal.dot(&sun);
-                        let r = brdf.reflectance(mu0, mu, geometry.phase_angle);
+                        let point = SurfacePoint {
+                            mu0,
+                            mu,
+                            alpha: geometry.phase_angle,
+                            body_fixed: geometry.sky_to_body_fixed * normal,
+                            sky_radius_rad: sub_radius_rad,
+                        };
+                        let r = surface.reflectance(&point);
                         e += r * geometry.electrons_per_sr * sr_per_sub;
                     }
                 }
@@ -194,7 +208,6 @@ mod tests {
     use crate::bodies::brdf::{disk_integrated_reflectance, Lambert};
     use approx::{assert_abs_diff_eq, assert_relative_eq};
     use shared::units::{LengthExt, Wavelength};
-    use std::f64::consts::PI;
 
     const RAD_PER_PX: f64 = 1e-6;
 
@@ -208,6 +221,7 @@ mod tests {
             sun_direction_sky: Vector3::new(alpha.sin(), 0.0, alpha.cos()),
             phase_angle: alpha,
             electrons_per_sr: 1e15,
+            sky_to_body_fixed: Matrix3::identity(),
         }
     }
 

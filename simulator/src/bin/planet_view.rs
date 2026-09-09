@@ -23,7 +23,11 @@ use ndarray::Array2;
 use shared::units::{Temperature, TemperatureExt};
 use starfield::catalogs::StarData;
 
-use simulator::bodies::brdf::{Brdf, Hapke, Lambert};
+use starfield_planet_maps::{earth_tier, mars_tier, AbundanceTier};
+use starfield_reflectance_library::ReflectanceLibrary;
+
+use simulator::bodies::brdf::{Hapke, Lambert};
+use simulator::bodies::surface::{SurfaceModel, TexturedSurfaceModel};
 use simulator::body_pass::{BodyPass, SceneBody};
 use simulator::epoch::Epoch;
 use simulator::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
@@ -77,14 +81,19 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     seed: u64,
 
+    /// Render grey Lambert/Hapke spheres instead of composition tiers.
+    #[arg(long, default_value_t = false)]
+    untextured: bool,
+
     /// Output path stem; writes `<stem>.png` (16-bit) and `<stem>_preview.png`.
     #[arg(long, default_value = "planet_view")]
     out: PathBuf,
 }
 
-/// Quick-look reflectance law for a body.
-fn default_brdf(body: BodyId) -> Arc<dyn Brdf> {
-    let lambert = |geometric_albedo: f64| -> Arc<dyn Brdf> {
+/// Quick-look grey reflectance law for a body: a Lambert sphere whose
+/// albedo reproduces the V geometric albedo, or the lunar Hapke set.
+fn grey_surface(body: BodyId) -> Arc<dyn SurfaceModel> {
+    let lambert = |geometric_albedo: f64| -> Arc<dyn SurfaceModel> {
         Arc::new(Lambert {
             albedo: (1.5 * geometric_albedo).min(1.0),
         })
@@ -101,6 +110,38 @@ fn default_brdf(body: BodyId) -> Arc<dyn Brdf> {
         BodyId::Neptune => lambert(0.442),
         BodyId::Sun => lambert(1.0),
     }
+}
+
+/// Textured surface where a composition tier exists (Earth, Mars),
+/// grey otherwise.
+fn default_surface(
+    body: BodyId,
+    library: &Arc<ReflectanceLibrary>,
+    untextured: bool,
+) -> Result<Arc<dyn SurfaceModel>, String> {
+    if untextured {
+        return Ok(grey_surface(body));
+    }
+    let tier: Option<(AbundanceTier, &str)> = match body {
+        BodyId::Earth => Some((
+            earth_tier().map_err(|e| e.to_string())?,
+            "Earth MCD12C1 composition 0.25°",
+        )),
+        BodyId::Mars => Some((
+            mars_tier().map_err(|e| e.to_string())?,
+            "Mars Viking/MDIM albedo 0.1° (uncalibrated contrast)",
+        )),
+        _ => None,
+    };
+    Ok(match tier {
+        Some((tier, label)) => Arc::new(TexturedSurfaceModel::new(
+            Arc::new(tier),
+            Arc::new(Lambert { albedo: 1.0 }),
+            Arc::clone(library),
+            label,
+        )),
+        None => grey_surface(body),
+    })
 }
 
 fn parse_body(name: &str) -> Result<BodyId, String> {
@@ -220,13 +261,13 @@ fn main() -> Result<(), String> {
     let (target_state, target_elongation) = &states[0];
     let pointing = target_state.direction;
 
-    let scene_bodies: Vec<SceneBody> = bodies
-        .iter()
-        .map(|&id| SceneBody {
-            id,
-            brdf: default_brdf(id),
-        })
-        .collect();
+    let library = Arc::new(ReflectanceLibrary::load_embedded().map_err(|e| e.to_string())?);
+    let mut scene_bodies = Vec::with_capacity(bodies.len());
+    for &id in &bodies {
+        let surface = default_surface(id, &library, args.untextured)?;
+        println!("{id} surface: {}", surface.label());
+        scene_bodies.push(SceneBody::new(id, surface));
+    }
     let pass = BodyPass::new(Arc::clone(&system), observer, scene_bodies)
         .with_oversampling(args.oversampling);
 
