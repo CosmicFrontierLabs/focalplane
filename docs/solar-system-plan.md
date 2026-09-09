@@ -713,6 +713,32 @@ Starfield issues filed for Phase 0 (OrbitalCommons/starfield):
 | D1.2 | `starfield-reflectance-library`: embedded endmember spectra with provenance | M |
 | D1.3 | `starfield-planet-maps`: downloader + cache + SHA-256 + equirect sampler; Earth land cover/snow/cloud, Moon, Mars, Mercury, OPAL maps at coarse tiers | L |
 | D1.4 | SHA-256 verification helper in `datasource-utils` | S |
+| D1.5 | `starfield-planet-spectra`: Karkoschka (1994, 1998) spectral geometric albedos, 300–1050 nm, for Jupiter, Saturn (globe, zero ring tilt), Uranus, Neptune, Titan; `AlbedoKind` distinguishes zero-phase from full-disk-at-archive-phase | done (PR open) |
+
+Interface decisions agreed with the datasources side (2026-09-09):
+
+- Map sampler takes **east-positive planetocentric longitude and
+  latitude in radians**, row 0 = north; every archive convention is
+  converted inside the map, never at the call site. Focalplane feeds it
+  planetocentric coordinates straight from the body-fixed frame with no
+  longitude-sense adjustment.
+- Sampler always returns an `EndmemberMix`; a scalar albedo is a
+  one-endmember mix. Endmember ids resolve into the reflectance library,
+  which exposes band means so per-endmember weights are computed once
+  per render.
+- Solar spectrum ships from datasources as 1 nm box means covering at
+  least 300–1100 nm.
+- Everything keyed on NAIF id, not `planetlib::Body` (Titan and the
+  other moons have no `Body` variant).
+- Earth uses ITRF93 and the Moon the DE440 principal-axes frame via
+  starfield's `frame_for(id)`, matching Horizons.
+- Time-dependent surface features (Mars seasonal CO₂ caps to −40°
+  latitude near Ls 80–90, Jupiter's Great Red Spot drifting ~0.36°/day
+  in System III) are parametric overlays composited over a static base
+  map, sampled with an epoch argument.
+- Maps ship a coarse tier by default and offer area-averaged sampling,
+  because one rendered pixel spans thousands of texels of a 100–232 m
+  mosaic.
 
 ### Phase 2 — simulator plumbing (this repo)
 
