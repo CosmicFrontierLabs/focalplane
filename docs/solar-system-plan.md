@@ -710,7 +710,7 @@ Starfield issues filed for Phase 0 (OrbitalCommons/starfield):
 | # | Item | Size |
 |---|---|---|
 | D1.1 | `starfield-solar-spectrum`: embedded 1 nm box means of TSIS-1 HSRS v2, 202–2730 nm, built from the native-resolution product (the 0.1 nm pre-smoothed LISIRD file is biased up to 1.1 % across Fraunhofer lines); 300–1100 nm integrates to 1002.2 W m⁻² | done (PR open) |
-| D1.2 | `starfield-reflectance-library`: embedded endmember spectra with provenance | M |
+| D1.2 | `starfield-reflectance-library`: nine USGS splib07 endmembers (open ocean, coastal water, green and dry vegetation, sand, snow, water ice from 859 nm only, fresh and weathered basalt) with `EndmemberMix` and band means; weights are not renormalised and any uncovered component yields `None`. Clouds are a Mie albedo from the atmosphere module, not a library entry; lunar mare/highland (RELAB/LSCC), Mars bright/dark (CRISM/OMEGA) and Venus cloud top still need their own archives, with basalt as a labelled analogue meanwhile | done (PR open) |
 | D1.3 | `starfield-planet-maps`: downloader + cache + SHA-256 + equirect sampler; Earth land cover/snow/cloud, Moon, Mars, Mercury, OPAL maps at coarse tiers | L |
 | D1.4 | SHA-256 verification helper in `datasource-utils` | S |
 | D1.5 | `starfield-planet-spectra`: Karkoschka (1994, 1998) spectral geometric albedos, 300–1050 nm, for Jupiter, Saturn (globe, zero ring tilt), Uranus, Neptune, Titan; `AlbedoKind` distinguishes zero-phase from full-disk-at-archive-phase | done (PR open) |
