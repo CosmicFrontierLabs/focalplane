@@ -10,11 +10,10 @@
 //! # Solar irradiance
 //!
 //! Reflected-light radiometry needs the photo-electron rate the aperture
-//! collects from the Sun at 1 AU through the sensor band. Until a
-//! measured solar spectrum is wired in, a 5772 K blackbody scaled to the
-//! Sun's Gaia G magnitude (−26.90, Casagrande & VandenBerg 2018) stands
-//! in; it is within a few percent of the true band-integrated value for
-//! broadband visible sensors.
+//! collects from the Sun at 1 AU through the sensor band. It comes from
+//! the TSIS-1 reference spectrum ([`crate::photometry::solar`]), loaded
+//! once per pass; a sensor band outside the archive coverage is a
+//! compositing error, not a dark image.
 //!
 //! # Limits
 //!
@@ -26,8 +25,7 @@
 //! - Disks are spheres of the equatorial radius; oblateness and body
 //!   rotation wait on starfield's PCK support.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
 
 use nalgebra::{Matrix2, UnitQuaternion, Vector2};
 use shared::units::{AngleExt, LengthExt};
@@ -38,14 +36,9 @@ use crate::bodies::brdf::Brdf;
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
 use crate::image_proc::body_stamp::{BodyStamp, StampGeometry, DEFAULT_OVERSAMPLING};
 use crate::image_proc::compose::{ComposeError, Composite, PassContext, SecondPass};
-use crate::photometry::spectrum::Spectrum;
-use crate::photometry::stellar::BlackbodyStellarSpectrum;
+use crate::photometry::solar::TsisSolarSpectrum;
 use crate::solar_system::{BodyId, BodyState, Observer, SolarSystem};
 
-/// Gaia G magnitude of the Sun.
-const SUN_GAIA_G: f64 = -26.90;
-/// B−V colour of the Sun.
-const SUN_B_V: f64 = 0.65;
 /// Angular step used to measure the projection Jacobian, radians (≈2″).
 const JACOBIAN_STEP_RAD: f64 = 1e-5;
 
@@ -83,6 +76,7 @@ pub struct BodyPass {
     bodies: Vec<SceneBody>,
     source: StateSource,
     oversampling: usize,
+    solar: OnceLock<TsisSolarSpectrum>,
 }
 
 impl BodyPass {
@@ -92,6 +86,7 @@ impl BodyPass {
             bodies,
             source: StateSource::Ephemeris { system, observer },
             oversampling: DEFAULT_OVERSAMPLING,
+            solar: OnceLock::new(),
         }
     }
 
@@ -103,6 +98,7 @@ impl BodyPass {
             bodies,
             source: StateSource::Fixed(states),
             oversampling: DEFAULT_OVERSAMPLING,
+            solar: OnceLock::new(),
         }
     }
 
@@ -112,15 +108,26 @@ impl BodyPass {
         self
     }
 
+    /// The TSIS-1 solar spectrum, loaded on first use.
+    fn solar(&self) -> Result<&TsisSolarSpectrum, ComposeError> {
+        if let Some(sun) = self.solar.get() {
+            return Ok(sun);
+        }
+        let sun = TsisSolarSpectrum::load().map_err(|e| ComposeError::Failed(e.to_string()))?;
+        let _ = self.solar.set(sun);
+        Ok(self.solar.get().expect("just set"))
+    }
+
     /// Photo-electron rate (e⁻/s) the aperture collects from the Sun at
-    /// 1 AU through the sensor band.
-    pub fn solar_electron_rate(satellite: &SatelliteConfig) -> f64 {
-        let sun = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(SUN_B_V, SUN_GAIA_G);
-        sun.photo_electrons(
-            &satellite.combined_qe,
-            satellite.telescope.clear_aperture_area(),
-            &Duration::from_secs(1),
-        )
+    /// 1 AU through the sensor band. Errors if the band leaves the TSIS-1
+    /// coverage.
+    pub fn solar_electron_rate(&self, satellite: &SatelliteConfig) -> Result<f64, ComposeError> {
+        self.solar()?
+            .photo_electron_rate(
+                &satellite.combined_qe,
+                satellite.telescope.clear_aperture_area(),
+            )
+            .map_err(|e| ComposeError::Failed(e.to_string()))
     }
 
     fn states(&self, ctx: &PassContext<'_>) -> Result<Vec<BodyState>, ComposeError> {
@@ -200,7 +207,7 @@ impl SecondPass for BodyPass {
         let psf = satellite.airy_disk_pixel_space();
         let pixel_mm = satellite.sensor.pixel_size().as_millimeters();
         let exposure_s = ctx.exposure.as_secs_f64();
-        let solar_rate = Self::solar_electron_rate(satellite);
+        let solar_rate = self.solar_electron_rate(satellite)?;
 
         let mut layers: Vec<(f64, BodyStamp)> = Vec::new();
         for (body, state) in self.bodies.iter().zip(states.iter()) {
@@ -278,6 +285,8 @@ mod tests {
     use approx::assert_relative_eq;
     use nalgebra::Vector3;
     use shared::units::{Temperature, TemperatureExt};
+    use starfield::planetarylib::subpoint::SubPoint;
+    use std::time::Duration;
 
     fn satellite() -> SatelliteConfig {
         SatelliteConfig::new(
@@ -308,12 +317,21 @@ mod tests {
             angular_semi_diameter: BodyId::Earth.equatorial_radius_km() / AU_KM,
             illumination: IlluminationGeometry::from_barycentric(observer, body, sun),
             v_magnitude: None,
+            sub_observer: SubPoint {
+                lon_rad: 0.0,
+                lat_rad: 0.0,
+                planetocentric: true,
+            },
+            sub_solar: None,
+            north_pole_position_angle: 0.0,
+            apparent_ellipse: (0.0, 0.0, 0.0),
         }
     }
 
     #[test]
     fn solar_electron_rate_is_enormous_and_finite() {
-        let rate = BodyPass::solar_electron_rate(&satellite());
+        let pass = BodyPass::with_fixed_states(Vec::new(), Vec::new());
+        let rate = pass.solar_electron_rate(&satellite()).unwrap();
         // 1361 W/m² at ~3.6×10⁻¹⁹ J per visible photon is ~4×10²¹
         // photons/s/m²; a 5 cm aperture (2×10⁻³ m²) at ~50 % band
         // efficiency collects a few ×10¹⁸ electrons/s.
@@ -362,7 +380,10 @@ mod tests {
             Some(1),
         );
 
-        let expected = exposure.as_secs_f64() * BodyPass::solar_electron_rate(&sat)
+        let solar_rate = BodyPass::with_fixed_states(Vec::new(), Vec::new())
+            .solar_electron_rate(&sat)
+            .unwrap();
+        let expected = exposure.as_secs_f64() * solar_rate
             / state.illumination.heliocentric_distance_au.powi(2)
             * state.angular_semi_diameter.powi(2)
             * disk_integrated_reflectance(&Lambert { albedo }, state.illumination.phase_angle, 300);

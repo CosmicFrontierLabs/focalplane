@@ -124,6 +124,20 @@ fn describe(state: &BodyState, elongation_deg: f64) -> String {
         state
             .v_magnitude
             .map_or_else(|| "  n/a".to_string(), |v| format!("{v:+5.2}")),
+    ) + &format!(
+        "\n{:<8} sub-observer lon {:7.2}°E lat {:+6.2}°  sub-solar {}  pole PA {:6.1}°",
+        "",
+        state.sub_observer.lon_rad.to_degrees(),
+        state.sub_observer.lat_rad.to_degrees(),
+        state.sub_solar.map_or_else(
+            || "n/a".to_string(),
+            |p| format!(
+                "lon {:7.2}°E lat {:+6.2}°",
+                p.lon_rad.to_degrees(),
+                p.lat_rad.to_degrees()
+            )
+        ),
+        state.north_pole_position_angle.to_degrees(),
     )
 }
 

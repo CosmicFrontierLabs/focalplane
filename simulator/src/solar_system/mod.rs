@@ -11,18 +11,23 @@
 //! `jplephem` port; the default is `de440s.bsp` (1849–2150), fetched into
 //! `~/.cache/starfield` on first use.
 //!
-//! Body radii and kernel names are tabulated here from the IAU WGCCRE
-//! 2015 report (Archinal et al. 2018). Body orientation (pole, prime
-//! meridian) is deliberately absent: it arrives with starfield's PCK
-//! support and will be consumed from there.
+//! Body radii come from starfield's embedded IAU WGCCRE 2015 table
+//! (Archinal et al. 2018); body-fixed frames from starfield's
+//! `PlanetaryConstants::frame_for` (ITRS for Earth, the DE440 principal
+//! axes for the Moon when a PA kernel is loaded, IAU rotational elements
+//! otherwise). Kernel names are the only thing tabulated locally.
 
 use std::fmt;
 use std::sync::Mutex;
 
 use nalgebra::Vector3;
+use starfield::framelib::Frame;
 use starfield::jplephem::{JplephemError, SpiceKernel};
 use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::magnitudelib::planetary_magnitude;
+use starfield::planetarylib::subpoint::SubPoint;
+use starfield::planetarylib::PlanetaryConstants;
+use starfield::planetlib::Body;
 use starfield::positions::Position;
 use starfield::{Equatorial, Loader, StarfieldError};
 use thiserror::Error;
@@ -41,9 +46,10 @@ pub const DEFAULT_KERNEL: &str = "de440s.bsp";
 /// Errors from ephemeris evaluation.
 #[derive(Debug, Error)]
 pub enum SolarSystemError {
-    /// Kernel download or open failure.
-    #[error("loading ephemeris kernel: {0}")]
-    Load(#[from] StarfieldError),
+    /// Kernel download or open failure, or a geometry helper that could
+    /// not place the Sun or find a body frame.
+    #[error("starfield: {0}")]
+    Starfield(#[from] StarfieldError),
     /// Kernel evaluation failure (body not in kernel, time out of range).
     #[error("evaluating ephemeris: {0}")]
     Ephemeris(#[from] JplephemError),
@@ -133,43 +139,40 @@ impl BodyId {
         }
     }
 
-    /// Equatorial radius in km (IAU WGCCRE 2015; Sun per IAU 2015
-    /// nominal value).
-    pub fn equatorial_radius_km(self) -> f64 {
+    /// The starfield body carrying the embedded IAU constants.
+    pub fn body(self) -> Body {
         match self {
-            BodyId::Sun => 695_700.0,
-            BodyId::Mercury => 2_440.53,
-            BodyId::Venus => 6_051.8,
-            BodyId::Earth => 6378.1366,
-            BodyId::Moon => 1_737.4,
-            BodyId::Mars => 3_396.19,
-            BodyId::Jupiter => 71_492.0,
-            BodyId::Saturn => 60_268.0,
-            BodyId::Uranus => 25_559.0,
-            BodyId::Neptune => 24_764.0,
+            BodyId::Sun => Body::Sun,
+            BodyId::Mercury => Body::Mercury,
+            BodyId::Venus => Body::Venus,
+            BodyId::Earth => Body::Earth,
+            BodyId::Moon => Body::Moon,
+            BodyId::Mars => Body::Mars,
+            BodyId::Jupiter => Body::Jupiter,
+            BodyId::Saturn => Body::Saturn,
+            BodyId::Uranus => Body::Uranus,
+            BodyId::Neptune => Body::Neptune,
         }
     }
 
-    /// Polar radius in km (IAU WGCCRE 2015).
+    /// Triaxial radii `[a, b, c]` in km from starfield's IAU 2015 table.
+    pub fn radii_km(self) -> [f64; 3] {
+        self.body().radii_km()
+    }
+
+    /// Equatorial radius in km.
+    pub fn equatorial_radius_km(self) -> f64 {
+        self.radii_km()[0]
+    }
+
+    /// Polar radius in km.
     pub fn polar_radius_km(self) -> f64 {
-        match self {
-            BodyId::Sun => 695_700.0,
-            BodyId::Mercury => 2_438.26,
-            BodyId::Venus => 6_051.8,
-            BodyId::Earth => 6356.7519,
-            BodyId::Moon => 1_737.4,
-            BodyId::Mars => 3_376.20,
-            BodyId::Jupiter => 66_854.0,
-            BodyId::Saturn => 54_364.0,
-            BodyId::Uranus => 24_973.0,
-            BodyId::Neptune => 24_341.0,
-        }
+        self.radii_km()[2]
     }
 
     /// Flattening `(a − c) / a`.
     pub fn flattening(self) -> f64 {
-        let a = self.equatorial_radius_km();
-        (a - self.polar_radius_km()) / a
+        self.body().flattening()
     }
 
     /// True for the one self-luminous body.
@@ -329,6 +332,17 @@ pub struct BodyState {
     /// Apparent V magnitude from Mallama & Hilton (2018), or the lunar
     /// phase curve for the Moon; `None` for the Sun.
     pub v_magnitude: Option<f64>,
+    /// Body-fixed point under the observer, planetocentric, longitude
+    /// east-positive in `[0, 2π)`: what the disk centre shows.
+    pub sub_observer: SubPoint,
+    /// Body-fixed point under the Sun, planetocentric; `None` for the Sun.
+    pub sub_solar: Option<SubPoint>,
+    /// Position angle of the body's north pole on the sky, radians east
+    /// of celestial north.
+    pub north_pole_position_angle: f64,
+    /// Projected ellipse of the oblate body: `(semi_major_rad,
+    /// semi_minor_rad, position_angle_rad)`.
+    pub apparent_ellipse: (f64, f64, f64),
 }
 
 impl BodyState {
@@ -350,11 +364,14 @@ impl BodyState {
 /// cost.
 pub struct SolarSystem {
     kernel: Mutex<SpiceKernel>,
+    /// Body orientation source: text and binary PCK kernels read so far,
+    /// falling back to the embedded IAU 2015 table.
+    constants: PlanetaryConstants,
 }
 
 impl fmt::Debug for SolarSystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SolarSystem { kernel: SpiceKernel }")
+        f.write_str("SolarSystem { kernel: SpiceKernel, constants: PlanetaryConstants }")
     }
 }
 
@@ -369,11 +386,26 @@ impl SolarSystem {
         Ok(Self::from_kernel(Loader::new().open(filename)?))
     }
 
-    /// Wrap an already-open kernel.
+    /// Wrap an already-open kernel, with body orientation from the
+    /// embedded IAU 2015 table.
     pub fn from_kernel(kernel: SpiceKernel) -> Self {
         Self {
             kernel: Mutex::new(kernel),
+            constants: PlanetaryConstants::new(),
         }
+    }
+
+    /// Replace the planetary constants (for example after reading
+    /// `pck00011.tpc` or a lunar principal-axes kernel into them).
+    pub fn with_constants(mut self, constants: PlanetaryConstants) -> Self {
+        self.constants = constants;
+        self
+    }
+
+    /// Body-fixed frame for `body`: ITRS for Earth, the lunar principal
+    /// axes when a PA kernel is loaded, IAU rotational elements otherwise.
+    pub fn frame_for(&self, body: BodyId) -> Result<Box<dyn Frame>, SolarSystemError> {
+        Ok(self.constants.frame_for(body.naif_id())?)
     }
 
     /// Apparent state of `body` from `observer` at `epoch`.
@@ -403,10 +435,26 @@ impl SolarSystem {
             IlluminationGeometry::from_barycentric(observer_bary.position, body_bary, sun_bary);
 
         let distance_au = astrometric.distance();
-        let angular_semi_diameter = (body.equatorial_radius_km() / (distance_au * AU_KM))
-            .clamp(-1.0, 1.0)
-            .asin();
+        let radii = body.radii_km();
+        let angular_semi_diameter = astrometric.angular_semi_diameter(radii);
         let v_magnitude = planetary_magnitude(&astrometric, epoch.time()).ok();
+
+        let frame = self.constants.frame_for(body.naif_id())?;
+        let t = epoch.time();
+        let sub_observer = astrometric
+            .sub_observer_point(frame.as_ref(), radii, t)
+            .to_planetocentric(radii);
+        let sub_solar = if body.is_sun() {
+            None
+        } else {
+            Some(
+                astrometric
+                    .sub_solar_point(frame.as_ref(), radii, &mut kernel, t)?
+                    .to_planetocentric(radii),
+            )
+        };
+        let north_pole_position_angle = astrometric.north_pole_position_angle(frame.as_ref(), t);
+        let apparent_ellipse = astrometric.apparent_ellipse(frame.as_ref(), radii, t);
 
         Ok(BodyState {
             body,
@@ -416,7 +464,18 @@ impl SolarSystem {
             angular_semi_diameter,
             illumination,
             v_magnitude,
+            sub_observer,
+            sub_solar,
+            north_pole_position_angle,
+            apparent_ellipse,
         })
+    }
+
+    /// Run `f` with the ephemeris kernel locked; for cross-checks that
+    /// need starfield's `Position` helpers directly.
+    pub fn with_ephemeris<R>(&self, f: impl FnOnce(&mut SpiceKernel) -> R) -> R {
+        let mut kernel = self.kernel.lock().expect("ephemeris kernel mutex poisoned");
+        f(&mut kernel)
     }
 
     /// Angle between a sky direction and the apparent Sun, radians.
@@ -511,6 +570,14 @@ mod tests {
                 Vector3::new(1.0, 1.0, 0.0),
             ),
             v_magnitude: None,
+            sub_observer: SubPoint {
+                lon_rad: 0.0,
+                lat_rad: 0.0,
+                planetocentric: true,
+            },
+            sub_solar: None,
+            north_pole_position_angle: 0.0,
+            apparent_ellipse: (0.0, 0.0, 0.0),
         };
         // Earth's equatorial radius subtends 8.794″ at 1 AU (the solar
         // parallax), so its diameter is 17.59″.
@@ -573,5 +640,69 @@ mod tests {
             elongation < 47.5,
             "Earth elongation from Mars {elongation:.1}° exceeds the orbital maximum"
         );
+
+        // Body-fixed geometry from the embedded IAU frame: real, finite,
+        // planetocentric, and the Earth sub-points are on opposite sides
+        // of the terminator for a 98° phase.
+        assert!(earth.sub_observer.planetocentric);
+        assert!((0.0..std::f64::consts::TAU).contains(&earth.sub_observer.lon_rad));
+        assert!(earth.sub_observer.lat_rad.abs() <= std::f64::consts::FRAC_PI_2);
+        let sub_solar = earth.sub_solar.expect("Earth has a sub-solar point");
+        let dlon = (earth.sub_observer.lon_rad - sub_solar.lon_rad)
+            .rem_euclid(std::f64::consts::TAU)
+            .to_degrees();
+        let dlon = dlon.min(360.0 - dlon);
+        assert!(
+            (80.0..115.0).contains(&dlon),
+            "sub-point longitude gap {dlon:.1}°"
+        );
+        assert!(earth.north_pole_position_angle.is_finite());
+        let (major, minor, _) = earth.apparent_ellipse;
+        assert_abs_diff_eq!(major, earth.angular_semi_diameter, epsilon = 1e-9);
+        assert!(minor <= major && minor > 0.99 * major);
+
+        // Local illumination geometry agrees with starfield's helpers.
+        let mars = Observer::BodyCenter(BodyId::Mars);
+        system.with_ephemeris(|kernel| {
+            let observer_bary = mars.barycentric(kernel, &epoch).unwrap();
+            let astrometric = observer_bary
+                .observe(BodyId::Earth.spice_name(), kernel, epoch.time())
+                .unwrap();
+            let upstream_phase = astrometric.phase_angle(kernel, epoch.time()).unwrap();
+            assert_abs_diff_eq!(
+                earth.illumination.phase_angle,
+                upstream_phase,
+                epsilon = 1e-6
+            );
+            let upstream_lit = astrometric
+                .illuminated_fraction(kernel, epoch.time())
+                .unwrap();
+            assert_abs_diff_eq!(
+                earth.illumination.illuminated_fraction,
+                upstream_lit,
+                epsilon = 1e-6
+            );
+            let upstream_limb = astrometric
+                .bright_limb_position_angle(kernel, epoch.time())
+                .unwrap();
+            let dpa = (earth.illumination.bright_limb_position_angle - upstream_limb)
+                .rem_euclid(std::f64::consts::TAU);
+            let dpa = dpa.min(std::f64::consts::TAU - dpa);
+            assert_abs_diff_eq!(dpa, 0.0, epsilon = 1e-6);
+        });
+    }
+
+    #[test]
+    fn frames_resolve_from_the_embedded_table_without_kernels() {
+        let constants = PlanetaryConstants::new();
+        for body in BodyId::ALL {
+            assert!(
+                constants.frame_for(body.naif_id()).is_ok(),
+                "{body} has no frame on a fresh PlanetaryConstants"
+            );
+        }
+        assert_abs_diff_eq!(BodyId::Mars.equatorial_radius_km(), 3396.19, epsilon = 1e-9);
+        assert_abs_diff_eq!(BodyId::Mars.polar_radius_km(), 3376.20, epsilon = 1e-9);
+        assert_abs_diff_eq!(BodyId::Sun.equatorial_radius_km(), 695_700.0, epsilon = 1.0);
     }
 }

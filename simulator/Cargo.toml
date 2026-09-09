@@ -12,14 +12,15 @@ license.workspace = true
 # Resolved solar-system bodies (planets, Moon, Sun) rendered as an opaque
 # second compositing pass. Off by default so renderer consumers that only
 # need star fields carry no ephemeris or texture dependencies.
-solar-system = []
+solar-system = ["dep:starfield-solar-spectrum"]
 
 [dependencies]
 starfield = { version = "0.16", features = ["photometry"] }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
-starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "88e1e7fe7efcfd433e5cbb0f8efebbbf66d28337" }
+starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",

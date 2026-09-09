@@ -748,7 +748,7 @@ Interface decisions agreed with the datasources side (2026-09-09):
 | F2.1 | `epoch.rs`: `Epoch` on `Scene`, `Trajectory`, `MotionBlurConfig`; `--epoch` CLI; metadata.json records it | M |
 | F2.2 | `solar_system/`: `SolarSystem` wrapper, `BodyState` (Sun included as a body), `Observer` config (`--observer mars-orbit:a,e,i,...`); solar elongation, transit/occultation flags in metadata | M |
 | F2.3 | Derive `SolarAngularCoordinates` from epoch/observer/pointing; zodiacal r^−2.3 scaling | S |
-| F2.4 | `photometry/solar.rs` (`SolarSpectrum: Spectrum`) + `reflectance.rs` band-integrated endmember weights | M |
+| F2.4 | `photometry/solar.rs` (`TsisSolarSpectrum: Spectrum`, coverage-checked, locked to the pinned table's 1002.2 / 624.6 / 1325.8 W m⁻²) done; `reflectance.rs` band weights `w(λ) = F☉·QE·λ` pending the map pin | solar done |
 | F2.5 | `image_proc/psf_convolve.rs` + sampled-PSF option; `blooming.rs` before quantisation | M |
 | F2.6 | `stray_light.rs` PST background term + CLI | S |
 
