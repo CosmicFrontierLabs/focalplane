@@ -388,9 +388,9 @@ mod tests {
         // to centre sampling.
         let i_e = total / p.total_flux_per_ie();
         // Pass the same (cx, cy) sign convention as SersicSplat::pixel_flux:
-        // +cx = east (col offset), +cy = north (negated row offset).
+        // +cx = east (negated col offset), +cy = north (negated row offset).
         let sb_centre =
-            p.surface_brightness_at(dx_pix * arcsec_per_pixel, -dy_pix * arcsec_per_pixel);
+            p.surface_brightness_at(-dx_pix * arcsec_per_pixel, -dy_pix * arcsec_per_pixel);
         let expected = i_e * sb_centre * arcsec_per_pixel * arcsec_per_pixel;
         // Quarter-pixel quadrature on a slowly-varying region matches
         // centre sampling well below 1% for this setup.
