@@ -703,7 +703,7 @@ Starfield issues filed for Phase 0 (OrbitalCommons/starfield):
 | S0.5 | `Observer` helpers: body-centred Kepler orbit, SPK spacecraft id, fixed heliocentric | S |
 | S0.6 | Earth body-fixed frame via existing ICRS→ITRS chain | S |
 | S0.7 | Lunar V magnitude in `magnitudelib` | S |
-| S0.8 | Release starfield 0.14; bump in focalplane | S |
+| S0.8 | starfield 0.16.0 released with all of S0.1–S0.7; the focalplane bump lands together with cfl-foundations#39 (`shared` pin) and starfield-datasources#63, since two starfield versions in one build break the shared catalog and star-finder traits | released; bump pending |
 
 ### Phase 1 — datasources (starfield-datasources repo)
 
