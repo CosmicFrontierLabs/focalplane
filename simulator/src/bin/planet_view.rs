@@ -23,7 +23,8 @@ use image::{ImageBuffer, Luma, Rgb, RgbImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
 use ndarray::Array2;
 use shared::units::{Temperature, TemperatureExt};
-use starfield::catalogs::StarData;
+use starfield::catalogs::{StarCatalog, StarData};
+use starfield_gaia::{Dr3, LazyLoadingCatalog};
 
 use starfield_planet_maps::{earth_tier, mars_tier, AbundanceTier};
 use starfield_reflectance_library::ReflectanceLibrary;
@@ -133,6 +134,20 @@ struct Args {
     /// Qualifier appended to site labels.
     #[arg(long, default_value = "likely receiving site")]
     site_qualifier: String,
+
+    /// Render background stars from the Gaia DR3 excerpt around the
+    /// pointing (occulted by bodies in front of them).
+    #[arg(long, default_value_t = false)]
+    stars: bool,
+
+    /// Faintest Gaia G magnitude to load when `--stars` is set.
+    #[arg(long, default_value_t = 18.0)]
+    star_mag_limit: f64,
+
+    /// HEALPix-sharded Gaia DR3 excerpt directory; defaults to the
+    /// starfield cache.
+    #[arg(long)]
+    gaia_dir: Option<PathBuf>,
 
     /// Output path stem; writes `<stem>.png` (16-bit) and `<stem>_preview.png`.
     #[arg(long, default_value = "planet_view")]
@@ -383,7 +398,39 @@ fn main() -> Result<(), String> {
     let zodiacal_elongation = target_elongation.clamp(MIN_ZODIACAL_ELONGATION_DEG, 180.0);
     let zodiacal =
         SolarAngularCoordinates::new(zodiacal_elongation, 0.0).map_err(|e| e.to_string())?;
-    let scene = Scene::from_catalog(focal_plane, Vec::new(), pointing, zodiacal)
+
+    // Background stars: a Gaia cone covering the window's half-diagonal
+    // plus a PSF margin, so every star that can deposit light is loaded.
+    let stars: Vec<StarData> = if args.stars {
+        let dir = args
+            .gaia_dir
+            .clone()
+            .unwrap_or_else(simulator::sims::gaia_dr3::default_excerpt_dir);
+        let lazy = LazyLoadingCatalog::<Dr3>::open(&dir).map_err(|e| e.to_string())?;
+        let half_diag_deg = (args.window_px as f64) * satellite.plate_scale_arcsec_per_pixel()
+            / 3600.0
+            * std::f64::consts::FRAC_1_SQRT_2
+            + 0.005;
+        let (catalog, _) = simulator::sims::gaia_dr3::materialize_cone_augmented(
+            &lazy,
+            pointing,
+            half_diag_deg,
+            args.star_mag_limit,
+        )
+        .map_err(|e| e.to_string())?;
+        let stars: Vec<StarData> = catalog.star_data().collect();
+        println!(
+            "stars: {} Gaia DR3 sources to G {:.1} within {:.3}° of the pointing",
+            stars.len(),
+            args.star_mag_limit,
+            half_diag_deg
+        );
+        stars
+    } else {
+        Vec::new()
+    };
+
+    let scene = Scene::from_catalog(focal_plane, stars, pointing, zodiacal)
         .with_second_pass(Arc::new(pass), Some(epoch));
 
     let exposure = std::time::Duration::from_secs_f64(args.exposure_s);
