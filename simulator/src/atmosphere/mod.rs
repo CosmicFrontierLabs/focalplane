@@ -1,10 +1,13 @@
 //! A molecular (Rayleigh) atmosphere around a body, single scattering.
 //!
 //! The visible limb of Earth is not its surface: along a tangent ray the
-//! Rayleigh optical depth is about 75 × the vertical value, so the ray
-//! turns opaque some 30–40 km above the ground and a blue-weighted glow
-//! extends past the geometric disk and past the terminator. A guider
-//! that fits the limb fits *this*, so the renderer has to produce it.
+//! Rayleigh optical depth is about 71 × the vertical value, so the ray
+//! reaches unit optical depth some 15 km above the ground at 550 nm (22 km
+//! at 450 nm) and a blue-weighted glow extends past the geometric disk
+//! and past the terminator. Broadband cameras detect the limb higher
+//! still, ~25 km for Artemis I, once aerosols, multiple scattering and
+//! the detection threshold are included. A guider that fits the limb
+//! fits *this*, so the renderer has to produce it.
 //!
 //! # Model
 //!
