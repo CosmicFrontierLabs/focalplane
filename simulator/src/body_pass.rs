@@ -34,6 +34,7 @@ use shared::units::{AngleExt, LengthExt};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 
+use crate::atmosphere::{AtmosphereRadiance, BoundRayleigh, RayleighAtmosphere};
 use crate::bodies::brdf::Brdf;
 use crate::bodies::surface::{SensorBand, SurfaceModel};
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
@@ -42,6 +43,8 @@ use crate::image_proc::compose::{ComposeError, Composite, PassContext, SecondPas
 use crate::photometry::solar::TsisSolarSpectrum;
 use crate::solar_system::{BodyId, BodyState, Observer, SolarSystem};
 
+/// Spectral bins for the atmosphere's band integration.
+const ATMOSPHERE_BINS: usize = 8;
 /// Angular step used to measure the projection Jacobian, radians (≈2″).
 const JACOBIAN_STEP_RAD: f64 = 1e-5;
 
@@ -52,20 +55,30 @@ pub struct SceneBody {
     pub id: BodyId,
     /// Surface description, bound to each sensor band at render time.
     pub surface: Arc<dyn SurfaceModel>,
+    /// Optional molecular atmosphere, bound to each sensor band at
+    /// render time.
+    pub atmosphere: Option<RayleighAtmosphere>,
 }
 
 impl SceneBody {
-    /// A body with any surface model.
+    /// A body with any surface model and no atmosphere.
     pub fn new(id: BodyId, surface: Arc<dyn SurfaceModel>) -> Self {
-        Self { id, surface }
+        Self {
+            id,
+            surface,
+            atmosphere: None,
+        }
     }
 
     /// A body whose whole surface follows one reflectance law.
     pub fn brdf<B: Brdf + Clone + std::fmt::Debug + 'static>(id: BodyId, law: B) -> Self {
-        Self {
-            id,
-            surface: Arc::new(law),
-        }
+        Self::new(id, Arc::new(law))
+    }
+
+    /// Wrap the body in a Rayleigh atmosphere.
+    pub fn with_atmosphere(mut self, atmosphere: RayleighAtmosphere) -> Self {
+        self.atmosphere = Some(atmosphere);
+        self
     }
 }
 
@@ -263,8 +276,24 @@ impl SecondPass for BodyPass {
                 electrons_per_sr: exposure_s * solar_rate
                     / illumination.heliocentric_distance_au.powi(2),
                 sky_to_body_fixed: state.sky_to_body_fixed,
+                radius_km: body.id.equatorial_radius_km(),
             };
-            let stamp = BodyStamp::build(&geometry, surface.as_ref(), &psf, self.oversampling);
+            let bound_air = body
+                .atmosphere
+                .as_ref()
+                .map(|atm| {
+                    BoundRayleigh::bind(
+                        atm.clone(),
+                        &satellite.combined_qe,
+                        self.solar()?,
+                        ATMOSPHERE_BINS,
+                    )
+                    .map_err(|e| ComposeError::Failed(format!("{}: {e}", body.id)))
+                })
+                .transpose()?;
+            let air: Option<&dyn AtmosphereRadiance> =
+                bound_air.as_ref().map(|b| b as &dyn AtmosphereRadiance);
+            let stamp = BodyStamp::build(&geometry, surface.as_ref(), air, &psf, self.oversampling);
             let no_data = surface.no_data_samples();
             if no_data > 0 {
                 log::warn!(

@@ -29,6 +29,7 @@ use starfield_gaia::{Dr3, LazyLoadingCatalog};
 use starfield_planet_maps::{earth_tier, mars_tier, AbundanceTier};
 use starfield_reflectance_library::ReflectanceLibrary;
 
+use simulator::atmosphere::RayleighAtmosphere;
 use simulator::bodies::brdf::{Hapke, Lambert};
 use simulator::bodies::surface::{SurfaceModel, TexturedSurfaceModel};
 use simulator::body_pass::{BodyPass, SceneBody};
@@ -125,6 +126,11 @@ struct Args {
     /// Render grey Lambert/Hapke spheres instead of composition tiers.
     #[arg(long, default_value_t = false)]
     untextured: bool,
+
+    /// Leave out Earth's Rayleigh atmosphere (limb glow, twilight,
+    /// two-way extinction of the surface).
+    #[arg(long, default_value_t = false)]
+    no_atmosphere: bool,
 
     /// Surface site on the target body to mark, as
     /// `Name:lat_deg:lon_east_deg:height_m` (geodetic). Repeatable.
@@ -387,7 +393,19 @@ fn main() -> Result<(), String> {
     for &id in &bodies {
         let surface = default_surface(id, &library, args.untextured)?;
         println!("{id} surface: {}", surface.label());
-        scene_bodies.push(SceneBody::new(id, surface));
+        let mut body = SceneBody::new(id, surface);
+        if id == BodyId::Earth && !args.no_atmosphere {
+            let air = RayleighAtmosphere::earth(id.equatorial_radius_km());
+            println!(
+                "{id} atmosphere: Rayleigh single scattering, H {:.1} km, top {:.0} km, \
+                 τ(550 nm) {:.4}",
+                air.scale_height_km,
+                air.top_km,
+                air.vertical_optical_depth(550.0, 0.0)
+            );
+            body = body.with_atmosphere(air);
+        }
+        scene_bodies.push(body);
     }
     let pass = BodyPass::new(Arc::clone(&system), observer, scene_bodies)
         .with_oversampling(args.oversampling);

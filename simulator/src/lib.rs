@@ -70,6 +70,8 @@
 
 pub mod algo; // misc module lives here
 #[cfg(feature = "solar-system")]
+pub mod atmosphere;
+#[cfg(feature = "solar-system")]
 pub mod bodies;
 #[cfg(feature = "solar-system")]
 pub mod body_pass;

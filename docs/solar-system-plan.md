@@ -76,13 +76,17 @@ phase-dependent photocentre bias dominates.
 ### 1.3 The atmospheric limb
 
 - Earth's visible-light limb is not the surface. Along a tangent ray at
-  height h the Rayleigh optical depth is roughly
-  τ_vert(h)·√(2πR/H) ≈ 75·τ_vert(h); with τ_vert(0, 550 nm) ≈ 0.1 and
-  H ≈ 8.4 km the limb (τ ≈ 1) sits near **35 km**, higher in the blue
-  (λ⁻⁴) and lower in the red. Artemis I OpNav pre-flight assumed a 35 km
-  atmosphere bias and measured **~25 km** from flight imagery
-  (camera-, exposure- and wavelength-dependent).
-- At 0.5 AU, 36 km subtends 0.10″; at 1.5 AU, 0.03″. The atmosphere
+  height h the Rayleigh optical depth is τ_vert(h)·√(2πR/H) ≈ 71·τ_vert(h);
+  with τ_vert(0, 550 nm) = 0.097 and H = 8 km the grazing depth at the
+  ground is 6.9, so the single-scattering τ = 1 level sits near **15 km**
+  at 550 nm, ~22 km at 450 nm and ~6 km at 750 nm (locked by tests in
+  `atmosphere/`). The *detected* limb in a broadband camera sits higher:
+  Artemis I OpNav pre-flight assumed a 35 km atmosphere bias and measured
+  **~25 km** from flight imagery, with aerosols, multiple scattering and
+  the edge-detection threshold making up the difference from the pure
+  Rayleigh figure. Both numbers are camera-, exposure- and
+  wavelength-dependent.
+- At 0.5 AU, 25 km subtends 0.07″; at 1.5 AU, 0.02″. The atmosphere
   therefore appears as a **sub-pixel limb extension plus a faint halo**
   (Rayleigh scale height ≈ 0.02″), never as a resolved ring, for any
   aperture ≤ 1 m. The rendering requirement is a correct *sub-pixel
@@ -760,7 +764,7 @@ Interface decisions agreed with the datasources side (2026-09-09):
 | F3.2 | `image_proc/planet_disk.rs` (`BodyStamp`: coverage + radiance) + `compose.rs` second pass + `scene_planet.rs` + static `Renderer` wiring; **uniform Lambert sphere first**; occultation-of-stars test; INVARIANTS §1/§2 tests; integrated V vs Mallama test | L |
 | F3.3 | Motion-blur wiring: `LightSources.bodies`, per-stamp re-projection, stamp cache, depth-sorted compositing | M |
 | F3.4 | Textured surfaces: `SurfaceRadiance`/`SurfaceModel` in `bodies/surface.rs` bind composition tiers to the sensor band with `w = F☉·QE·λ` weights (clipped to endmember coverage, ≤ 5 % uncovered response); Earth renders from the MODIS composition tier and Mars from the Viking albedo tier through a unit-albedo Lambert law. Still to do: Moon tier (datasources PR pending), Lommel–Seeliger + haze for Mars, Hapke for the Moon and Mercury, calibrated Mars and lunar spectra (#65, #66) | Earth/Mars textured |
-| F3.5 | `atmosphere/`: Rayleigh/Mie/ozone LUTs, spherical-shell single + multiple scattering, limb integrator; Earth/Mars/Venus presets; limb-height test | L |
+| F3.5 | `atmosphere/`: **v1 done** — exponential Rayleigh shell (H = 8 km, top 100 km, Hansen & Travis τ(λ)), single scattering with ground-shadow test, band integration in F☉·QE·λ-weighted bins, per-frame (ρ, azimuth) table in the stamp; two-way surface extinction, limb glow and twilight arc; tests lock the Chapman factor and the 15 km / 22 km / 6 km τ = 1 tangent heights at 550 / 450 / 750 nm. Cloud-free textured Earth at full phase brightens 3× with the atmosphere (surface p ≈ 0.06 plus Rayleigh ≈ 0.12), a thin crescent 5×. Still to do: multiple scattering, aerosol Mie term, ozone Chappuis absorption, Mars and Venus presets | v1 done |
 | F3.6 | `bodies/earth.rs`: endmember surface, cloud layer (climatology + stochastic), glint, atmosphere; colour validation tests | L |
 | F3.7 | Venus, gas giants (no rings) | M |
 | F3.7b | `bodies/sun.rs`: limb-darkened solar disk (Neckel & Labs), transit/silhouette rendering via the same compositing, exposure-planner guard | S |
