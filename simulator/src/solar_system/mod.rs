@@ -300,6 +300,20 @@ impl IlluminationGeometry {
     }
 }
 
+impl IlluminationGeometry {
+    /// Sun direction in the body's sky frame `(east, north, toward
+    /// observer)`; the frame the stamp rasteriser lights the disk in.
+    pub fn sun_direction_sky_frame(&self) -> Vector3<f64> {
+        let toward_observer = self.observer_direction;
+        let (east, north) = sky_basis(&-toward_observer);
+        Vector3::new(
+            self.sun_direction.dot(&east),
+            self.sun_direction.dot(&north),
+            self.sun_direction.dot(&toward_observer),
+        )
+    }
+}
+
 /// Local east and north unit vectors on the sky at a line-of-sight
 /// direction in the ICRF frame.
 fn sky_basis(line_of_sight: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
@@ -350,6 +364,105 @@ pub struct BodyState {
     pub sky_to_body_fixed: Matrix3<f64>,
 }
 
+/// A fixed point on a body's surface, in the body's geodetic
+/// (planetographic) coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SurfaceSite {
+    /// Label for logs and overlays.
+    pub name: String,
+    /// Geodetic latitude, degrees, north positive.
+    pub latitude_deg: f64,
+    /// Longitude, degrees, east positive.
+    pub longitude_east_deg: f64,
+    /// Height above the reference ellipsoid, metres.
+    pub height_m: f64,
+}
+
+impl SurfaceSite {
+    /// Position of the site relative to the body centre in body-fixed
+    /// coordinates, km, on the oblate ellipsoid with equatorial radius
+    /// `a` and polar radius `c`.
+    pub fn body_fixed_km(&self, radii_km: [f64; 3]) -> Vector3<f64> {
+        let a = radii_km[0];
+        let c = radii_km[2];
+        let e2 = 1.0 - (c * c) / (a * a);
+        let lat = self.latitude_deg.to_radians();
+        let lon = self.longitude_east_deg.to_radians();
+        let (sin_lat, cos_lat) = lat.sin_cos();
+        let n = a / (1.0 - e2 * sin_lat * sin_lat).sqrt();
+        let h = self.height_m / 1000.0;
+        Vector3::new(
+            (n + h) * cos_lat * lon.cos(),
+            (n + h) * cos_lat * lon.sin(),
+            (n * (1.0 - e2) + h) * sin_lat,
+        )
+    }
+
+    /// Outward geodetic surface normal in body-fixed coordinates.
+    pub fn body_fixed_normal(&self) -> Vector3<f64> {
+        let lat = self.latitude_deg.to_radians();
+        let lon = self.longitude_east_deg.to_radians();
+        Vector3::new(lat.cos() * lon.cos(), lat.cos() * lon.sin(), lat.sin())
+    }
+}
+
+/// Where a [`SurfaceSite`] appears against its body's disk.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SiteView {
+    /// Angular offset of the site from the body centre on the sky,
+    /// radians: `(east, north)`.
+    pub sky_offset_rad: (f64, f64),
+    /// Apparent direction of the site (body centre direction plus the
+    /// small-angle offset).
+    pub direction: Equatorial,
+    /// Cosine of the emission angle at the site (surface normal against
+    /// the direction to the observer). Positive means the site faces
+    /// the observer.
+    pub emission_cosine: f64,
+    /// Cosine of the solar incidence angle at the site; `None` for the
+    /// Sun itself.
+    pub incidence_cosine: Option<f64>,
+    /// True when the site is on the observer-facing hemisphere and
+    /// therefore imaged (lit or not).
+    pub visible: bool,
+}
+
+/// How a site presents to the observer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SiteStatus {
+    /// On the facing hemisphere and sunlit: imaged on the bright disk.
+    VisibleDay,
+    /// On the facing hemisphere but past the terminator: imaged on the
+    /// dark disk (in silhouette against nothing; not a photometric
+    /// feature).
+    VisibleNight,
+    /// On the far hemisphere: occulted by the body itself.
+    FarSide,
+}
+
+impl SiteView {
+    /// Classify the site: far side, or visible by day or by night.
+    pub fn status(&self) -> SiteStatus {
+        if !self.visible {
+            SiteStatus::FarSide
+        } else if self.incidence_cosine.is_none_or(|c| c > 0.0) {
+            SiteStatus::VisibleDay
+        } else {
+            SiteStatus::VisibleNight
+        }
+    }
+}
+
+impl fmt::Display for SiteStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SiteStatus::VisibleDay => "visible, day side",
+            SiteStatus::VisibleNight => "visible, night side",
+            SiteStatus::FarSide => "not visible, far side",
+        })
+    }
+}
+
 impl BodyState {
     /// Angular diameter in arcseconds.
     pub fn angular_diameter_arcsec(&self) -> f64 {
@@ -359,6 +472,42 @@ impl BodyState {
     /// Observer–body distance in km.
     pub fn distance_km(&self) -> f64 {
         self.distance_au * AU_KM
+    }
+
+    /// Project a surface site onto the sky with the same light-time-
+    /// corrected orientation the disk is rendered with. The offset is
+    /// the site's body-fixed position rotated into the sky frame and
+    /// divided by the distance (small-angle; the disk is always well
+    /// under a degree across).
+    pub fn view_site(&self, site: &SurfaceSite) -> SiteView {
+        let radii = self.body.radii_km();
+        // sky_to_body_fixed is orthonormal, so its transpose maps
+        // body-fixed vectors into the sky frame.
+        let body_to_sky = self.sky_to_body_fixed.transpose();
+        let position_sky = body_to_sky * site.body_fixed_km(radii);
+        let normal_sky = body_to_sky * site.body_fixed_normal();
+        let distance_km = self.distance_km();
+        let east = position_sky.x / distance_km;
+        let north = position_sky.y / distance_km;
+        // Toward-observer axis is +z of the sky frame.
+        let emission_cosine = normal_sky.z;
+        let incidence_cosine = if self.body.is_sun() {
+            None
+        } else {
+            Some(normal_sky.dot(&self.illumination.sun_direction_sky_frame()))
+        };
+        let cos_dec = self.direction.dec.cos().max(1e-12);
+        let direction = Equatorial::new(
+            self.direction.ra + east / cos_dec,
+            self.direction.dec + north,
+        );
+        SiteView {
+            sky_offset_rad: (east, north),
+            direction,
+            emission_cosine,
+            incidence_cosine,
+            visible: emission_cosine > 0.0,
+        }
     }
 }
 
@@ -507,7 +656,7 @@ impl SolarSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_abs_diff_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
     use std::f64::consts::{FRAC_PI_2, PI};
 
     #[test]
@@ -710,6 +859,46 @@ mod tests {
             east_bf.dot(&local_east) < 0.0,
             "sky east should map to decreasing body longitude"
         );
+
+        // Palomar (MPC 675, Caltech almanac) at this epoch: the site is
+        // 117° of longitude from the sub-observer point, so it is on the
+        // far side; a site placed at the sub-observer point is at disk
+        // centre facing us; one 60° east of it lies toward sky west and
+        // inside the disk.
+        let palomar = SurfaceSite {
+            name: "Palomar".into(),
+            latitude_deg: 33.356_667,
+            longitude_east_deg: -116.8625,
+            height_m: 1706.0,
+        };
+        let view = earth.view_site(&palomar);
+        assert_eq!(view.status(), SiteStatus::FarSide);
+        let centre = SurfaceSite {
+            name: "sub-observer".into(),
+            latitude_deg: earth
+                .sub_observer
+                .to_planetographic(BodyId::Earth.radii_km())
+                .lat_rad
+                .to_degrees(),
+            longitude_east_deg: earth.sub_observer.lon_rad.to_degrees(),
+            height_m: 0.0,
+        };
+        let cv = earth.view_site(&centre);
+        assert!(
+            cv.sky_offset_rad.0.hypot(cv.sky_offset_rad.1) < 1e-4 * earth.angular_semi_diameter
+        );
+        assert!(cv.emission_cosine > 0.9999);
+        let east_of_centre = SurfaceSite {
+            longitude_east_deg: centre.longitude_east_deg + 60.0,
+            ..centre.clone()
+        };
+        let ev = earth.view_site(&east_of_centre);
+        assert!(ev.visible);
+        assert!(
+            ev.sky_offset_rad.0 < 0.0,
+            "east longitude lies toward sky west"
+        );
+        assert!(ev.sky_offset_rad.0.hypot(ev.sky_offset_rad.1) < earth.angular_semi_diameter);
         let (major, minor, _) = earth.apparent_ellipse;
         assert_abs_diff_eq!(major, earth.angular_semi_diameter, epsilon = 1e-9);
         assert!(minor <= major && minor > 0.99 * major);
@@ -743,6 +932,150 @@ mod tests {
             let dpa = dpa.min(std::f64::consts::TAU - dpa);
             assert_abs_diff_eq!(dpa, 0.0, epsilon = 1e-6);
         });
+    }
+
+    /// A body whose body-fixed frame coincides with the sky frame: +x
+    /// east, +y north, +z toward the observer.
+    fn aligned_state(distance_au: f64) -> BodyState {
+        BodyState {
+            body: BodyId::Earth,
+            direction: Equatorial::from_degrees(0.0, 0.0),
+            distance_au,
+            light_time_s: 0.0,
+            angular_semi_diameter: (BodyId::Earth.equatorial_radius_km() / (distance_au * AU_KM))
+                .asin(),
+            illumination: IlluminationGeometry::from_barycentric(
+                Vector3::zeros(),
+                Vector3::new(distance_au, 0.0, 0.0),
+                // Sun off to the sky-east side of the body.
+                Vector3::new(distance_au, 1.0, 0.0),
+            ),
+            v_magnitude: None,
+            sub_observer: SubPoint {
+                lon_rad: 0.0,
+                lat_rad: std::f64::consts::FRAC_PI_2,
+                planetocentric: true,
+            },
+            sub_solar: None,
+            north_pole_position_angle: 0.0,
+            apparent_ellipse: (0.0, 0.0, 0.0),
+            sky_to_body_fixed: Matrix3::identity(),
+        }
+    }
+
+    #[test]
+    fn site_at_the_sub_observer_point_sits_at_disk_centre_facing_us() {
+        let state = aligned_state(1.0);
+        // Body +z is toward the observer, so the north pole is the
+        // sub-observer point in this aligned frame.
+        let pole = SurfaceSite {
+            name: "pole".into(),
+            latitude_deg: 90.0,
+            longitude_east_deg: 0.0,
+            height_m: 0.0,
+        };
+        let view = state.view_site(&pole);
+        assert_abs_diff_eq!(view.sky_offset_rad.0, 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(view.sky_offset_rad.1, 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(view.emission_cosine, 1.0, epsilon = 1e-12);
+        assert!(view.visible);
+    }
+
+    #[test]
+    fn equatorial_sites_land_on_the_limb_at_the_semi_diameter() {
+        let state = aligned_state(1.0);
+        // Body +x (lon 0, lat 0) is sky east: on the east limb, edge-on.
+        let east_limb = SurfaceSite {
+            name: "east".into(),
+            latitude_deg: 0.0,
+            longitude_east_deg: 0.0,
+            height_m: 0.0,
+        };
+        let view = state.view_site(&east_limb);
+        assert_relative_eq!(
+            view.sky_offset_rad.0,
+            state.angular_semi_diameter,
+            max_relative = 1e-6
+        );
+        assert_abs_diff_eq!(view.sky_offset_rad.1, 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(view.emission_cosine, 0.0, epsilon = 1e-12);
+        assert!(
+            !view.visible,
+            "a limb point is not on the facing hemisphere"
+        );
+        // It faces the Sun, which sits to the sky east.
+        assert!(view.incidence_cosine.unwrap() > 0.9);
+        // The far side (−z) is hidden.
+        let far = SurfaceSite {
+            name: "far".into(),
+            latitude_deg: -90.0,
+            longitude_east_deg: 0.0,
+            height_m: 0.0,
+        };
+        assert!(!state.view_site(&far).visible);
+        assert_abs_diff_eq!(state.view_site(&far).emission_cosine, -1.0, epsilon = 1e-12);
+        assert_eq!(state.view_site(&far).status(), SiteStatus::FarSide);
+    }
+
+    #[test]
+    fn night_side_but_facing_is_visible_not_far_side() {
+        let state = aligned_state(1.0);
+        // Sun is to the sky east (+x). A facing-hemisphere site tilted
+        // toward sky west (lon 180°, lat 45°) faces us but not the Sun.
+        let dusk = SurfaceSite {
+            name: "dusk".into(),
+            latitude_deg: 45.0,
+            longitude_east_deg: 180.0,
+            height_m: 0.0,
+        };
+        let view = state.view_site(&dusk);
+        assert!(view.visible);
+        assert!(view.incidence_cosine.unwrap() < 0.0);
+        assert_eq!(view.status(), SiteStatus::VisibleNight);
+        // Its sky offset is toward the west: negative east component.
+        assert!(view.sky_offset_rad.0 < 0.0);
+        // Same latitude on the Sun-facing side is a day-side site.
+        let dawn = SurfaceSite {
+            longitude_east_deg: 0.0,
+            ..dusk.clone()
+        };
+        assert_eq!(state.view_site(&dawn).status(), SiteStatus::VisibleDay);
+    }
+
+    #[test]
+    fn site_height_and_flattening_enter_the_geodetic_position() {
+        let radii = BodyId::Earth.radii_km();
+        let sea_level = SurfaceSite {
+            name: "equator".into(),
+            latitude_deg: 0.0,
+            longitude_east_deg: 0.0,
+            height_m: 0.0,
+        };
+        assert_relative_eq!(
+            sea_level.body_fixed_km(radii).norm(),
+            radii[0],
+            max_relative = 1e-12
+        );
+        let raised = SurfaceSite {
+            height_m: 1000.0,
+            ..sea_level.clone()
+        };
+        assert_relative_eq!(
+            raised.body_fixed_km(radii).norm(),
+            radii[0] + 1.0,
+            max_relative = 1e-12
+        );
+        let pole = SurfaceSite {
+            name: "pole".into(),
+            latitude_deg: 90.0,
+            longitude_east_deg: 0.0,
+            height_m: 0.0,
+        };
+        assert_relative_eq!(
+            pole.body_fixed_km(radii).norm(),
+            radii[2],
+            max_relative = 1e-9
+        );
     }
 
     #[test]

@@ -15,10 +15,12 @@
 //! `A = 3p/2`), and the lunar-average Hapke set for the Moon.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
+use ab_glyph::{FontRef, PxScale};
 use clap::Parser;
-use image::{ImageBuffer, Luma};
+use image::{ImageBuffer, Luma, Rgb, RgbImage};
+use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
 use ndarray::Array2;
 use shared::units::{Temperature, TemperatureExt};
 use starfield::catalogs::StarData;
@@ -35,10 +37,48 @@ use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{SensorModel, TelescopeModel};
 use simulator::sims::orientation::orientation_from_pointing;
-use simulator::solar_system::{BodyId, BodyState, Observer, SolarSystem};
+use simulator::solar_system::{
+    BodyId, BodyState, Observer, SiteStatus, SiteView, SolarSystem, SurfaceSite,
+};
 
 /// Smallest solar elongation with zodiacal-light table coverage.
 const MIN_ZODIACAL_ELONGATION_DEG: f64 = 15.0;
+
+static FONT_DATA: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono-Bold.ttf");
+static FONT: LazyLock<FontRef<'static>> =
+    LazyLock::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
+
+/// Overlay colour for surface sites, distinct from the red/green centre
+/// markers used in downstream videos.
+const SITE_COLOUR: Rgb<u8> = Rgb([0, 220, 255]);
+
+/// A surface site projected onto the sensor, ready to draw.
+struct SiteMarker {
+    site: SurfaceSite,
+    view: SiteView,
+    pixel: Option<(f64, f64)>,
+}
+
+/// Parse `Name:lat_deg:lon_east_deg:height_m`.
+fn parse_site(spec: &str) -> Result<SurfaceSite, String> {
+    let parts: Vec<&str> = spec.split(':').collect();
+    if parts.len() != 4 {
+        return Err(format!(
+            "site {spec:?} must be Name:lat_deg:lon_east_deg:height_m"
+        ));
+    }
+    let num = |s: &str, what: &str| {
+        s.trim()
+            .parse::<f64>()
+            .map_err(|_| format!("site {spec:?}: bad {what} {s:?}"))
+    };
+    Ok(SurfaceSite {
+        name: parts[0].trim().to_string(),
+        latitude_deg: num(parts[1], "latitude")?,
+        longitude_east_deg: num(parts[2], "longitude")?,
+        height_m: num(parts[3], "height")?,
+    })
+}
 
 #[derive(Parser, Debug)]
 #[command(about = "Render solar-system bodies from a spacecraft at one epoch")]
@@ -84,6 +124,15 @@ struct Args {
     /// Render grey Lambert/Hapke spheres instead of composition tiers.
     #[arg(long, default_value_t = false)]
     untextured: bool,
+
+    /// Surface site on the target body to mark, as
+    /// `Name:lat_deg:lon_east_deg:height_m` (geodetic). Repeatable.
+    #[arg(long = "site")]
+    sites: Vec<String>,
+
+    /// Qualifier appended to site labels.
+    #[arg(long, default_value = "likely receiving site")]
+    site_qualifier: String,
 
     /// Output path stem; writes `<stem>.png` (16-bit) and `<stem>_preview.png`.
     #[arg(long, default_value = "planet_view")]
@@ -192,8 +241,7 @@ fn save_u16(image: &Array2<u16>, path: &PathBuf) -> Result<(), String> {
 }
 
 /// Asinh stretch between the 1st percentile and the maximum, to 8 bits.
-fn save_preview(image: &Array2<f64>, path: &PathBuf) -> Result<(), String> {
-    let (h, w) = image.dim();
+fn stretch_to_u8(image: &Array2<f64>) -> Result<Vec<u8>, String> {
     let mut sorted: Vec<f64> = image.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(|a, b| a.total_cmp(b));
     if sorted.is_empty() {
@@ -204,14 +252,72 @@ fn save_preview(image: &Array2<f64>, path: &PathBuf) -> Result<(), String> {
     let span = (ceiling - floor).max(1e-9);
     let scale = 1000.0;
     let norm = |v: f64| ((v - floor).max(0.0) / span * scale).asinh() / scale.asinh();
-    let raw: Vec<u8> = image
+    Ok(image
         .iter()
         .map(|&v| (norm(v) * 255.0).round().clamp(0.0, 255.0) as u8)
-        .collect();
-    ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(w as u32, h as u32, raw)
-        .ok_or_else(|| "buffer size mismatch".to_string())?
-        .save(path)
-        .map_err(|e| e.to_string())
+        .collect())
+}
+
+/// Stretched 8-bit preview; greyscale without sites, RGB with cyan site
+/// markers and labels when sites are given.
+fn save_preview(
+    image: &Array2<f64>,
+    path: &PathBuf,
+    markers: &[SiteMarker],
+    qualifier: &str,
+) -> Result<(), String> {
+    let (h, w) = image.dim();
+    let raw = stretch_to_u8(image)?;
+    if markers.is_empty() {
+        return ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(w as u32, h as u32, raw)
+            .ok_or_else(|| "buffer size mismatch".to_string())?
+            .save(path)
+            .map_err(|e| e.to_string());
+    }
+    let mut rgb = RgbImage::from_fn(w as u32, h as u32, |x, y| {
+        let v = raw[(y as usize) * w + x as usize];
+        Rgb([v, v, v])
+    });
+    let font_px = ((h as f32) / 32.0).clamp(10.0, 18.0);
+    let font_scale = PxScale::from(font_px);
+    // Full label with status in the caption band; only the name at the
+    // marker, so a long qualifier never runs over the disk.
+    let mut caption_y = 4;
+    for marker in markers {
+        let status = marker.view.status();
+        let caption = match (status, marker.pixel) {
+            (SiteStatus::FarSide, _) => {
+                format!("{} ({qualifier}): not visible, far side", marker.site.name)
+            }
+            (_, None) => format!("{} ({qualifier}): {status}, off sensor", marker.site.name),
+            (_, Some((px, py))) => {
+                let (cx, cy) = (px.round() as i32, py.round() as i32);
+                draw_filled_circle_mut(&mut rgb, (cx, cy), 3, SITE_COLOUR);
+                draw_hollow_circle_mut(&mut rgb, (cx, cy), 7, SITE_COLOUR);
+                let name = &marker.site.name;
+                let text_w = (name.chars().count() as f32 * font_px * 0.62) as i32;
+                let tx = if cx + 12 + text_w < w as i32 {
+                    cx + 12
+                } else {
+                    (cx - 12 - text_w).max(0)
+                };
+                let ty = (cy - font_px as i32 / 2).clamp(0, (h as i32 - font_px as i32).max(0));
+                draw_text_mut(&mut rgb, SITE_COLOUR, tx, ty, font_scale, &*FONT, name);
+                format!("{name} ({qualifier}): {status}")
+            }
+        };
+        draw_text_mut(
+            &mut rgb,
+            SITE_COLOUR,
+            4,
+            caption_y,
+            font_scale,
+            &*FONT,
+            &caption,
+        );
+        caption_y += font_px as i32 + 2;
+    }
+    rgb.save(path).map_err(|e| e.to_string())
 }
 
 fn main() -> Result<(), String> {
@@ -312,11 +418,42 @@ fn main() -> Result<(), String> {
         }
     }
 
+    // Surface sites on the target: same light-time-corrected orientation
+    // and projector as the disk, so marker and texture agree.
+    let mut markers = Vec::new();
+    for spec in &args.sites {
+        let site = parse_site(spec)?;
+        let view = target_state.view_site(&site);
+        let probe = StarData::with_position(0, view.direction, 0.0, None);
+        let pixel = scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0);
+        let px_text = pixel.map_or_else(
+            || "off-sensor".to_string(),
+            |(x, y)| format!("{x:.4} {y:.4}"),
+        );
+        println!(
+            "site {} lat {:+.6} lon {:+.6}E h {:.0} m: {}; px {px_text}; offset E {:+.4}\" N {:+.4}\"; \
+             emission_cos {:+.4}; incidence_cos {}",
+            site.name,
+            site.latitude_deg,
+            site.longitude_east_deg,
+            site.height_m,
+            view.status(),
+            view.sky_offset_rad.0.to_degrees() * 3600.0,
+            view.sky_offset_rad.1.to_degrees() * 3600.0,
+            view.emission_cosine,
+            view.incidence_cosine
+                .map_or_else(|| "n/a".to_string(), |c| format!("{c:+.4}")),
+        );
+        markers.push(SiteMarker { site, view, pixel });
+    }
+
     let png = args.out.with_extension("png");
     let preview = PathBuf::from(format!("{}_preview.png", args.out.display()));
     save_u16(&result.quantized_image, &png)?;
     let electrons = result.mean_electron_image();
-    save_preview(&electrons, &preview)?;
+    save_preview(&electrons, &preview, &markers, &args.site_qualifier)?;
     println!("wrote {} and {}", png.display(), preview.display());
     Ok(())
 }
