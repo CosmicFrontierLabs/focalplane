@@ -378,7 +378,12 @@ mod tests {
     #[test]
     fn lambert_sphere_geometric_albedo_is_two_thirds() {
         let lambert = Lambert { albedo: 0.9 };
-        assert_relative_eq!(geometric_albedo(&lambert, N), 0.6, max_relative = 2e-3);
+        let p = geometric_albedo(&lambert, N);
+        eprintln!(
+            "residual lambert_geometric_albedo={p:.6} expected=0.6 rel={:.2e}",
+            p / 0.6 - 1.0
+        );
+        assert_relative_eq!(p, 0.6, max_relative = 2e-3);
     }
 
     #[test]
@@ -386,6 +391,10 @@ mod tests {
         // q = 1.5 for a Lambert sphere, so p·q = A.
         let lambert = Lambert { albedo: 0.4 };
         let q = phase_integral(&lambert, 90, 120);
+        eprintln!(
+            "residual lambert_phase_integral={q:.6} expected=1.5 rel={:.2e}",
+            q / 1.5 - 1.0
+        );
         assert_relative_eq!(q, 1.5, max_relative = 5e-3);
         assert_relative_eq!(
             q * geometric_albedo(&lambert, 120),
@@ -410,7 +419,12 @@ mod tests {
     #[test]
     fn lommel_seeliger_sphere_geometric_albedo_is_w_over_eight() {
         let ls = LommelSeeliger::isotropic(0.4);
-        assert_relative_eq!(geometric_albedo(&ls, N), 0.05, max_relative = 2e-3);
+        let p = geometric_albedo(&ls, N);
+        eprintln!(
+            "residual lommel_seeliger_geometric_albedo={p:.6} expected=0.05 rel={:.2e}",
+            p / 0.05 - 1.0
+        );
+        assert_relative_eq!(p, 0.05, max_relative = 2e-3);
     }
 
     #[test]

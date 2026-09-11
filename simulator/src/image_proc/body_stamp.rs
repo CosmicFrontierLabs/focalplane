@@ -450,6 +450,11 @@ mod tests {
             let expected = g.electrons_per_sr
                 * g.semi_diameter_rad.powi(2)
                 * disk_integrated_reflectance(&lambert, g.phase_angle, 300);
+            eprintln!(
+                "residual stamp_electrons_phase{phase_deg}={:.6e} analytic={expected:.6e} rel={:.2e}",
+                stamp.total_electrons(),
+                stamp.total_electrons() / expected - 1.0
+            );
             assert_relative_eq!(stamp.total_electrons(), expected, max_relative = 0.01);
         }
     }

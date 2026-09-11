@@ -161,6 +161,10 @@ mod tests {
         let sun = sun();
         for (lo, hi, expected) in [(300.0, 1100.0, 1002.2), (380.0, 750.0, 624.6)] {
             let got = sun.irradiance_w_m2(&Band::from_nm_bounds(lo, hi)).unwrap();
+            eprintln!(
+                "residual tsis_irradiance_{lo}_{hi}nm_w_m2={got:.3} table={expected} diff={:.3e}",
+                got - expected
+            );
             assert_abs_diff_eq!(got, expected, epsilon = 0.15);
             assert!(
                 (got - expected).abs() < 0.15,
@@ -168,6 +172,7 @@ mod tests {
             );
         }
         let total = sun.table().total_irradiance();
+        eprintln!("residual tsis_irradiance_202_2730nm_w_m2={total:.3} table=1325.8");
         assert!(
             (total - 1325.8).abs() < 0.15,
             "202-2730 nm = {total:.2} W/m², expected 1325.8 from {HSRS_PROVENANCE}"
@@ -181,6 +186,7 @@ mod tests {
         let sun = sun();
         let f_nu = sun.spectral_irradiance(Wavelength::from_nanometers(550.0));
         let ab = -2.5 * (f_nu / CGS::AB_ZERO_POINT_FLUX_DENSITY).log10();
+        eprintln!("residual solar_ab_magnitude_550nm={ab:.4}");
         assert_abs_diff_eq!(ab, -26.81, epsilon = 0.05);
     }
 
@@ -217,6 +223,10 @@ mod tests {
         let tsis = sun.photo_electron_rate(&qe, aperture).unwrap();
         let blackbody = BlackbodyStellarSpectrum::from_gaia_bv_magnitude(0.65, -26.90)
             .photo_electrons(&qe, aperture, &Duration::from_secs(1));
+        eprintln!(
+            "residual tsis_over_blackbody_rate={:.5} tsis_e_per_s={tsis:.4e} blackbody_e_per_s={blackbody:.4e}",
+            tsis / blackbody
+        );
         assert_relative_eq!(tsis, blackbody, max_relative = 0.15);
         // ~4×10²¹ solar photons/s/m² across the whole spectrum; 100 cm² is
         // 10⁻² m², the 400–800 nm window holds about half the photons and

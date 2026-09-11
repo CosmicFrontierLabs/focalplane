@@ -443,9 +443,19 @@ mod tests {
         // Bodhaine et al. (1999) sea-level values: 0.097 at 550 nm,
         // ~0.36 at 400 nm, ~0.0135 at 900 nm (λ⁻⁴ scaling of the 550 nm
         // value gives 0.0136).
-        assert_relative_eq!(rayleigh_optical_depth(0.55), 0.0973, max_relative = 0.01);
-        assert_relative_eq!(rayleigh_optical_depth(0.40), 0.36, max_relative = 0.03);
-        assert_relative_eq!(rayleigh_optical_depth(0.90), 0.0135, max_relative = 0.03);
+        for (um, reference, tolerance) in [
+            (0.55, 0.0973, 0.01),
+            (0.40, 0.36, 0.03),
+            (0.90, 0.0135, 0.03),
+        ] {
+            let tau = rayleigh_optical_depth(um);
+            eprintln!(
+                "residual rayleigh_tau_{}nm={tau:.5} reference={reference} rel={:.2e}",
+                (um * 1000.0) as u32,
+                tau / reference - 1.0
+            );
+            assert_relative_eq!(tau, reference, max_relative = tolerance);
+        }
     }
 
     #[test]
@@ -499,6 +509,10 @@ mod tests {
             );
             let chapman =
                 atm.vertical_optical_depth(550.0, h) * (2.0 * PI * r / atm.scale_height_km).sqrt();
+            eprintln!(
+                "residual grazing_tau_h{h}km={tau:.5} chapman={chapman:.5} rel={:.2e}",
+                tau / chapman - 1.0
+            );
             assert_relative_eq!(tau, chapman, max_relative = 0.03);
         }
     }
@@ -536,6 +550,7 @@ mod tests {
         let h550 = limb_height(550.0);
         let h450 = limb_height(450.0);
         let h750 = limb_height(750.0);
+        eprintln!("residual tau1_tangent_height_km_550={h550:.2} 450={h450:.2} 750={h750:.2}");
         assert!(
             (13.0..18.0).contains(&h550),
             "τ=1 tangent height {h550:.1} km at 550 nm"
