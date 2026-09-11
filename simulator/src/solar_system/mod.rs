@@ -511,6 +511,48 @@ impl BodyState {
     }
 }
 
+/// Where to aim a beam so it reaches a moving target: the transmit
+/// counterpart of an apparent position.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransmitAimpoint {
+    /// When the photons arrive at the target.
+    pub arrival_epoch: Epoch,
+    /// Forward one-way light time, seconds.
+    pub light_time_s: f64,
+    /// Transmitter-at-emission to target-at-arrival distance, AU.
+    pub distance_au: f64,
+    /// ICRF direction from the transmitter to where the target will be
+    /// at arrival, before aberration.
+    pub geometric_direction: Equatorial,
+    /// Direction to aim the beam in the transmitter's own frame, after
+    /// removing the transmitter's velocity aberration.
+    pub aim_direction: Equatorial,
+    /// Angle between `geometric_direction` and `aim_direction`, radians
+    /// (≈ |v_tx × d̂| / c).
+    pub aberration_angle: f64,
+    /// Transmitter barycentric velocity over c, ICRF components.
+    pub transmitter_velocity_over_c: Vector3<f64>,
+}
+
+/// Direction to aim so that, after the transmitter's own velocity
+/// aberration, the beam travels along `geometric_direction` in the
+/// barycentric frame: `d − β` normalised, the inverse of the receive
+/// correction `d + β` that starfield applies to observed light.
+pub fn aim_before_aberration(
+    geometric_direction: Vector3<f64>,
+    beta: Vector3<f64>,
+) -> Vector3<f64> {
+    (geometric_direction - beta).normalize()
+}
+
+impl TransmitAimpoint {
+    /// Point-ahead angle, radians: how far the aim direction lies from a
+    /// received apparent direction of the same target.
+    pub fn point_ahead_from(&self, received_apparent: &Equatorial) -> f64 {
+        self.aim_direction.angular_distance(received_apparent)
+    }
+}
+
 /// Ephemeris evaluator shared by every body in a scene.
 ///
 /// Wraps the SPK kernel in a mutex so it can sit behind a `Send + Sync`
@@ -631,6 +673,85 @@ impl SolarSystem {
             north_pole_position_angle,
             apparent_ellipse,
             sky_to_body_fixed,
+        })
+    }
+
+    /// Where a transmitter at `observer` must aim at `epoch` so that its
+    /// photons arrive at `target` (optionally at a fixed `site` on it).
+    ///
+    /// This is the *transmit* problem, the mirror of what
+    /// [`SolarSystem::body_state`] solves for reception:
+    ///
+    /// 1. Solve the forward light time: `t_arr = t + |r_target(t_arr) −
+    ///    r_tx(t)| / c`, iterated to convergence, with the target (and
+    ///    the site, rotated with the body frame) taken at the arrival
+    ///    epoch.
+    /// 2. The geometric aim direction is the unit vector from the
+    ///    transmitter at `t` to the target at `t_arr` in the ICRF.
+    /// 3. Transmitter aberration: a beam launched along `d′` in the
+    ///    transmitter's frame propagates along `d ∝ d′ + v/c` in the
+    ///    barycentric frame, so to send photons along `d` the beam must
+    ///    be aimed along `d′ ∝ d − v/c` (first order).
+    ///
+    /// The point-ahead angle is the angle between this aim direction and
+    /// the received apparent direction of the same target, and is of
+    /// order `2 v_rel / c`: tens of arcseconds between Earth and Mars.
+    pub fn transmit_aimpoint(
+        &self,
+        target: BodyId,
+        site: Option<&SurfaceSite>,
+        observer: &Observer,
+        epoch: &Epoch,
+    ) -> Result<TransmitAimpoint, SolarSystemError> {
+        let mut kernel = self.kernel.lock().expect("ephemeris kernel mutex poisoned");
+        let tx = observer.barycentric(&mut kernel, epoch)?;
+        let radii = target.radii_km();
+        let frame = self.constants.frame_for(target.naif_id())?;
+
+        // Site position in the ICRF at an arrival epoch, or the body
+        // centre when no site is given.
+        let target_position =
+            |kernel: &mut SpiceKernel, arrival: &Epoch| -> Result<Vector3<f64>, SolarSystemError> {
+                let centre = kernel.at(target.spice_name(), arrival.time())?.position;
+                Ok(match site {
+                    Some(site) => {
+                        let body_fixed_km = site.body_fixed_km(radii);
+                        let icrf_km = frame.rotation_at(arrival.time()).transpose() * body_fixed_km;
+                        centre + icrf_km / AU_KM
+                    }
+                    None => centre,
+                })
+            };
+
+        let mut light_time_days = 0.0;
+        let mut arrival = epoch.clone();
+        let mut geometric = Vector3::zeros();
+        for _ in 0..8 {
+            let r_target = target_position(&mut kernel, &arrival)?;
+            geometric = r_target - tx.position;
+            light_time_days = geometric.norm() / starfield::constants::C_AUDAY;
+            arrival = epoch.offset_secs(light_time_days * SECONDS_PER_DAY);
+        }
+        let distance_au = geometric.norm();
+        let geometric_direction = geometric / distance_au;
+        // tx.velocity is AU/day; v/c in the same units.
+        let beta = tx.velocity / starfield::constants::C_AUDAY;
+        let aim_direction = aim_before_aberration(geometric_direction, beta);
+
+        let to_equatorial = |v: Vector3<f64>| {
+            let ra = v.y.atan2(v.x).rem_euclid(std::f64::consts::TAU);
+            let dec = (v.z / v.norm()).clamp(-1.0, 1.0).asin();
+            Equatorial::new(ra, dec)
+        };
+
+        Ok(TransmitAimpoint {
+            arrival_epoch: arrival,
+            light_time_s: light_time_days * SECONDS_PER_DAY,
+            distance_au,
+            geometric_direction: to_equatorial(geometric_direction),
+            aim_direction: to_equatorial(aim_direction),
+            aberration_angle: geometric_direction.angle(&aim_direction),
+            transmitter_velocity_over_c: beta,
         })
     }
 
@@ -1076,6 +1197,122 @@ mod tests {
             radii[2],
             max_relative = 1e-9
         );
+    }
+
+    /// Transmit solve from Mars to Earth at the HiRISE epoch: forward
+    /// light time matches the backward one, the aim leads the received
+    /// direction by tens of arcseconds, and the aberration term alone is
+    /// the transmitter speed over c. Needs the DE440s kernel.
+    #[test]
+    #[ignore]
+    fn transmit_aimpoint_leads_the_received_direction() {
+        let system = SolarSystem::new().unwrap();
+        let epoch = Epoch::parse("2007-10-03T16:30:00Z").unwrap();
+        let mars = Observer::BodyCenter(BodyId::Mars);
+        let received = system.body_state(BodyId::Earth, &mars, &epoch).unwrap();
+        let aim = system
+            .transmit_aimpoint(BodyId::Earth, None, &mars, &epoch)
+            .unwrap();
+
+        // Forward and backward light times differ only by the target's
+        // motion over the light time (v_E · lt / c ≈ 0.05 s), so they
+        // agree to well under a second.
+        assert_abs_diff_eq!(aim.light_time_s, received.light_time_s, epsilon = 0.5);
+        assert_abs_diff_eq!(
+            aim.arrival_epoch.jd_tdb(),
+            epoch.jd_tdb() + aim.light_time_s / SECONDS_PER_DAY,
+            epsilon = 1e-9
+        );
+
+        // Transmitter aberration is the transverse velocity over c:
+        // |β × d̂|, at most v_Mars / c ≈ 16.5″.
+        let beta = aim.transmitter_velocity_over_c;
+        let speed_arcsec = beta.norm().to_degrees() * 3600.0;
+        assert!((14.0..18.0).contains(&speed_arcsec), "v/c {speed_arcsec}");
+        let (ra, dec) = (aim.geometric_direction.ra, aim.geometric_direction.dec);
+        let d = Vector3::new(dec.cos() * ra.cos(), dec.cos() * ra.sin(), dec.sin());
+        // Exact angle of d − β from d: tan θ = |β × d̂| / (1 − β · d̂).
+        let expected_aberration = beta.cross(&d).norm().atan2(1.0 - beta.dot(&d));
+        assert_relative_eq!(
+            aim.aberration_angle,
+            expected_aberration,
+            max_relative = 1e-6
+        );
+        eprintln!(
+            "residual transmit_aberration_arcsec={:.4} v_over_c_arcsec={speed_arcsec:.4} \
+             aberration_minus_transverse_rad={:.3e}",
+            aim.aberration_angle.to_degrees() * 3600.0,
+            aim.aberration_angle - expected_aberration,
+        );
+
+        // Site rotation happens at the arrival epoch: Palomar's ICRF
+        // position rotates by ω_E · lt · cos(lat) between emission and
+        // arrival, ≈ 1.9° · cos 33° for a 475 s light time.
+        let palomar = SurfaceSite {
+            name: "Palomar".into(),
+            latitude_deg: 33.356_667,
+            longitude_east_deg: -116.8625,
+            height_m: 1706.0,
+        };
+        let frame = system.frame_for(BodyId::Earth).unwrap();
+        let body_fixed = palomar.body_fixed_km(BodyId::Earth.radii_km());
+        let at_emission = frame.rotation_at(epoch.time()).transpose() * body_fixed;
+        let at_arrival = frame.rotation_at(aim.arrival_epoch.time()).transpose() * body_fixed;
+        let rotated = at_emission.angle(&at_arrival);
+        let sidereal_rate = std::f64::consts::TAU / 86_164.090_5;
+        // The position vector sweeps a circle at its geocentric latitude,
+        // 0.18° below the geodetic one on the ellipsoid.
+        let cos_geocentric_lat = body_fixed.xy().norm() / body_fixed.norm();
+        let expected_rotation = sidereal_rate * aim.light_time_s * cos_geocentric_lat;
+        eprintln!(
+            "residual site_rotation_over_light_time_deg={:.5} expected={:.5}",
+            rotated.to_degrees(),
+            expected_rotation.to_degrees()
+        );
+        assert_relative_eq!(rotated, expected_rotation, max_relative = 1e-3);
+
+        // Point-ahead between received apparent and transmit aim: the
+        // relative velocity term, tens of arcseconds, never degrees.
+        let point_ahead_arcsec = aim.point_ahead_from(&received.direction).to_degrees() * 3600.0;
+        assert!(
+            (10.0..80.0).contains(&point_ahead_arcsec),
+            "{point_ahead_arcsec}"
+        );
+
+        // Aiming at Palomar rather than Earth's centre moves the aim by
+        // no more than the apparent Earth radius.
+        let site_aim = system
+            .transmit_aimpoint(BodyId::Earth, Some(&palomar), &mars, &epoch)
+            .unwrap();
+        let shift = site_aim.aim_direction.angular_distance(&aim.aim_direction);
+        assert!(
+            shift <= received.angular_semi_diameter * 1.001,
+            "site shift {shift}"
+        );
+        assert!(shift > 0.0);
+        eprintln!(
+            "residual point_ahead_arcsec={point_ahead_arcsec:.4} \
+             site_shift_arcsec={:.4} earth_semi_diameter_arcsec={:.4}",
+            shift.to_degrees() * 3600.0,
+            received.angular_semi_diameter.to_degrees() * 3600.0
+        );
+    }
+
+    /// The aberration sign, with no kernel: a transmitter moving along
+    /// +x must aim behind the geometric direction (toward −x), and the
+    /// receive correction `d′ + β` must undo it to first order.
+    #[test]
+    fn transmit_aim_lags_the_transmitter_velocity() {
+        let d = Vector3::new(0.0, 1.0, 0.0);
+        let beta = Vector3::new(1e-4, 0.0, 0.0);
+        let aim = aim_before_aberration(d, beta);
+        assert!(aim.x < 0.0, "aim {aim}");
+        assert_abs_diff_eq!(aim.angle(&d), 1e-4, epsilon = 1e-12);
+        let recovered = (aim + beta).normalize();
+        assert_abs_diff_eq!(recovered.angle(&d), 0.0, epsilon = 1e-8);
+        // Velocity along the line of sight changes nothing.
+        let along = aim_before_aberration(d, Vector3::new(0.0, 1e-4, 0.0));
+        assert_abs_diff_eq!(along.angle(&d), 0.0, epsilon = 1e-15);
     }
 
     #[test]
