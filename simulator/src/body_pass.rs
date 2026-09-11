@@ -107,6 +107,7 @@ pub struct BodyPass {
     bodies: Vec<SceneBody>,
     source: StateSource,
     oversampling: usize,
+    psf_blur: bool,
     solar: OnceLock<TsisSolarSpectrum>,
 }
 
@@ -117,6 +118,7 @@ impl BodyPass {
             bodies,
             source: StateSource::Ephemeris { system, observer },
             oversampling: DEFAULT_OVERSAMPLING,
+            psf_blur: true,
             solar: OnceLock::new(),
         }
     }
@@ -129,6 +131,7 @@ impl BodyPass {
             bodies,
             source: StateSource::Fixed(states),
             oversampling: DEFAULT_OVERSAMPLING,
+            psf_blur: true,
             solar: OnceLock::new(),
         }
     }
@@ -136,6 +139,14 @@ impl BodyPass {
     /// Sub-samples per pixel edge used when rasterising disks.
     pub fn with_oversampling(mut self, oversampling: usize) -> Self {
         self.oversampling = oversampling.max(2);
+        self
+    }
+
+    /// Whether body stamps are blurred with the sensor PSF. Off renders
+    /// the geometric disk at sub-sample resolution, for isolating the
+    /// PSF's effect on the limb; stars keep their PSF regardless.
+    pub fn with_psf_blur(mut self, psf_blur: bool) -> Self {
+        self.psf_blur = psf_blur;
         self
     }
 
@@ -235,7 +246,16 @@ impl SecondPass for BodyPass {
         let states = self.states(ctx)?;
         let orientation = middle_sample(ctx)?.orientation;
         let satellite = ctx.satellite;
-        let psf = satellite.airy_disk_pixel_space();
+        let psf = if self.psf_blur {
+            satellite.airy_disk_pixel_space()
+        } else {
+            // A PSF far narrower than a pixel: the sampled kernel collapses
+            // to a single central weight.
+            shared::image_proc::airy::PixelScaledAiryDisk::with_fwhm(
+                1e-3,
+                satellite.telescope.corrected_to,
+            )
+        };
         let pixel_mm = satellite.sensor.pixel_size().as_millimeters();
         let exposure_s = ctx.exposure.as_secs_f64();
         let solar_rate = self.solar_electron_rate(satellite)?;

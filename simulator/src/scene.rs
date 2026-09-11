@@ -265,6 +265,20 @@ impl Scene {
         exposure: &Duration,
         base_seed: Option<u64>,
     ) -> Vec<RenderingResult> {
+        self.render_with_options(exposure, true, base_seed)
+    }
+
+    /// Render all sensors, choosing whether photon arrivals are Poisson
+    /// sampled. With `apply_poisson = false` the `star_image` and
+    /// `zodiacal_image` components are the pre-noise means (sensor read
+    /// and dark noise are still drawn into `sensor_noise_image`), which
+    /// is what effect-isolation renders need.
+    pub fn render_with_options(
+        &self,
+        exposure: &Duration,
+        apply_poisson: bool,
+        base_seed: Option<u64>,
+    ) -> Vec<RenderingResult> {
         let sensor_count = self.focal_plane.array.sensor_count();
         let mut results = Vec::with_capacity(sensor_count);
 
@@ -290,7 +304,12 @@ impl Scene {
             }
 
             let seed = base_seed.map(|s| s + sensor_idx as u64);
-            let rendered = renderer.render_with_seed(exposure, &self.zodiacal_coordinates, seed);
+            let rendered = renderer.render_with_options(
+                exposure,
+                &self.zodiacal_coordinates,
+                apply_poisson,
+                seed,
+            );
 
             results.push(RenderingResult {
                 quantized_image: rendered.quantized_image,
