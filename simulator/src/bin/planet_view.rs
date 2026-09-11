@@ -570,6 +570,7 @@ fn main() -> Result<(), String> {
     let metadata_path = PathBuf::from(format!("{}.json", args.out.display()));
     let git_commit = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .ok()
         .filter(|o| o.status.success())
