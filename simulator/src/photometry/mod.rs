@@ -69,6 +69,8 @@ pub mod human;
 pub mod photoconversion;
 pub mod quantum_efficiency;
 pub mod sdss;
+#[cfg(feature = "solar-system")]
+pub mod solar;
 pub mod spectrum;
 pub mod stellar;
 pub mod stis_zodiacal;

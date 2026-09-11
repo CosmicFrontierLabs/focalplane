@@ -8,12 +8,25 @@ description = "Space telescope optical and sensor simulation"
 repository.workspace = true
 license.workspace = true
 
+[features]
+# Resolved solar-system bodies (planets, Moon, Sun) rendered as an opaque
+# second compositing pass. Off by default so renderer consumers that only
+# need star fields carry no ephemeris or texture dependencies.
+solar-system = [
+    "dep:starfield-solar-spectrum",
+    "dep:starfield-planet-maps",
+    "dep:starfield-reflectance-library",
+]
+
 [dependencies]
-starfield = { version = "0.13", features = ["photometry"] }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "3613f1c" }
+starfield = { version = "0.16", features = ["photometry"] }
+starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
+starfield-planet-maps = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
+starfield-reflectance-library = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",
@@ -29,9 +42,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "fe49b89" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "70673b9eaefb7d8d2856633f5443561e3ca89c1d" }
 
 rand = "0.9"
 rand_distr = "0.5"
@@ -65,6 +78,10 @@ criterion = { version = "0.5", default-features = false, features = [
 ] } # Benchmarking (no plotters: criterion's plotters feature pulls image 0.24)
 approx = "0.5"                                               # Approximate floating point comparisons
 tempfile = "3.10"                                            # Temporary file handling
+
+[[bin]]
+name = "planet_view"
+required-features = ["solar-system"]
 
 [[bench]]
 name = "render"

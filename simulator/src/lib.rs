@@ -69,6 +69,13 @@
 //! - **Education**: Understand space telescope physics and image processing
 
 pub mod algo; // misc module lives here
+#[cfg(feature = "solar-system")]
+pub mod atmosphere;
+#[cfg(feature = "solar-system")]
+pub mod bodies;
+#[cfg(feature = "solar-system")]
+pub mod body_pass;
+pub mod epoch;
 pub mod hardware;
 pub mod image_proc; // render module lives here
 pub mod photometry;
@@ -77,6 +84,8 @@ pub mod scene;
 pub mod scene_galaxy;
 pub mod shared_args;
 pub mod sims;
+#[cfg(feature = "solar-system")]
+pub mod solar_system;
 pub mod star_math;
 pub mod star_projector;
 

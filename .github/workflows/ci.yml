@@ -24,3 +24,6 @@ jobs:
 
     - name: Run tests
       run: cargo test --verbose
+
+    - name: Run tests with solar-system feature
+      run: cargo test --verbose --features solar-system

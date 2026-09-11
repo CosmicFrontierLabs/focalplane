@@ -1,9 +1,12 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
 use ndarray::{Array2, Zip};
 use starfield::{catalogs::StarData, Equatorial};
 
+use crate::epoch::Epoch;
+use crate::image_proc::compose::{Composite, OrientationSample, PassContext, SecondPass};
 use crate::{
     hardware::{
         satellite::FocalPlaneConfig, sensor_noise::generate_sensor_noise, SatelliteConfig,
@@ -163,9 +166,70 @@ pub struct Renderer {
 
     /// Stars that were rendered in the base image (not clipped)
     pub rendered_stars: Vec<StarInFrame>,
+
+    /// Optional opaque-body compositing pass, bound to the fixed
+    /// orientation of this static render. `None` renders exactly as if
+    /// the pass did not exist.
+    pub second_pass: Option<SecondPassBinding>,
+}
+
+/// A [`SecondPass`] together with the pointing it should be evaluated
+/// at. Static renders have one orientation for the whole exposure, so
+/// the binding carries it alongside the pass and the optional epoch.
+#[derive(Clone, Debug)]
+pub struct SecondPassBinding {
+    /// The compositing pass.
+    pub pass: Arc<dyn SecondPass>,
+    /// Spacecraft orientation for the exposure.
+    pub orientation: UnitQuaternion<f64>,
+    /// Absolute time at exposure start, if known.
+    pub epoch: Option<Epoch>,
+    /// Which sensor of the focal-plane array this renderer draws.
+    pub sensor_idx: usize,
+    /// Focal-plane geometry the pass projects bodies through.
+    pub focal_plane: FocalPlaneConfig,
 }
 
 impl Renderer {
+    /// Attach an opaque-body second pass evaluated at a fixed pointing.
+    pub fn with_second_pass(mut self, binding: SecondPassBinding) -> Self {
+        self.second_pass = Some(binding);
+        self
+    }
+
+    /// Composite for this renderer's exposure, or `None` when no pass
+    /// is bound. Panics if the pass fails: the static render API is
+    /// infallible and a silently dropped body would be worse than a
+    /// loud failure.
+    fn second_pass_composite(&self, exposure: &Duration) -> Option<Composite> {
+        let binding = self.second_pass.as_ref()?;
+        let (width, height) = self
+            .satellite_config
+            .sensor
+            .dimensions
+            .get_pixel_width_height();
+        let samples = [OrientationSample {
+            offset: Duration::ZERO,
+            orientation: binding.orientation,
+        }];
+        let ctx = PassContext {
+            focal_plane: &binding.focal_plane,
+            satellite: &self.satellite_config,
+            sensor_idx: binding.sensor_idx,
+            roi_origin: (0, 0),
+            roi_size: (width, height),
+            exposure: *exposure,
+            epoch: binding.epoch.clone(),
+            samples: &samples,
+        };
+        Some(
+            binding
+                .pass
+                .composite(&ctx)
+                .expect("second pass failed during static render"),
+        )
+    }
+
     /// Create a new renderer from a star catalog and satellite configuration.
     ///
     /// Projects stars through the focal-plane-mm pipeline and creates a base
@@ -197,6 +261,7 @@ impl Renderer {
             satellite_config,
             base_star_image,
             rendered_stars,
+            second_pass: None,
         }
     }
 
@@ -241,6 +306,7 @@ impl Renderer {
             satellite_config,
             base_star_image,
             rendered_stars: stars.to_vec(),
+            second_pass: None,
         }
     }
 
@@ -315,7 +381,21 @@ impl Renderer {
         let exposure_factor = exposure.as_secs_f64();
 
         // Scale star image by exposure duration
-        let scaled_star_image = &self.base_star_image * exposure_factor;
+        let mut scaled_star_image = &self.base_star_image * exposure_factor;
+
+        // Generate zodiacal background
+        let z_light = ZodiacalLight::new();
+
+        let mut zodiacal_mean =
+            z_light.generate_zodiacal_background(&self.satellite_config, exposure, zodiacal_coords);
+
+        // Opaque bodies hide the stars and zodiacal light behind them
+        // and add their own radiance to the star buffer. Both buffers
+        // are still means here, so the Poisson draws below stay valid.
+        if let Some(composite) = self.second_pass_composite(exposure) {
+            composite.apply(&mut scaled_star_image);
+            composite.apply_mask(&mut zodiacal_mean);
+        }
 
         // Apply Poisson arrival time statistics to star photons if requested
         let star_image = if apply_poisson {
@@ -331,12 +411,6 @@ impl Renderer {
             self.satellite_config.temperature,
             rng_seed,
         );
-
-        // Generate zodiacal background
-        let z_light = ZodiacalLight::new();
-
-        let zodiacal_mean =
-            z_light.generate_zodiacal_background(&self.satellite_config, exposure, zodiacal_coords);
 
         let zodiacal_image = if apply_poisson {
             let new_seed = rng_seed.map(|val| val + 1);
@@ -801,6 +875,86 @@ mod tests {
 
         // Very loose bounds, but should catch egregious errors
         assert!(added_flux > 0.0);
+    }
+
+    /// A 50 mm telescope on the flat-QE test sensor with one star near
+    /// the centre; the fixture the second-pass tests composite onto.
+    fn second_pass_renderer() -> Renderer {
+        let sat = SatelliteConfig::new(
+            crate::hardware::telescope::models::SMALL_50MM.clone(),
+            create_test_sensor(16, 1.0, 1.0e9),
+            Temperature::from_celsius(-10.0),
+        );
+        let star = create_star_in_frame(500.0, 500.0, 2.0, 1.0e4);
+        Renderer::from_stars(&[star], sat)
+    }
+
+    fn bind(renderer: &Renderer, pass: Arc<dyn SecondPass>) -> SecondPassBinding {
+        SecondPassBinding {
+            pass,
+            orientation: UnitQuaternion::identity(),
+            epoch: None,
+            sensor_idx: 0,
+            focal_plane: FocalPlaneConfig::from_satellite(&renderer.satellite_config),
+        }
+    }
+
+    #[test]
+    fn test_noop_second_pass_is_byte_identical_to_none() {
+        use crate::image_proc::compose::NoopPass;
+        let coords = crate::photometry::zodiacal::SolarAngularCoordinates::zodiacal_minimum();
+        let exposure = Duration::from_millis(500);
+        let plain = second_pass_renderer();
+        let binding = bind(&plain, Arc::new(NoopPass));
+        let with_noop = plain.clone().with_second_pass(binding);
+
+        let a = plain.render_with_options(&exposure, &coords, true, Some(11));
+        let b = with_noop.render_with_options(&exposure, &coords, true, Some(11));
+        assert_eq!(a.star_image, b.star_image);
+        assert_eq!(a.zodiacal_image, b.zodiacal_image);
+        assert_eq!(a.sensor_noise_image, b.sensor_noise_image);
+        assert_eq!(a.quantized_image, b.quantized_image);
+    }
+
+    #[test]
+    fn test_second_pass_masks_stars_and_zodiacal_and_adds_body() {
+        use crate::image_proc::compose::{BodyComposite, Composite, ConstantPass};
+        let coords = crate::photometry::zodiacal::SolarAngularCoordinates::zodiacal_minimum();
+        let exposure = Duration::from_millis(500);
+        let plain = second_pass_renderer();
+        let reference = plain.render_with_options(&exposure, &coords, false, Some(3));
+
+        // Opaque 20×20 body covering the star, adding 7 e⁻/px.
+        let electrons = 7.0;
+        let layer = BodyComposite::new(
+            (490, 490),
+            Array2::from_elem((20, 20), 1.0),
+            Array2::from_elem((20, 20), electrons),
+        );
+        let pass = ConstantPass::new(Composite {
+            layers: vec![layer],
+        });
+        let binding = bind(&plain, Arc::new(pass));
+        let with_body = plain.clone().with_second_pass(binding);
+        let composited = with_body.render_with_options(&exposure, &coords, false, Some(3));
+
+        assert!(
+            reference.star_image[[500, 500]] > 1.0,
+            "star must be visible"
+        );
+        for (r, c) in ndarray::indices(reference.star_image.dim()) {
+            let inside = (490..510).contains(&r) && (490..510).contains(&c);
+            if inside {
+                assert_abs_diff_eq!(composited.star_image[[r, c]], electrons, epsilon = 1e-12);
+                assert_abs_diff_eq!(composited.zodiacal_image[[r, c]], 0.0, epsilon = 1e-12);
+            } else {
+                assert_eq!(composited.star_image[[r, c]], reference.star_image[[r, c]]);
+                assert_eq!(
+                    composited.zodiacal_image[[r, c]],
+                    reference.zodiacal_image[[r, c]]
+                );
+            }
+        }
     }
 
     #[test]
