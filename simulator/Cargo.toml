@@ -16,6 +16,7 @@ solar-system = [
     "dep:starfield-solar-spectrum",
     "dep:starfield-planet-maps",
     "dep:starfield-reflectance-library",
+    "dep:starfield-mpc",
 ]
 
 [dependencies]
@@ -23,6 +24,7 @@ starfield = { version = "0.16", features = ["photometry"] }
 starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
 starfield-planet-maps = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
 starfield-reflectance-library = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
+starfield-mpc = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81", optional = true }
 starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
 starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }
 starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "e18af6c65417ec79e4eaedff0aea4a2fe0f81a81" }

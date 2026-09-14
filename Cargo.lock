@@ -3480,6 +3480,7 @@ dependencies = [
  "starfield-bright-galaxies",
  "starfield-datasource-utils",
  "starfield-gaia",
+ "starfield-mpc",
  "starfield-nsa",
  "starfield-planet-maps",
  "starfield-reflectance-library",
@@ -3597,6 +3598,21 @@ dependencies = [
  "nalgebra",
  "rand 0.8.6",
  "regex",
+ "serde",
+ "serde_json",
+ "starfield",
+ "starfield-datasource-utils",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "starfield-mpc"
+version = "0.1.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=e18af6c65417ec79e4eaedff0aea4a2fe0f81a81#e18af6c65417ec79e4eaedff0aea4a2fe0f81a81"
+dependencies = [
+ "log",
+ "nalgebra",
+ "reqwest",
  "serde",
  "serde_json",
  "starfield",

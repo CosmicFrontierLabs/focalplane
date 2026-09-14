@@ -34,6 +34,9 @@ use thiserror::Error;
 
 use crate::epoch::Epoch;
 
+pub mod frame_metadata;
+pub mod minor_planets;
+
 /// Astronomical unit in kilometres (IAU 2012).
 pub const AU_KM: f64 = 149_597_870.7;
 

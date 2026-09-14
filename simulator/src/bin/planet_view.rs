@@ -22,8 +22,13 @@ use clap::Parser;
 use image::{ImageBuffer, Luma, Rgb, RgbImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
 use ndarray::Array2;
-use serde_json::json;
 use shared::units::{AreaExt, LengthExt, Temperature, TemperatureExt};
+use simulator::solar_system::frame_metadata::{
+    AtmosphereModel, BodyRecord, EpochRecord, FrameMetadata, Generator, Instrument,
+    MinorPlanetRecord, MinorPlanetsModel, Models, Outputs, Pointing, Radiometry, SiteRecord,
+    StarsModel,
+};
+use simulator::solar_system::minor_planets::MinorPlanetCatalog;
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield_gaia::{Dr3, LazyLoadingCatalog};
 
@@ -61,6 +66,15 @@ struct SiteMarker {
     site: SurfaceSite,
     view: SiteView,
     pixel: Option<(f64, f64)>,
+}
+
+/// Preview colour for minor-planet markers.
+const MINOR_PLANET_COLOUR: Rgb<u8> = Rgb([255, 214, 0]);
+
+/// A point source to circle and name on the preview.
+struct PointMarker {
+    name: String,
+    pixel: (f64, f64),
 }
 
 /// Parse `Name:lat_deg:lon_east_deg:height_m`.
@@ -156,6 +170,24 @@ struct Args {
     /// starfield cache.
     #[arg(long)]
     gaia_dir: Option<PathBuf>,
+
+    /// Add every MPCORB minor planet in the field as a point source
+    /// (two-body propagation, H-G magnitudes); downloads the catalogue
+    /// into the starfield cache on first use.
+    #[arg(long, default_value_t = false)]
+    minor_planets: bool,
+
+    /// MPCORB-format file to use instead of the cached full catalogue.
+    #[arg(long)]
+    mpcorb: Option<PathBuf>,
+
+    /// Faintest V magnitude of minor planets to include.
+    #[arg(long, default_value_t = 20.0)]
+    minor_planet_mag_limit: f64,
+
+    /// Mark and name minor planets on the preview (yellow).
+    #[arg(long, default_value_t = false)]
+    label_minor_planets: bool,
 
     /// Write the pre-noise mean image (no shot, read or dark noise) as
     /// the 16-bit output instead of a noisy realisation.
@@ -306,11 +338,12 @@ fn save_preview(
     path: &PathBuf,
     markers: &[SiteMarker],
     qualifier: &str,
+    points: &[PointMarker],
     stretch_ceiling: Option<f64>,
 ) -> Result<(), String> {
     let (h, w) = image.dim();
     let raw = stretch_to_u8(image, stretch_ceiling)?;
-    if markers.is_empty() {
+    if markers.is_empty() && points.is_empty() {
         return ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(w as u32, h as u32, raw)
             .ok_or_else(|| "buffer size mismatch".to_string())?
             .save(path)
@@ -358,6 +391,28 @@ fn save_preview(
             &caption,
         );
         caption_y += font_px as i32 + 2;
+    }
+    // Point sources: a small hollow ring so the source itself stays
+    // visible, name to the right (or left near the edge).
+    for point in points {
+        let (cx, cy) = (point.pixel.0.round() as i32, point.pixel.1.round() as i32);
+        draw_hollow_circle_mut(&mut rgb, (cx, cy), 6, MINOR_PLANET_COLOUR);
+        let text_w = (point.name.chars().count() as f32 * font_px * 0.62) as i32;
+        let tx = if cx + 10 + text_w < w as i32 {
+            cx + 10
+        } else {
+            (cx - 10 - text_w).max(0)
+        };
+        let ty = (cy - font_px as i32 / 2).clamp(0, (h as i32 - font_px as i32).max(0));
+        draw_text_mut(
+            &mut rgb,
+            MINOR_PLANET_COLOUR,
+            tx,
+            ty,
+            font_scale,
+            &*FONT,
+            &point.name,
+        );
     }
     rgb.save(path).map_err(|e| e.to_string())
 }
@@ -448,16 +503,15 @@ fn main() -> Result<(), String> {
 
     // Background stars: a Gaia cone covering the window's half-diagonal
     // plus a PSF margin, so every star that can deposit light is loaded.
-    let stars: Vec<StarData> = if args.stars {
+    let half_diag_deg = (args.window_px as f64) * satellite.plate_scale_arcsec_per_pixel() / 3600.0
+        * std::f64::consts::FRAC_1_SQRT_2
+        + 0.005;
+    let mut stars: Vec<StarData> = if args.stars {
         let dir = args
             .gaia_dir
             .clone()
             .unwrap_or_else(simulator::sims::gaia_dr3::default_excerpt_dir);
         let lazy = LazyLoadingCatalog::<Dr3>::open(&dir).map_err(|e| e.to_string())?;
-        let half_diag_deg = (args.window_px as f64) * satellite.plate_scale_arcsec_per_pixel()
-            / 3600.0
-            * std::f64::consts::FRAC_1_SQRT_2
-            + 0.005;
         let (catalog, _) = simulator::sims::gaia_dr3::materialize_cone_augmented(
             &lazy,
             pointing,
@@ -477,6 +531,57 @@ fn main() -> Result<(), String> {
         Vec::new()
     };
     let star_count = stars.len();
+
+    // Minor planets: every MPCORB body in the same cone, as point
+    // sources appended to the star list so they share the first-pass
+    // photometry, PSF and occultation by the resolved bodies.
+    let (minor_planet_catalog, minor_planet_sightings) = if args.minor_planets {
+        let catalog = match &args.mpcorb {
+            Some(path) => MinorPlanetCatalog::from_file(path),
+            None => MinorPlanetCatalog::load_default(),
+        }
+        .map_err(|e| e.to_string())?;
+        let sightings = system
+            .minor_planets_in_cone(
+                &catalog,
+                &observer,
+                &epoch,
+                &pointing,
+                half_diag_deg.to_radians(),
+                args.minor_planet_mag_limit,
+            )
+            .map_err(|e| e.to_string())?;
+        println!(
+            "minor planets: {} of {} MPCORB bodies within {:.3}° brighter than V {:.1} ({})",
+            sightings.len(),
+            catalog.len(),
+            half_diag_deg,
+            args.minor_planet_mag_limit,
+            catalog.path().display()
+        );
+        for s in &sightings {
+            println!(
+                "  {:<24} V {:5.2}  RA {:9.5}° Dec {:+9.5}°  Δ {:.4} AU  r {:.4} AU  phase {:5.1}°  motion {:.1}″/h",
+                s.name,
+                s.v_magnitude,
+                s.direction.ra_degrees(),
+                s.direction.dec_degrees(),
+                s.range_au,
+                s.heliocentric_au,
+                s.phase_angle.to_degrees(),
+                s.sky_motion_arcsec_per_hour
+            );
+        }
+        for s in &sightings {
+            let id = catalog
+                .find(&s.designation)
+                .map_or(u64::MAX, |e| e.star_id());
+            stars.push(s.star_data(id));
+        }
+        (Some(catalog), sightings)
+    } else {
+        (None, Vec::new())
+    };
 
     let scene = Scene::from_catalog(focal_plane, stars, pointing, zodiacal)
         .with_second_pass(Arc::new(pass), Some(epoch.clone()));
@@ -553,6 +658,23 @@ fn main() -> Result<(), String> {
         markers.push(SiteMarker { site, view, pixel });
     }
 
+    // Minor planets on the sensor, through the same projector.
+    let mut minor_planet_pixels: Vec<Option<(f64, f64)>> = Vec::new();
+    let mut point_markers = Vec::new();
+    for s in &minor_planet_sightings {
+        let probe = StarData::with_position(0, s.direction, 0.0, None);
+        let pixel = scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0);
+        minor_planet_pixels.push(pixel);
+        if let (true, Some(pixel)) = (args.label_minor_planets, pixel) {
+            point_markers.push(PointMarker {
+                name: format!("{} V{:.1}", s.name, s.v_magnitude),
+                pixel,
+            });
+        }
+    }
+
     let png = args.out.with_extension("png");
     let preview = PathBuf::from(format!("{}_preview.png", args.out.display()));
     save_u16(&result.quantized_image, &png)?;
@@ -562,6 +684,7 @@ fn main() -> Result<(), String> {
         &preview,
         &markers,
         &args.site_qualifier,
+        &point_markers,
         args.stretch_peak_e,
     )?;
 
@@ -575,126 +698,160 @@ fn main() -> Result<(), String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let body_json = |state: &BodyState, elongation_deg: f64| {
-        let ill = &state.illumination;
-        json!({
-            "body": state.body.name(),
-            "naif_id": state.body.naif_id(),
-            "apparent_ra_deg": state.direction.ra_degrees(),
-            "apparent_dec_deg": state.direction.dec_degrees(),
-            "range_au": state.distance_au,
-            "range_km": state.distance_km(),
-            "light_time_s": state.light_time_s,
-            "heliocentric_distance_au": ill.heliocentric_distance_au,
-            "angular_diameter_arcsec": state.angular_diameter_arcsec(),
-            "phase_angle_deg": ill.phase_angle.to_degrees(),
-            "illuminated_fraction": ill.illuminated_fraction,
-            "bright_limb_position_angle_deg": ill.bright_limb_position_angle.to_degrees(),
-            "north_pole_position_angle_deg": state.north_pole_position_angle.to_degrees(),
-            "solar_elongation_deg": elongation_deg,
-            "v_magnitude_mallama_hilton_2018": state.v_magnitude,
-            "sub_observer_lon_east_deg": state.sub_observer.lon_rad.to_degrees(),
-            "sub_observer_lat_planetocentric_deg": state.sub_observer.lat_rad.to_degrees(),
-            "sub_solar_lon_east_deg": state.sub_solar.map(|p| p.lon_rad.to_degrees()),
-            "sub_solar_lat_planetocentric_deg": state.sub_solar.map(|p| p.lat_rad.to_degrees()),
-            "equatorial_radius_km": state.body.equatorial_radius_km(),
-            "polar_radius_km": state.body.polar_radius_km(),
-            "electrons_per_sr_per_unit_reflectance": args.exposure_s * solar_rate
-                / ill.heliocentric_distance_au.powi(2),
-        })
-    };
-    let sites_json: Vec<_> = markers
+    let body_records: Vec<BodyRecord> = states
         .iter()
-        .map(|m| {
-            json!({
-                "name": m.site.name,
-                "qualifier": args.site_qualifier,
-                "latitude_geodetic_deg": m.site.latitude_deg,
-                "longitude_east_deg": m.site.longitude_east_deg,
-                "height_m": m.site.height_m,
-                "status": m.view.status().to_string(),
-                "visible_geometric": m.view.visible,
-                "emission_cosine": m.view.emission_cosine,
-                "incidence_cosine": m.view.incidence_cosine,
-                "sky_offset_east_arcsec": m.view.sky_offset_rad.0.to_degrees() * 3600.0,
-                "sky_offset_north_arcsec": m.view.sky_offset_rad.1.to_degrees() * 3600.0,
-                "pixel_x": m.pixel.map(|p| p.0),
-                "pixel_y": m.pixel.map(|p| p.1),
-                "meaning": "apparent imaged site at the light-time-corrected epoch; not a transmit point-ahead or arrival-time aimpoint; visible means on the facing hemisphere, not link availability",
-            })
+        .map(|(state, elongation_deg)| {
+            let electrons_per_sr =
+                args.exposure_s * solar_rate / state.illumination.heliocentric_distance_au.powi(2);
+            BodyRecord::from_state(state, *elongation_deg, electrons_per_sr)
         })
         .collect();
-    let metadata = json!({
-        "generator": {
-            "crate": "focalplane simulator",
-            "version": env!("CARGO_PKG_VERSION"),
-            "binary": "planet_view",
-            "git_commit": git_commit,
-            "command_line": std::env::args().collect::<Vec<_>>(),
-        },
-        "epoch": {
-            "utc": epoch.to_string(),
-            "jd_tdb": epoch.jd_tdb(),
-        },
-        "observer": format!("{observer:?}"),
-        "pointing_icrf": {
-            "ra_deg": pointing.ra_degrees(),
-            "dec_deg": pointing.dec_degrees(),
-            "roll_deg": 0.0,
-            "target": target.name(),
-        },
-        "instrument": {
-            "telescope": satellite.telescope.name,
-            "aperture_m": satellite.telescope.aperture.as_meters(),
-            "focal_length_m": satellite.telescope.focal_length.as_meters(),
-            "obscuration_ratio_linear": satellite.telescope.obscuration_ratio,
-            "clear_aperture_cm2": satellite.telescope.clear_aperture_area().as_square_centimeters(),
-            "sensor": satellite.sensor.name,
-            "pixel_um": satellite.sensor.pixel_size().as_micrometers(),
-            "plate_scale_arcsec_per_px": satellite.plate_scale_arcsec_per_pixel(),
-            "window_px": args.window_px,
-            "exposure_s": args.exposure_s,
-            "temperature_c": args.temperature_c,
-            "full_well_e": well,
-            "dark_current_e_per_s_per_px": satellite.sensor.dark_current_at_temperature(satellite.temperature),
-            "psf_model": if args.no_psf { "none on bodies (delta); stars Gaussian-approximated Airy" } else { "Gaussian approximation of the Airy core at the reference wavelength, 3x3 Simpson per pixel" },
-            "psf_fwhm_px": satellite.airy_disk_pixel_space().fwhm(),
-            "image_parity": "north up, east left (sky parity); pixel index = pixel centre",
-        },
-        "models": {
-            "bodies": bodies.iter().map(|b| b.name()).collect::<Vec<_>>(),
-            "textured": !args.untextured,
-            "earth_atmosphere": if args.no_atmosphere || target != BodyId::Earth && !bodies.contains(&BodyId::Earth) { json!(null) } else {
-                let air = RayleighAtmosphere::earth(BodyId::Earth.equatorial_radius_km());
-                json!({"type": "Rayleigh single scattering", "scale_height_km": air.scale_height_km, "top_km": air.top_km, "tau_vertical_550nm": air.vertical_optical_depth(550.0, 0.0), "spectral_bins": 8, "multiple_scattering": false, "aerosols": false, "ozone": false, "clouds": false, "refraction": false})
-            },
-            "noise": if args.noiseless { "none (pre-noise mean image)" } else { "Poisson shot noise on bodies+stars and on zodiacal light, Gaussian read noise, dark current" },
-            "stray_light": "not modelled",
-            "ocean_glint": "not modelled",
-            "clouds": "not modelled",
-            "body_motion_blur": "not modelled (body evaluated at mid-exposure orientation)",
-            "oversampling_per_pixel_edge": args.oversampling,
-            "stars": if args.stars { json!({"catalog": "Gaia DR3 excerpt + Hipparcos bright supplement", "mag_limit_g": args.star_mag_limit, "count_in_cone": star_count}) } else { json!(null) },
-        },
-        "radiometry": {
-            "solar_spectrum": simulator::photometry::solar::HSRS_PROVENANCE,
-            "solar_electron_rate_1au_e_per_s": solar_rate,
-            "chain": "F_sun(lambda) [W m^-2 nm^-1 @1 AU] -> photons (lambda/hc) -> electrons (combined QE, 1 nm bins) -> Edot_sun; body radiance per unit solar irradiance r [sr^-1] = BRDF x texel band albedo x T_sun T_view + Rayleigh path radiance; pixel e- = sum_subsamples r * (T * Edot_sun / d_sun^2) * Omega_sub",
-            "scene_electrons_total": total,
-            "scene_electrons_peak_per_px": result.star_image.iter().cloned().fold(0.0, f64::max),
-            "pixels_at_full_well": saturated,
-            "zodiacal_elongation_used_deg": zodiacal_elongation,
-        },
-        "bodies": states.iter().map(|(s, e)| body_json(s, *e)).collect::<Vec<_>>(),
-        "sites": sites_json,
-        "outputs": {
-            "image_16bit_dn": png.display().to_string(),
-            "preview_8bit": preview.display().to_string(),
-            "preview_stretch": format!("asinh(1000 x) / asinh(1000), floor = 1st percentile, ceiling = {}", args.stretch_peak_e.map_or("frame max".to_string(), |c| format!("{c} e-/px"))),
-            "dn_per_electron": satellite.sensor.dn_per_electron,
-            "black_level_dn": satellite.sensor.black_level_dn,
-        },
+    let site_records: Vec<SiteRecord> = markers
+        .iter()
+        .map(|m| SiteRecord::new(&m.site, &m.view, &args.site_qualifier, m.pixel))
+        .collect();
+    let minor_planet_records: Vec<MinorPlanetRecord> = minor_planet_sightings
+        .iter()
+        .zip(&minor_planet_pixels)
+        .map(|(s, px)| MinorPlanetRecord::new(s, *px))
+        .collect();
+    let earth_atmosphere = (bodies.contains(&BodyId::Earth) && !args.no_atmosphere).then(|| {
+        let air = RayleighAtmosphere::earth(BodyId::Earth.equatorial_radius_km());
+        AtmosphereModel {
+            kind: "Rayleigh single scattering".to_string(),
+            scale_height_km: air.scale_height_km,
+            top_km: air.top_km,
+            tau_vertical_550nm: air.vertical_optical_depth(550.0, 0.0),
+            spectral_bins: 8,
+            multiple_scattering: false,
+            aerosols: false,
+            ozone: false,
+            clouds: false,
+            refraction: false,
+        }
     });
+    let stars_model = args.stars.then(|| StarsModel {
+        catalog: "Gaia DR3 excerpt + Hipparcos bright supplement".to_string(),
+        mag_limit_g: args.star_mag_limit,
+        count_in_cone: star_count,
+    });
+    let minor_planets_model = minor_planet_catalog
+        .as_ref()
+        .map(|catalog| MinorPlanetsModel {
+            catalog: "MPC MPCORB via starfield-mpc".to_string(),
+            catalog_file: catalog.path().display().to_string(),
+            catalog_bodies: catalog.len(),
+            elements_epoch_tt_jd_range: catalog.epoch_range_tt(),
+            mag_limit_v: args.minor_planet_mag_limit,
+            count_in_cone: minor_planet_sightings.len(),
+            propagation: "two-body from osculating elements; light time iterated; first-order \
+                      observer aberration; no perturbations, no deflection"
+                .to_string(),
+            photometry: "IAU H-G (Bowell et al. 1989), G = 0.15 where absent; solar-colour point \
+                     source, B-V 0.75"
+                .to_string(),
+            not_modelled: ["rotational light curves", "resolved disks", "comet comae"]
+                .map(str::to_string)
+                .to_vec(),
+        });
+    let metadata = FrameMetadata {
+        generator: Generator {
+            crate_name: "focalplane simulator".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            binary: "planet_view".to_string(),
+            git_commit,
+            command_line: std::env::args().collect(),
+        },
+        epoch: EpochRecord {
+            utc: epoch.to_string(),
+            jd_tdb: epoch.jd_tdb(),
+        },
+        observer: format!("{observer:?}"),
+        pointing_icrf: Pointing {
+            ra_deg: pointing.ra_degrees(),
+            dec_deg: pointing.dec_degrees(),
+            roll_deg: 0.0,
+            target: target.name().to_string(),
+        },
+        instrument: Instrument {
+            telescope: satellite.telescope.name.to_string(),
+            aperture_m: satellite.telescope.aperture.as_meters(),
+            focal_length_m: satellite.telescope.focal_length.as_meters(),
+            obscuration_ratio_linear: satellite.telescope.obscuration_ratio,
+            clear_aperture_cm2: satellite
+                .telescope
+                .clear_aperture_area()
+                .as_square_centimeters(),
+            sensor: satellite.sensor.name.to_string(),
+            pixel_um: satellite.sensor.pixel_size().as_micrometers(),
+            plate_scale_arcsec_per_px: satellite.plate_scale_arcsec_per_pixel(),
+            window_px: args.window_px,
+            exposure_s: args.exposure_s,
+            temperature_c: args.temperature_c,
+            full_well_e: well,
+            dark_current_e_per_s_per_px: satellite
+                .sensor
+                .dark_current_at_temperature(satellite.temperature),
+            psf_model: if args.no_psf {
+                "none on bodies (delta); stars Gaussian-approximated Airy"
+            } else {
+                "Gaussian approximation of the Airy core at the reference wavelength, 3x3 \
+                 Simpson per pixel"
+            }
+            .to_string(),
+            psf_fwhm_px: satellite.airy_disk_pixel_space().fwhm(),
+            image_parity: "north up, east left (sky parity); pixel index = pixel centre"
+                .to_string(),
+        },
+        models: Models {
+            bodies: bodies.iter().map(|b| b.name().to_string()).collect(),
+            textured: !args.untextured,
+            earth_atmosphere,
+            noise: if args.noiseless {
+                "none (pre-noise mean image)"
+            } else {
+                "Poisson shot noise on bodies+stars and on zodiacal light, Gaussian read \
+                 noise, dark current"
+            }
+            .to_string(),
+            stray_light: "not modelled".to_string(),
+            ocean_glint: "not modelled".to_string(),
+            clouds: "not modelled".to_string(),
+            body_motion_blur: "not modelled (body evaluated at mid-exposure orientation)"
+                .to_string(),
+            oversampling_per_pixel_edge: args.oversampling,
+            stars: stars_model,
+            minor_planets: minor_planets_model,
+        },
+        radiometry: Radiometry {
+            solar_spectrum: simulator::photometry::solar::HSRS_PROVENANCE.to_string(),
+            solar_electron_rate_1au_e_per_s: solar_rate,
+            chain: "F_sun(lambda) [W m^-2 nm^-1 @1 AU] -> photons (lambda/hc) -> electrons \
+                    (combined QE, 1 nm bins) -> Edot_sun; body radiance per unit solar \
+                    irradiance r [sr^-1] = BRDF x texel band albedo x T_sun T_view + Rayleigh \
+                    path radiance; pixel e- = sum_subsamples r * (T * Edot_sun / d_sun^2) * \
+                    Omega_sub"
+                .to_string(),
+            scene_electrons_total: total,
+            scene_electrons_peak_per_px: result.star_image.iter().cloned().fold(0.0, f64::max),
+            pixels_at_full_well: saturated,
+            zodiacal_elongation_used_deg: zodiacal_elongation,
+        },
+        bodies: body_records,
+        sites: site_records,
+        minor_planets: minor_planet_records,
+        outputs: Outputs {
+            image_16bit_dn: png.display().to_string(),
+            preview_8bit: preview.display().to_string(),
+            preview_stretch: format!(
+                "asinh(1000 x) / asinh(1000), floor = 1st percentile, ceiling = {}",
+                args.stretch_peak_e
+                    .map_or("frame max".to_string(), |c| format!("{c} e-/px"))
+            ),
+            dn_per_electron: satellite.sensor.dn_per_electron,
+            black_level_dn: satellite.sensor.black_level_dn,
+        },
+    };
     std::fs::write(
         &metadata_path,
         serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?,
