@@ -784,8 +784,19 @@ Interface decisions agreed with the datasources side (2026-09-09):
 
 Saturn rings; Mars dust storms; Earth city lights and earthshine on
 the Moon; polarisation (Rayleigh limb is strongly polarised, relevant
-if a polarising element is in the optical train); asteroids via
-`starfield-mpc` Kepler propagation (already exists) as point sources.
+if a polarising element is in the optical train).
+
+**Done:** asteroids as point sources (`solar_system/minor_planets.rs`,
+`planet_view --minor-planets`): the full MPCORB catalogue through
+`starfield-mpc`, two-body propagation with light time and observer
+aberration, IAU H-G magnitudes, solar-colour spectrum. Validated on
+Ceres against Horizons (2″ from Earth, 5″ from Mars, ΔV 0.04). Density
+reality check: the 20′ IMX455 field around Earth from Mars holds ~120
+catalogue bodies but only 3 brighter than V 20, none brighter than
+V 18.9; at 1 ms they are sub-electron, so as distractors they matter
+for exposures of seconds, not the guide cadence. Not done: resolved
+Ceres/Vesta disks (needs the `BodyId` opening-up), perturbed
+propagation for NEOs, light curves, comets.
 
 ---
 
