@@ -23,6 +23,7 @@ use image::{ImageBuffer, Luma, Rgb, RgbImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
 use ndarray::Array2;
 use shared::units::{AreaExt, LengthExt, Temperature, TemperatureExt};
+use simulator::overlay::{Annotation, AnnotationKind, Footprint, Overlay};
 use simulator::solar_system::frame_metadata::{
     AtmosphereModel, BodyRecord, EpochRecord, FrameMetadata, Generator, Instrument,
     MinorPlanetRecord, MinorPlanetsModel, Models, Outputs, Pointing, Radiometry, SiteRecord,
@@ -30,6 +31,7 @@ use simulator::solar_system::frame_metadata::{
 };
 use simulator::solar_system::minor_planets::MinorPlanetCatalog;
 use starfield::catalogs::{StarCatalog, StarData};
+use starfield::Equatorial;
 use starfield_gaia::{Dr3, LazyLoadingCatalog};
 
 use starfield_planet_maps::{earth_tier, mars_tier, AbundanceTier};
@@ -857,11 +859,170 @@ fn main() -> Result<(), String> {
         serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+
+    // Informational overlay: the same sources in the same pixel frame,
+    // as an SVG that sits 1:1 on the PNGs and carries the records above
+    // in its metadata.
+    let overlay_path = PathBuf::from(format!("{}.svg", args.out.display()));
+    let overlay = build_overlay(
+        args.window_px,
+        &metadata,
+        &states,
+        &markers,
+        &minor_planet_pixels,
+        &scene.per_sensor_stars[0],
+        &satellite,
+    );
+    std::fs::write(&overlay_path, overlay.to_svg()).map_err(|e| e.to_string())?;
     println!(
-        "wrote {}, {} and {}",
+        "wrote {}, {}, {} and {}",
         png.display(),
         preview.display(),
-        metadata_path.display()
+        metadata_path.display(),
+        overlay_path.display()
     );
     Ok(())
+}
+
+/// Stars brighter than this Gaia G get a footprint ring on the overlay.
+const OVERLAY_STAR_RING_MAG: f64 = 16.0;
+/// How many of the brightest stars get a label.
+const OVERLAY_STAR_LABELS: usize = 10;
+
+/// Assemble the overlay from the frame's records and projected sources.
+fn build_overlay(
+    window_px: usize,
+    metadata: &FrameMetadata,
+    states: &[(BodyState, f64)],
+    markers: &[SiteMarker],
+    minor_planet_pixels: &[Option<(f64, f64)>],
+    stars: &[simulator::image_proc::render::StarInFrame],
+    satellite: &SatelliteConfig,
+) -> Overlay {
+    let plate_scale = satellite.plate_scale_arcsec_per_pixel();
+    let orientation = orientation_from_pointing(
+        &Equatorial::from_degrees(
+            metadata.pointing_icrf.ra_deg,
+            metadata.pointing_icrf.dec_deg,
+        ),
+        0.0,
+    );
+    let focal_plane = FocalPlaneConfig::from_satellite(satellite);
+    let mut overlay = Overlay::new(window_px, window_px).with_frame(metadata);
+
+    for ((state, _), record) in states.iter().zip(&metadata.bodies) {
+        let probe = StarData::with_position(0, state.direction, 0.0, None);
+        let Some(pixel) = focal_plane.project_to_sensor(&probe, &orientation, 0, 0.0) else {
+            continue;
+        };
+        let kind = match state.body {
+            BodyId::Sun => AnnotationKind::Sun,
+            BodyId::Moon => AnnotationKind::Moon,
+            _ => AnnotationKind::Planet,
+        };
+        let radius_px = state.angular_diameter_arcsec() / 2.0 / plate_scale;
+        let label = format!(
+            "{} {:.1}\" {:.0}% lit",
+            state.body.name(),
+            state.angular_diameter_arcsec(),
+            100.0 * state.illumination.illuminated_fraction
+        );
+        overlay.push(
+            Annotation::new(
+                state.body.name().to_ascii_lowercase(),
+                kind,
+                label,
+                pixel,
+                Footprint::Circle { radius_px },
+            )
+            .with_payload(record),
+        );
+    }
+
+    for (marker, record) in markers.iter().zip(&metadata.sites) {
+        let Some(pixel) = marker.pixel else {
+            continue;
+        };
+        if marker.view.status() == SiteStatus::FarSide {
+            continue;
+        }
+        overlay.push(
+            Annotation::new(
+                format!(
+                    "site-{}",
+                    marker.site.name.to_ascii_lowercase().replace(' ', "-")
+                ),
+                AnnotationKind::Site,
+                format!("{} ({})", marker.site.name, marker.view.status()),
+                pixel,
+                Footprint::Point {
+                    marker_radius_px: 4.0,
+                },
+            )
+            .with_payload(record),
+        );
+    }
+
+    for (record, pixel) in metadata.minor_planets.iter().zip(minor_planet_pixels) {
+        let Some(pixel) = *pixel else {
+            continue;
+        };
+        overlay.push(
+            Annotation::new(
+                format!("mp-{}", record.designation),
+                AnnotationKind::MinorPlanet,
+                format!("{} V{:.1}", record.name, record.v_magnitude),
+                pixel,
+                Footprint::Point {
+                    marker_radius_px: 5.0,
+                },
+            )
+            .with_payload(record),
+        );
+    }
+
+    // Stars: rings for the bright ones, labels for the brightest few.
+    // Minor planets were appended to the star list, so skip the ids the
+    // catalogue stamped with the high bit.
+    let mut bright: Vec<&simulator::image_proc::render::StarInFrame> = stars
+        .iter()
+        .filter(|s| s.star.magnitude <= OVERLAY_STAR_RING_MAG && s.star.id < (1 << 63))
+        .collect();
+    bright.sort_by(|a, b| a.star.magnitude.total_cmp(&b.star.magnitude));
+    for (rank, s) in bright.iter().enumerate() {
+        let label = if rank < OVERLAY_STAR_LABELS {
+            format!("G {:.1}", s.star.magnitude)
+        } else {
+            String::new()
+        };
+        overlay.push(
+            Annotation::new(
+                format!("star-{}", s.star.id),
+                AnnotationKind::Star,
+                label,
+                (s.x, s.y),
+                Footprint::Point {
+                    marker_radius_px: 4.0,
+                },
+            )
+            .with_payload(&StarRecord {
+                gaia_source_id: s.star.id,
+                ra_deg: s.star.position.ra_degrees(),
+                dec_deg: s.star.position.dec_degrees(),
+                magnitude_g: s.star.magnitude,
+                b_v: s.star.b_v,
+            }),
+        );
+    }
+    overlay
+}
+
+/// Payload for a star annotation.
+#[derive(serde::Serialize)]
+struct StarRecord {
+    gaia_source_id: u64,
+    ra_deg: f64,
+    dec_deg: f64,
+    magnitude_g: f64,
+    b_v: Option<f64>,
 }
