@@ -111,10 +111,7 @@ impl Epoch {
     /// UTC calendar string rounded to the millisecond, or the TDB Julian
     /// date if the UTC conversion is unavailable.
     pub fn utc_string(&self) -> String {
-        // starfield's `utc_iso` truncates the fractional second, so bias
-        // by half a millisecond to round to the nearest one.
-        let rounded = self.time.clone() + 0.5e-3 / SECONDS_PER_DAY;
-        rounded
+        self.time
             .utc_iso('T', 3)
             .unwrap_or_else(|_| format!("JD {:.8} TDB", self.jd_tdb()))
     }
