@@ -794,7 +794,9 @@ Ceres against Horizons (2″ from Earth, 5″ from Mars, ΔV 0.04). Density
 reality check: the 20′ IMX455 field around Earth from Mars holds ~120
 catalogue bodies but only 3 brighter than V 20, none brighter than
 V 18.9; at 1 ms they are sub-electron, so as distractors they matter
-for exposures of seconds, not the guide cadence. Not done: resolved
+for exposures of seconds, not the guide cadence. Eighty assumed-circular
+TNO rows (e = 0) are dropped because starfield 0.16.1 builds a NaN state
+for them (starfield#192). Not done: resolved
 Ceres/Vesta disks (needs the `BodyId` opening-up), perturbed
 propagation for NEOs, light curves, comets.
 

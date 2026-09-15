@@ -182,8 +182,7 @@ impl MinorPlanetCatalog {
         self.elements.is_empty()
     }
 
-    /// Rows dropped for an unparseable epoch, eccentricity outside
-    /// `[0, MAX_ECCENTRICITY)`, or a non-finite state vector.
+    /// Rows dropped for an unparseable epoch or a non-finite state vector.
     pub fn skipped_unusable(&self) -> usize {
         self.skipped_unusable
     }
@@ -217,25 +216,16 @@ impl MinorPlanetCatalog {
     }
 }
 
-/// Eccentricity above which a row is dropped: starfield's universal-variable
-/// propagator is not stable for near-parabolic ellipses (`KeplerOrbit::at`
-/// panics on some of them), and the ~30 such MPCORB rows are damocloids on
-/// 300–1200 AU orbits that are far below any sensor limit except for the
-/// few months around perihelion.
-pub const MAX_ECCENTRICITY: f64 = 0.98;
-
 impl MinorPlanetElements {
     fn from_record(record: MpcOrbRecord, ts: &Timescale) -> Option<Self> {
-        let usable = (0.0..MAX_ECCENTRICITY).contains(&record.eccentricity)
-            && record.semimajor_axis > 0.0
-            && record.semimajor_axis.is_finite();
-        if !usable {
-            return None;
-        }
         let orbit = record.to_kepler_orbit(ts)?;
-        if !(orbit.position_au.iter().all(|v| v.is_finite())
-            && orbit.velocity_au_per_day.iter().all(|v| v.is_finite()))
-        {
+        // starfield 0.16.1 builds a NaN state for exactly circular
+        // elements (80 assumed-circular TNO rows, e = 0.0000000) and
+        // its propagator then panics on them
+        // (OrbitalCommons/starfield#192); a non-finite state is dropped.
+        let finite = orbit.position_au.iter().all(|v| v.is_finite())
+            && orbit.velocity_au_per_day.iter().all(|v| v.is_finite());
+        if !finite {
             return None;
         }
         Some(Self {
