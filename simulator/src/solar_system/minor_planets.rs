@@ -182,7 +182,8 @@ impl MinorPlanetCatalog {
         self.elements.is_empty()
     }
 
-    /// Rows dropped for an unparseable epoch or a non-finite state vector.
+    /// Rows dropped for an unparseable epoch or elements that describe
+    /// no bound orbit.
     pub fn skipped_unusable(&self) -> usize {
         self.skipped_unusable
     }
@@ -219,13 +220,10 @@ impl MinorPlanetCatalog {
 impl MinorPlanetElements {
     fn from_record(record: MpcOrbRecord, ts: &Timescale) -> Option<Self> {
         let orbit = record.to_kepler_orbit(ts)?;
-        // starfield 0.16.1 builds a NaN state for exactly circular
-        // elements (80 assumed-circular TNO rows, e = 0.0000000) and
-        // its propagator then panics on them
-        // (OrbitalCommons/starfield#192); a non-finite state is dropped.
-        let finite = orbit.position_au.iter().all(|v| v.is_finite())
-            && orbit.velocity_au_per_day.iter().all(|v| v.is_finite());
-        if !finite {
+        // Elements that describe no bound orbit (e ≥ 1 with a > 0, a ≤ 0,
+        // NaN fields) give a non-finite state; screen them here so every
+        // stored orbit propagates.
+        if !orbit.is_finite() {
             return None;
         }
         Some(Self {
