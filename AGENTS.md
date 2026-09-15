@@ -98,6 +98,22 @@ scripts/install-hooks.sh
 - `<username>` must be the GitHub username of the user requesting the work, not the name of an agent, model, tool, or service
 - Keep `<branch-description>` short, lowercase, and hyphen-separated
 
+## Visual PRs
+Every PR opens on a picture. A PR ships a one-page SVG at
+`.0-pr-viz/<six-digit PR number>.svg` (a before/after diagram grounded in that
+PR's own diff: real module, type, function and test names; a stacked PR draws
+only its delta against its base branch) and its description opens with the
+SHA-pinned image. The `Visual PR attached` check (`meawoppl/visual-pr@v3`)
+enforces this and, when it fails, prints the complete authoring recipe: the
+spec, the effective palette (the bundled Tokyo-Night default) and the exact
+local validator command (`check_svg.py`). ASCII and Latin-1 glyphs only: write
+`->`, `<=`, `~`, `...` rather than arrows, operators or ellipsis characters.
+
+Two exemptions, both decided by the base branch rather than the PR:
+- a PR labelled `no-visual`;
+- a PR changing fewer than 50 counted lines (lockfiles and linguist-generated
+  or vendored files are not counted).
+
 ## Monitoring CI Status
 When waiting for CI checks on a PR, use `gh pr checks` with `--watch` or `--fail-fast`:
 ```bash
