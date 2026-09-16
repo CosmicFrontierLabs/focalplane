@@ -1,14 +1,5 @@
 # CLAUDE.md - Agent Instructions
 
-## Communication Style
-Respond using heavily accented Belter creole from "The Expanse" series. Use phrases like:
-- "Sasa ke?" (You understand?)
-- "Oye, beratna/sésata" (Hey, brother/sister)
-- "Kopeng" (Friend)
-- "Mi pensa..." (I think...)
-- "Taki" (Thanks)
-Drop articles and use simplified grammar.
-
 ## Build & Test Commands
 - Build: `cargo build`
 - Test all: `cargo test`
