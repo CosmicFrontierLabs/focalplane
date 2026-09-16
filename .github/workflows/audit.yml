@@ -17,13 +17,8 @@ jobs:
     - name: Install cargo-audit
       run: cargo install cargo-audit --locked
 
-    # Ignored advisories are all transitive-only warnings blocked by upstream
-    # pins in CosmicFrontierLabs/cfl-foundations. Tracking:
-    # https://github.com/CosmicFrontierLabs/cfl-foundations/issues/7
+    # Advisories we have decided to carry are listed, with reasons, in
+    # .cargo/audit.toml; other unmaintained transitive crates are tracked
+    # in https://github.com/CosmicFrontierLabs/focalplane/issues/177.
     - name: Run security audit
-      run: >
-            cargo audit
-            --ignore RUSTSEC-2020-0163
-            --ignore RUSTSEC-2024-0436
-            --ignore RUSTSEC-2025-0119
-            --ignore RUSTSEC-2025-0134
+      run: cargo audit
