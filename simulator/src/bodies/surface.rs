@@ -170,11 +170,21 @@ pub enum SurfaceError {
 /// A body surface with spatially varying composition.
 ///
 /// `law` is evaluated as given and scaled by the texel's band albedo,
-/// so it should be a unit-albedo law: `Lambert { albedo: 1.0 }` or
-/// `Minnaert { albedo: 1.0, k }` are exact; a Hapke or Lommel–Seeliger
-/// law is scaled linearly in place of its single-scattering albedo,
-/// which is an approximation that overstates limb darkening for bright
-/// texels.
+/// so it must be a unit law in the same albedo convention the tier was
+/// built in. Two conventions are in use:
+///
+/// - texels are Lambert (normal) albedos, as in the Earth tier's
+///   per-endmember values: use `Lambert { albedo: 1.0 }` (or
+///   `Minnaert { albedo: 1.0, k }`), which scale exactly;
+/// - texels are brightness rescaled so the disk mean is the body's
+///   geometric albedo, as in the Moon and Mars tiers: use
+///   [`crate::bodies::brdf::UnitGeometricAlbedo`] around the body's
+///   photometric law, so the disk-integrated brightness and phase curve
+///   are the law's and the map only redistributes light across the disk.
+///
+/// Scaling a Hapke or Lommel–Seeliger law by anything other than a
+/// constant factor changes its limb darkening; both wrappers above scale
+/// by constants.
 pub struct TexturedSurfaceModel {
     sampler: Arc<dyn SurfaceSampler + Send + Sync>,
     law: Arc<dyn Brdf>,

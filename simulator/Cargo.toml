@@ -21,14 +21,14 @@ solar-system = [
 
 [dependencies]
 starfield = { version = "0.16", features = ["photometry"] }
-starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc", optional = true }
-starfield-planet-maps = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc", optional = true }
-starfield-reflectance-library = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc", optional = true }
-starfield-mpc = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc", optional = true }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc" }
-starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "7680c8a9ad6cd53f22790e126cbaf9c85417a7dc" }
+starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea", optional = true }
+starfield-planet-maps = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea", optional = true }
+starfield-reflectance-library = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea", optional = true }
+starfield-mpc = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea", optional = true }
+starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea" }
+starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea" }
+starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "12f24d109b936e81476bbe0fad127661d5546eea" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",

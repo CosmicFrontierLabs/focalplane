@@ -3904,7 +3904,7 @@ dependencies = [
 [[package]]
 name = "starfield-bright-galaxies"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "serde",
  "starfield",
@@ -3914,7 +3914,7 @@ dependencies = [
 [[package]]
 name = "starfield-datasource-utils"
 version = "0.1.1"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "reqwest",
  "sha2 0.11.0",
@@ -3946,7 +3946,7 @@ dependencies = [
 [[package]]
 name = "starfield-gaia"
 version = "0.2.1"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "arrow",
  "cdshealpix",
@@ -3966,7 +3966,7 @@ dependencies = [
 [[package]]
 name = "starfield-mpc"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "log",
  "nalgebra",
@@ -3981,7 +3981,7 @@ dependencies = [
 [[package]]
 name = "starfield-nsa"
 version = "0.2.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "fitsio-pure 0.11.0",
  "nalgebra",
@@ -3995,7 +3995,7 @@ dependencies = [
 [[package]]
 name = "starfield-planet-maps"
 version = "0.1.1"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "flate2",
  "starfield",
@@ -4006,7 +4006,7 @@ dependencies = [
 [[package]]
 name = "starfield-reflectance-library"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "starfield",
  "starfield-datasource-utils",
@@ -4015,7 +4015,7 @@ dependencies = [
 [[package]]
 name = "starfield-solar-spectrum"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=7680c8a9ad6cd53f22790e126cbaf9c85417a7dc#7680c8a9ad6cd53f22790e126cbaf9c85417a7dc"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources.git?rev=12f24d109b936e81476bbe0fad127661d5546eea#12f24d109b936e81476bbe0fad127661d5546eea"
 dependencies = [
  "starfield",
 ]

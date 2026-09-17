@@ -34,11 +34,11 @@ use starfield::catalogs::{StarCatalog, StarData};
 use starfield::Equatorial;
 use starfield_gaia::{Dr3, LazyLoadingCatalog};
 
-use starfield_planet_maps::{earth_tier, mars_tier, AbundanceTier};
+use starfield_planet_maps::{earth_tier, mars_tier, moon_tier, AbundanceTier};
 use starfield_reflectance_library::ReflectanceLibrary;
 
 use simulator::atmosphere::RayleighAtmosphere;
-use simulator::bodies::brdf::{Hapke, Lambert};
+use simulator::bodies::brdf::{Brdf, Hapke, Lambert, UnitGeometricAlbedo};
 use simulator::bodies::surface::{SurfaceModel, TexturedSurfaceModel};
 use simulator::body_pass::{BodyPass, SceneBody};
 use simulator::epoch::Epoch;
@@ -253,12 +253,26 @@ fn default_surface(
             mars_tier().map_err(|e| e.to_string())?,
             "Mars Viking/MDIM albedo 0.1° (uncalibrated contrast)",
         )),
+        BodyId::Moon => Some((
+            moon_tier().map_err(|e| e.to_string())?,
+            "Moon LROC WAC 643 nm normal albedo 0.1°",
+        )),
         _ => None,
+    };
+    // The tiers' texel values are albedos: Earth's are per-endmember
+    // Lambert albedos, so a unit Lambert scales them exactly; the Moon's
+    // are WAC brightness rescaled so the disk mean is the geometric
+    // albedo, so the law must have unit geometric albedo and the Moon's
+    // own phase curve, which a Lambert sphere lacks by a factor of ~3 at
+    // quadrature.
+    let law: Arc<dyn Brdf> = match body {
+        BodyId::Moon => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+        _ => Arc::new(Lambert { albedo: 1.0 }),
     };
     Ok(match tier {
         Some((tier, label)) => Arc::new(TexturedSurfaceModel::new(
             Arc::new(tier),
-            Arc::new(Lambert { albedo: 1.0 }),
+            law,
             Arc::clone(library),
             label,
         )),

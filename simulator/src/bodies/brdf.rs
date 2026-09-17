@@ -307,6 +307,48 @@ impl Brdf for Hapke {
     }
 }
 
+/// A law rescaled so that a sphere of it has unit geometric albedo.
+///
+/// Multiplying this by a texel value then yields a surface whose
+/// disk-integrated geometric albedo equals that value while keeping the
+/// wrapped law's limb darkening and phase curve. This is how an albedo
+/// map whose mean was set to a body's published geometric albedo is
+/// combined with a photometric law that has a real phase function (the
+/// Moon's Hapke set): the map supplies *where* the light is, the law
+/// supplies *how much* leaves at each phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitGeometricAlbedo<B: Brdf> {
+    law: B,
+    inverse_geometric_albedo: f64,
+}
+
+impl<B: Brdf> UnitGeometricAlbedo<B> {
+    /// Wrap `law`, measuring its geometric albedo numerically.
+    pub fn new(law: B) -> Self {
+        let p = geometric_albedo(&law, 400);
+        Self {
+            law,
+            inverse_geometric_albedo: 1.0 / p,
+        }
+    }
+
+    /// The wrapped law.
+    pub fn law(&self) -> &B {
+        &self.law
+    }
+
+    /// Geometric albedo of the wrapped law before rescaling.
+    pub fn original_geometric_albedo(&self) -> f64 {
+        1.0 / self.inverse_geometric_albedo
+    }
+}
+
+impl<B: Brdf> Brdf for UnitGeometricAlbedo<B> {
+    fn reflectance(&self, mu0: f64, mu: f64, alpha: f64) -> f64 {
+        self.law.reflectance(mu0, mu, alpha) * self.inverse_geometric_albedo
+    }
+}
+
 /// Disk-integrated reflectance of a sphere at phase angle `alpha`:
 ///
 /// `∫ r(μ₀, μ, α) μ dΩ`
@@ -589,6 +631,31 @@ mod tests {
         // parameter set with a strong opposition surge lands near it.
         let p = geometric_albedo(&Hapke::lunar_average(), 200);
         assert!((0.08..0.25).contains(&p), "p = {p}");
+    }
+
+    #[test]
+    fn unit_geometric_albedo_wrapper_normalises_and_keeps_the_phase_curve() {
+        let hapke = Hapke::lunar_average();
+        let unit = UnitGeometricAlbedo::new(hapke);
+        assert_relative_eq!(geometric_albedo(&unit, 200), 1.0, max_relative = 2e-3);
+        assert_relative_eq!(
+            unit.original_geometric_albedo(),
+            geometric_albedo(&hapke, 400),
+            max_relative = 1e-12
+        );
+        // Same phase function as the wrapped law.
+        let alpha = 86.0_f64.to_radians();
+        let phi_unit = disk_integrated_reflectance(&unit, alpha, 200);
+        // The wrapper normalises with a 400-point quadrature; the 200-point
+        // one here differs at the 1e-5 level.
+        let phi_hapke =
+            disk_integrated_reflectance(&hapke, alpha, 200) / geometric_albedo(&hapke, 200);
+        assert_relative_eq!(phi_unit, phi_hapke, max_relative = 1e-4);
+        // A Lambert sphere of the same geometric albedo is far brighter
+        // at quadrature: the reason the Moon cannot use a unit Lambert.
+        let lambert = UnitGeometricAlbedo::new(Lambert { albedo: 1.0 });
+        let phi_lambert = disk_integrated_reflectance(&lambert, alpha, 200);
+        assert!(phi_lambert > 2.0 * phi_unit, "{phi_lambert} vs {phi_unit}");
     }
 
     #[test]
