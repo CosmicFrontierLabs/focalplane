@@ -259,14 +259,16 @@ fn default_surface(
         )),
         _ => None,
     };
-    // The tiers' texel values are albedos: Earth's are per-endmember
-    // Lambert albedos, so a unit Lambert scales them exactly; the Moon's
-    // are WAC brightness rescaled so the disk mean is the geometric
-    // albedo, so the law must have unit geometric albedo and the Moon's
-    // own phase curve, which a Lambert sphere lacks by a factor of ~3 at
-    // quadrature.
+    // The tiers' texel values are albedos in two conventions. Earth's are
+    // per-endmember Lambert albedos, so a unit Lambert scales them
+    // exactly. The Moon's and Mars's are mosaic brightness rescaled so
+    // the disk mean is the body's geometric albedo, so the law must have
+    // unit geometric albedo: the Moon's own Hapke set for its steep phase
+    // curve (a Lambert sphere is ~3x too bright at quadrature), a Lambert
+    // sphere for Mars, whose phase curve is close to Lambertian.
     let law: Arc<dyn Brdf> = match body {
         BodyId::Moon => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+        BodyId::Mars => Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
         _ => Arc::new(Lambert { albedo: 1.0 }),
     };
     Ok(match tier {

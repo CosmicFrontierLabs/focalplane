@@ -448,6 +448,21 @@ ellipsoid in a broadband visible camera (Artemis I: 25 km measured,
   (or a global mean set) × WAC 643 nm normalised-albedo mosaic; lunar
   libration and pole from the DE440 lunar PA binary PCK. Colour from a
   two-endmember (mare/highland) model.
+
+  **Status (datasources rev 12f24d1):** the WAC 643 nm tier is in
+  (`moon_tier()`, 0.1°, one endmember, disk mean set to p = 0.12) and
+  `planet_view` renders it. Because the tier's texels are disk-mean
+  geometric albedo, they scale a `UnitGeometricAlbedo` wrapper around
+  the lunar-average Hapke set, not a unit Lambert (which came out 2.2×
+  too bright at 86° phase). Measured against Mallama & Hilton V from
+  Mars at 2027-06-01T23Z (phase 86°): textured Hapke 2.70×10⁶ e⁻ vs
+  3.01×10⁶ from V (10 % low); grey Hapke sphere 3.80×10⁶. The Mars tier
+  is built the same way and now uses the same wrapper around Lambert:
+  from Earth at 2027-02-19 (phase 2.7°) 9.55×10⁶ e⁻ vs 1.07×10⁷ from V
+  (11 % low). Datasources will add an explicit albedo-convention field
+  to the tier header (SFEMv4) so the wrapper choice keys off the data
+  rather than the body name. Not done: Sato parameter maps, mare and
+  highland endmembers, libration from the PA kernel.
 - **Mercury**: Hapke (Domingue et al.) × MESSENGER MDIS monochrome map.
 - **Mars**: Lommel–Seeliger + a thin dust-haze scattering layer
   (τ ≈ 0.1–1 with dust-storm option), albedo from the Viking/MOLA
