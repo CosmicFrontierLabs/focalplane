@@ -465,6 +465,187 @@ mod tests {
         assert_eq!(bound.no_data_samples(), 0);
     }
 
+    /// Geometric albedo of a bound surface: `∫ r μ dΩ` over the hemisphere
+    /// facing an observer on the body-fixed +x axis, at zero phase.
+    fn hemisphere_geometric_albedo(surface: &dyn SurfaceRadiance, n: usize) -> f64 {
+        let d_theta = FRAC_PI_2 / n as f64;
+        let d_phi = 2.0 * PI / (2 * n) as f64;
+        let mut p = 0.0;
+        for it in 0..n {
+            let theta = (it as f64 + 0.5) * d_theta;
+            let (sin_t, mu) = theta.sin_cos();
+            for ip in 0..2 * n {
+                let phi = (ip as f64 + 0.5) * d_phi;
+                let point = SurfacePoint {
+                    mu0: mu,
+                    mu,
+                    alpha: 0.0,
+                    body_fixed: Vector3::new(mu, sin_t * phi.cos(), sin_t * phi.sin()),
+                    sky_radius_rad: 2e-5,
+                };
+                p += surface.reflectance(&point) * mu * sin_t * d_theta * d_phi;
+            }
+        }
+        p
+    }
+
+    /// The one-endmember Moon and Mars tiers are scaled so their disk mean
+    /// is the body's geometric albedo (0.12, 0.17) *in the band the tier
+    /// was normalised in*: the endmember's solar-weighted 400–2400 nm mean
+    /// (FreshBasalt 0.102, WeatheredBasalt 0.147 at datasources 12f24d1).
+    /// A silicon sensor sees both basalts darker (0.095, 0.132 for the
+    /// IMX455), so through a unit-geometric-albedo law the textured
+    /// bodies come out 7–10 % below those targets. This locks both the
+    /// convention (a unit Lambert would put the Moon at 2A/3 of the
+    /// target and Mars likewise) and the size of the band shortfall.
+    #[test]
+    fn disk_mean_tiers_reproduce_their_geometric_albedo_in_the_sensor_band() {
+        use crate::bodies::brdf::{Hapke, UnitGeometricAlbedo};
+        use crate::hardware::sensor::models::IMX455;
+        use starfield_planet_maps::{mars_tier, moon_tier};
+
+        let solar = TsisSolarSpectrum::load().unwrap();
+        let qe = &IMX455.quantum_efficiency;
+        let band = SensorBand { qe, solar: &solar };
+        let library = Arc::new(ReflectanceLibrary::load_embedded().unwrap());
+
+        let fresh =
+            TexturedSurfaceModel::band_weight(&library, Endmember::FreshBasalt, &band).unwrap();
+        let weathered =
+            TexturedSurfaceModel::band_weight(&library, Endmember::WeatheredBasalt, &band).unwrap();
+        eprintln!(
+            "residual fresh_basalt_imx455={fresh:.4} tier_norm=0.102 ratio={:.3} \
+             weathered_basalt_imx455={weathered:.4} tier_norm=0.147 ratio={:.3}",
+            fresh / 0.102,
+            weathered / 0.147
+        );
+        assert!(
+            (0.85..0.98).contains(&(fresh / 0.102)),
+            "fresh basalt band ratio"
+        );
+        assert!(
+            (0.85..0.98).contains(&(weathered / 0.147)),
+            "weathered basalt band ratio"
+        );
+
+        let moon = TexturedSurfaceModel::new(
+            Arc::new(moon_tier().unwrap()),
+            Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+            Arc::clone(&library),
+            "Moon",
+        )
+        .bind(&band)
+        .unwrap();
+        let p_moon = hemisphere_geometric_albedo(moon.as_ref(), 120);
+        let mars = TexturedSurfaceModel::new(
+            Arc::new(mars_tier().unwrap()),
+            Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
+            Arc::clone(&library),
+            "Mars",
+        )
+        .bind(&band)
+        .unwrap();
+        let p_mars = hemisphere_geometric_albedo(mars.as_ref(), 120);
+        eprintln!(
+            "residual moon_nearside_p={p_moon:.4} target=0.12 mars_p={p_mars:.4} target=0.17 \
+             moon_nodata={} mars_nodata={}",
+            moon.no_data_samples(),
+            mars.no_data_samples()
+        );
+        // The hemisphere facing +x is the Moon's mare-rich near side, a
+        // fifth darker than the global mean; Mars's prime-meridian
+        // hemisphere is close to its mean. Both carry the band ratio.
+        assert!((0.08..0.125).contains(&p_moon), "Moon p = {p_moon}");
+        assert!((0.14..0.175).contains(&p_mars), "Mars p = {p_mars}");
+        // No-data swath seams are a small fraction of the near side.
+        assert!(moon.no_data_samples() < 120 * 240 / 20);
+
+        // The quantity the tiers actually guarantee is the area-weighted
+        // global mean of the texel albedo: the target times the band ratio,
+        // less the no-data fraction (2.47 % of the Moon's area at 12f24d1).
+        let global_mean = |tier: Arc<dyn SurfaceSampler + Send + Sync>| {
+            let bound = TexturedSurfaceModel::new(
+                tier,
+                Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
+                Arc::clone(&library),
+                "mean",
+            )
+            .bind(&band)
+            .unwrap();
+            let (n_lat, n_lon) = (180, 360);
+            let (mut sum, mut area) = (0.0, 0.0);
+            for i in 0..n_lat {
+                let lat = (-90.0 + (i as f64 + 0.5) * 180.0 / n_lat as f64).to_radians();
+                let w = lat.cos();
+                for j in 0..n_lon {
+                    let lon = ((j as f64 + 0.5) * 360.0 / n_lon as f64).to_radians();
+                    let point = SurfacePoint {
+                        mu0: 1.0,
+                        mu: 1.0,
+                        alpha: 0.0,
+                        body_fixed: Vector3::new(
+                            lat.cos() * lon.cos(),
+                            lat.cos() * lon.sin(),
+                            lat.sin(),
+                        ),
+                        sky_radius_rad: 2e-5,
+                    };
+                    // r(1, 1, 0) of a unit-geometric-albedo Lambert is 1.5/π
+                    // per unit texel albedo.
+                    sum += w * bound.reflectance(&point) * PI / 1.5;
+                    area += w;
+                }
+            }
+            sum / area
+        };
+        let moon_mean = global_mean(Arc::new(moon_tier().unwrap()));
+        let mars_mean = global_mean(Arc::new(mars_tier().unwrap()));
+        eprintln!(
+            "residual moon_global_mean_albedo={moon_mean:.4} expected={:.4} \
+             mars_global_mean_albedo={mars_mean:.4} expected={:.4}",
+            0.12 * fresh / 0.102,
+            0.17 * weathered / 0.147
+        );
+        assert_relative_eq!(moon_mean, 0.12 * fresh / 0.102, max_relative = 0.05);
+        assert_relative_eq!(mars_mean, 0.17 * weathered / 0.147, max_relative = 0.05);
+    }
+
+    /// A unit Lambert is the wrong law for a disk-mean tier: it would
+    /// render the Moon at two thirds of its geometric albedo.
+    #[test]
+    fn unit_lambert_understates_a_disk_mean_tier() {
+        use crate::bodies::brdf::UnitGeometricAlbedo;
+        use starfield_planet_maps::mars_tier;
+
+        let solar = TsisSolarSpectrum::load().unwrap();
+        let qe = create_flat_qe(0.5);
+        let band = SensorBand {
+            qe: &qe,
+            solar: &solar,
+        };
+        let library = Arc::new(ReflectanceLibrary::load_embedded().unwrap());
+        let tier = Arc::new(mars_tier().unwrap());
+        let lambert = TexturedSurfaceModel::new(
+            Arc::clone(&tier) as Arc<dyn SurfaceSampler + Send + Sync>,
+            Arc::new(Lambert { albedo: 1.0 }),
+            Arc::clone(&library),
+            "Mars, unit Lambert",
+        )
+        .bind(&band)
+        .unwrap();
+        let unit = TexturedSurfaceModel::new(
+            tier,
+            Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
+            library,
+            "Mars, unit geometric albedo",
+        )
+        .bind(&band)
+        .unwrap();
+        let ratio = hemisphere_geometric_albedo(lambert.as_ref(), 60)
+            / hemisphere_geometric_albedo(unit.as_ref(), 60);
+        assert_relative_eq!(ratio, 2.0 / 3.0, max_relative = 1e-3);
+    }
+
     #[test]
     fn uncovered_sensor_band_is_an_error_at_bind_time() {
         let solar = TsisSolarSpectrum::load().unwrap();
