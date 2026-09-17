@@ -466,9 +466,16 @@ ellipsoid in a broadband visible camera (Artemis I: 25 km measured,
   area means of the tiers through our band are 0.1091 (Moon, the extra
   2.5 % being the 2.47 % no-data area) and 0.1524 (Mars, exact), locked
   by `disk_mean_tiers_reproduce_their_geometric_albedo_in_the_sensor_band`.
-  SFEMv4 normalises the one-endmember tiers at 500–600 nm and records the
-  convention and band in the header, so the wrapper choice keys off the
-  data rather than the body name and the V-band flux comes out at p. Not done: Sato parameter maps, mare and
+  **Fixed at datasources 0711def (SFEMv4):** the one-endmember tiers are
+  normalised at 500–600 nm and the header records the albedo convention
+  and band; `planet_view` keys the unit law off `albedo_convention()`
+  and the lock test computes the colour term from `albedo_band_nm()` and
+  the library (FreshBasalt 1.035, WeatheredBasalt 1.030 into IMX455).
+  Re-measured against Mallama & Hilton V: Moon from Mars at 86° phase
+  2.99×10⁶ e⁻ vs 3.01×10⁶ (0.6 % low); Mars from Earth at 2.7° phase
+  1.097×10⁷ vs 1.071×10⁷ (2.4 % high, the basalt colour term). Global
+  area means through IMX455: Moon 0.1211 = 0.1242 less the 2.47 %
+  no-data, Mars 0.1751 exact; both asserted to 1 %. Not done: Sato parameter maps, mare and
   highland endmembers, libration from the PA kernel.
 - **Mercury**: Hapke (Domingue et al.) × MESSENGER MDIS monochrome map.
 - **Mars**: Lommel–Seeliger + a thin dust-haze scattering layer

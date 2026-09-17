@@ -34,7 +34,7 @@ use starfield::catalogs::{StarCatalog, StarData};
 use starfield::Equatorial;
 use starfield_gaia::{Dr3, LazyLoadingCatalog};
 
-use starfield_planet_maps::{earth_tier, mars_tier, moon_tier, AbundanceTier};
+use starfield_planet_maps::{earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention};
 use starfield_reflectance_library::ReflectanceLibrary;
 
 use simulator::atmosphere::RayleighAtmosphere;
@@ -259,27 +259,36 @@ fn default_surface(
         )),
         _ => None,
     };
-    // The tiers' texel values are albedos in two conventions. Earth's are
-    // per-endmember Lambert albedos, so a unit Lambert scales them
-    // exactly. The Moon's and Mars's are mosaic brightness rescaled so
-    // the disk mean is the body's geometric albedo, so the law must have
-    // unit geometric albedo: the Moon's own Hapke set for its steep phase
-    // curve (a Lambert sphere is ~3x too bright at quadrature), a Lambert
-    // sphere for Mars, whose phase curve is close to Lambertian.
-    let law: Arc<dyn Brdf> = match body {
-        BodyId::Moon => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
-        BodyId::Mars => Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
-        _ => Arc::new(Lambert { albedo: 1.0 }),
-    };
     Ok(match tier {
-        Some((tier, label)) => Arc::new(TexturedSurfaceModel::new(
-            Arc::new(tier),
-            law,
-            Arc::clone(library),
-            label,
-        )),
+        Some((tier, label)) => {
+            let law = unit_law_for(&tier, body);
+            Arc::new(TexturedSurfaceModel::new(
+                Arc::new(tier),
+                law,
+                Arc::clone(library),
+                label,
+            ))
+        }
         None => grey_surface(body),
     })
+}
+
+/// The unit law a tier's texels scale, chosen by the albedo convention
+/// the tier records in its header. Hemispherical-Lambert tiers (Earth's
+/// per-endmember composition) scale a unit Lambert exactly. Geometric
+/// disk-mean tiers (mosaics rescaled so the disk mean is the body's
+/// geometric albedo) scale a law normalised to unit geometric albedo, so
+/// the map only redistributes light and the body's own phase curve sets
+/// the total: the lunar-average Hapke set for the Moon (a Lambert sphere
+/// is ~3x too bright at quadrature), Lambert for anything else.
+fn unit_law_for(tier: &AbundanceTier, body: BodyId) -> Arc<dyn Brdf> {
+    match tier.albedo_convention() {
+        AlbedoConvention::HemisphericalLambert => Arc::new(Lambert { albedo: 1.0 }),
+        AlbedoConvention::GeometricDiskMean => match body {
+            BodyId::Moon => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+            _ => Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
+        },
+    }
 }
 
 fn parse_body(name: &str) -> Result<BodyId, String> {

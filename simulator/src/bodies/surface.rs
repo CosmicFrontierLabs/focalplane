@@ -490,46 +490,63 @@ mod tests {
     }
 
     /// The one-endmember Moon and Mars tiers are scaled so their disk mean
-    /// is the body's geometric albedo (0.12, 0.17) *in the band the tier
-    /// was normalised in*: the endmember's solar-weighted 400–2400 nm mean
-    /// (FreshBasalt 0.102, WeatheredBasalt 0.147 at datasources 12f24d1).
-    /// A silicon sensor sees both basalts darker (0.095, 0.132 for the
-    /// IMX455), so through a unit-geometric-albedo law the textured
-    /// bodies come out 7–10 % below those targets. This locks both the
-    /// convention (a unit Lambert would put the Moon at 2A/3 of the
-    /// target and Mars likewise) and the size of the band shortfall.
+    /// is the body's geometric albedo (0.12, 0.17) in the band the tier
+    /// records (`albedo_band_nm`, 500–600 nm): abundance = p / the
+    /// endmember's box mean over that band. A sensor sees the endmember at
+    /// its own band mean, so the textured body's albedo is
+    /// p · ρ(sensor band) / ρ(tier band): the basalt analogue's colour
+    /// carried into the band, a few percent either way for silicon. This
+    /// locks the convention (a unit Lambert would put a disk-mean tier at
+    /// 2/3 of its target), the recorded band, and the colour term.
     #[test]
     fn disk_mean_tiers_reproduce_their_geometric_albedo_in_the_sensor_band() {
         use crate::bodies::brdf::{Hapke, UnitGeometricAlbedo};
         use crate::hardware::sensor::models::IMX455;
-        use starfield_planet_maps::{mars_tier, moon_tier};
+        use starfield_planet_maps::{mars_tier, moon_tier, AbundanceTier, AlbedoConvention};
 
         let solar = TsisSolarSpectrum::load().unwrap();
         let qe = &IMX455.quantum_efficiency;
         let band = SensorBand { qe, solar: &solar };
         let library = Arc::new(ReflectanceLibrary::load_embedded().unwrap());
 
-        let fresh =
-            TexturedSurfaceModel::band_weight(&library, Endmember::FreshBasalt, &band).unwrap();
-        let weathered =
-            TexturedSurfaceModel::band_weight(&library, Endmember::WeatheredBasalt, &band).unwrap();
-        eprintln!(
-            "residual fresh_basalt_imx455={fresh:.4} tier_norm=0.102 ratio={:.3} \
-             weathered_basalt_imx455={weathered:.4} tier_norm=0.147 ratio={:.3}",
-            fresh / 0.102,
-            weathered / 0.147
+        // Ratio of the endmember's albedo in the sensor band to its mean
+        // over the band the tier was normalised in.
+        let colour_term = |endmember: Endmember, tier: &AbundanceTier| {
+            assert_eq!(
+                tier.albedo_convention(),
+                AlbedoConvention::GeometricDiskMean
+            );
+            let (lo, hi) = tier.albedo_band_nm();
+            let tier_band_mean = library
+                .get(endmember)
+                .unwrap()
+                .curve()
+                .mean_over(lo as f64, hi as f64)
+                .unwrap();
+            let sensor_band =
+                TexturedSurfaceModel::band_weight(&library, endmember, &band).unwrap();
+            eprintln!(
+                "residual {endmember:?} imx455={sensor_band:.4} \
+                 tier_band_{lo:.0}_{hi:.0}nm={tier_band_mean:.4} ratio={:.3}",
+                sensor_band / tier_band_mean
+            );
+            sensor_band / tier_band_mean
+        };
+        let moon_map = moon_tier().unwrap();
+        let mars_map = mars_tier().unwrap();
+        let moon_colour = colour_term(Endmember::FreshBasalt, &moon_map);
+        let mars_colour = colour_term(Endmember::WeatheredBasalt, &mars_map);
+        assert!(
+            (0.9..1.1).contains(&moon_colour),
+            "fresh basalt colour term"
         );
         assert!(
-            (0.85..0.98).contains(&(fresh / 0.102)),
-            "fresh basalt band ratio"
-        );
-        assert!(
-            (0.85..0.98).contains(&(weathered / 0.147)),
-            "weathered basalt band ratio"
+            (0.9..1.1).contains(&mars_colour),
+            "weathered basalt colour term"
         );
 
         let moon = TexturedSurfaceModel::new(
-            Arc::new(moon_tier().unwrap()),
+            Arc::new(moon_map),
             Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
             Arc::clone(&library),
             "Moon",
@@ -538,7 +555,7 @@ mod tests {
         .unwrap();
         let p_moon = hemisphere_geometric_albedo(moon.as_ref(), 120);
         let mars = TexturedSurfaceModel::new(
-            Arc::new(mars_tier().unwrap()),
+            Arc::new(mars_map),
             Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
             Arc::clone(&library),
             "Mars",
@@ -554,15 +571,16 @@ mod tests {
         );
         // The hemisphere facing +x is the Moon's mare-rich near side, a
         // fifth darker than the global mean; Mars's prime-meridian
-        // hemisphere is close to its mean. Both carry the band ratio.
-        assert!((0.08..0.125).contains(&p_moon), "Moon p = {p_moon}");
-        assert!((0.14..0.175).contains(&p_mars), "Mars p = {p_mars}");
+        // hemisphere is close to its mean. Both carry the colour term.
+        assert!((0.085..0.135).contains(&p_moon), "Moon p = {p_moon}");
+        assert!((0.15..0.20).contains(&p_mars), "Mars p = {p_mars}");
         // No-data swath seams are a small fraction of the near side.
         assert!(moon.no_data_samples() < 120 * 240 / 20);
 
         // The quantity the tiers actually guarantee is the area-weighted
-        // global mean of the texel albedo: the target times the band ratio,
-        // less the no-data fraction (2.47 % of the Moon's area at 12f24d1).
+        // global mean of the texel albedo: the target times the colour
+        // term, less the no-data fraction counted as zero here (2.47 % of
+        // the Moon's area, none of Mars's).
         let global_mean = |tier: Arc<dyn SurfaceSampler + Send + Sync>| {
             let bound = TexturedSurfaceModel::new(
                 tier,
@@ -600,14 +618,22 @@ mod tests {
         };
         let moon_mean = global_mean(Arc::new(moon_tier().unwrap()));
         let mars_mean = global_mean(Arc::new(mars_tier().unwrap()));
+        let moon_expected = 0.12 * moon_colour;
+        let mars_expected = 0.17 * mars_colour;
         eprintln!(
-            "residual moon_global_mean_albedo={moon_mean:.4} expected={:.4} \
-             mars_global_mean_albedo={mars_mean:.4} expected={:.4}",
-            0.12 * fresh / 0.102,
-            0.17 * weathered / 0.147
+            "residual moon_global_mean_albedo={moon_mean:.4} expected={moon_expected:.4} \
+             nodata_offset={:.4} mars_global_mean_albedo={mars_mean:.4} \
+             expected={mars_expected:.4}",
+            1.0 - moon_mean / moon_expected
         );
-        assert_relative_eq!(moon_mean, 0.12 * fresh / 0.102, max_relative = 0.05);
-        assert_relative_eq!(mars_mean, 0.17 * weathered / 0.147, max_relative = 0.05);
+        // Moon: the no-data area (2.47 %) counts as zero, so the mean sits
+        // that far below the target and nowhere else.
+        assert_relative_eq!(
+            moon_mean,
+            moon_expected * (1.0 - 0.0247),
+            max_relative = 0.01
+        );
+        assert_relative_eq!(mars_mean, mars_expected, max_relative = 0.01);
     }
 
     /// A unit Lambert is the wrong law for a disk-mean tier: it would
