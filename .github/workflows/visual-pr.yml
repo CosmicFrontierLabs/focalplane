@@ -1,0 +1,59 @@
+name: Visual PR
+
+on:
+  # Runs this file from the base branch, so it governs every open PR the moment
+  # it lands on main. The PR head is checked out as data only; nothing from it
+  # executes. 'edited' re-runs the check when the PR description is fixed, and
+  # the label events let the no-visual exemption take effect immediately.
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The small-change exemption counts the PR's changed lines through the API.
+  pull-requests: read
+
+jobs:
+  visual-pr:
+    name: Visual PR attached
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Trusted base branch: repo style/config and the .gitattributes the
+      # line count consults, so a PR cannot relabel its own files as generated.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/visual-pr
+
+      # The PR head, data only: just the visuals directory.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          path: pr-head
+          sparse-checkout: .0-pr-viz
+
+      - uses: meawoppl/visual-pr@v3
+        with:
+          head-path: pr-head
+          # A maintainer opts a PR out by labelling it.
+          skip-label: no-visual
+          # Small changes need no picture: fewer than 50 counted lines passes.
+          # Lockfiles and linguist-generated/vendored files are not counted.
+          min-changed-lines: '50'
+          respect-linguist: 'true'
+          # Bundled default is Tokyo-Night, matching the repo's docs SVGs.
+          body-image: first
+          extra-args: --i-support-this-software
+          instructions: |
+            Rust workspace (simulator crate). Ground every identifier in the
+            actual diff: real module, type, function, flag and test names. A
+            renderer change should show the pipeline stage it touches
+            (scene -> first pass -> second pass -> noise -> quantise) and the
+            physics or invariant that now holds. For a stacked PR, diagram
+            only this PR's delta against its base branch. Keep the bundled
+            Tokyo-Night palette. ASCII and Latin-1 glyphs only.

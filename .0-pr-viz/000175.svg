@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <defs>
+    <marker id="arr-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#565f89"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ece6a"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f7768e"/>
+    </marker>
+  </defs>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #175 · ci: require a visual summary on every PR</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">A focalplane PR used to open on its diff, with no check asking for a picture;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now visual-pr.yml requires .0-pr-viz/nnnnnn.svg, so review starts on a grounded diagram.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1135" stroke="#3d4666" stroke-width="1.5" stroke-dasharray="2 6"/>
+
+  <!-- BEFORE -->
+  <g>
+    <rect x="80" y="250" width="860" height="110" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="104" y="290" font-size="26" fill="#7aa2f7">pull_request opened</text>
+    <text x="104" y="330" font-size="23" fill="#a9b1d6">description: prose only, whatever the author wrote</text>
+  </g>
+  <line x1="510" y1="360" x2="510" y2="430" stroke="#565f89" stroke-width="1.5" marker-end="url(#arr-dim)"/>
+
+  <g>
+    <rect x="80" y="435" width="860" height="250" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="104" y="475" font-size="26" fill="#7aa2f7">.github/workflows checks</text>
+    <text x="104" y="515" font-size="23" fill="#a9b1d6">pr-check.yml: check-attribution (meawoppl/stop-ai@v1)</text>
+    <text x="104" y="551" font-size="23" fill="#a9b1d6">ci.yml: cargo check --locked, cargo test, --features solar-system</text>
+    <text x="104" y="587" font-size="23" fill="#a9b1d6">format.yml, docs.yml, audit.yml</text>
+    <text x="104" y="623" font-size="22" fill="#565f89">all of them read code; none reads the PR description or asks for a figure</text>
+  </g>
+  <line x1="510" y1="685" x2="510" y2="755" stroke="#f7768e" stroke-width="3" marker-end="url(#arr-red)"/>
+  <text x="530" y="730" font-size="23" fill="#f7768e">no gate on orientation</text>
+
+  <g>
+    <rect x="80" y="960" width="860" height="120" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="1006" font-size="26" fill="#c0caf5">review opens on "Files changed"</text>
+    <text x="104" y="1046" font-size="23" fill="#f7768e">what changed and why must be reverse-engineered from the diff</text>
+  </g>
+
+  <!-- AFTER -->
+  <g>
+    <rect x="1065" y="250" width="860" height="110" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="1089" y="290" font-size="26" fill="#7aa2f7">pull_request_target: opened, edited, synchronize, labeled</text>
+    <text x="1089" y="330" font-size="23" fill="#a9b1d6">runs from the base branch; the PR head is checked out as data only</text>
+  </g>
+  <line x1="1495" y1="360" x2="1495" y2="430" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="435" width="860" height="250" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="475" font-size="26" fill="#9ece6a">visual-pr.yml: job visual-pr, "Visual PR attached"</text>
+    <text x="1089" y="515" font-size="23" fill="#a9b1d6">checkout base sparse .github/visual-pr; checkout head sparse .0-pr-viz</text>
+    <text x="1089" y="551" font-size="23" fill="#a9b1d6">meawoppl/visual-pr@v3: head-path pr-head, body-image first</text>
+    <text x="1089" y="587" font-size="23" fill="#a9b1d6">instructions: real module/type/function names, stage of the pipeline</text>
+    <text x="1089" y="623" font-size="22" fill="#565f89">fails with the full authoring recipe: spec, palette, check_svg.py command</text>
+  </g>
+  <line x1="1495" y1="685" x2="1495" y2="755" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="760" width="860" height="140" fill="#1e202e" stroke="#e0af68" stroke-width="1.5"/>
+    <text x="1089" y="800" font-size="24" fill="#e0af68">exemptions, decided by the base branch</text>
+    <text x="1089" y="836" font-size="22" fill="#a9b1d6">skip-label: no-visual</text>
+    <text x="1089" y="870" font-size="22" fill="#a9b1d6">min-changed-lines: 50, respect-linguist: true (lockfiles not counted)</text>
+  </g>
+
+  <g>
+    <rect x="1065" y="960" width="860" height="120" fill="#1e202e" stroke="#9ece6a" stroke-width="1.5"/>
+    <text x="1089" y="1006" font-size="26" fill="#c0caf5">review opens on .0-pr-viz/000175.svg</text>
+    <text x="1089" y="1046" font-size="23" fill="#9ece6a">description line 1 is the SHA-pinned image; AGENTS.md documents the rule</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Does not make the check required in branch protection (a repo setting), and adds no repo style JSON: the bundled Tokyo-Night default applies.</text>
+</svg>
