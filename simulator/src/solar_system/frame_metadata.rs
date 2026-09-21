@@ -207,8 +207,8 @@ impl BodyRecord {
             sub_observer_lat_planetocentric_deg: state.sub_observer.lat_rad.to_degrees(),
             sub_solar_lon_east_deg: state.sub_solar.map(|p| p.lon_rad.to_degrees()),
             sub_solar_lat_planetocentric_deg: state.sub_solar.map(|p| p.lat_rad.to_degrees()),
-            equatorial_radius_km: state.body.equatorial_radius_km(),
-            polar_radius_km: state.body.polar_radius_km(),
+            equatorial_radius_km: state.radii_km[0],
+            polar_radius_km: state.radii_km[2],
             electrons_per_sr_per_unit_reflectance,
         }
     }

@@ -477,6 +477,25 @@ ellipsoid in a broadband visible camera (Artemis I: 25 km measured,
   area means through IMX455: Moon 0.1211 = 0.1242 less the 2.47 %
   no-data, Mars 0.1751 exact; both asserted to 1 %. Not done: Sato parameter maps, mare and
   highland endmembers, libration from the PA kernel.
+- **Planetary satellites (status 2026-09-21):** `BodyId` is now a NAIF-id
+  newtype (`BodyId::IO`, `BodyId::TITAN`, `BodyId(606)`, parsed from any
+  NAIF name), radii and rotation come from `pck00011.tpc` read into the
+  `SolarSystem` (embedded IAU table as fallback), and `SolarSystem` holds
+  satellite SPKs beside DE440s (`with_satellites_for`, table in
+  `satellite_kernel_for`: mar099, jup365, sat441, ura184_part-3,
+  nep097). A moon the primary kernel lacks is observed by taking its
+  barycentric state from the satellite kernel with the same light-time
+  iteration `observe` uses, then handed to starfield's `apparent` and
+  sub-point helpers unchanged; starfield#216 (`SpiceKernel::open_many`,
+  in PR #218 for 0.17.1) replaces that with one merged kernel. Triton
+  from Earth and from Mars agrees with Horizons to 0.02″ in astrometric
+  direction, 1×10⁻⁷ in range and 0.1 % in angular diameter
+  (`triton_matches_horizons_from_earth_and_mars`); Io, Titan and Phobos
+  tests are written and wait on their 0.4–1.2 GB kernels. Surfaces are
+  grey Lambert spheres at published V geometric albedos (Hapke for the
+  Moon); no satellite tiers exist yet. Kernels resolve through the
+  starfield datastore, so a cold cache needs `STARFIELD_ALLOW_UPSTREAM=1`
+  or a mirror.
 - **Mercury**: Hapke (Domingue et al.) × MESSENGER MDIS monochrome map.
 - **Mars**: Lommel–Seeliger + a thin dust-haze scattering layer
   (τ ≈ 0.1–1 with dust-storm option), albedo from the Viking/MOLA

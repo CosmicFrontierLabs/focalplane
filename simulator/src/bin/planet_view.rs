@@ -111,7 +111,11 @@ struct Args {
     #[arg(long, default_value = "mars")]
     observer: String,
 
-    /// Comma-separated bodies to render; the first is the pointing target.
+    /// Comma-separated bodies to render (NAIF names or ids: `earth`,
+    /// `moon`, `io`, `titan`, `606`); the first is the pointing target.
+    /// Planetary satellites load their NAIF SPK (0.1–1.2 GB) and
+    /// `pck00011.tpc`; a cold cache needs `STARFIELD_ALLOW_UPSTREAM=1` or
+    /// a `STARFIELD_MIRROR`.
     #[arg(long, default_value = "earth,moon")]
     bodies: String,
 
@@ -220,17 +224,33 @@ fn grey_surface(body: BodyId) -> Arc<dyn SurfaceModel> {
             albedo: (1.5 * geometric_albedo).min(1.0),
         })
     };
+    // Planets: Mallama & Hilton (2018) V geometric albedos. Satellites:
+    // V geometric albedos from the JPL satellite physical-parameter
+    // table (Enceladus exceeds the Lambert limit and clamps).
     match body {
-        BodyId::Moon => Arc::new(Hapke::lunar_average()),
-        BodyId::Mercury => lambert(0.142),
-        BodyId::Venus => lambert(0.689),
-        BodyId::Earth => lambert(0.434),
-        BodyId::Mars => lambert(0.170),
-        BodyId::Jupiter => lambert(0.538),
-        BodyId::Saturn => lambert(0.499),
-        BodyId::Uranus => lambert(0.488),
-        BodyId::Neptune => lambert(0.442),
-        BodyId::Sun => lambert(1.0),
+        BodyId::MOON => Arc::new(Hapke::lunar_average()),
+        BodyId::MERCURY => lambert(0.142),
+        BodyId::VENUS => lambert(0.689),
+        BodyId::EARTH => lambert(0.434),
+        BodyId::MARS => lambert(0.170),
+        BodyId::JUPITER => lambert(0.538),
+        BodyId::SATURN => lambert(0.499),
+        BodyId::URANUS => lambert(0.488),
+        BodyId::NEPTUNE => lambert(0.442),
+        BodyId::SUN => lambert(1.0),
+        BodyId::PHOBOS => lambert(0.071),
+        BodyId::DEIMOS => lambert(0.068),
+        BodyId::IO => lambert(0.63),
+        BodyId::EUROPA => lambert(0.67),
+        BodyId::GANYMEDE => lambert(0.43),
+        BodyId::CALLISTO => lambert(0.22),
+        BodyId::ENCELADUS => lambert(1.0),
+        BodyId::RHEA => lambert(0.95),
+        BodyId::TITAN => lambert(0.22),
+        BodyId::IAPETUS => lambert(0.30),
+        BodyId::TITANIA => lambert(0.35),
+        BodyId::TRITON => lambert(0.76),
+        _ => lambert(0.30),
     }
 }
 
@@ -245,15 +265,15 @@ fn default_surface(
         return Ok(grey_surface(body));
     }
     let tier: Option<(AbundanceTier, &str)> = match body {
-        BodyId::Earth => Some((
+        BodyId::EARTH => Some((
             earth_tier().map_err(|e| e.to_string())?,
             "Earth MCD12C1 composition 0.25°",
         )),
-        BodyId::Mars => Some((
+        BodyId::MARS => Some((
             mars_tier().map_err(|e| e.to_string())?,
             "Mars Viking/MDIM albedo 0.1° (uncalibrated contrast)",
         )),
-        BodyId::Moon => Some((
+        BodyId::MOON => Some((
             moon_tier().map_err(|e| e.to_string())?,
             "Moon LROC WAC 643 nm normal albedo 0.1°",
         )),
@@ -285,7 +305,7 @@ fn unit_law_for(tier: &AbundanceTier, body: BodyId) -> Arc<dyn Brdf> {
     match tier.albedo_convention() {
         AlbedoConvention::HemisphericalLambert => Arc::new(Lambert { albedo: 1.0 }),
         AlbedoConvention::GeometricDiskMean => match body {
-            BodyId::Moon => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+            BodyId::MOON => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
             _ => Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
         },
     }
@@ -457,7 +477,16 @@ fn main() -> Result<(), String> {
         .collect::<Result<_, _>>()?;
     let target = *bodies.first().ok_or("at least one body is required")?;
 
-    let system = Arc::new(SolarSystem::new().map_err(|e| e.to_string())?);
+    // Satellite kernels for every moon in the scene or under the observer.
+    let mut kernel_bodies = bodies.clone();
+    if let Observer::BodyCenter(body) = &observer {
+        kernel_bodies.push(*body);
+    }
+    let system = Arc::new(
+        SolarSystem::new()
+            .and_then(|s| s.with_satellites_for(&kernel_bodies))
+            .map_err(|e| e.to_string())?,
+    );
     let satellite = SatelliteConfig::new(
         args.telescope.to_config().clone(),
         args.sensor
@@ -497,8 +526,8 @@ fn main() -> Result<(), String> {
         let surface = default_surface(id, &library, args.untextured)?;
         println!("{id} surface: {}", surface.label());
         let mut body = SceneBody::new(id, surface);
-        if id == BodyId::Earth && !args.no_atmosphere {
-            let air = RayleighAtmosphere::earth(id.equatorial_radius_km());
+        if id == BodyId::EARTH && !args.no_atmosphere {
+            let air = RayleighAtmosphere::earth(system.radii_km(id).map_err(|e| e.to_string())?[0]);
             println!(
                 "{id} atmosphere: Rayleigh single scattering, H {:.1} km, top {:.0} km, \
                  τ(550 nm) {:.4}",
@@ -742,8 +771,8 @@ fn main() -> Result<(), String> {
         .zip(&minor_planet_pixels)
         .map(|(s, px)| MinorPlanetRecord::new(s, *px))
         .collect();
-    let earth_atmosphere = (bodies.contains(&BodyId::Earth) && !args.no_atmosphere).then(|| {
-        let air = RayleighAtmosphere::earth(BodyId::Earth.equatorial_radius_km());
+    let earth_atmosphere = (bodies.contains(&BodyId::EARTH) && !args.no_atmosphere).then(|| {
+        let air = RayleighAtmosphere::earth(BodyId::EARTH.equatorial_radius_km().unwrap());
         AtmosphereModel {
             kind: "Rayleigh single scattering".to_string(),
             scale_height_km: air.scale_height_km,
@@ -941,8 +970,8 @@ fn build_overlay(
             continue;
         };
         let kind = match state.body {
-            BodyId::Sun => AnnotationKind::Sun,
-            BodyId::Moon => AnnotationKind::Moon,
+            BodyId::SUN => AnnotationKind::Sun,
+            BodyId::MOON => AnnotationKind::Moon,
             _ => AnnotationKind::Planet,
         };
         let radius_px = state.angular_diameter_arcsec() / 2.0 / plate_scale;

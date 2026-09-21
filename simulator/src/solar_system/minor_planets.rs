@@ -514,7 +514,7 @@ mod tests {
         let epoch = Epoch::parse("2026-09-14T00:00:00Z").unwrap();
         for (observer, ra, dec, delta, v, phase_deg) in [
             (
-                Observer::BodyCenter(BodyId::Earth),
+                Observer::BodyCenter(BodyId::EARTH),
                 101.706_521,
                 22.985_889,
                 2.857_616,
@@ -522,7 +522,7 @@ mod tests {
                 20.614,
             ),
             (
-                Observer::BodyCenter(BodyId::Mars),
+                Observer::BodyCenter(BodyId::MARS),
                 84.301_025,
                 22.170_577,
                 1.156_803,
@@ -568,7 +568,7 @@ mod tests {
         let system = SolarSystem::new().unwrap();
         let cat = ceres();
         let epoch = Epoch::parse("2026-09-14T00:00:00Z").unwrap();
-        let mars = Observer::BodyCenter(BodyId::Mars);
+        let mars = Observer::BodyCenter(BodyId::MARS);
         let here = Equatorial::from_degrees(84.301_025, 22.170_577);
         let found = system
             .minor_planets_in_cone(&cat, &mars, &epoch, &here, 1.0_f64.to_radians(), 20.0)

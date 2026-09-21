@@ -296,7 +296,7 @@ impl SecondPass for BodyPass {
                 electrons_per_sr: exposure_s * solar_rate
                     / illumination.heliocentric_distance_au.powi(2),
                 sky_to_body_fixed: state.sky_to_body_fixed,
-                radius_km: body.id.equatorial_radius_km(),
+                radius_km: state.radii_km[0],
             };
             let bound_air = body
                 .atmosphere
@@ -393,11 +393,13 @@ mod tests {
                 0.0,
             );
         BodyState {
-            body: BodyId::Earth,
+            body: BodyId::EARTH,
             direction,
+            astrometric_direction: direction,
             distance_au: 1.0,
             light_time_s: 499.0,
-            angular_semi_diameter: BodyId::Earth.equatorial_radius_km() / AU_KM,
+            angular_semi_diameter: BodyId::EARTH.equatorial_radius_km().unwrap() / AU_KM,
+            radii_km: BodyId::EARTH.radii_km().unwrap(),
             illumination: IlluminationGeometry::from_barycentric(observer, body, sun),
             v_magnitude: None,
             sub_observer: SubPoint {
@@ -430,7 +432,7 @@ mod tests {
         let state = fixed_earth(pointing);
         let albedo = 0.3;
         let pass = BodyPass::with_fixed_states(
-            vec![SceneBody::brdf(BodyId::Earth, Lambert { albedo })],
+            vec![SceneBody::brdf(BodyId::EARTH, Lambert { albedo })],
             vec![state.clone()],
         );
 
@@ -482,7 +484,7 @@ mod tests {
         let sat = satellite();
         let fp = FocalPlaneConfig::from_satellite(&sat);
         let pass = BodyPass::with_fixed_states(
-            vec![SceneBody::brdf(BodyId::Sun, Lambert { albedo: 1.0 })],
+            vec![SceneBody::brdf(BodyId::SUN, Lambert { albedo: 1.0 })],
             vec![fixed_earth(Equatorial::from_degrees(0.0, 0.0))],
         );
         let samples = [crate::image_proc::compose::OrientationSample {
@@ -512,8 +514,8 @@ mod tests {
         let fp = FocalPlaneConfig::from_satellite(&sat);
         let system = Arc::new(SolarSystem::new().unwrap());
         let epoch = crate::epoch::Epoch::parse("2007-10-03T05:30:00Z").unwrap();
-        let observer = Observer::BodyCenter(BodyId::Mars);
-        let earth = system.body_state(BodyId::Earth, &observer, &epoch).unwrap();
+        let observer = Observer::BodyCenter(BodyId::MARS);
+        let earth = system.body_state(BodyId::EARTH, &observer, &epoch).unwrap();
 
         let no_epoch = BodyPass::new(Arc::clone(&system), observer.clone(), Vec::new());
         let samples = [crate::image_proc::compose::OrientationSample {
@@ -540,7 +542,7 @@ mod tests {
             observer,
             vec![
                 SceneBody::new(
-                    BodyId::Earth,
+                    BodyId::EARTH,
                     Arc::new(crate::bodies::surface::TexturedSurfaceModel::new(
                         Arc::new(starfield_planet_maps::earth_tier().unwrap()),
                         Arc::new(Lambert { albedo: 1.0 }),
@@ -551,7 +553,7 @@ mod tests {
                         "Earth MCD12C1 0.25°",
                     )),
                 ),
-                SceneBody::brdf(BodyId::Moon, crate::bodies::brdf::Hapke::lunar_average()),
+                SceneBody::brdf(BodyId::MOON, crate::bodies::brdf::Hapke::lunar_average()),
             ],
         );
         let scene = Scene::from_catalog(

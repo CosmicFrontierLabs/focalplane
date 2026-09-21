@@ -21,14 +21,16 @@ use std::fmt;
 use std::sync::Mutex;
 
 use nalgebra::{Matrix3, Vector3};
+use starfield::constants::C_AUDAY;
 use starfield::framelib::Frame;
+use starfield::jplephem::names::{target_id, target_name};
 use starfield::jplephem::{JplephemError, SpiceKernel};
 use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::magnitudelib::planetary_magnitude;
 use starfield::planetarylib::subpoint::SubPoint;
-use starfield::planetarylib::PlanetaryConstants;
-use starfield::planetlib::Body;
-use starfield::positions::Position;
+use starfield::planetarylib::{body_constants, PlanetaryConstants};
+use starfield::positions::{Position, PositionKind};
+use starfield::time::Time;
 use starfield::{Equatorial, Loader, StarfieldError};
 use thiserror::Error;
 
@@ -58,144 +60,248 @@ pub enum SolarSystemError {
     Ephemeris(#[from] JplephemError),
 }
 
-/// Bodies with tabulated radii and kernel names.
+/// A solar-system body, by NAIF integer id.
+///
+/// Anything an SPK kernel can place and a PCK can orient is a body:
+/// the Sun (10), planets (`x99`), planetary satellites (`xnn`), and
+/// system barycentres (`1`–`9`). Names come from starfield's NAIF table;
+/// radii and rotation come from [`SolarSystem`], which consults the
+/// text PCK it has read and falls back to the embedded IAU 2015 table.
+/// The associated constants name the bodies with render defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum BodyId {
-    Sun,
-    Mercury,
-    Venus,
-    Earth,
-    Moon,
-    Mars,
-    Jupiter,
-    Saturn,
-    Uranus,
-    Neptune,
-}
+#[serde(transparent)]
+pub struct BodyId(pub i32);
 
 impl BodyId {
-    /// Every tabulated body.
+    pub const SUN: BodyId = BodyId(10);
+    pub const MERCURY: BodyId = BodyId(199);
+    pub const VENUS: BodyId = BodyId(299);
+    pub const EARTH: BodyId = BodyId(399);
+    pub const MOON: BodyId = BodyId(301);
+    pub const MARS: BodyId = BodyId(499);
+    pub const PHOBOS: BodyId = BodyId(401);
+    pub const DEIMOS: BodyId = BodyId(402);
+    pub const JUPITER: BodyId = BodyId(599);
+    pub const IO: BodyId = BodyId(501);
+    pub const EUROPA: BodyId = BodyId(502);
+    pub const GANYMEDE: BodyId = BodyId(503);
+    pub const CALLISTO: BodyId = BodyId(504);
+    pub const SATURN: BodyId = BodyId(699);
+    pub const ENCELADUS: BodyId = BodyId(602);
+    pub const RHEA: BodyId = BodyId(605);
+    pub const TITAN: BodyId = BodyId(606);
+    pub const IAPETUS: BodyId = BodyId(608);
+    pub const URANUS: BodyId = BodyId(799);
+    pub const TITANIA: BodyId = BodyId(703);
+    pub const NEPTUNE: BodyId = BodyId(899);
+    pub const TRITON: BodyId = BodyId(801);
+
+    /// The bodies whose radii and rotation the embedded IAU 2015 table
+    /// carries: the Sun, the eight planets and the Moon. Everything else
+    /// needs `pck00011.tpc` read into the [`SolarSystem`].
     pub const ALL: [BodyId; 10] = [
-        BodyId::Sun,
-        BodyId::Mercury,
-        BodyId::Venus,
-        BodyId::Earth,
-        BodyId::Moon,
-        BodyId::Mars,
-        BodyId::Jupiter,
-        BodyId::Saturn,
-        BodyId::Uranus,
-        BodyId::Neptune,
+        BodyId::SUN,
+        BodyId::MERCURY,
+        BodyId::VENUS,
+        BodyId::EARTH,
+        BodyId::MOON,
+        BodyId::MARS,
+        BodyId::JUPITER,
+        BodyId::SATURN,
+        BodyId::URANUS,
+        BodyId::NEPTUNE,
+    ];
+
+    /// Planetary satellites with a render default and a known kernel.
+    pub const SATELLITES: [BodyId; 12] = [
+        BodyId::MOON,
+        BodyId::PHOBOS,
+        BodyId::DEIMOS,
+        BodyId::IO,
+        BodyId::EUROPA,
+        BodyId::GANYMEDE,
+        BodyId::CALLISTO,
+        BodyId::ENCELADUS,
+        BodyId::RHEA,
+        BodyId::TITAN,
+        BodyId::IAPETUS,
+        BodyId::TRITON,
     ];
 
     /// NAIF integer id.
     pub fn naif_id(self) -> i32 {
-        match self {
-            BodyId::Sun => 10,
-            BodyId::Mercury => 199,
-            BodyId::Venus => 299,
-            BodyId::Earth => 399,
-            BodyId::Moon => 301,
-            BodyId::Mars => 499,
-            BodyId::Jupiter => 599,
-            BodyId::Saturn => 699,
-            BodyId::Uranus => 799,
-            BodyId::Neptune => 899,
+        self.0
+    }
+
+    /// Human-readable name from the NAIF table (`Io`, `Mars`, `Earth
+    /// Barycenter`), or `NAIF 12345` for an id the table lacks.
+    pub fn name(self) -> String {
+        match target_name(self.0).or_else(|| satellite_name(self.0)) {
+            Some(upper) => upper
+                .split(' ')
+                .map(|w| {
+                    let mut c = w.chars();
+                    match c.next() {
+                        Some(f) => {
+                            f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            None => format!("NAIF {}", self.0),
         }
-    }
-
-    /// Name used for SPK lookups. The planetary DE kernels carry Earth,
-    /// the Moon and the Sun as bodies and every other planet as a system
-    /// barycentre. Mercury and Venus have no moons, so their barycentre
-    /// is their centre; Mars's barycentre sits within a kilometre of its
-    /// centre; the giant planets' barycentre offsets (up to ~0.07 solar
-    /// radii for Jupiter) are far below the pointing precision of any
-    /// focal-plane simulation.
-    pub fn spice_name(self) -> &'static str {
-        match self {
-            BodyId::Sun => "sun",
-            BodyId::Mercury => "mercury barycenter",
-            BodyId::Venus => "venus barycenter",
-            BodyId::Earth => "earth",
-            BodyId::Moon => "moon",
-            BodyId::Mars => "mars barycenter",
-            BodyId::Jupiter => "jupiter barycenter",
-            BodyId::Saturn => "saturn barycenter",
-            BodyId::Uranus => "uranus barycenter",
-            BodyId::Neptune => "neptune barycenter",
-        }
-    }
-
-    /// Human-readable name.
-    pub fn name(self) -> &'static str {
-        match self {
-            BodyId::Sun => "Sun",
-            BodyId::Mercury => "Mercury",
-            BodyId::Venus => "Venus",
-            BodyId::Earth => "Earth",
-            BodyId::Moon => "Moon",
-            BodyId::Mars => "Mars",
-            BodyId::Jupiter => "Jupiter",
-            BodyId::Saturn => "Saturn",
-            BodyId::Uranus => "Uranus",
-            BodyId::Neptune => "Neptune",
-        }
-    }
-
-    /// The starfield body carrying the embedded IAU constants.
-    pub fn body(self) -> Body {
-        match self {
-            BodyId::Sun => Body::Sun,
-            BodyId::Mercury => Body::Mercury,
-            BodyId::Venus => Body::Venus,
-            BodyId::Earth => Body::Earth,
-            BodyId::Moon => Body::Moon,
-            BodyId::Mars => Body::Mars,
-            BodyId::Jupiter => Body::Jupiter,
-            BodyId::Saturn => Body::Saturn,
-            BodyId::Uranus => Body::Uranus,
-            BodyId::Neptune => Body::Neptune,
-        }
-    }
-
-    /// Triaxial radii `[a, b, c]` in km from starfield's IAU 2015 table.
-    pub fn radii_km(self) -> [f64; 3] {
-        self.body().radii_km()
-    }
-
-    /// Equatorial radius in km.
-    pub fn equatorial_radius_km(self) -> f64 {
-        self.radii_km()[0]
-    }
-
-    /// Polar radius in km.
-    pub fn polar_radius_km(self) -> f64 {
-        self.radii_km()[2]
-    }
-
-    /// Flattening `(a − c) / a`.
-    pub fn flattening(self) -> f64 {
-        self.body().flattening()
     }
 
     /// True for the one self-luminous body.
     pub fn is_sun(self) -> bool {
-        matches!(self, BodyId::Sun)
+        self == BodyId::SUN
     }
 
-    /// Parse a case-insensitive body name.
-    pub fn parse(name: &str) -> Option<Self> {
-        let lower = name.trim().to_ascii_lowercase();
-        BodyId::ALL
-            .into_iter()
-            .find(|b| b.name().to_ascii_lowercase() == lower)
+    /// True for a planet centre (`x99`).
+    pub fn is_planet(self) -> bool {
+        (100..1000).contains(&self.0) && self.0 % 100 == 99
     }
+
+    /// True for a planetary satellite (`xnn`, `nn` < 99).
+    pub fn is_satellite(self) -> bool {
+        (100..1000).contains(&self.0) && self.0 % 100 != 99
+    }
+
+    /// The system barycentre a planet or satellite belongs to (`4` for
+    /// Mars and Phobos), or the body itself for the Sun and barycentres.
+    pub fn system_barycenter(self) -> BodyId {
+        if (100..1000).contains(&self.0) {
+            BodyId(self.0 / 100)
+        } else {
+            self
+        }
+    }
+
+    /// The planet a satellite orbits, or the body itself otherwise.
+    pub fn primary(self) -> BodyId {
+        if self.is_satellite() {
+            BodyId(self.0 / 100 * 100 + 99)
+        } else {
+            self
+        }
+    }
+
+    /// Triaxial radii `[a, b, c]` in km from the embedded IAU 2015 table,
+    /// which covers [`BodyId::ALL`] only; [`SolarSystem::radii_km`] also
+    /// reads the text PCK.
+    pub fn radii_km(self) -> Option<[f64; 3]> {
+        body_constants(self.0).map(|c| c.radii)
+    }
+
+    /// Equatorial radius in km, embedded table only.
+    pub fn equatorial_radius_km(self) -> Option<f64> {
+        self.radii_km().map(|r| r[0])
+    }
+
+    /// Polar radius in km, embedded table only.
+    pub fn polar_radius_km(self) -> Option<f64> {
+        self.radii_km().map(|r| r[2])
+    }
+
+    /// Flattening `(a − c) / a`, embedded table only.
+    pub fn flattening(self) -> Option<f64> {
+        self.radii_km().map(|r| (r[0] - r[2]) / r[0])
+    }
+
+    /// Parse a case-insensitive NAIF name (`mars`, `Io`, `titan`) or a
+    /// numeric id.
+    pub fn parse(name: &str) -> Option<Self> {
+        let trimmed = name.trim();
+        if let Ok(id) = trimmed.parse::<i32>() {
+            return Some(BodyId(id));
+        }
+        target_id(trimmed).map(BodyId).or_else(|| {
+            SATELLITE_NAMES
+                .iter()
+                .find(|(_, n)| n.eq_ignore_ascii_case(trimmed))
+                .map(|(id, _)| BodyId(*id))
+        })
+    }
+}
+
+/// NAIF ids and names of the planetary satellites starfield's name table
+/// does not carry (it stops at the Galileans).
+const SATELLITE_NAMES: &[(i32, &str)] = &[
+    (601, "MIMAS"),
+    (602, "ENCELADUS"),
+    (603, "TETHYS"),
+    (604, "DIONE"),
+    (605, "RHEA"),
+    (606, "TITAN"),
+    (607, "HYPERION"),
+    (608, "IAPETUS"),
+    (609, "PHOEBE"),
+    (701, "ARIEL"),
+    (702, "UMBRIEL"),
+    (703, "TITANIA"),
+    (704, "OBERON"),
+    (705, "MIRANDA"),
+    (801, "TRITON"),
+    (802, "NEREID"),
+    (901, "CHARON"),
+];
+
+fn satellite_name(id: i32) -> Option<&'static str> {
+    SATELLITE_NAMES
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, n)| *n)
 }
 
 impl fmt::Display for BodyId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(&self.name())
     }
+}
+
+/// Barycentric state of `body` from `kernel`, falling back to the body's
+/// system barycentre when the kernel has no segment for the body itself.
+/// The planetary DE kernels carry Earth, the Moon and the Sun as bodies
+/// and every other planet as a system barycentre: Mercury and Venus have
+/// no moons, so their barycentre is their centre; Mars's barycentre sits
+/// within a kilometre of its centre; the giant planets' offsets (up to
+/// ~0.07 solar radii for Jupiter) are far below focal-plane pointing
+/// precision.
+fn kernel_state(
+    kernel: &mut SpiceKernel,
+    body: BodyId,
+    time: &Time,
+) -> Result<Position, SolarSystemError> {
+    match kernel.at(&body.0.to_string(), time) {
+        Ok(state) => Ok(state),
+        Err(err) if body.is_planet() => kernel
+            .at(&body.system_barycenter().0.to_string(), time)
+            .map_err(|_| SolarSystemError::from(err)),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// The kernel target name `observe` should use for `body`: the body
+/// itself when the kernel has it, otherwise its system barycentre for a
+/// planet.
+fn observe_target(kernel: &mut SpiceKernel, body: BodyId) -> Result<String, SolarSystemError> {
+    let own = body.0.to_string();
+    if kernel.get(&own).is_ok() {
+        return Ok(own);
+    }
+    if body.is_planet() {
+        let bary = body.system_barycenter().0.to_string();
+        if kernel.get(&bary).is_ok() {
+            return Ok(bary);
+        }
+    }
+    Err(JplephemError::Other(format!(
+        "no path from the solar-system barycentre to {body} ({}) in this kernel",
+        body.0
+    ))
+    .into())
 }
 
 /// Where the telescope is.
@@ -227,13 +333,13 @@ impl Observer {
         epoch: &Epoch,
     ) -> Result<Position, SolarSystemError> {
         match self {
-            Observer::BodyCenter(body) => Ok(kernel.at(body.spice_name(), epoch.time())?),
+            Observer::BodyCenter(body) => kernel_state(kernel, *body, epoch.time()),
             Observer::OffsetFromBody {
                 body,
                 position_km,
                 velocity_km_s,
             } => {
-                let center = kernel.at(body.spice_name(), epoch.time())?;
+                let center = kernel_state(kernel, *body, epoch.time())?;
                 Ok(Position::barycentric(
                     center.position + position_km / AU_KM,
                     center.velocity + velocity_km_s * (SECONDS_PER_DAY / AU_KM),
@@ -338,12 +444,17 @@ pub struct BodyState {
     /// Apparent ICRF direction (light-time, deflection and aberration
     /// applied), radians.
     pub direction: Equatorial,
+    /// Astrometric ICRF direction (light time only), radians: what an
+    /// ephemeris service reports as the body's astrometric position.
+    pub astrometric_direction: Equatorial,
     /// Observer–body distance at the light-time-corrected epoch, AU.
     pub distance_au: f64,
     /// One-way light time, seconds.
     pub light_time_s: f64,
     /// Angular semi-diameter of the equatorial radius, radians.
     pub angular_semi_diameter: f64,
+    /// Triaxial radii `[a, b, c]` the state was computed with, km.
+    pub radii_km: [f64; 3],
     /// Sun and observer directions, phase, limb orientation.
     pub illumination: IlluminationGeometry,
     /// Apparent V magnitude from Mallama & Hilton (2018), or the lunar
@@ -483,7 +594,7 @@ impl BodyState {
     /// divided by the distance (small-angle; the disk is always well
     /// under a degree across).
     pub fn view_site(&self, site: &SurfaceSite) -> SiteView {
-        let radii = self.body.radii_km();
+        let radii = self.radii_km;
         // sky_to_body_fixed is orthonormal, so its transpose maps
         // body-fixed vectors into the sky frame.
         let body_to_sky = self.sky_to_body_fixed.transpose();
@@ -562,27 +673,63 @@ impl TransmitAimpoint {
 /// second pass; kernel evaluation is microseconds, far below any render
 /// cost.
 pub struct SolarSystem {
+    /// The planetary ephemeris: Sun, planets (as system barycentres),
+    /// Earth and Moon, all chained to the solar-system barycentre.
     kernel: Mutex<SpiceKernel>,
-    /// Body orientation source: text and binary PCK kernels read so far,
-    /// falling back to the embedded IAU 2015 table.
+    /// Satellite kernels (`jup365.bsp`, `sat441.bsp`, …), each chaining
+    /// its moons through the planet barycentre to the solar-system
+    /// barycentre. Searched in order for a body the primary kernel lacks.
+    satellite_kernels: Vec<Mutex<SpiceKernel>>,
+    /// Body orientation and radii source: text and binary PCK kernels
+    /// read so far, falling back to the embedded IAU 2015 table.
     constants: PlanetaryConstants,
 }
 
 impl fmt::Debug for SolarSystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SolarSystem { kernel: SpiceKernel, constants: PlanetaryConstants }")
+        write!(
+            f,
+            "SolarSystem {{ kernel: SpiceKernel, satellite_kernels: {}, constants: PlanetaryConstants }}",
+            self.satellite_kernels.len()
+        )
+    }
+}
+
+/// NAIF text PCK with radii and rotational elements for every planetary
+/// satellite.
+pub const TEXT_PCK: &str = "pck00011.tpc";
+
+/// Generic NAIF satellite SPK carrying each system's major moons (from
+/// `generic_kernels/spk/satellites/aa_summaries.txt`, 2026-09): Phobos
+/// and Deimos; the Galileans; Mimas through Iapetus; Ariel through
+/// Miranda (the `ura184` set splits by body group, part 3 has the five
+/// classical moons); Triton (`nep105` holds only Nereid). Each file
+/// also carries its planet barycentre and Earth relative to the
+/// solar-system barycentre.
+pub fn satellite_kernel_for(system_barycenter: BodyId) -> Option<&'static str> {
+    match system_barycenter.0 {
+        4 => Some("mar099.bsp"),
+        5 => Some("jup365.bsp"),
+        6 => Some("sat441.bsp"),
+        7 => Some("ura184_part-3.bsp"),
+        8 => Some("nep097.bsp"),
+        _ => None,
     }
 }
 
 impl SolarSystem {
-    /// Load the default DE440s kernel, downloading it if absent.
+    /// Load the default DE440s kernel and the satellite text PCK,
+    /// downloading either if absent.
     pub fn new() -> Result<Self, SolarSystemError> {
         Self::with_kernel(DEFAULT_KERNEL)
     }
 
-    /// Load a named JPL kernel (e.g. `de440.bsp`), downloading if absent.
+    /// Load a named JPL kernel (e.g. `de440.bsp`) and the satellite text
+    /// PCK, downloading if absent.
     pub fn with_kernel(filename: &str) -> Result<Self, SolarSystemError> {
-        Ok(Self::from_kernel(Loader::new().open(filename)?))
+        let loader = Loader::new();
+        let constants = loader.open_text_pck(TEXT_PCK)?;
+        Ok(Self::from_kernel(loader.open(filename)?).with_constants(constants))
     }
 
     /// Wrap an already-open kernel, with body orientation from the
@@ -590,6 +737,7 @@ impl SolarSystem {
     pub fn from_kernel(kernel: SpiceKernel) -> Self {
         Self {
             kernel: Mutex::new(kernel),
+            satellite_kernels: Vec::new(),
             constants: PlanetaryConstants::new(),
         }
     }
@@ -601,10 +749,124 @@ impl SolarSystem {
         self
     }
 
+    /// Add a satellite SPK by NAIF file name, resolving it through the
+    /// starfield datastore (local cache, then `STARFIELD_MIRROR`, then
+    /// NAIF itself only with `STARFIELD_ALLOW_UPSTREAM=1`).
+    pub fn with_satellite_kernel(mut self, filename: &str) -> Result<Self, SolarSystemError> {
+        let kernel = Loader::new().open(filename).map_err(|e| {
+            StarfieldError::DataError(format!(
+                "satellite kernel {filename}: {e}; a cold cache needs \
+                 STARFIELD_ALLOW_UPSTREAM=1 or a STARFIELD_MIRROR"
+            ))
+        })?;
+        self.satellite_kernels.push(Mutex::new(kernel));
+        Ok(self)
+    }
+
+    /// Add an already-open satellite SPK.
+    pub fn with_satellite_spk(mut self, kernel: SpiceKernel) -> Self {
+        self.satellite_kernels.push(Mutex::new(kernel));
+        self
+    }
+
+    /// Load the generic satellite kernel for every system among `bodies`
+    /// that needs one (see [`satellite_kernel_for`]).
+    pub fn with_satellites_for(mut self, bodies: &[BodyId]) -> Result<Self, SolarSystemError> {
+        let mut wanted: Vec<&'static str> = Vec::new();
+        for body in bodies
+            .iter()
+            .filter(|b| b.is_satellite() && **b != BodyId::MOON)
+        {
+            if let Some(name) = satellite_kernel_for(body.system_barycenter()) {
+                if !wanted.contains(&name) {
+                    wanted.push(name);
+                }
+            }
+        }
+        for name in wanted {
+            self = self.with_satellite_kernel(name)?;
+        }
+        Ok(self)
+    }
+
     /// Body-fixed frame for `body`: ITRS for Earth, the lunar principal
     /// axes when a PA kernel is loaded, IAU rotational elements otherwise.
     pub fn frame_for(&self, body: BodyId) -> Result<Box<dyn Frame>, SolarSystemError> {
         Ok(self.constants.frame_for(body.naif_id())?)
+    }
+
+    /// Triaxial radii `[a, b, c]` in km: from the text PCK when read,
+    /// else the embedded IAU 2015 table.
+    pub fn radii_km(&self, body: BodyId) -> Result<[f64; 3], SolarSystemError> {
+        self.constants
+            .radii(body.naif_id())
+            .or_else(|| body.radii_km())
+            .ok_or_else(|| {
+                StarfieldError::DataError(format!(
+                    "no radii for {body} ({}): read {TEXT_PCK} into the SolarSystem",
+                    body.naif_id()
+                ))
+                .into()
+            })
+    }
+
+    /// Astrometric position of `body` (light time applied, no aberration)
+    /// from an observer whose barycentric state is `observer_bary`.
+    ///
+    /// Bodies the primary kernel can chain to the barycentre go through
+    /// starfield's `observe`. A satellite the primary kernel lacks is
+    /// taken from the first satellite kernel that has it: its
+    /// barycentric position at the emission epoch, iterated for light
+    /// time exactly as `observe` does, assembled into the same
+    /// `Position` so every downstream helper (`apparent`, sub-points,
+    /// ellipse) works unchanged.
+    fn observe(
+        &self,
+        kernel: &mut SpiceKernel,
+        observer_bary: &Position,
+        body: BodyId,
+        epoch: &Epoch,
+    ) -> Result<Position, SolarSystemError> {
+        if let Ok(target) = observe_target(kernel, body) {
+            return Ok(observer_bary.observe(&target, kernel, epoch.time())?);
+        }
+        let name = body.0.to_string();
+        for satellite_kernel in &self.satellite_kernels {
+            let mut sat = satellite_kernel
+                .lock()
+                .expect("satellite kernel mutex poisoned");
+            if sat.get(&name).is_err() {
+                continue;
+            }
+            let mut light_time_days = 0.0;
+            let mut target = sat.at(&name, epoch.time())?;
+            for _ in 0..8 {
+                let emission = epoch.offset_secs(-light_time_days * SECONDS_PER_DAY);
+                target = sat.at(&name, emission.time())?;
+                let next = (target.position - observer_bary.position).norm() / C_AUDAY;
+                if (next - light_time_days).abs() < 1e-12 {
+                    light_time_days = next;
+                    break;
+                }
+                light_time_days = next;
+            }
+            return Ok(Position {
+                position: target.position - observer_bary.position,
+                velocity: target.velocity - observer_bary.velocity,
+                kind: PositionKind::Astrometric,
+                center: observer_bary.target,
+                target: body.0,
+                light_time: light_time_days,
+                observer_barycentric: Some(Box::new(observer_bary.clone())),
+            });
+        }
+        Err(JplephemError::Other(format!(
+            "no kernel loaded places {body} ({}); add its satellite SPK ({}) with \
+             SolarSystem::with_satellites_for",
+            body.0,
+            satellite_kernel_for(body.system_barycenter()).unwrap_or("unknown")
+        ))
+        .into())
     }
 
     /// Apparent state of `body` from `observer` at `epoch`.
@@ -616,25 +878,26 @@ impl SolarSystem {
     ) -> Result<BodyState, SolarSystemError> {
         let mut kernel = self.kernel.lock().expect("ephemeris kernel mutex poisoned");
         let observer_bary = observer.barycentric(&mut kernel, epoch)?;
-        let astrometric = observer_bary.observe(body.spice_name(), &mut kernel, epoch.time())?;
+        let astrometric = self.observe(&mut kernel, &observer_bary, body, epoch)?;
         let apparent = astrometric.apparent(&mut kernel, epoch.time())?;
         let (ra_hours, dec_degrees, _) = apparent.radec(None);
         let direction = Equatorial::from_degrees(ra_hours * 15.0, dec_degrees);
+        let (astro_ra_hours, astro_dec_degrees, _) = astrometric.radec(None);
+        let astrometric_direction =
+            Equatorial::from_degrees(astro_ra_hours * 15.0, astro_dec_degrees);
 
         let body_bary = observer_bary.position + astrometric.position;
         let emission = epoch.offset_secs(-astrometric.light_time * SECONDS_PER_DAY);
         let sun_bary = if body.is_sun() {
             body_bary
         } else {
-            kernel
-                .at(BodyId::Sun.spice_name(), emission.time())?
-                .position
+            kernel_state(&mut kernel, BodyId::SUN, emission.time())?.position
         };
         let illumination =
             IlluminationGeometry::from_barycentric(observer_bary.position, body_bary, sun_bary);
 
         let distance_au = astrometric.distance();
-        let radii = body.radii_km();
+        let radii = self.radii_km(body)?;
         let angular_semi_diameter = astrometric.angular_semi_diameter(radii);
         let v_magnitude = planetary_magnitude(&astrometric, epoch.time()).ok();
 
@@ -666,9 +929,11 @@ impl SolarSystem {
         Ok(BodyState {
             body,
             direction,
+            astrometric_direction,
             distance_au,
             light_time_s: astrometric.light_time * SECONDS_PER_DAY,
             angular_semi_diameter,
+            radii_km: radii,
             illumination,
             v_magnitude,
             sub_observer,
@@ -708,14 +973,14 @@ impl SolarSystem {
     ) -> Result<TransmitAimpoint, SolarSystemError> {
         let mut kernel = self.kernel.lock().expect("ephemeris kernel mutex poisoned");
         let tx = observer.barycentric(&mut kernel, epoch)?;
-        let radii = target.radii_km();
+        let radii = self.radii_km(target)?;
         let frame = self.constants.frame_for(target.naif_id())?;
 
         // Site position in the ICRF at an arrival epoch, or the body
         // centre when no site is given.
         let target_position =
             |kernel: &mut SpiceKernel, arrival: &Epoch| -> Result<Vector3<f64>, SolarSystemError> {
-                let centre = kernel.at(target.spice_name(), arrival.time())?.position;
+                let centre = kernel_state(kernel, target, arrival.time())?.position;
                 Ok(match site {
                     Some(site) => {
                         let body_fixed_km = site.body_fixed_km(radii);
@@ -772,7 +1037,7 @@ impl SolarSystem {
         observer: &Observer,
         epoch: &Epoch,
     ) -> Result<f64, SolarSystemError> {
-        let sun = self.body_state(BodyId::Sun, observer, epoch)?;
+        let sun = self.body_state(BodyId::SUN, observer, epoch)?;
         Ok(direction.angular_distance(&sun.direction))
     }
 }
@@ -786,15 +1051,39 @@ mod tests {
     #[test]
     fn body_table_is_consistent() {
         for body in BodyId::ALL {
-            assert!(body.polar_radius_km() <= body.equatorial_radius_km());
-            assert!(body.flattening() >= 0.0);
-            assert_eq!(BodyId::parse(body.name()), Some(body));
+            assert!(body.polar_radius_km().unwrap() <= body.equatorial_radius_km().unwrap());
+            assert!(body.flattening().unwrap() >= 0.0);
+            assert_eq!(BodyId::parse(&body.name()), Some(body));
             assert_eq!(BodyId::parse(&body.name().to_uppercase()), Some(body));
         }
-        assert_abs_diff_eq!(BodyId::Jupiter.flattening(), 0.0649, epsilon = 1e-4);
-        assert_abs_diff_eq!(BodyId::Earth.flattening(), 1.0 / 298.257, epsilon = 1e-5);
-        assert_eq!(BodyId::parse("Phobos"), None);
-        assert_eq!(BodyId::Mars.naif_id(), 499);
+        assert_abs_diff_eq!(
+            BodyId::JUPITER.flattening().unwrap(),
+            0.0649,
+            epsilon = 1e-4
+        );
+        assert_abs_diff_eq!(
+            BodyId::EARTH.flattening().unwrap(),
+            1.0 / 298.257,
+            epsilon = 1e-5
+        );
+        // Satellites: named and classified, radii only through a text PCK.
+        assert_eq!(BodyId::parse("Phobos"), Some(BodyId::PHOBOS));
+        assert_eq!(BodyId::parse("io"), Some(BodyId::IO));
+        assert_eq!(BodyId::parse("606"), Some(BodyId::TITAN));
+        assert_eq!(BodyId::IO.name(), "Io");
+        assert_eq!(BodyId::TITAN.to_string(), "Titan");
+        assert!(BodyId::TITAN.is_satellite() && !BodyId::TITAN.is_planet());
+        assert!(BodyId::SATURN.is_planet() && !BodyId::SATURN.is_satellite());
+        assert_eq!(BodyId::TITAN.primary(), BodyId::SATURN);
+        assert_eq!(BodyId::TITAN.system_barycenter(), BodyId(6));
+        assert_eq!(BodyId::SATURN.system_barycenter(), BodyId(6));
+        assert_eq!(BodyId::SUN.system_barycenter(), BodyId::SUN);
+        assert_eq!(BodyId::PHOBOS.radii_km(), None);
+        for moon in BodyId::SATELLITES {
+            assert!(moon.is_satellite(), "{moon}");
+            assert_ne!(BodyId::parse(&moon.name()), None, "{moon}");
+        }
+        assert_eq!(BodyId::MARS.naif_id(), 499);
     }
 
     #[test]
@@ -846,11 +1135,13 @@ mod tests {
     #[test]
     fn body_state_angular_helpers() {
         let state = BodyState {
-            body: BodyId::Earth,
+            body: BodyId::EARTH,
             direction: Equatorial::from_degrees(0.0, 0.0),
+            astrometric_direction: Equatorial::from_degrees(0.0, 0.0),
             distance_au: 1.0,
             light_time_s: 499.0,
-            angular_semi_diameter: (BodyId::Earth.equatorial_radius_km() / AU_KM).asin(),
+            angular_semi_diameter: (BodyId::EARTH.equatorial_radius_km().unwrap() / AU_KM).asin(),
+            radii_km: BodyId::EARTH.radii_km().unwrap(),
             illumination: IlluminationGeometry::from_barycentric(
                 Vector3::zeros(),
                 Vector3::new(1.0, 0.0, 0.0),
@@ -883,9 +1174,9 @@ mod tests {
     fn earth_from_mars_matches_hirise_release_geometry() {
         let system = SolarSystem::new().unwrap();
         let epoch = Epoch::parse("2007-10-03T05:30:00Z").unwrap();
-        let mars = Observer::BodyCenter(BodyId::Mars);
-        let earth = system.body_state(BodyId::Earth, &mars, &epoch).unwrap();
-        let moon = system.body_state(BodyId::Moon, &mars, &epoch).unwrap();
+        let mars = Observer::BodyCenter(BodyId::MARS);
+        let earth = system.body_state(BodyId::EARTH, &mars, &epoch).unwrap();
+        let moon = system.body_state(BodyId::MOON, &mars, &epoch).unwrap();
 
         assert_abs_diff_eq!(earth.distance_km(), 1.42e8, epsilon = 1.5e6);
         assert_abs_diff_eq!(earth.angular_diameter_arcsec(), 18.5, epsilon = 0.3);
@@ -1001,7 +1292,7 @@ mod tests {
             name: "sub-observer".into(),
             latitude_deg: earth
                 .sub_observer
-                .to_planetographic(BodyId::Earth.radii_km())
+                .to_planetographic(BodyId::EARTH.radii_km().unwrap())
                 .lat_rad
                 .to_degrees(),
             longitude_east_deg: earth.sub_observer.lon_rad.to_degrees(),
@@ -1028,11 +1319,11 @@ mod tests {
         assert!(minor <= major && minor > 0.99 * major);
 
         // Local illumination geometry agrees with starfield's helpers.
-        let mars = Observer::BodyCenter(BodyId::Mars);
+        let mars = Observer::BodyCenter(BodyId::MARS);
         system.with_ephemeris(|kernel| {
             let observer_bary = mars.barycentric(kernel, &epoch).unwrap();
             let astrometric = observer_bary
-                .observe(BodyId::Earth.spice_name(), kernel, epoch.time())
+                .observe("earth", kernel, epoch.time())
                 .unwrap();
             let upstream_phase = astrometric.phase_angle(kernel, epoch.time()).unwrap();
             assert_abs_diff_eq!(
@@ -1062,11 +1353,14 @@ mod tests {
     /// east, +y north, +z toward the observer.
     fn aligned_state(distance_au: f64) -> BodyState {
         BodyState {
-            body: BodyId::Earth,
+            body: BodyId::EARTH,
             direction: Equatorial::from_degrees(0.0, 0.0),
+            astrometric_direction: Equatorial::from_degrees(0.0, 0.0),
             distance_au,
             light_time_s: 0.0,
-            angular_semi_diameter: (BodyId::Earth.equatorial_radius_km() / (distance_au * AU_KM))
+            radii_km: BodyId::EARTH.radii_km().unwrap(),
+            angular_semi_diameter: (BodyId::EARTH.equatorial_radius_km().unwrap()
+                / (distance_au * AU_KM))
                 .asin(),
             illumination: IlluminationGeometry::from_barycentric(
                 Vector3::zeros(),
@@ -1168,7 +1462,7 @@ mod tests {
 
     #[test]
     fn site_height_and_flattening_enter_the_geodetic_position() {
-        let radii = BodyId::Earth.radii_km();
+        let radii = BodyId::EARTH.radii_km().unwrap();
         let sea_level = SurfaceSite {
             name: "equator".into(),
             latitude_deg: 0.0,
@@ -1211,10 +1505,10 @@ mod tests {
     fn transmit_aimpoint_leads_the_received_direction() {
         let system = SolarSystem::new().unwrap();
         let epoch = Epoch::parse("2007-10-03T16:30:00Z").unwrap();
-        let mars = Observer::BodyCenter(BodyId::Mars);
-        let received = system.body_state(BodyId::Earth, &mars, &epoch).unwrap();
+        let mars = Observer::BodyCenter(BodyId::MARS);
+        let received = system.body_state(BodyId::EARTH, &mars, &epoch).unwrap();
         let aim = system
-            .transmit_aimpoint(BodyId::Earth, None, &mars, &epoch)
+            .transmit_aimpoint(BodyId::EARTH, None, &mars, &epoch)
             .unwrap();
 
         // Forward and backward light times differ only by the target's
@@ -1257,8 +1551,8 @@ mod tests {
             longitude_east_deg: -116.8625,
             height_m: 1706.0,
         };
-        let frame = system.frame_for(BodyId::Earth).unwrap();
-        let body_fixed = palomar.body_fixed_km(BodyId::Earth.radii_km());
+        let frame = system.frame_for(BodyId::EARTH).unwrap();
+        let body_fixed = palomar.body_fixed_km(BodyId::EARTH.radii_km().unwrap());
         let at_emission = frame.rotation_at(epoch.time()).transpose() * body_fixed;
         let at_arrival = frame.rotation_at(aim.arrival_epoch.time()).transpose() * body_fixed;
         let rotated = at_emission.angle(&at_arrival);
@@ -1285,7 +1579,7 @@ mod tests {
         // Aiming at Palomar rather than Earth's centre moves the aim by
         // no more than the apparent Earth radius.
         let site_aim = system
-            .transmit_aimpoint(BodyId::Earth, Some(&palomar), &mars, &epoch)
+            .transmit_aimpoint(BodyId::EARTH, Some(&palomar), &mars, &epoch)
             .unwrap();
         let shift = site_aim.aim_direction.angular_distance(&aim.aim_direction);
         assert!(
@@ -1318,6 +1612,160 @@ mod tests {
         assert_abs_diff_eq!(along.angle(&d), 0.0, epsilon = 1e-15);
     }
 
+    /// One satellite against JPL Horizons at 2026-09-22 00:00 UTC
+    /// (astrometric ICRF RA/Dec in degrees, observer range in AU, angular
+    /// diameter in arcseconds), from the geocentre and from the Mars
+    /// centre. The Mars view goes through the satellite-kernel path,
+    /// since DE440s cannot place a moon and the satellite kernel cannot
+    /// place Mars.
+    fn check_satellite_against_horizons(
+        system: &SolarSystem,
+        body: BodyId,
+        observer: BodyId,
+        ra_deg: f64,
+        dec_deg: f64,
+        range_au: f64,
+        diameter_arcsec: f64,
+    ) {
+        let epoch = Epoch::parse("2026-09-22T00:00:00Z").unwrap();
+        let state = system
+            .body_state(body, &Observer::BodyCenter(observer), &epoch)
+            .unwrap();
+        let horizons = Equatorial::from_degrees(ra_deg, dec_deg);
+        let sep_arcsec = state
+            .astrometric_direction
+            .angular_distance(&horizons)
+            .to_degrees()
+            * 3600.0;
+        eprintln!(
+            "residual {body}_from_{observer}_astrometric_vs_horizons_arcsec={sep_arcsec:.3} \
+             range_au={:.6} horizons={range_au} diam_arcsec={:.5} horizons={diameter_arcsec}",
+            state.distance_au,
+            state.angular_diameter_arcsec()
+        );
+        assert!(
+            sep_arcsec < 0.5,
+            "{body} from {observer}: {sep_arcsec}″ from Horizons"
+        );
+        assert_relative_eq!(state.distance_au, range_au, max_relative = 2e-5);
+        assert_relative_eq!(
+            state.angular_diameter_arcsec(),
+            diameter_arcsec,
+            max_relative = 0.01
+        );
+        assert!(state.radii_km[0] > 0.0);
+        assert!(state.sub_observer.lon_rad.is_finite());
+    }
+
+    /// Triton via `nep097.bsp` and `pck00011.tpc` (needs both cached or
+    /// `STARFIELD_ALLOW_UPSTREAM=1`).
+    #[test]
+    #[ignore]
+    fn triton_matches_horizons_from_earth_and_mars() {
+        let system = SolarSystem::new()
+            .unwrap()
+            .with_satellites_for(&[BodyId::TRITON])
+            .unwrap();
+        assert_relative_eq!(
+            system.radii_km(BodyId::TRITON).unwrap()[0],
+            1352.6,
+            max_relative = 1e-3
+        );
+        check_satellite_against_horizons(
+            &system,
+            BodyId::TRITON,
+            BodyId::EARTH,
+            3.066_527_105,
+            -0.217_678_286,
+            28.875_191_328,
+            0.129_174,
+        );
+        check_satellite_against_horizons(
+            &system,
+            BodyId::TRITON,
+            BodyId::MARS,
+            0.256_328_818,
+            -1.452_477_752,
+            29.599_563_141,
+            0.126_013,
+        );
+    }
+
+    /// Io via `jup365.bsp` (1.1 GB).
+    #[test]
+    #[ignore]
+    fn io_matches_horizons_from_earth_and_mars() {
+        let system = SolarSystem::new()
+            .unwrap()
+            .with_satellites_for(&[BodyId::IO])
+            .unwrap();
+        check_satellite_against_horizons(
+            &system,
+            BodyId::IO,
+            BodyId::EARTH,
+            140.155_222_852,
+            16.126_599_389,
+            6.019_204_475,
+            0.838_107,
+        );
+        check_satellite_against_horizons(
+            &system,
+            BodyId::IO,
+            BodyId::MARS,
+            148.103_278_873,
+            13.371_389_613,
+            4.459_626_615,
+            1.131_201,
+        );
+    }
+
+    /// Titan via `sat441.bsp` and Phobos via `mar099.bsp`.
+    #[test]
+    #[ignore]
+    fn titan_and_phobos_match_horizons() {
+        let system = SolarSystem::new()
+            .unwrap()
+            .with_satellites_for(&[BodyId::TITAN, BodyId::PHOBOS])
+            .unwrap();
+        check_satellite_against_horizons(
+            &system,
+            BodyId::TITAN,
+            BodyId::EARTH,
+            12.003_543_388,
+            2.218_972_825,
+            8.450_304_286,
+            0.840_349,
+        );
+        check_satellite_against_horizons(
+            &system,
+            BodyId::TITAN,
+            BodyId::MARS,
+            2.183_999_523,
+            -1.989_432_554,
+            9.027_453_927,
+            0.786_624,
+        );
+        check_satellite_against_horizons(
+            &system,
+            BodyId::PHOBOS,
+            BodyId::EARTH,
+            118.162_188_540,
+            21.795_879_682,
+            1.725_218_811,
+            0.020_779,
+        );
+        // Phobos from the Mars centre: 9 400 km away, 564″ across.
+        check_satellite_against_horizons(
+            &system,
+            BodyId::PHOBOS,
+            BodyId::MARS,
+            198.660_904_175,
+            18.875_565_154,
+            0.000_063_580_937,
+            563.8275,
+        );
+    }
+
     #[test]
     fn frames_resolve_from_the_embedded_table_without_kernels() {
         let constants = PlanetaryConstants::new();
@@ -1327,8 +1775,20 @@ mod tests {
                 "{body} has no frame on a fresh PlanetaryConstants"
             );
         }
-        assert_abs_diff_eq!(BodyId::Mars.equatorial_radius_km(), 3396.19, epsilon = 1e-9);
-        assert_abs_diff_eq!(BodyId::Mars.polar_radius_km(), 3376.20, epsilon = 1e-9);
-        assert_abs_diff_eq!(BodyId::Sun.equatorial_radius_km(), 695_700.0, epsilon = 1.0);
+        assert_abs_diff_eq!(
+            BodyId::MARS.equatorial_radius_km().unwrap(),
+            3396.19,
+            epsilon = 1e-9
+        );
+        assert_abs_diff_eq!(
+            BodyId::MARS.polar_radius_km().unwrap(),
+            3376.20,
+            epsilon = 1e-9
+        );
+        assert_abs_diff_eq!(
+            BodyId::SUN.equatorial_radius_km().unwrap(),
+            695_700.0,
+            epsilon = 1.0
+        );
     }
 }
