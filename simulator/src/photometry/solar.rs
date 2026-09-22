@@ -21,7 +21,7 @@ use std::fmt;
 use std::time::Duration;
 
 use shared::units::{Area, LengthExt, Wavelength};
-use starfield_solar_spectrum::SolarSpectrum;
+use starfield::surfaces::solar_spectrum::SolarSpectrum;
 use thiserror::Error;
 
 use crate::photometry::quantum_efficiency::QuantumEfficiency;
