@@ -2337,7 +2337,7 @@ dependencies = [
 [[package]]
 name = "meter-math"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=9e991e8#9e991e8ccaade2de218e04a21629d6956b1d4043"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=6789b2c#6789b2c3562a4ed378a28b85d138a113c9b13478"
 dependencies = [
  "log",
  "nalgebra",
@@ -3670,7 +3670,7 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=9e991e8#9e991e8ccaade2de218e04a21629d6956b1d4043"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=6789b2c#6789b2c3562a4ed378a28b85d138a113c9b13478"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3711,7 +3711,7 @@ dependencies = [
 [[package]]
 name = "shared-wasm"
 version = "0.1.0"
-source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=9e991e8#9e991e8ccaade2de218e04a21629d6956b1d4043"
+source = "git+https://github.com/CosmicFrontierLabs/cfl-foundations?rev=6789b2c#6789b2c3562a4ed378a28b85d138a113c9b13478"
 dependencies = [
  "num-traits",
  "serde",
