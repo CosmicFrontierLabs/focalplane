@@ -46,8 +46,10 @@ use shared::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarData;
 use starfield::Equatorial;
 
+use crate::epoch::Epoch;
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::hardware::SatelliteConfig;
+use crate::image_proc::compose::{OrientationSample, PassContext, SecondPass};
 use crate::image_proc::deposit::MeanFluxDeposit;
 use crate::image_proc::render::quantize_image;
 use crate::photometry::photoconversion::SourceFlux;
@@ -276,6 +278,14 @@ pub struct LightSources<'a> {
     pub catalog_stars: &'a [StarData],
     pub galaxies: &'a [Galaxy],
     pub zodiacal: SolarAngularCoordinates,
+    /// Opaque-body compositing pass applied after stars, galaxies and
+    /// zodiacal light and before dark current (see
+    /// [`crate::image_proc::compose`]). `None` renders exactly as if
+    /// the pass did not exist.
+    pub second_pass: Option<&'a dyn SecondPass>,
+    /// Absolute time of trajectory `t = 0`. Required by passes that
+    /// evaluate ephemerides; `None` for purely sidereal scenes.
+    pub epoch: Option<&'a Epoch>,
 }
 
 /// Static inputs shared across every `(frame, sensor)` tile in a render.
@@ -598,12 +608,23 @@ fn build_tile_mean_image(
     // value is stable across every stamp of the exposure.
     let mut local_flux: HashMap<u64, SourceFlux> = HashMap::new();
 
+    // Orientation samples are retained for the second pass, which
+    // integrates opaque bodies over the same stamp schedule.
+    let mut samples: Vec<OrientationSample> = Vec::new();
+    let collect_samples = scene.sources.second_pass.is_some();
+
     let t_splat_stars = Instant::now();
     for stamp_t in schedule.stamp_times(stamp_phase) {
         let t_clamped = stamp_t
             .min(scene.trajectory.end_time())
             .max(scene.trajectory.start_time());
         let orientation = scene.trajectory.orientation_at(t_clamped)?;
+        if collect_samples {
+            samples.push(OrientationSample {
+                offset: stamp_t.saturating_sub(schedule.frame_start),
+                orientation,
+            });
+        }
         for star in &plan.stars {
             let hit =
                 match scene
@@ -688,9 +709,33 @@ fn build_tile_mean_image(
         .dark_current_at_temperature(satellite.temperature);
     let dark_mean = (dark_rate * schedule.exposure.as_secs_f64()).max(0.0);
 
-    // Build unified Poisson mean image.
+    // Build unified Poisson mean image. With a second pass the order
+    // is stars + galaxies + zodiacal → composite (bodies hide the sky
+    // behind them) → dark current (detector-internal, never hidden).
     let t_combined_mean = Instant::now();
-    let mean_image = accumulator.into_combined_mean(plan.zodiacal_per_px[sensor_idx], dark_mean);
+    let zodiacal_per_px = plan.zodiacal_per_px[sensor_idx];
+    let mean_image = match scene.sources.second_pass {
+        None => accumulator.into_combined_mean(zodiacal_per_px, dark_mean),
+        Some(pass) => {
+            let ctx = PassContext {
+                focal_plane: scene.fp,
+                satellite,
+                sensor_idx,
+                roi_origin: (roi.min_col, roi.min_row),
+                roi_size: (roi_w, roi_h),
+                exposure: schedule.exposure,
+                epoch: scene.sources.epoch.map(|e| e.offset(schedule.frame_start)),
+                samples: &samples,
+            };
+            let composite = pass.composite(&ctx)?;
+            let mut sky = accumulator.into_combined_mean(zodiacal_per_px, 0.0);
+            composite.apply(&mut sky);
+            if dark_mean > 0.0 {
+                sky.par_iter_mut().for_each(|pixel| *pixel += dark_mean);
+            }
+            sky
+        }
+    };
     let ms_combined_mean = t_combined_mean.elapsed().as_millis();
 
     Ok(MeanImageResult {
@@ -1446,6 +1491,8 @@ mod tests {
             catalog_stars: &[],
             galaxies: &[],
             zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+            second_pass: None,
+            epoch: None,
         }
     }
 
@@ -1455,6 +1502,8 @@ mod tests {
             catalog_stars: stars,
             galaxies: &[],
             zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+            second_pass: None,
+            epoch: None,
         }
     }
 
@@ -1464,6 +1513,8 @@ mod tests {
             catalog_stars: &[],
             galaxies,
             zodiacal: SolarAngularCoordinates::zodiacal_minimum(),
+            second_pass: None,
+            epoch: None,
         }
     }
 
@@ -2834,5 +2885,116 @@ mod tests {
     #[test]
     fn test_pure_tone_jitter_body_y_axis() {
         assert_pure_tone_psf_spread(nalgebra::Vector3::y(), "Y");
+    }
+
+    /// One bright star at the pointing over a static trajectory; the
+    /// scene the second-pass tests composite onto.
+    fn second_pass_fixture() -> (
+        FocalPlaneConfig,
+        Trajectory,
+        Vec<StarData>,
+        MotionBlurConfig,
+    ) {
+        let fp = tiny_fp();
+        let pointing = Equatorial::from_degrees(45.0, 30.0);
+        let stars = vec![StarData {
+            id: 1,
+            magnitude: 8.0,
+            position: pointing,
+            b_v: Some(0.6),
+        }];
+        let cfg = MotionBlurConfig {
+            timestep: Duration::from_secs(1),
+            exposure: Duration::from_secs(1),
+            max_drift_per_stamp_px: 0.1,
+            base_seed: Some(7),
+            force_static: true,
+            quiet: true,
+            ..Default::default()
+        };
+        (fp, static_trajectory(), stars, cfg)
+    }
+
+    /// Pre-noise mean image of sensor 0 for `sources`.
+    fn tile_mean_for(
+        fp: &FocalPlaneConfig,
+        traj: &Trajectory,
+        cfg: &MotionBlurConfig,
+        sources: &LightSources<'_>,
+    ) -> Array2<f64> {
+        let ctx = RenderContext::from_focal_plane(fp).unwrap();
+        let projected_galaxies = project_galaxies_for_render(traj, fp, sources.galaxies).unwrap();
+        let scene = RenderScene {
+            trajectory: traj,
+            sources: *sources,
+            fp,
+            projected_galaxies,
+        };
+        let zlight = ZodiacalLight::new();
+        let plan = plan_frame(&scene, &ctx, &zlight, 0, Duration::ZERO, cfg).unwrap();
+        let sat = &ctx.satellites[0];
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let tile_ctx = TileRenderContext {
+            scene: &scene,
+            plan: &plan,
+            sensor_idx: 0,
+        };
+        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let roi = AABB::from_coords(0, 0, h - 1, w - 1);
+        build_tile_mean_image(&tile_ctx, &cache, sat, 1, roi)
+            .unwrap()
+            .mean_image
+    }
+
+    #[test]
+    fn test_noop_second_pass_is_byte_identical_to_none() {
+        use crate::image_proc::compose::NoopPass;
+        let (fp, traj, stars, cfg) = second_pass_fixture();
+        let without = star_sources(&stars);
+        let noop = NoopPass;
+        let with = LightSources {
+            second_pass: Some(&noop),
+            ..without
+        };
+        let a = render_one_frame(&traj, &without, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+        let b = render_one_frame(&traj, &with, &fp, Duration::ZERO, 0, &cfg, None).unwrap();
+        assert_eq!(a, b, "an empty composite must not change a single byte");
+    }
+
+    #[test]
+    fn test_second_pass_masks_sky_but_not_dark_current() {
+        use crate::image_proc::compose::{BodyComposite, Composite, ConstantPass};
+        let (fp, traj, stars, cfg) = second_pass_fixture();
+        let sat = fp.satellite_for_sensor(0).unwrap();
+        let (w, h) = sat.sensor.dimensions.get_pixel_width_height();
+        let dark_mean =
+            sat.sensor.dark_current_at_temperature(sat.temperature) * cfg.exposure.as_secs_f64();
+
+        let without = star_sources(&stars);
+        let reference = tile_mean_for(&fp, &traj, &cfg, &without);
+        let star_peak = reference.iter().cloned().fold(0.0_f64, f64::max);
+        assert!(star_peak > dark_mean + 1.0, "fixture star must be visible");
+
+        // Half-transparent body over the whole sensor adding 3 e⁻/px.
+        let coverage = 0.5;
+        let electrons = 3.0;
+        let pass = ConstantPass::new(Composite {
+            layers: vec![BodyComposite::new(
+                (0, 0),
+                Array2::from_elem((h, w), coverage),
+                Array2::from_elem((h, w), electrons),
+            )],
+        });
+        let with = LightSources {
+            second_pass: Some(&pass),
+            ..without
+        };
+        let composited = tile_mean_for(&fp, &traj, &cfg, &with);
+
+        for (r, c) in ndarray::indices((h, w)) {
+            let sky = reference[[r, c]] - dark_mean;
+            let expected = sky * (1.0 - coverage) + electrons + dark_mean;
+            assert_abs_diff_eq!(composited[[r, c]], expected, epsilon = 1e-9);
+        }
     }
 }

@@ -40,6 +40,9 @@ pub enum TrajectoryError {
     #[error("focal plane has no sensors")]
     NoSensors,
 
+    #[error(transparent)]
+    SecondPass(#[from] crate::image_proc::compose::ComposeError),
+
     #[error("ROI {roi:?} out of bounds for sensor {sensor_idx} ({width}x{height})")]
     RoiOutOfBounds {
         roi: (usize, usize, usize, usize),

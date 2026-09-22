@@ -212,6 +212,8 @@ fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
         catalog_stars: &stars,
         galaxies: &[],
         zodiacal: zodi,
+        second_pass: None,
+        epoch: None,
     };
 
     let mut group = c.benchmark_group("render_one_frame_roi");

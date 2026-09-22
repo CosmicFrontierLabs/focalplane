@@ -1,0 +1,1082 @@
+//! Render solar-system bodies as seen from a spacecraft at one epoch.
+//!
+//! Quick-look tool for the solar-system second pass: points the telescope
+//! at a target body, composites the requested bodies onto an empty star
+//! field, and writes a 16-bit PNG plus an 8-bit stretched preview.
+//!
+//! ```text
+//! cargo run --features solar-system --bin planet_view -- \
+//!     --epoch 2007-10-03T05:30:00Z --observer mars --bodies earth,moon \
+//!     --telescope cosmic-frontier-jbt50cm --exposure-s 0.001 --out earth_from_mars
+//! ```
+//!
+//! Surface models are quick-look defaults: Lambert spheres whose albedo
+//! reproduces each planet's V geometric albedo (Mallama & Hilton 2018,
+//! `A = 3p/2`), and the lunar-average Hapke set for the Moon.
+
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
+
+use ab_glyph::{FontRef, PxScale};
+use clap::Parser;
+use image::{ImageBuffer, Luma, Rgb, RgbImage};
+use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_text_mut};
+use ndarray::Array2;
+use shared::units::{AreaExt, LengthExt, Temperature, TemperatureExt};
+use simulator::overlay::{Annotation, AnnotationKind, Footprint, Overlay};
+use simulator::solar_system::frame_metadata::{
+    AtmosphereModel, BodyRecord, EpochRecord, FrameMetadata, Generator, Instrument,
+    MinorPlanetRecord, MinorPlanetsModel, Models, Outputs, Pointing, Radiometry, SiteRecord,
+    StarsModel,
+};
+use simulator::solar_system::minor_planets::MinorPlanetCatalog;
+use starfield::catalogs::{StarCatalog, StarData};
+use starfield::Equatorial;
+use starfield_gaia::{Dr3, LazyLoadingCatalog};
+
+use starfield_planet_maps::{earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention};
+use starfield_reflectance_library::ReflectanceLibrary;
+
+use simulator::atmosphere::RayleighAtmosphere;
+use simulator::bodies::brdf::{Brdf, Hapke, Lambert, UnitGeometricAlbedo};
+use simulator::bodies::surface::{SurfaceModel, TexturedSurfaceModel};
+use simulator::body_pass::{BodyPass, SceneBody};
+use simulator::epoch::Epoch;
+use simulator::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector, SatelliteConfig};
+use simulator::image_proc::render::quantize_image;
+use simulator::photometry::zodiacal::SolarAngularCoordinates;
+use simulator::scene::Scene;
+use simulator::shared_args::{SensorModel, TelescopeModel};
+use simulator::sims::orientation::orientation_from_pointing;
+use simulator::solar_system::{
+    BodyId, BodyState, Observer, SiteStatus, SiteView, SolarSystem, SurfaceSite,
+};
+
+/// Smallest solar elongation with zodiacal-light table coverage.
+const MIN_ZODIACAL_ELONGATION_DEG: f64 = 15.0;
+
+static FONT_DATA: &[u8] = include_bytes!("../../assets/fonts/DejaVuSansMono-Bold.ttf");
+static FONT: LazyLock<FontRef<'static>> =
+    LazyLock::new(|| FontRef::try_from_slice(FONT_DATA).expect("bundled font parses"));
+
+/// Overlay colour for surface sites, distinct from the red/green centre
+/// markers used in downstream videos.
+const SITE_COLOUR: Rgb<u8> = Rgb([0, 220, 255]);
+
+/// A surface site projected onto the sensor, ready to draw.
+struct SiteMarker {
+    site: SurfaceSite,
+    view: SiteView,
+    pixel: Option<(f64, f64)>,
+}
+
+/// Preview colour for minor-planet markers.
+const MINOR_PLANET_COLOUR: Rgb<u8> = Rgb([255, 214, 0]);
+
+/// A point source to circle and name on the preview.
+struct PointMarker {
+    name: String,
+    pixel: (f64, f64),
+}
+
+/// Parse `Name:lat_deg:lon_east_deg:height_m`.
+fn parse_site(spec: &str) -> Result<SurfaceSite, String> {
+    let parts: Vec<&str> = spec.split(':').collect();
+    if parts.len() != 4 {
+        return Err(format!(
+            "site {spec:?} must be Name:lat_deg:lon_east_deg:height_m"
+        ));
+    }
+    let num = |s: &str, what: &str| {
+        s.trim()
+            .parse::<f64>()
+            .map_err(|_| format!("site {spec:?}: bad {what} {s:?}"))
+    };
+    Ok(SurfaceSite {
+        name: parts[0].trim().to_string(),
+        latitude_deg: num(parts[1], "latitude")?,
+        longitude_east_deg: num(parts[2], "longitude")?,
+        height_m: num(parts[3], "height")?,
+    })
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Render solar-system bodies from a spacecraft at one epoch")]
+struct Args {
+    /// Exposure start, RFC 3339 UTC or `JD 2461558.5` (TDB).
+    #[arg(long)]
+    epoch: String,
+
+    /// Body whose centre the observer sits at.
+    #[arg(long, default_value = "mars")]
+    observer: String,
+
+    /// Comma-separated bodies to render (NAIF names or ids: `earth`,
+    /// `moon`, `io`, `titan`, `606`); the first is the pointing target.
+    /// Planetary satellites load their NAIF SPK (0.1–1.2 GB) and
+    /// `pck00011.tpc`; a cold cache needs `STARFIELD_ALLOW_UPSTREAM=1` or
+    /// a `STARFIELD_MIRROR`.
+    #[arg(long, default_value = "earth,moon")]
+    bodies: String,
+
+    #[arg(long, value_enum, default_value_t = TelescopeModel::CosmicFrontierJbt50cm)]
+    telescope: TelescopeModel,
+
+    #[arg(long, value_enum, default_value_t = SensorModel::Imx455)]
+    sensor: SensorModel,
+
+    /// Sensor window rendered around the target, pixels (square).
+    #[arg(long, default_value_t = 512)]
+    window_px: usize,
+
+    /// Exposure time in seconds.
+    #[arg(long, default_value_t = 0.001)]
+    exposure_s: f64,
+
+    /// Sensor temperature, °C.
+    #[arg(long, default_value_t = -10.0)]
+    temperature_c: f64,
+
+    /// Sub-samples per pixel edge when rasterising disks.
+    #[arg(long, default_value_t = 4)]
+    oversampling: usize,
+
+    /// RNG seed for the noise draws.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+
+    /// Render grey Lambert/Hapke spheres instead of composition tiers.
+    #[arg(long, default_value_t = false)]
+    untextured: bool,
+
+    /// Leave out Earth's Rayleigh atmosphere (limb glow, twilight,
+    /// two-way extinction of the surface).
+    #[arg(long, default_value_t = false)]
+    no_atmosphere: bool,
+
+    /// Surface site on the target body to mark, as
+    /// `Name:lat_deg:lon_east_deg:height_m` (geodetic). Repeatable.
+    #[arg(long = "site")]
+    sites: Vec<String>,
+
+    /// Qualifier appended to site labels.
+    #[arg(long, default_value = "likely receiving site")]
+    site_qualifier: String,
+
+    /// Render background stars from the Gaia DR3 excerpt around the
+    /// pointing (occulted by bodies in front of them).
+    #[arg(long, default_value_t = false)]
+    stars: bool,
+
+    /// Faintest Gaia G magnitude to load when `--stars` is set.
+    #[arg(long, default_value_t = 18.0)]
+    star_mag_limit: f64,
+
+    /// HEALPix-sharded Gaia DR3 excerpt directory; defaults to the
+    /// starfield cache.
+    #[arg(long)]
+    gaia_dir: Option<PathBuf>,
+
+    /// Add every MPCORB minor planet in the field as a point source
+    /// (two-body propagation, H-G magnitudes); downloads the catalogue
+    /// into the starfield cache on first use.
+    #[arg(long, default_value_t = false)]
+    minor_planets: bool,
+
+    /// MPCORB-format file to use instead of the cached full catalogue.
+    #[arg(long)]
+    mpcorb: Option<PathBuf>,
+
+    /// Faintest V magnitude of minor planets to include.
+    #[arg(long, default_value_t = 20.0)]
+    minor_planet_mag_limit: f64,
+
+    /// Mark and name minor planets on the preview (yellow).
+    #[arg(long, default_value_t = false)]
+    label_minor_planets: bool,
+
+    /// Write the pre-noise mean image (no shot, read or dark noise) as
+    /// the 16-bit output instead of a noisy realisation.
+    #[arg(long, default_value_t = false)]
+    noiseless: bool,
+
+    /// Skip the PSF blur on body stamps (stars keep theirs), isolating
+    /// the PSF's effect on the limb.
+    #[arg(long, default_value_t = false)]
+    no_psf: bool,
+
+    /// Fixed preview stretch ceiling in electrons per pixel, so a series
+    /// of frames shares one brightness scale. Default: each frame's own
+    /// maximum.
+    #[arg(long)]
+    stretch_peak_e: Option<f64>,
+
+    /// Output path stem; writes `<stem>.png` (16-bit) and `<stem>_preview.png`.
+    #[arg(long, default_value = "planet_view")]
+    out: PathBuf,
+}
+
+/// Quick-look grey reflectance law for a body: a Lambert sphere whose
+/// albedo reproduces the V geometric albedo, or the lunar Hapke set.
+fn grey_surface(body: BodyId) -> Arc<dyn SurfaceModel> {
+    let lambert = |geometric_albedo: f64| -> Arc<dyn SurfaceModel> {
+        Arc::new(Lambert {
+            albedo: (1.5 * geometric_albedo).min(1.0),
+        })
+    };
+    // Planets: Mallama & Hilton (2018) V geometric albedos. Satellites:
+    // V geometric albedos from the JPL satellite physical-parameter
+    // table (Enceladus exceeds the Lambert limit and clamps).
+    match body {
+        BodyId::MOON => Arc::new(Hapke::lunar_average()),
+        BodyId::MERCURY => lambert(0.142),
+        BodyId::VENUS => lambert(0.689),
+        BodyId::EARTH => lambert(0.434),
+        BodyId::MARS => lambert(0.170),
+        BodyId::JUPITER => lambert(0.538),
+        BodyId::SATURN => lambert(0.499),
+        BodyId::URANUS => lambert(0.488),
+        BodyId::NEPTUNE => lambert(0.442),
+        BodyId::SUN => lambert(1.0),
+        BodyId::PHOBOS => lambert(0.071),
+        BodyId::DEIMOS => lambert(0.068),
+        BodyId::IO => lambert(0.63),
+        BodyId::EUROPA => lambert(0.67),
+        BodyId::GANYMEDE => lambert(0.43),
+        BodyId::CALLISTO => lambert(0.22),
+        BodyId::ENCELADUS => lambert(1.0),
+        BodyId::RHEA => lambert(0.95),
+        BodyId::TITAN => lambert(0.22),
+        BodyId::IAPETUS => lambert(0.30),
+        BodyId::TITANIA => lambert(0.35),
+        BodyId::TRITON => lambert(0.76),
+        _ => lambert(0.30),
+    }
+}
+
+/// Textured surface where a composition tier exists (Earth, Mars),
+/// grey otherwise.
+fn default_surface(
+    body: BodyId,
+    library: &Arc<ReflectanceLibrary>,
+    untextured: bool,
+) -> Result<Arc<dyn SurfaceModel>, String> {
+    if untextured {
+        return Ok(grey_surface(body));
+    }
+    let tier: Option<(AbundanceTier, &str)> = match body {
+        BodyId::EARTH => Some((
+            earth_tier().map_err(|e| e.to_string())?,
+            "Earth MCD12C1 composition 0.25°",
+        )),
+        BodyId::MARS => Some((
+            mars_tier().map_err(|e| e.to_string())?,
+            "Mars Viking/MDIM albedo 0.1° (uncalibrated contrast)",
+        )),
+        BodyId::MOON => Some((
+            moon_tier().map_err(|e| e.to_string())?,
+            "Moon LROC WAC 643 nm normal albedo 0.1°",
+        )),
+        _ => None,
+    };
+    Ok(match tier {
+        Some((tier, label)) => {
+            let law = unit_law_for(&tier, body);
+            Arc::new(TexturedSurfaceModel::new(
+                Arc::new(tier),
+                law,
+                Arc::clone(library),
+                label,
+            ))
+        }
+        None => grey_surface(body),
+    })
+}
+
+/// The unit law a tier's texels scale, chosen by the albedo convention
+/// the tier records in its header. Hemispherical-Lambert tiers (Earth's
+/// per-endmember composition) scale a unit Lambert exactly. Geometric
+/// disk-mean tiers (mosaics rescaled so the disk mean is the body's
+/// geometric albedo) scale a law normalised to unit geometric albedo, so
+/// the map only redistributes light and the body's own phase curve sets
+/// the total: the lunar-average Hapke set for the Moon (a Lambert sphere
+/// is ~3x too bright at quadrature), Lambert for anything else.
+fn unit_law_for(tier: &AbundanceTier, body: BodyId) -> Arc<dyn Brdf> {
+    match tier.albedo_convention() {
+        AlbedoConvention::HemisphericalLambert => Arc::new(Lambert { albedo: 1.0 }),
+        AlbedoConvention::GeometricDiskMean => match body {
+            BodyId::MOON => Arc::new(UnitGeometricAlbedo::new(Hapke::lunar_average())),
+            _ => Arc::new(UnitGeometricAlbedo::new(Lambert { albedo: 1.0 })),
+        },
+    }
+}
+
+fn parse_body(name: &str) -> Result<BodyId, String> {
+    BodyId::parse(name).ok_or_else(|| format!("unknown body {name:?}"))
+}
+
+fn describe(state: &BodyState, elongation_deg: f64) -> String {
+    let ill = &state.illumination;
+    format!(
+        "{:<8} RA {:9.4}° Dec {:+8.4}°  range {:.4} AU  diam {:7.3}″  phase {:6.2}°  lit {:5.1}%  \
+         limb PA {:6.1}°  elong {:5.1}°  V {}",
+        state.body,
+        state.direction.ra_degrees(),
+        state.direction.dec_degrees(),
+        state.distance_au,
+        state.angular_diameter_arcsec(),
+        ill.phase_angle.to_degrees(),
+        100.0 * ill.illuminated_fraction,
+        ill.bright_limb_position_angle.to_degrees(),
+        elongation_deg,
+        state
+            .v_magnitude
+            .map_or_else(|| "  n/a".to_string(), |v| format!("{v:+5.2}")),
+    ) + &format!(
+        "\n{:<8} sub-observer lon {:7.2}°E lat {:+6.2}°  sub-solar {}  pole PA {:6.1}°",
+        "",
+        state.sub_observer.lon_rad.to_degrees(),
+        state.sub_observer.lat_rad.to_degrees(),
+        state.sub_solar.map_or_else(
+            || "n/a".to_string(),
+            |p| format!(
+                "lon {:7.2}°E lat {:+6.2}°",
+                p.lon_rad.to_degrees(),
+                p.lat_rad.to_degrees()
+            )
+        ),
+        state.north_pole_position_angle.to_degrees(),
+    )
+}
+
+fn save_u16(image: &Array2<u16>, path: &PathBuf) -> Result<(), String> {
+    let (h, w) = image.dim();
+    let raw: Vec<u16> = image.iter().copied().collect();
+    ImageBuffer::<Luma<u16>, Vec<u16>>::from_raw(w as u32, h as u32, raw)
+        .ok_or_else(|| "buffer size mismatch".to_string())?
+        .save(path)
+        .map_err(|e| e.to_string())
+}
+
+/// Asinh stretch between the 1st percentile and `ceiling` (default the
+/// frame maximum), to 8 bits: `v ↦ asinh(1000 · (v − floor)/(ceiling −
+/// floor)) / asinh(1000)`.
+fn stretch_to_u8(image: &Array2<f64>, ceiling: Option<f64>) -> Result<Vec<u8>, String> {
+    let mut sorted: Vec<f64> = image.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    if sorted.is_empty() {
+        return Err("empty image".into());
+    }
+    let floor = sorted[sorted.len() / 100];
+    let ceiling = ceiling.unwrap_or(*sorted.last().unwrap());
+    let span = (ceiling - floor).max(1e-9);
+    let scale = 1000.0;
+    let norm = |v: f64| ((v - floor).max(0.0) / span * scale).asinh() / scale.asinh();
+    Ok(image
+        .iter()
+        .map(|&v| (norm(v) * 255.0).round().clamp(0.0, 255.0) as u8)
+        .collect())
+}
+
+/// Stretched 8-bit preview; greyscale without sites, RGB with cyan site
+/// markers and labels when sites are given.
+fn save_preview(
+    image: &Array2<f64>,
+    path: &PathBuf,
+    markers: &[SiteMarker],
+    qualifier: &str,
+    points: &[PointMarker],
+    stretch_ceiling: Option<f64>,
+) -> Result<(), String> {
+    let (h, w) = image.dim();
+    let raw = stretch_to_u8(image, stretch_ceiling)?;
+    if markers.is_empty() && points.is_empty() {
+        return ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(w as u32, h as u32, raw)
+            .ok_or_else(|| "buffer size mismatch".to_string())?
+            .save(path)
+            .map_err(|e| e.to_string());
+    }
+    let mut rgb = RgbImage::from_fn(w as u32, h as u32, |x, y| {
+        let v = raw[(y as usize) * w + x as usize];
+        Rgb([v, v, v])
+    });
+    let font_px = ((h as f32) / 32.0).clamp(10.0, 18.0);
+    let font_scale = PxScale::from(font_px);
+    // Full label with status in the caption band; only the name at the
+    // marker, so a long qualifier never runs over the disk.
+    let mut caption_y = 4;
+    for marker in markers {
+        let status = marker.view.status();
+        let caption = match (status, marker.pixel) {
+            (SiteStatus::FarSide, _) => {
+                format!("{} ({qualifier}): not visible, far side", marker.site.name)
+            }
+            (_, None) => format!("{} ({qualifier}): {status}, off sensor", marker.site.name),
+            (_, Some((px, py))) => {
+                let (cx, cy) = (px.round() as i32, py.round() as i32);
+                draw_filled_circle_mut(&mut rgb, (cx, cy), 3, SITE_COLOUR);
+                draw_hollow_circle_mut(&mut rgb, (cx, cy), 7, SITE_COLOUR);
+                let name = &marker.site.name;
+                let text_w = (name.chars().count() as f32 * font_px * 0.62) as i32;
+                let tx = if cx + 12 + text_w < w as i32 {
+                    cx + 12
+                } else {
+                    (cx - 12 - text_w).max(0)
+                };
+                let ty = (cy - font_px as i32 / 2).clamp(0, (h as i32 - font_px as i32).max(0));
+                draw_text_mut(&mut rgb, SITE_COLOUR, tx, ty, font_scale, &*FONT, name);
+                format!("{name} ({qualifier}): {status}")
+            }
+        };
+        draw_text_mut(
+            &mut rgb,
+            SITE_COLOUR,
+            4,
+            caption_y,
+            font_scale,
+            &*FONT,
+            &caption,
+        );
+        caption_y += font_px as i32 + 2;
+    }
+    // Point sources: a small hollow ring so the source itself stays
+    // visible, name to the right (or left near the edge).
+    for point in points {
+        let (cx, cy) = (point.pixel.0.round() as i32, point.pixel.1.round() as i32);
+        draw_hollow_circle_mut(&mut rgb, (cx, cy), 6, MINOR_PLANET_COLOUR);
+        let text_w = (point.name.chars().count() as f32 * font_px * 0.62) as i32;
+        let tx = if cx + 10 + text_w < w as i32 {
+            cx + 10
+        } else {
+            (cx - 10 - text_w).max(0)
+        };
+        let ty = (cy - font_px as i32 / 2).clamp(0, (h as i32 - font_px as i32).max(0));
+        draw_text_mut(
+            &mut rgb,
+            MINOR_PLANET_COLOUR,
+            tx,
+            ty,
+            font_scale,
+            &*FONT,
+            &point.name,
+        );
+    }
+    rgb.save(path).map_err(|e| e.to_string())
+}
+
+fn main() -> Result<(), String> {
+    env_logger::init();
+    let args = Args::parse();
+
+    let epoch = Epoch::parse(&args.epoch).map_err(|e| e.to_string())?;
+    let observer = Observer::BodyCenter(parse_body(&args.observer)?);
+    let bodies: Vec<BodyId> = args
+        .bodies
+        .split(',')
+        .map(parse_body)
+        .collect::<Result<_, _>>()?;
+    let target = *bodies.first().ok_or("at least one body is required")?;
+
+    // Satellite kernels for every moon in the scene or under the observer.
+    let mut kernel_bodies = bodies.clone();
+    if let Observer::BodyCenter(body) = &observer {
+        kernel_bodies.push(*body);
+    }
+    let system = Arc::new(
+        SolarSystem::new()
+            .and_then(|s| s.with_satellites_for(&kernel_bodies))
+            .map_err(|e| e.to_string())?,
+    );
+    let satellite = SatelliteConfig::new(
+        args.telescope.to_config().clone(),
+        args.sensor
+            .to_config()
+            .with_dimensions(args.window_px, args.window_px),
+        Temperature::from_celsius(args.temperature_c),
+    );
+    let focal_plane = FocalPlaneConfig::from_satellite(&satellite);
+
+    println!(
+        "{} on {} ({:.3}″/px, window {} px), epoch {}",
+        satellite.telescope.name,
+        satellite.sensor.name,
+        satellite.plate_scale_arcsec_per_pixel(),
+        args.window_px,
+        epoch
+    );
+
+    let mut states = Vec::new();
+    for &body in &bodies {
+        let state = system
+            .body_state(body, &observer, &epoch)
+            .map_err(|e| e.to_string())?;
+        let elongation = system
+            .solar_elongation(&state.direction, &observer, &epoch)
+            .map_err(|e| e.to_string())?
+            .to_degrees();
+        println!("{}", describe(&state, elongation));
+        states.push((state, elongation));
+    }
+    let (target_state, target_elongation) = &states[0];
+    let pointing = target_state.direction;
+
+    let library = Arc::new(ReflectanceLibrary::load_embedded().map_err(|e| e.to_string())?);
+    let mut scene_bodies = Vec::with_capacity(bodies.len());
+    for &id in &bodies {
+        let surface = default_surface(id, &library, args.untextured)?;
+        println!("{id} surface: {}", surface.label());
+        let mut body = SceneBody::new(id, surface);
+        if id == BodyId::EARTH && !args.no_atmosphere {
+            let air = RayleighAtmosphere::earth(system.radii_km(id).map_err(|e| e.to_string())?[0]);
+            println!(
+                "{id} atmosphere: Rayleigh single scattering, H {:.1} km, top {:.0} km, \
+                 τ(550 nm) {:.4}",
+                air.scale_height_km,
+                air.top_km,
+                air.vertical_optical_depth(550.0, 0.0)
+            );
+            body = body.with_atmosphere(air);
+        }
+        scene_bodies.push(body);
+    }
+    let pass = BodyPass::new(Arc::clone(&system), observer.clone(), scene_bodies)
+        .with_oversampling(args.oversampling)
+        .with_psf_blur(!args.no_psf);
+    let solar_rate = pass
+        .solar_electron_rate(&satellite)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "solar photo-electron rate through the aperture at 1 AU: {solar_rate:.4e} e⁻/s \
+         (TSIS-1 HSRS × combined QE)"
+    );
+
+    // The zodiacal table has no data inside the solar exclusion zone;
+    // inside it the true background is stray light, which is not
+    // modelled, so the nearest tabulated elongation is used.
+    let zodiacal_elongation = target_elongation.clamp(MIN_ZODIACAL_ELONGATION_DEG, 180.0);
+    let zodiacal =
+        SolarAngularCoordinates::new(zodiacal_elongation, 0.0).map_err(|e| e.to_string())?;
+
+    // Background stars: a Gaia cone covering the window's half-diagonal
+    // plus a PSF margin, so every star that can deposit light is loaded.
+    let half_diag_deg = (args.window_px as f64) * satellite.plate_scale_arcsec_per_pixel() / 3600.0
+        * std::f64::consts::FRAC_1_SQRT_2
+        + 0.005;
+    let mut stars: Vec<StarData> = if args.stars {
+        let dir = args
+            .gaia_dir
+            .clone()
+            .unwrap_or_else(simulator::sims::gaia_dr3::default_excerpt_dir);
+        let lazy = LazyLoadingCatalog::<Dr3>::open(&dir).map_err(|e| e.to_string())?;
+        let (catalog, _) = simulator::sims::gaia_dr3::materialize_cone_augmented(
+            &lazy,
+            pointing,
+            half_diag_deg,
+            args.star_mag_limit,
+        )
+        .map_err(|e| e.to_string())?;
+        let stars: Vec<StarData> = catalog.star_data().collect();
+        println!(
+            "stars: {} Gaia DR3 sources to G {:.1} within {:.3}° of the pointing",
+            stars.len(),
+            args.star_mag_limit,
+            half_diag_deg
+        );
+        stars
+    } else {
+        Vec::new()
+    };
+    let star_count = stars.len();
+
+    // Minor planets: every MPCORB body in the same cone, as point
+    // sources appended to the star list so they share the first-pass
+    // photometry, PSF and occultation by the resolved bodies.
+    let (minor_planet_catalog, minor_planet_sightings) = if args.minor_planets {
+        let catalog = match &args.mpcorb {
+            Some(path) => MinorPlanetCatalog::from_file(path),
+            None => MinorPlanetCatalog::load_default(),
+        }
+        .map_err(|e| e.to_string())?;
+        let sightings = system
+            .minor_planets_in_cone(
+                &catalog,
+                &observer,
+                &epoch,
+                &pointing,
+                half_diag_deg.to_radians(),
+                args.minor_planet_mag_limit,
+            )
+            .map_err(|e| e.to_string())?;
+        println!(
+            "minor planets: {} of {} MPCORB bodies within {:.3}° brighter than V {:.1} ({})",
+            sightings.len(),
+            catalog.len(),
+            half_diag_deg,
+            args.minor_planet_mag_limit,
+            catalog.path().display()
+        );
+        for s in &sightings {
+            println!(
+                "  {:<24} V {:5.2}  RA {:9.5}° Dec {:+9.5}°  Δ {:.4} AU  r {:.4} AU  phase {:5.1}°  motion {:.1}″/h",
+                s.name,
+                s.v_magnitude,
+                s.direction.ra_degrees(),
+                s.direction.dec_degrees(),
+                s.range_au,
+                s.heliocentric_au,
+                s.phase_angle.to_degrees(),
+                s.sky_motion_arcsec_per_hour
+            );
+        }
+        for s in &sightings {
+            let id = catalog
+                .find(&s.designation)
+                .map_or(u64::MAX, |e| e.star_id());
+            stars.push(s.star_data(id));
+        }
+        (Some(catalog), sightings)
+    } else {
+        (None, Vec::new())
+    };
+
+    let scene = Scene::from_catalog(focal_plane, stars, pointing, zodiacal)
+        .with_second_pass(Arc::new(pass), Some(epoch.clone()));
+
+    let exposure = std::time::Duration::from_secs_f64(args.exposure_s);
+    let mut result = scene
+        .render_with_options(&exposure, !args.noiseless, Some(args.seed))
+        .remove(0);
+    if args.noiseless {
+        // Pre-noise mean of sky + bodies + zodiacal light; no read or
+        // dark noise either.
+        let mean = &result.star_image + &result.zodiacal_image;
+        result.quantized_image = quantize_image(&mean, &satellite.sensor);
+        result.sensor_noise_image.fill(0.0);
+    }
+
+    let well = satellite.sensor.max_well_depth_e;
+    let saturated = result.star_image.iter().filter(|&&e| e >= well).count();
+    let total = result.star_image.sum();
+    println!(
+        "body electrons {:.3e} (peak {:.3e} e⁻/px, {} px at full well {:.0} e⁻)",
+        total,
+        result.star_image.iter().cloned().fold(0.0, f64::max),
+        saturated,
+        well
+    );
+    println!(
+        "{} is {} px across on this sensor",
+        target,
+        (target_state.angular_diameter_arcsec() / satellite.plate_scale_arcsec_per_pixel()).round()
+    );
+    // Geometric centre of each body on the sensor, through the same
+    // projector the second pass uses (pixel index = pixel centre).
+    let orientation = orientation_from_pointing(&pointing, 0.0);
+    for (state, _) in &states {
+        let probe = StarData::with_position(0, state.direction, 0.0, None);
+        match scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0)
+        {
+            Some((x, y)) => println!("{} centre px {x:.4} {y:.4}", state.body),
+            None => println!("{} centre px off-sensor", state.body),
+        }
+    }
+
+    // Surface sites on the target: same light-time-corrected orientation
+    // and projector as the disk, so marker and texture agree.
+    let mut markers = Vec::new();
+    for spec in &args.sites {
+        let site = parse_site(spec)?;
+        let view = target_state.view_site(&site);
+        let probe = StarData::with_position(0, view.direction, 0.0, None);
+        let pixel = scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0);
+        let px_text = pixel.map_or_else(
+            || "off-sensor".to_string(),
+            |(x, y)| format!("{x:.4} {y:.4}"),
+        );
+        println!(
+            "site {} lat {:+.6} lon {:+.6}E h {:.0} m: {}; px {px_text}; offset E {:+.4}\" N {:+.4}\"; \
+             emission_cos {:+.4}; incidence_cos {}",
+            site.name,
+            site.latitude_deg,
+            site.longitude_east_deg,
+            site.height_m,
+            view.status(),
+            view.sky_offset_rad.0.to_degrees() * 3600.0,
+            view.sky_offset_rad.1.to_degrees() * 3600.0,
+            view.emission_cosine,
+            view.incidence_cosine
+                .map_or_else(|| "n/a".to_string(), |c| format!("{c:+.4}")),
+        );
+        markers.push(SiteMarker { site, view, pixel });
+    }
+
+    // Minor planets on the sensor, through the same projector.
+    let mut minor_planet_pixels: Vec<Option<(f64, f64)>> = Vec::new();
+    let mut point_markers = Vec::new();
+    for s in &minor_planet_sightings {
+        let probe = StarData::with_position(0, s.direction, 0.0, None);
+        let pixel = scene
+            .focal_plane
+            .project_to_sensor(&probe, &orientation, 0, 0.0);
+        minor_planet_pixels.push(pixel);
+        if let (true, Some(pixel)) = (args.label_minor_planets, pixel) {
+            point_markers.push(PointMarker {
+                name: format!("{} V{:.1}", s.name, s.v_magnitude),
+                pixel,
+            });
+        }
+    }
+
+    let png = args.out.with_extension("png");
+    let preview = PathBuf::from(format!("{}_preview.png", args.out.display()));
+    save_u16(&result.quantized_image, &png)?;
+    let electrons = result.mean_electron_image();
+    save_preview(
+        &electrons,
+        &preview,
+        &markers,
+        &args.site_qualifier,
+        &point_markers,
+        args.stretch_peak_e,
+    )?;
+
+    // Per-frame metadata: everything needed to reproduce and to read
+    // the image quantitatively.
+    let metadata_path = PathBuf::from(format!("{}.json", args.out.display()));
+    let git_commit = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let body_records: Vec<BodyRecord> = states
+        .iter()
+        .map(|(state, elongation_deg)| {
+            let electrons_per_sr =
+                args.exposure_s * solar_rate / state.illumination.heliocentric_distance_au.powi(2);
+            BodyRecord::from_state(state, *elongation_deg, electrons_per_sr)
+        })
+        .collect();
+    let site_records: Vec<SiteRecord> = markers
+        .iter()
+        .map(|m| SiteRecord::new(&m.site, &m.view, &args.site_qualifier, m.pixel))
+        .collect();
+    let minor_planet_records: Vec<MinorPlanetRecord> = minor_planet_sightings
+        .iter()
+        .zip(&minor_planet_pixels)
+        .map(|(s, px)| MinorPlanetRecord::new(s, *px))
+        .collect();
+    let earth_atmosphere = (bodies.contains(&BodyId::EARTH) && !args.no_atmosphere).then(|| {
+        let air = RayleighAtmosphere::earth(BodyId::EARTH.equatorial_radius_km().unwrap());
+        AtmosphereModel {
+            kind: "Rayleigh single scattering".to_string(),
+            scale_height_km: air.scale_height_km,
+            top_km: air.top_km,
+            tau_vertical_550nm: air.vertical_optical_depth(550.0, 0.0),
+            spectral_bins: 8,
+            multiple_scattering: false,
+            aerosols: false,
+            ozone: false,
+            clouds: false,
+            refraction: false,
+        }
+    });
+    let stars_model = args.stars.then(|| StarsModel {
+        catalog: "Gaia DR3 excerpt + Hipparcos bright supplement".to_string(),
+        mag_limit_g: args.star_mag_limit,
+        count_in_cone: star_count,
+    });
+    let minor_planets_model = minor_planet_catalog
+        .as_ref()
+        .map(|catalog| MinorPlanetsModel {
+            catalog: "MPC MPCORB via starfield-mpc".to_string(),
+            catalog_file: catalog.path().display().to_string(),
+            catalog_bodies: catalog.len(),
+            elements_epoch_tt_jd_range: catalog.epoch_range_tt(),
+            mag_limit_v: args.minor_planet_mag_limit,
+            count_in_cone: minor_planet_sightings.len(),
+            propagation: "two-body from osculating elements; light time iterated; first-order \
+                      observer aberration; no perturbations, no deflection"
+                .to_string(),
+            photometry: "IAU H-G (Bowell et al. 1989), G = 0.15 where absent; solar-colour point \
+                     source, B-V 0.75"
+                .to_string(),
+            not_modelled: ["rotational light curves", "resolved disks", "comet comae"]
+                .map(str::to_string)
+                .to_vec(),
+        });
+    let metadata = FrameMetadata {
+        generator: Generator {
+            crate_name: "focalplane simulator".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            binary: "planet_view".to_string(),
+            git_commit,
+            command_line: std::env::args().collect(),
+        },
+        epoch: EpochRecord {
+            utc: epoch.to_string(),
+            jd_tdb: epoch.jd_tdb(),
+        },
+        observer: format!("{observer:?}"),
+        pointing_icrf: Pointing {
+            ra_deg: pointing.ra_degrees(),
+            dec_deg: pointing.dec_degrees(),
+            roll_deg: 0.0,
+            target: target.name().to_string(),
+        },
+        instrument: Instrument {
+            telescope: satellite.telescope.name.to_string(),
+            aperture_m: satellite.telescope.aperture.as_meters(),
+            focal_length_m: satellite.telescope.focal_length.as_meters(),
+            obscuration_ratio_linear: satellite.telescope.obscuration_ratio,
+            clear_aperture_cm2: satellite
+                .telescope
+                .clear_aperture_area()
+                .as_square_centimeters(),
+            sensor: satellite.sensor.name.to_string(),
+            pixel_um: satellite.sensor.pixel_size().as_micrometers(),
+            plate_scale_arcsec_per_px: satellite.plate_scale_arcsec_per_pixel(),
+            window_px: args.window_px,
+            exposure_s: args.exposure_s,
+            temperature_c: args.temperature_c,
+            full_well_e: well,
+            dark_current_e_per_s_per_px: satellite
+                .sensor
+                .dark_current_at_temperature(satellite.temperature),
+            psf_model: if args.no_psf {
+                "none on bodies (delta); stars Gaussian-approximated Airy"
+            } else {
+                "Gaussian approximation of the Airy core at the reference wavelength, 3x3 \
+                 Simpson per pixel"
+            }
+            .to_string(),
+            psf_fwhm_px: satellite.airy_disk_pixel_space().fwhm(),
+            image_parity: "north up, east left (sky parity); pixel index = pixel centre"
+                .to_string(),
+        },
+        models: Models {
+            bodies: bodies.iter().map(|b| b.name().to_string()).collect(),
+            textured: !args.untextured,
+            earth_atmosphere,
+            noise: if args.noiseless {
+                "none (pre-noise mean image)"
+            } else {
+                "Poisson shot noise on bodies+stars and on zodiacal light, Gaussian read \
+                 noise, dark current"
+            }
+            .to_string(),
+            stray_light: "not modelled".to_string(),
+            ocean_glint: "not modelled".to_string(),
+            clouds: "not modelled".to_string(),
+            body_motion_blur: "not modelled (body evaluated at mid-exposure orientation)"
+                .to_string(),
+            oversampling_per_pixel_edge: args.oversampling,
+            stars: stars_model,
+            minor_planets: minor_planets_model,
+        },
+        radiometry: Radiometry {
+            solar_spectrum: simulator::photometry::solar::HSRS_PROVENANCE.to_string(),
+            solar_electron_rate_1au_e_per_s: solar_rate,
+            chain: "F_sun(lambda) [W m^-2 nm^-1 @1 AU] -> photons (lambda/hc) -> electrons \
+                    (combined QE, 1 nm bins) -> Edot_sun; body radiance per unit solar \
+                    irradiance r [sr^-1] = BRDF x texel band albedo x T_sun T_view + Rayleigh \
+                    path radiance; pixel e- = sum_subsamples r * (T * Edot_sun / d_sun^2) * \
+                    Omega_sub"
+                .to_string(),
+            scene_electrons_total: total,
+            scene_electrons_peak_per_px: result.star_image.iter().cloned().fold(0.0, f64::max),
+            pixels_at_full_well: saturated,
+            zodiacal_elongation_used_deg: zodiacal_elongation,
+        },
+        bodies: body_records,
+        sites: site_records,
+        minor_planets: minor_planet_records,
+        outputs: Outputs {
+            image_16bit_dn: png.display().to_string(),
+            preview_8bit: preview.display().to_string(),
+            preview_stretch: format!(
+                "asinh(1000 x) / asinh(1000), floor = 1st percentile, ceiling = {}",
+                args.stretch_peak_e
+                    .map_or("frame max".to_string(), |c| format!("{c} e-/px"))
+            ),
+            dn_per_electron: satellite.sensor.dn_per_electron,
+            black_level_dn: satellite.sensor.black_level_dn,
+        },
+    };
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Informational overlay: the same sources in the same pixel frame,
+    // as an SVG that sits 1:1 on the PNGs and carries the records above
+    // in its metadata.
+    let overlay_path = PathBuf::from(format!("{}.svg", args.out.display()));
+    let overlay = build_overlay(
+        args.window_px,
+        &metadata,
+        &states,
+        &markers,
+        &minor_planet_pixels,
+        &scene.per_sensor_stars[0],
+        &satellite,
+    );
+    std::fs::write(&overlay_path, overlay.to_svg()).map_err(|e| e.to_string())?;
+    println!(
+        "wrote {}, {}, {} and {}",
+        png.display(),
+        preview.display(),
+        metadata_path.display(),
+        overlay_path.display()
+    );
+    Ok(())
+}
+
+/// Stars brighter than this Gaia G get a footprint ring on the overlay.
+const OVERLAY_STAR_RING_MAG: f64 = 16.0;
+/// How many of the brightest stars get a label.
+const OVERLAY_STAR_LABELS: usize = 10;
+
+/// Assemble the overlay from the frame's records and projected sources.
+fn build_overlay(
+    window_px: usize,
+    metadata: &FrameMetadata,
+    states: &[(BodyState, f64)],
+    markers: &[SiteMarker],
+    minor_planet_pixels: &[Option<(f64, f64)>],
+    stars: &[simulator::image_proc::render::StarInFrame],
+    satellite: &SatelliteConfig,
+) -> Overlay {
+    let plate_scale = satellite.plate_scale_arcsec_per_pixel();
+    let orientation = orientation_from_pointing(
+        &Equatorial::from_degrees(
+            metadata.pointing_icrf.ra_deg,
+            metadata.pointing_icrf.dec_deg,
+        ),
+        0.0,
+    );
+    let focal_plane = FocalPlaneConfig::from_satellite(satellite);
+    let mut overlay = Overlay::new(window_px, window_px).with_frame(metadata);
+
+    for ((state, _), record) in states.iter().zip(&metadata.bodies) {
+        let probe = StarData::with_position(0, state.direction, 0.0, None);
+        let Some(pixel) = focal_plane.project_to_sensor(&probe, &orientation, 0, 0.0) else {
+            continue;
+        };
+        let kind = match state.body {
+            BodyId::SUN => AnnotationKind::Sun,
+            BodyId::MOON => AnnotationKind::Moon,
+            _ => AnnotationKind::Planet,
+        };
+        let radius_px = state.angular_diameter_arcsec() / 2.0 / plate_scale;
+        let label = format!(
+            "{} {:.1}\" {:.0}% lit",
+            state.body.name(),
+            state.angular_diameter_arcsec(),
+            100.0 * state.illumination.illuminated_fraction
+        );
+        overlay.push(
+            Annotation::new(
+                state.body.name().to_ascii_lowercase(),
+                kind,
+                label,
+                pixel,
+                Footprint::Circle { radius_px },
+            )
+            .with_payload(record),
+        );
+    }
+
+    for (marker, record) in markers.iter().zip(&metadata.sites) {
+        let Some(pixel) = marker.pixel else {
+            continue;
+        };
+        if marker.view.status() == SiteStatus::FarSide {
+            continue;
+        }
+        overlay.push(
+            Annotation::new(
+                format!(
+                    "site-{}",
+                    marker.site.name.to_ascii_lowercase().replace(' ', "-")
+                ),
+                AnnotationKind::Site,
+                format!("{} ({})", marker.site.name, marker.view.status()),
+                pixel,
+                Footprint::Point {
+                    marker_radius_px: 4.0,
+                },
+            )
+            .with_payload(record),
+        );
+    }
+
+    for (record, pixel) in metadata.minor_planets.iter().zip(minor_planet_pixels) {
+        let Some(pixel) = *pixel else {
+            continue;
+        };
+        overlay.push(
+            Annotation::new(
+                format!("mp-{}", record.designation),
+                AnnotationKind::MinorPlanet,
+                format!("{} V{:.1}", record.name, record.v_magnitude),
+                pixel,
+                Footprint::Point {
+                    marker_radius_px: 5.0,
+                },
+            )
+            .with_payload(record),
+        );
+    }
+
+    // Stars: rings for the bright ones, labels for the brightest few.
+    // Minor planets were appended to the star list, so skip the ids the
+    // catalogue stamped with the high bit.
+    let mut bright: Vec<&simulator::image_proc::render::StarInFrame> = stars
+        .iter()
+        .filter(|s| s.star.magnitude <= OVERLAY_STAR_RING_MAG && s.star.id < (1 << 63))
+        .collect();
+    bright.sort_by(|a, b| a.star.magnitude.total_cmp(&b.star.magnitude));
+    for (rank, s) in bright.iter().enumerate() {
+        let label = if rank < OVERLAY_STAR_LABELS {
+            format!("G {:.1}", s.star.magnitude)
+        } else {
+            String::new()
+        };
+        overlay.push(
+            Annotation::new(
+                format!("star-{}", s.star.id),
+                AnnotationKind::Star,
+                label,
+                (s.x, s.y),
+                Footprint::Point {
+                    marker_radius_px: 4.0,
+                },
+            )
+            .with_payload(&StarRecord {
+                gaia_source_id: s.star.id,
+                ra_deg: s.star.position.ra_degrees(),
+                dec_deg: s.star.position.dec_degrees(),
+                magnitude_g: s.star.magnitude,
+                b_v: s.star.b_v,
+            }),
+        );
+    }
+    overlay
+}
+
+/// Payload for a star annotation.
+#[derive(serde::Serialize)]
+struct StarRecord {
+    gaia_source_id: u64,
+    ra_deg: f64,
+    dec_deg: f64,
+    magnitude_g: f64,
+    b_v: Option<f64>,
+}

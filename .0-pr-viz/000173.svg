@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <defs>
+    <marker id="arr-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#565f89"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ece6a"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f7768e"/>
+    </marker>
+  </defs>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #173 · Solar-system bodies: second pass, BRDFs, ephemeris geometry, textures, atmosphere</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">The renderer knew only point sources, so a resolved Earth, Moon or asteroid field could not be drawn;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now an optional second pass composites ephemeris-placed disks onto the star image before the noise draw.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1135" stroke="#3d4666" stroke-width="1.5" stroke-dasharray="2 6"/>
+
+  <!-- BEFORE -->
+  <g>
+    <rect x="80" y="250" width="860" height="150" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="104" y="290" font-size="26" fill="#7aa2f7">Scene::from_catalog(focal_plane, stars, pointing, zodiacal)</text>
+    <text x="104" y="330" font-size="23" fill="#a9b1d6">StarInFrame -> PSF deposit -> star_image (mean electrons)</text>
+    <text x="104" y="366" font-size="22" fill="#565f89">GalaxyInFrame via with_galaxies; both are surface-brightness splats</text>
+  </g>
+  <line x1="510" y1="400" x2="510" y2="470" stroke="#565f89" stroke-width="1.5" marker-end="url(#arr-dim)"/>
+
+  <g>
+    <rect x="80" y="475" width="860" height="150" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="104" y="515" font-size="26" fill="#7aa2f7">render_with_seed: zodiacal + dark + one Poisson draw</text>
+    <text x="104" y="555" font-size="23" fill="#a9b1d6">quantize_image clips at the full well</text>
+    <text x="104" y="591" font-size="22" fill="#565f89">INVARIANTS section 1: a single Poisson stage over the combined mean</text>
+  </g>
+  <line x1="510" y1="625" x2="510" y2="700" stroke="#f7768e" stroke-width="3" marker-end="url(#arr-red)"/>
+  <text x="510" y="670" font-size="23" fill="#f7768e" text-anchor="middle">no opaque, extended body anywhere in the chain</text>
+
+  <g>
+    <rect x="80" y="960" width="860" height="120" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="1006" font-size="26" fill="#c0caf5">Earth-limb guiding from Mars could not be simulated</text>
+    <text x="104" y="1046" font-size="23" fill="#f7768e">no ephemeris, no disk, no phase, no limb, no occultation of stars</text>
+  </g>
+
+  <!-- AFTER -->
+  <g>
+    <rect x="1065" y="250" width="860" height="150" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="1089" y="290" font-size="26" fill="#7aa2f7">Scene::with_second_pass(Arc&lt;dyn SecondPass&gt;, Epoch)</text>
+    <text x="1089" y="330" font-size="23" fill="#a9b1d6">stars and galaxies unchanged; minor planets appended as StarData</text>
+    <text x="1089" y="366" font-size="22" fill="#565f89">feature = "solar-system"; None renders exactly as before</text>
+  </g>
+  <line x1="1495" y1="400" x2="1495" y2="470" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="475" width="860" height="260" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="515" font-size="26" fill="#9ece6a">BodyPass::composite -> Composite { layers: BodyComposite }</text>
+    <text x="1089" y="555" font-size="23" fill="#a9b1d6">SolarSystem::body_state: DE440s + satellite SPKs, light time, aberration</text>
+    <text x="1089" y="591" font-size="23" fill="#a9b1d6">BodyStamp::build: Lambert / Hapke / textured tier x TSIS-1 solar rate</text>
+    <text x="1089" y="627" font-size="23" fill="#a9b1d6">RayleighAtmosphere: single scattering, limb glow, two-way extinction</text>
+    <text x="1089" y="663" font-size="23" fill="#a9b1d6">sky x (1 - coverage) + electrons, applied before dark and Poisson</text>
+    <text x="1089" y="699" font-size="22" fill="#565f89">tests: stamp total = electrons_per_sr x theta^2 x disk integral to 1e-3</text>
+  </g>
+  <line x1="1495" y1="735" x2="1495" y2="800" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="805" width="860" height="110" fill="#1e202e" stroke="#e0af68" stroke-width="1.5"/>
+    <text x="1089" y="845" font-size="24" fill="#e0af68">planet_view: frames + FrameMetadata JSON + overlay SVG</text>
+    <text x="1089" y="881" font-size="22" fill="#a9b1d6">HiRISE 2007 geometry, Horizons satellites and Ceres locked by tests</text>
+  </g>
+
+  <g>
+    <rect x="1065" y="960" width="860" height="120" fill="#1e202e" stroke="#9ece6a" stroke-width="1.5"/>
+    <text x="1089" y="1006" font-size="26" fill="#c0caf5">Earth, Moon, Mars, satellites and MPCORB asteroids render</text>
+    <text x="1089" y="1046" font-size="23" fill="#9ece6a">textured Moon and Mars within 1-3 % of Mallama-Hilton V</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Not modelled: clouds, aerosols, multiple scattering, ocean glint, rings, satellite textures, self-luminous Sun; motion blur of bodies within an exposure.</text>
+</svg>
