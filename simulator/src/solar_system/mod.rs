@@ -21,7 +21,6 @@ use std::fmt;
 use std::sync::Mutex;
 
 use nalgebra::{Matrix3, Vector3};
-use starfield::constants::C_AUDAY;
 use starfield::framelib::Frame;
 use starfield::jplephem::names::{target_id, target_name};
 use starfield::jplephem::{JplephemError, SpiceKernel};
@@ -29,7 +28,7 @@ use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::magnitudelib::planetary_magnitude;
 use starfield::planetarylib::subpoint::SubPoint;
 use starfield::planetarylib::{body_constants, PlanetaryConstants};
-use starfield::positions::{Position, PositionKind};
+use starfield::positions::Position;
 use starfield::time::Time;
 use starfield::{Equatorial, Loader, StarfieldError};
 use thiserror::Error;
@@ -673,13 +672,13 @@ impl TransmitAimpoint {
 /// second pass; kernel evaluation is microseconds, far below any render
 /// cost.
 pub struct SolarSystem {
-    /// The planetary ephemeris: Sun, planets (as system barycentres),
-    /// Earth and Moon, all chained to the solar-system barycentre.
+    /// One merged SPK: the planetary ephemeris (Sun, planets as system
+    /// barycentres, Earth and Moon) plus any satellite kernels merged in,
+    /// so every body chains to the solar-system barycentre and
+    /// starfield's `observe`/`apparent` work for all of them.
     kernel: Mutex<SpiceKernel>,
-    /// Satellite kernels (`jup365.bsp`, `sat441.bsp`, …), each chaining
-    /// its moons through the planet barycentre to the solar-system
-    /// barycentre. Searched in order for a body the primary kernel lacks.
-    satellite_kernels: Vec<Mutex<SpiceKernel>>,
+    /// Satellite kernel file names merged so far, in load order.
+    satellite_kernels: Vec<String>,
     /// Body orientation and radii source: text and binary PCK kernels
     /// read so far, falling back to the embedded IAU 2015 table.
     constants: PlanetaryConstants,
@@ -689,8 +688,8 @@ impl fmt::Debug for SolarSystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SolarSystem {{ kernel: SpiceKernel, satellite_kernels: {}, constants: PlanetaryConstants }}",
-            self.satellite_kernels.len()
+            "SolarSystem {{ kernel: SpiceKernel, satellite_kernels: {:?}, constants: PlanetaryConstants }}",
+            self.satellite_kernels
         )
     }
 }
@@ -749,24 +748,33 @@ impl SolarSystem {
         self
     }
 
-    /// Add a satellite SPK by NAIF file name, resolving it through the
+    /// Merge a satellite SPK by NAIF file name, resolving it through the
     /// starfield datastore (local cache, then `STARFIELD_MIRROR`, then
-    /// NAIF itself only with `STARFIELD_ALLOW_UPSTREAM=1`).
-    pub fn with_satellite_kernel(mut self, filename: &str) -> Result<Self, SolarSystemError> {
+    /// NAIF itself only with `STARFIELD_ALLOW_UPSTREAM=1`). Its segments
+    /// take precedence over earlier ones for the same centre and target.
+    pub fn with_satellite_kernel(self, filename: &str) -> Result<Self, SolarSystemError> {
         let kernel = Loader::new().open(filename).map_err(|e| {
             StarfieldError::DataError(format!(
                 "satellite kernel {filename}: {e}; a cold cache needs \
                  STARFIELD_ALLOW_UPSTREAM=1 or a STARFIELD_MIRROR"
             ))
         })?;
-        self.satellite_kernels.push(Mutex::new(kernel));
-        Ok(self)
+        Ok(self.with_satellite_spk(kernel, filename))
     }
 
-    /// Add an already-open satellite SPK.
-    pub fn with_satellite_spk(mut self, kernel: SpiceKernel) -> Self {
-        self.satellite_kernels.push(Mutex::new(kernel));
+    /// Merge an already-open satellite SPK, recorded under `label`.
+    pub fn with_satellite_spk(mut self, kernel: SpiceKernel, label: &str) -> Self {
+        self.kernel
+            .lock()
+            .expect("ephemeris kernel mutex poisoned")
+            .merge(kernel);
+        self.satellite_kernels.push(label.to_string());
         self
+    }
+
+    /// Satellite kernel file names merged into the ephemeris, in order.
+    pub fn satellite_kernels(&self) -> &[String] {
+        &self.satellite_kernels
     }
 
     /// Load the generic satellite kernel for every system among `bodies`
@@ -811,15 +819,9 @@ impl SolarSystem {
     }
 
     /// Astrometric position of `body` (light time applied, no aberration)
-    /// from an observer whose barycentric state is `observer_bary`.
-    ///
-    /// Bodies the primary kernel can chain to the barycentre go through
-    /// starfield's `observe`. A satellite the primary kernel lacks is
-    /// taken from the first satellite kernel that has it: its
-    /// barycentric position at the emission epoch, iterated for light
-    /// time exactly as `observe` does, assembled into the same
-    /// `Position` so every downstream helper (`apparent`, sub-points,
-    /// ellipse) works unchanged.
+    /// from an observer whose barycentric state is `observer_bary`,
+    /// through starfield's `observe` on the merged kernel. A satellite
+    /// whose SPK has not been merged is reported with the file to add.
     fn observe(
         &self,
         kernel: &mut SpiceKernel,
@@ -827,46 +829,18 @@ impl SolarSystem {
         body: BodyId,
         epoch: &Epoch,
     ) -> Result<Position, SolarSystemError> {
-        if let Ok(target) = observe_target(kernel, body) {
-            return Ok(observer_bary.observe(&target, kernel, epoch.time())?);
-        }
-        let name = body.0.to_string();
-        for satellite_kernel in &self.satellite_kernels {
-            let mut sat = satellite_kernel
-                .lock()
-                .expect("satellite kernel mutex poisoned");
-            if sat.get(&name).is_err() {
-                continue;
+        let target = observe_target(kernel, body).map_err(|e| {
+            if body.is_satellite() && body != BodyId::MOON {
+                JplephemError::Other(format!(
+                    "{e}; merge its satellite SPK ({}) with SolarSystem::with_satellites_for",
+                    satellite_kernel_for(body.system_barycenter()).unwrap_or("unknown")
+                ))
+                .into()
+            } else {
+                e
             }
-            let mut light_time_days = 0.0;
-            let mut target = sat.at(&name, epoch.time())?;
-            for _ in 0..8 {
-                let emission = epoch.offset_secs(-light_time_days * SECONDS_PER_DAY);
-                target = sat.at(&name, emission.time())?;
-                let next = (target.position - observer_bary.position).norm() / C_AUDAY;
-                if (next - light_time_days).abs() < 1e-12 {
-                    light_time_days = next;
-                    break;
-                }
-                light_time_days = next;
-            }
-            return Ok(Position {
-                position: target.position - observer_bary.position,
-                velocity: target.velocity - observer_bary.velocity,
-                kind: PositionKind::Astrometric,
-                center: observer_bary.target,
-                target: body.0,
-                light_time: light_time_days,
-                observer_barycentric: Some(Box::new(observer_bary.clone())),
-            });
-        }
-        Err(JplephemError::Other(format!(
-            "no kernel loaded places {body} ({}); add its satellite SPK ({}) with \
-             SolarSystem::with_satellites_for",
-            body.0,
-            satellite_kernel_for(body.system_barycenter()).unwrap_or("unknown")
-        ))
-        .into())
+        })?;
+        Ok(observer_bary.observe(&target, kernel, epoch.time())?)
     }
 
     /// Apparent state of `body` from `observer` at `epoch`.

@@ -483,19 +483,19 @@ ellipsoid in a broadband visible camera (Artemis I: 25 km measured,
   `SolarSystem` (embedded IAU table as fallback), and `SolarSystem` holds
   satellite SPKs beside DE440s (`with_satellites_for`, table in
   `satellite_kernel_for`: mar099, jup365, sat441, ura184_part-3,
-  nep097). A moon the primary kernel lacks is observed by taking its
-  barycentric state from the satellite kernel with the same light-time
-  iteration `observe` uses, then handed to starfield's `apparent` and
-  sub-point helpers unchanged; starfield#216 (`SpiceKernel::open_many`,
-  in PR #218 for 0.17.1) replaces that with one merged kernel. Triton
-  from Earth and from Mars agrees with Horizons to 0.02″ in astrometric
-  direction, 1×10⁻⁷ in range and 0.1 % in angular diameter
-  (`triton_matches_horizons_from_earth_and_mars`); Io, Titan and Phobos
-  tests are written and wait on their 0.4–1.2 GB kernels. Surfaces are
-  grey Lambert spheres at published V geometric albedos (Hapke for the
-  Moon); no satellite tiers exist yet. Kernels resolve through the
-  starfield datastore, so a cold cache needs `STARFIELD_ALLOW_UPSTREAM=1`
-  or a mirror.
+  nep097), merged into one SPK with starfield 0.17.1's
+  `SpiceKernel::merge` (starfield#215–#217, PR #218) so every body goes
+  through the same `observe`/`apparent` chain as the planets. Against
+  JPL Horizons at 2026-09-22 from both the geocentre and the Mars
+  centre: Io, Titan and Phobos agree to 0.003″ or better in astrometric
+  direction and 1×10⁻⁷ in range (SPK-exact); Triton to 0.02″, the
+  nep097 vs Horizons solution difference. Angular diameters agree to
+  0.1 %. Surfaces are grey Lambert spheres at published V geometric
+  albedos (Hapke for the Moon); no satellite tiers exist yet, and
+  `planetary_magnitude` has no satellite phase laws so V is reported as
+  n/a. Kernels resolve through the starfield datastore, so a cold cache
+  needs `STARFIELD_ALLOW_UPSTREAM=1` or a mirror; the five satellite
+  kernels total 3.5 GB.
 - **Mercury**: Hapke (Domingue et al.) × MESSENGER MDIS monochrome map.
 - **Mars**: Lommel–Seeliger + a thin dust-haze scattering layer
   (τ ≈ 0.1–1 with dust-storm option), albedo from the Viking/MOLA

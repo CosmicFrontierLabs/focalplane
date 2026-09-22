@@ -20,15 +20,15 @@ solar-system = [
 ]
 
 [dependencies]
-starfield = { version = "0.16", features = ["photometry"] }
-starfield-solar-spectrum = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe", optional = true }
-starfield-planet-maps = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe", optional = true }
-starfield-reflectance-library = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe", optional = true }
-starfield-mpc = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe", optional = true }
-starfield-nsa = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe" }
-starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe" }
-starfield-bright-galaxies = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe" }
-starfield-datasource-utils = { git = "https://github.com/OrbitalCommons/starfield-datasources.git", rev = "0711deff6760b8be96f7bfab35329d76ae6027fe" }
+starfield = { version = "0.17", features = ["photometry"] }
+starfield-solar-spectrum = { version = "0.17", optional = true }
+starfield-planet-maps = { version = "0.17", optional = true }
+starfield-reflectance-library = { version = "0.17", optional = true }
+starfield-mpc = { version = "0.17", optional = true }
+starfield-nsa = { version = "0.17" }
+starfield-gaia = { version = "0.17" }
+starfield-bright-galaxies = { version = "0.17" }
+starfield-datasource-utils = { version = "0.17" }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",
@@ -44,9 +44,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7ac7bba", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7ac7bba" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "7ac7bba" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "9e991e8", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "9e991e8" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "9e991e8" }
 
 rand = "0.9"
 rand_distr = "0.5"
