@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <defs>
+    <marker id="arr-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#565f89"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ece6a"/>
+    </marker>
+    <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f7768e"/>
+    </marker>
+  </defs>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #182 · deps: starfield 0.18 facade replaces the datasource crates</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">simulator pulled nine starfield-* crates by name, each a separate version to keep in step;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now one starfield 0.18 dependency with features, and grouped import paths, so there is one version to move.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1135" stroke="#3d4666" stroke-width="1.5" stroke-dasharray="2 6"/>
+
+  <!-- BEFORE -->
+  <g>
+    <rect x="80" y="250" width="860" height="290" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="104" y="290" font-size="26" fill="#7aa2f7">simulator/Cargo.toml [dependencies]</text>
+    <text x="104" y="330" font-size="23" fill="#a9b1d6">starfield 0.17, starfield-gaia, -nsa, -bright-galaxies,</text>
+    <text x="104" y="366" font-size="23" fill="#a9b1d6">starfield-datasource-utils, and under solar-system:</text>
+    <text x="104" y="402" font-size="23" fill="#a9b1d6">starfield-planet-maps, -reflectance-library, -solar-spectrum, -mpc</text>
+    <text x="104" y="438" font-size="22" fill="#565f89">nine crates, each pinned to the same 0.17.x by hand</text>
+    <text x="104" y="474" font-size="22" fill="#565f89">use starfield_gaia::..., use starfield_planet_maps::... at 11 sites</text>
+    <text x="104" y="510" font-size="22" fill="#565f89">starfield_datasource_utils::cache_dir in three sims modules</text>
+  </g>
+  <line x1="510" y1="540" x2="510" y2="610" stroke="#f7768e" stroke-width="3" marker-end="url(#arr-red)"/>
+  <text x="510" y="650" font-size="23" fill="#f7768e" text-anchor="middle">every starfield bump touches nine version lines</text>
+  <text x="510" y="682" font-size="22" fill="#565f89" text-anchor="middle">and a lagging one links two starfield-core copies</text>
+
+  <g>
+    <rect x="80" y="960" width="860" height="120" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="1006" font-size="26" fill="#c0caf5">per-source crates stop at 0.17.1</text>
+    <text x="104" y="1046" font-size="23" fill="#f7768e">no path to future data or API fixes without this migration</text>
+  </g>
+
+  <!-- AFTER -->
+  <g>
+    <rect x="1065" y="250" width="860" height="180" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="290" font-size="26" fill="#9ece6a">starfield = 0.18 with features gaia, nsa, bright-galaxies</text>
+    <text x="1089" y="330" font-size="23" fill="#a9b1d6">solar-system = [starfield/solar-spectrum, /planet-maps,</text>
+    <text x="1089" y="366" font-size="23" fill="#a9b1d6">                starfield/reflectance-library, starfield/mpc]</text>
+    <text x="1089" y="402" font-size="22" fill="#565f89">one version line; Cargo.lock has one starfield-core 0.18.0</text>
+  </g>
+  <line x1="1495" y1="430" x2="1495" y2="500" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="505" width="860" height="220" fill="#1e202e" stroke="#3d4666" stroke-width="1.5"/>
+    <text x="1089" y="545" font-size="26" fill="#7aa2f7">grouped import paths</text>
+    <text x="1089" y="585" font-size="23" fill="#a9b1d6">starfield::catalogs::{gaia, nsa, bright_galaxies}</text>
+    <text x="1089" y="621" font-size="23" fill="#a9b1d6">starfield::surfaces::{planet_maps, reflectance_library, solar_spectrum}</text>
+    <text x="1089" y="657" font-size="23" fill="#a9b1d6">starfield::jpl::mpc, starfield::data::source_utils::cache_dir</text>
+    <text x="1089" y="693" font-size="22" fill="#565f89">same types, same functions; only the leading path segment changed</text>
+  </g>
+  <line x1="1495" y1="725" x2="1495" y2="795" stroke="#9ece6a" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <g>
+    <rect x="1065" y="800" width="860" height="110" fill="#1e202e" stroke="#e0af68" stroke-width="1.5"/>
+    <text x="1089" y="840" font-size="24" fill="#e0af68">gate: cfl-foundations#45 (shared on starfield 0.18)</text>
+    <text x="1089" y="876" font-size="22" fill="#a9b1d6">pin points at that branch head; re-point to main after it merges</text>
+  </g>
+
+  <g>
+    <rect x="1065" y="960" width="860" height="120" fill="#1e202e" stroke="#9ece6a" stroke-width="1.5"/>
+    <text x="1089" y="1006" font-size="26" fill="#c0caf5">445 tests, both feature sets, clippy and audit: unchanged</text>
+    <text x="1089" y="1046" font-size="23" fill="#9ece6a">Moon, Mars, Earth-from-Mars renders reproduce to the electron</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">No behaviour change is intended or observed; the embedded tier data is byte-identical to 0.17.1, so this PR only changes where the same code is imported from.</text>
+</svg>
