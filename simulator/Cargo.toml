@@ -13,22 +13,14 @@ license.workspace = true
 # second compositing pass. Off by default so renderer consumers that only
 # need star fields carry no ephemeris or texture dependencies.
 solar-system = [
-    "dep:starfield-solar-spectrum",
-    "dep:starfield-planet-maps",
-    "dep:starfield-reflectance-library",
-    "dep:starfield-mpc",
+    "starfield/solar-spectrum",
+    "starfield/planet-maps",
+    "starfield/reflectance-library",
+    "starfield/mpc",
 ]
 
 [dependencies]
-starfield = { version = "0.17", features = ["photometry"] }
-starfield-solar-spectrum = { version = "0.17", optional = true }
-starfield-planet-maps = { version = "0.17", optional = true }
-starfield-reflectance-library = { version = "0.17", optional = true }
-starfield-mpc = { version = "0.17", optional = true }
-starfield-nsa = { version = "0.17" }
-starfield-gaia = { version = "0.17" }
-starfield-bright-galaxies = { version = "0.17" }
-starfield-datasource-utils = { version = "0.17" }
+starfield = { version = "0.18", features = ["photometry", "gaia", "nsa", "bright-galaxies"] }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",
@@ -44,9 +36,9 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "6789b2c", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "6789b2c" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "6789b2c" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1" }
 
 rand = "0.9"
 rand_distr = "0.5"

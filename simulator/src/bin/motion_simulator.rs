@@ -13,9 +13,9 @@ use simulator::sims::trajectory::{
 };
 use simulator::star_math::field_diameter_for_array;
 use simulator::units::{AngleExt, LengthExt, TemperatureExt};
+use starfield::catalogs::gaia::{Dr3, LazyLoadingCatalog};
 use starfield::catalogs::StarCatalog;
 use starfield::Equatorial;
-use starfield_gaia::{Dr3, LazyLoadingCatalog};
 use std::path::Path;
 use std::time::Instant;
 
