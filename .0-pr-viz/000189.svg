@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <defs>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ece6a"/>
+    </marker>
+  </defs>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #189 · Use starfield 0.18 helpers instead of local copies</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">simulator kept private copies of names, profiles, magnitudes and vector maths;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now each call goes to the starfield API that already ships it, so one copy.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1135" stroke="#3d4666" stroke-width="1.5" stroke-dasharray="2 6"/>
+
+  <!-- BEFORE -->
+  <g>
+    <rect x="80" y="250" width="860" height="140" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="290" font-size="26" fill="#7aa2f7">solar_system/mod.rs  SATELLITE_NAMES</text>
+    <text x="104" y="330" font-size="23" fill="#a9b1d6">17 moons (MIMAS .. CHARON), second lookup in BodyId</text>
+    <text x="104" y="366" font-size="22" fill="#565f89">comment: starfield's table "stops at the Galileans"</text>
+  </g>
+  <g>
+    <rect x="80" y="410" width="860" height="140" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="450" font-size="26" fill="#7aa2f7">nsa_to_sersic_profile, 1 - ellipticity_sersic</text>
+    <text x="104" y="490" font-size="23" fill="#a9b1d6">nsa_galaxies.rs and bright_galaxies.rs map fields by hand</text>
+    <text x="104" y="526" font-size="22" fill="#565f89">comment: waiting on starfield-datasources #38</text>
+  </g>
+  <g>
+    <rect x="80" y="570" width="860" height="140" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="610" font-size="26" fill="#7aa2f7">minor_planets.rs  hg_apparent_magnitude</text>
+    <text x="104" y="650" font-size="23" fill="#a9b1d6">Bowell H-G phase law, re-typed from the paper</text>
+    <text x="104" y="686" font-size="22" fill="#565f89">plus its own Ceres-vs-Horizons unit test</text>
+  </g>
+  <g>
+    <rect x="80" y="730" width="860" height="180" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="770" font-size="26" fill="#7aa2f7">vector conversions, three times over</text>
+    <text x="104" y="810" font-size="23" fill="#a9b1d6">minor_planets: to_equatorial, unit_vector</text>
+    <text x="104" y="846" font-size="23" fill="#a9b1d6">transmit_aimpoint: to_equatorial closure</text>
+    <text x="104" y="882" font-size="23" fill="#a9b1d6">trajectory: equatorial_to_xyz, xyz_to_equatorial, angular_distance_deg</text>
+  </g>
+  <g>
+    <rect x="80" y="930" width="860" height="150" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+    <text x="104" y="970" font-size="26" fill="#7aa2f7">constants redefined</text>
+    <text x="104" y="1010" font-size="23" fill="#a9b1d6">AU_KM, SECONDS_PER_DAY (mod.rs, epoch.rs), RAD_TO_ARCSEC</text>
+    <text x="104" y="1046" font-size="22" fill="#565f89">test: fov_envelope diameter &gt;= 11.0 passed by one ulp</text>
+  </g>
+
+  <!-- AFTER -->
+  <g>
+    <rect x="1065" y="250" width="860" height="140" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="290" font-size="26" fill="#9ece6a">jplephem::names::{target_id, target_name}</text>
+    <text x="1089" y="330" font-size="23" fill="#a9b1d6">0.18 carries all 17 ids; BodyId::parse is one lookup</text>
+    <text x="1089" y="366" font-size="22" fill="#565f89">checked id-by-id against starfield-core 0.18.0</text>
+  </g>
+  <g>
+    <rect x="1065" y="410" width="860" height="140" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="450" font-size="26" fill="#9ece6a">ExtendedSource::sersic_profile()</text>
+    <text x="1089" y="490" font-size="23" fill="#a9b1d6">implemented for NsaEntry and BrightGalaxy upstream</text>
+    <text x="1089" y="526" font-size="22" fill="#565f89">NSA extent filter uses is_some_and on the profile</text>
+  </g>
+  <g>
+    <rect x="1065" y="570" width="860" height="140" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="610" font-size="26" fill="#9ece6a">apparent_magnitude_with_phase</text>
+    <text x="1089" y="650" font-size="23" fill="#a9b1d6">magnitudelib::small_body, argument order (h, r, delta, alpha, g)</text>
+    <text x="1089" y="686" font-size="22" fill="#565f89">local copy and its duplicate test removed</text>
+  </g>
+  <g>
+    <rect x="1065" y="730" width="860" height="180" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="770" font-size="26" fill="#9ece6a">InertialFrame + Cartesian3</text>
+    <text x="1089" y="810" font-size="23" fill="#a9b1d6">solar_system: direction_of, unit_vector via to/from_vector3</text>
+    <text x="1089" y="846" font-size="23" fill="#a9b1d6">fov_envelope: Cartesian3 mean, Equatorial::angular_distance</text>
+    <text x="1089" y="882" font-size="22" fill="#565f89">one conversion path for every RA/Dec vector in the crate</text>
+  </g>
+  <g>
+    <rect x="1065" y="930" width="860" height="150" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1089" y="970" font-size="26" fill="#9ece6a">starfield::constants::{AU_KM, DAY_S, ASEC2RAD}</text>
+    <text x="1089" y="1010" font-size="23" fill="#a9b1d6">test asserts diameter == 11.0 within 1e-9</text>
+    <text x="1089" y="1046" font-size="22" fill="#565f89">414 lib tests pass with solar-system, 349 without</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Stacked on #182. Not done here: SdssBand vs catalogs::photometry::Band, Gaia cone augmentation and bright-galaxy cone queries, which wait on starfield.</text>
+</svg>
