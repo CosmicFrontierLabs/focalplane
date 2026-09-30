@@ -611,6 +611,6 @@ mod orientation_diag {
         }
         let mut f = std::fs::File::create("/tmp/rust_sersic_pa45_raw.f64").unwrap();
         f.write_all(&bytes).unwrap();
-        eprintln!("wrote /tmp/rust_sersic_pa45_raw.f64 ({}x{} f64)", n, n);
+        eprintln!("wrote /tmp/rust_sersic_pa45_raw.f64 ({n}x{n} f64)");
     }
 }

@@ -301,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Model Selected: {}", args.sensor);
     println!("  Name: {}", sensor.name);
     let (width, height) = sensor.dimensions.get_pixel_width_height();
-    println!("  Resolution: {}x{} pixels", width, height);
+    println!("  Resolution: {width}x{height} pixels");
     println!(
         "  Pixel Size: {:.2}μm",
         sensor.pixel_size().as_micrometers()

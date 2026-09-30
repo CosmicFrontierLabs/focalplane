@@ -209,9 +209,9 @@ mod tests {
 
         // Should be evenly spaced
         let spacing = (MAX_TEMP_C - MIN_TEMP_C) / (INTERPOLATION_POINTS - 1) as f64;
-        for i in 1..INTERPOLATION_POINTS {
+        for (i, &temp) in temps.iter().enumerate().skip(1) {
             let expected = MIN_TEMP_C + (i as f64) * spacing;
-            assert_relative_eq!(temps[i], expected, epsilon = 1e-10);
+            assert_relative_eq!(temp, expected, epsilon = 1e-10);
         }
     }
 

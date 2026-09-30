@@ -90,7 +90,7 @@ pub fn convert_epoch(coords: Equatorial, from_epoch: f64, to_epoch: f64) -> Equa
     };
 
     // Clamp Dec to -90 to +90 range
-    let clamped_dec = new_dec.max(-90.0).min(90.0);
+    let clamped_dec = new_dec.clamp(-90.0, 90.0);
 
     Equatorial::from_degrees(normalized_ra, clamped_dec)
 }

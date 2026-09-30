@@ -275,7 +275,7 @@ mod tests {
     fn static_and_splat_psf_paths_are_byte_equal() {
         use crate::sims::motion_blur::SensorAccumulator;
         let psf = PixelScaledAiryDisk::with_fwhm(2.0, Wavelength::from_nanometers(550.0));
-        let total_flux = 12_345.6789_f64;
+        let total_flux = 12345.6789_f64;
         let px = 25.31;
         let py = 24.07;
 
