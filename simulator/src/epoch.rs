@@ -20,11 +20,9 @@ use chrono::{DateTime, Utc};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
+use starfield::constants::DAY_S;
 use starfield::time::{Time, Timescale};
 use thiserror::Error;
-
-/// Seconds in one Julian day.
-const SECONDS_PER_DAY: f64 = 86_400.0;
 
 /// Errors from parsing an [`Epoch`] out of user input.
 #[derive(Debug, Error)]
@@ -99,13 +97,13 @@ impl Epoch {
     /// This epoch shifted by a signed number of seconds.
     pub fn offset_secs(&self, seconds: f64) -> Self {
         Self {
-            time: self.time.clone() + seconds / SECONDS_PER_DAY,
+            time: self.time.clone() + seconds / DAY_S,
         }
     }
 
     /// Signed seconds from `self` to `other`.
     pub fn seconds_until(&self, other: &Epoch) -> f64 {
-        (other.jd_tdb() - self.jd_tdb()) * SECONDS_PER_DAY
+        (other.jd_tdb() - self.jd_tdb()) * DAY_S
     }
 
     /// UTC calendar string rounded to the millisecond, or the TDB Julian
@@ -187,8 +185,8 @@ mod tests {
         // 2000-01-01T12:00:00 UTC is JD 2451545.0 UTC; TT is 64.184 s
         // ahead, so JD(TDB) ≈ 2451545.0 + 64.184 / 86400.
         let epoch = Epoch::parse("2000-01-01T12:00:00Z").unwrap();
-        let expected = 2_451_545.0 + 64.184 / SECONDS_PER_DAY;
-        assert_abs_diff_eq!(epoch.jd_tdb(), expected, epsilon = 2e-3 / SECONDS_PER_DAY);
+        let expected = 2_451_545.0 + 64.184 / DAY_S;
+        assert_abs_diff_eq!(epoch.jd_tdb(), expected, epsilon = 2e-3 / DAY_S);
     }
 
     #[test]

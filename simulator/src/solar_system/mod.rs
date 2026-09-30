@@ -21,6 +21,9 @@ use std::fmt;
 use std::sync::Mutex;
 
 use nalgebra::{Matrix3, Vector3};
+use starfield::constants::DAY_S;
+use starfield::coordinates::cartesian::Cartesian3;
+use starfield::framelib::inertial::InertialFrame;
 use starfield::framelib::Frame;
 use starfield::jplephem::names::{target_id, target_name};
 use starfield::jplephem::{JplephemError, SpiceKernel};
@@ -38,11 +41,17 @@ use crate::epoch::Epoch;
 pub mod frame_metadata;
 pub mod minor_planets;
 
-/// Astronomical unit in kilometres (IAU 2012).
-pub const AU_KM: f64 = 149_597_870.7;
+pub use starfield::constants::AU_KM;
 
-/// Seconds per day.
-const SECONDS_PER_DAY: f64 = 86_400.0;
+/// Unit ICRF direction of `v` as right ascension and declination.
+pub(crate) fn direction_of(v: &Vector3<f64>) -> Equatorial {
+    Equatorial::from_cartesian(Cartesian3::from_vector3(*v))
+}
+
+/// ICRF unit vector toward `direction`.
+pub(crate) fn unit_vector(direction: &Equatorial) -> Vector3<f64> {
+    direction.to_cartesian().to_vector3()
+}
 
 /// Default planetary ephemeris kernel.
 pub const DEFAULT_KERNEL: &str = "de440s.bsp";
@@ -135,7 +144,7 @@ impl BodyId {
     /// Human-readable name from the NAIF table (`Io`, `Mars`, `Earth
     /// Barycenter`), or `NAIF 12345` for an id the table lacks.
     pub fn name(self) -> String {
-        match target_name(self.0).or_else(|| satellite_name(self.0)) {
+        match target_name(self.0) {
             Some(upper) => upper
                 .split(' ')
                 .map(|w| {
@@ -216,42 +225,8 @@ impl BodyId {
         if let Ok(id) = trimmed.parse::<i32>() {
             return Some(BodyId(id));
         }
-        target_id(trimmed).map(BodyId).or_else(|| {
-            SATELLITE_NAMES
-                .iter()
-                .find(|(_, n)| n.eq_ignore_ascii_case(trimmed))
-                .map(|(id, _)| BodyId(*id))
-        })
+        target_id(trimmed).map(BodyId)
     }
-}
-
-/// NAIF ids and names of the planetary satellites starfield's name table
-/// does not carry (it stops at the Galileans).
-const SATELLITE_NAMES: &[(i32, &str)] = &[
-    (601, "MIMAS"),
-    (602, "ENCELADUS"),
-    (603, "TETHYS"),
-    (604, "DIONE"),
-    (605, "RHEA"),
-    (606, "TITAN"),
-    (607, "HYPERION"),
-    (608, "IAPETUS"),
-    (609, "PHOEBE"),
-    (701, "ARIEL"),
-    (702, "UMBRIEL"),
-    (703, "TITANIA"),
-    (704, "OBERON"),
-    (705, "MIRANDA"),
-    (801, "TRITON"),
-    (802, "NEREID"),
-    (901, "CHARON"),
-];
-
-fn satellite_name(id: i32) -> Option<&'static str> {
-    SATELLITE_NAMES
-        .iter()
-        .find(|(i, _)| *i == id)
-        .map(|(_, n)| *n)
 }
 
 impl fmt::Display for BodyId {
@@ -341,7 +316,7 @@ impl Observer {
                 let center = kernel_state(kernel, *body, epoch.time())?;
                 Ok(Position::barycentric(
                     center.position + position_km / AU_KM,
-                    center.velocity + velocity_km_s * (SECONDS_PER_DAY / AU_KM),
+                    center.velocity + velocity_km_s * (DAY_S / AU_KM),
                     body.naif_id(),
                 ))
             }
@@ -861,7 +836,7 @@ impl SolarSystem {
             Equatorial::from_degrees(astro_ra_hours * 15.0, astro_dec_degrees);
 
         let body_bary = observer_bary.position + astrometric.position;
-        let emission = epoch.offset_secs(-astrometric.light_time * SECONDS_PER_DAY);
+        let emission = epoch.offset_secs(-astrometric.light_time * DAY_S);
         let sun_bary = if body.is_sun() {
             body_bary
         } else {
@@ -905,7 +880,7 @@ impl SolarSystem {
             direction,
             astrometric_direction,
             distance_au,
-            light_time_s: astrometric.light_time * SECONDS_PER_DAY,
+            light_time_s: astrometric.light_time * DAY_S,
             angular_semi_diameter,
             radii_km: radii,
             illumination,
@@ -972,7 +947,7 @@ impl SolarSystem {
             let r_target = target_position(&mut kernel, &arrival)?;
             geometric = r_target - tx.position;
             light_time_days = geometric.norm() / starfield::constants::C_AUDAY;
-            arrival = epoch.offset_secs(light_time_days * SECONDS_PER_DAY);
+            arrival = epoch.offset_secs(light_time_days * DAY_S);
         }
         let distance_au = geometric.norm();
         let geometric_direction = geometric / distance_au;
@@ -980,18 +955,12 @@ impl SolarSystem {
         let beta = tx.velocity / starfield::constants::C_AUDAY;
         let aim_direction = aim_before_aberration(geometric_direction, beta);
 
-        let to_equatorial = |v: Vector3<f64>| {
-            let ra = v.y.atan2(v.x).rem_euclid(std::f64::consts::TAU);
-            let dec = (v.z / v.norm()).clamp(-1.0, 1.0).asin();
-            Equatorial::new(ra, dec)
-        };
-
         Ok(TransmitAimpoint {
             arrival_epoch: arrival,
-            light_time_s: light_time_days * SECONDS_PER_DAY,
+            light_time_s: light_time_days * DAY_S,
             distance_au,
-            geometric_direction: to_equatorial(geometric_direction),
-            aim_direction: to_equatorial(aim_direction),
+            geometric_direction: direction_of(&geometric_direction),
+            aim_direction: direction_of(&aim_direction),
             aberration_angle: geometric_direction.angle(&aim_direction),
             transmitter_velocity_over_c: beta,
         })
@@ -1491,7 +1460,7 @@ mod tests {
         assert_abs_diff_eq!(aim.light_time_s, received.light_time_s, epsilon = 0.5);
         assert_abs_diff_eq!(
             aim.arrival_epoch.jd_tdb(),
-            epoch.jd_tdb() + aim.light_time_s / SECONDS_PER_DAY,
+            epoch.jd_tdb() + aim.light_time_s / DAY_S,
             epsilon = 1e-9
         );
 

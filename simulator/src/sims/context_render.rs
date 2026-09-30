@@ -23,13 +23,12 @@ use imageproc::drawing::{draw_text_mut, text_size};
 use nalgebra::UnitQuaternion;
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
+use starfield::constants::ASEC2RAD;
 
 use crate::hardware::satellite::FocalPlaneConfig;
 use crate::sims::nsa_galaxies::GalaxyInField;
 use crate::sims::orientation::boresight_of;
 use crate::sims::trajectory::TrajectoryError;
-
-const RAD_TO_ARCSEC: f64 = 206_264.806_247_096_4;
 
 type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
 
@@ -179,7 +178,7 @@ pub fn render_context_frame(
     // Drawn before the sensor outlines so the green box stays on top
     // (helps eyeballing which galaxies actually clip a detector).
     if !galaxies.is_empty() {
-        let arcsec_per_mm = fp.plate_scale_rad_per_mm() * RAD_TO_ARCSEC;
+        let arcsec_per_mm = fp.plate_scale_rad_per_mm() / ASEC2RAD;
         let yellow = Rgb([255, 200, 60]);
         for g in galaxies {
             let Some((x_mm, y_mm)) = fp.sky_to_mm(&g.position, orientation) else {
