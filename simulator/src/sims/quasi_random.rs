@@ -219,7 +219,7 @@ mod tests {
         for seed in [0_u64, 1, 42, u64::MAX, 0xDEADBEEF, 0xCAFEBABE_F00DBA11] {
             let p = phase_from_seed(seed);
             assert!(
-                p >= 0.0 && p < 1.0,
+                (0.0..1.0).contains(&p),
                 "phase {p} from seed {seed} out of range"
             );
         }

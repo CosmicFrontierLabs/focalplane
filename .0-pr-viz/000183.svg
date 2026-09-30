@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #183 · ci: lint every target and feature with clippy</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">CI's clippy step only saw the lib and bins, so 33 lints piled up in examples,</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">benches and tests; now it lints every target and feature, and they are fixed.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1140" stroke="#3d4666" stroke-width="2" stroke-dasharray="8,8"/>
+
+  <!-- BEFORE: command -->
+  <g>
+    <rect x="55" y="240" width="905" height="110" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="80" y="282" font-size="23" fill="#a9b1d6">format.yml / Run clippy</text>
+    <text x="80" y="322" font-size="26" fill="#7aa2f7" font-family="'DejaVu Sans Mono', monospace">cargo clippy -- -D warnings</text>
+  </g>
+
+  <text x="55" y="400" font-size="23" fill="#a9b1d6">Linted:</text>
+  <g>
+    <rect x="55" y="420" width="905" height="90" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="80" y="475" font-size="23" fill="#c0caf5">simulator lib + src/bin/*, default features</text>
+  </g>
+
+  <text x="55" y="560" font-size="23" fill="#a9b1d6">Never linted (33 lints found when enabled):</text>
+  <g>
+    <rect x="55" y="580" width="905" height="400" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="630" font-size="23" fill="#f7768e">examples/  15</text>
+    <text x="80" y="665" font-size="21" fill="#a9b1d6">object_detection, focal_plane_viz, catalog_stats,</text>
+    <text x="80" y="695" font-size="21" fill="#a9b1d6">chromatic_airy_demo, zodiacal_background</text>
+    <text x="80" y="750" font-size="23" fill="#f7768e">benches/render.rs  2</text>
+    <text x="80" y="785" font-size="21" fill="#a9b1d6">clone_on_copy on PixelScaledAiryDisk</text>
+    <text x="80" y="840" font-size="23" fill="#f7768e">#[cfg(test)] modules  16</text>
+    <text x="80" y="875" font-size="21" fill="#a9b1d6">motion_blur, sensor_noise, deposit, dark_current,</text>
+    <text x="80" y="905" font-size="21" fill="#a9b1d6">zodiacal, sersic_splat, quasi_random</text>
+    <text x="80" y="955" font-size="23" fill="#f7768e">solar-system feature code (planet_view)</text>
+  </g>
+
+  <!-- AFTER: command -->
+  <g>
+    <rect x="1040" y="240" width="905" height="110" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="282" font-size="23" fill="#a9b1d6">format.yml / Run clippy</text>
+    <text x="1065" y="322" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">cargo clippy --all-targets --all-features -- -D warnings</text>
+  </g>
+
+  <text x="1040" y="400" font-size="23" fill="#a9b1d6">Linted:</text>
+  <g>
+    <rect x="1040" y="420" width="905" height="190" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="470" font-size="23" fill="#c0caf5">lib + bins + examples + benches + tests</text>
+    <text x="1065" y="510" font-size="23" fill="#c0caf5">with solar-system enabled</text>
+    <text x="1065" y="570" font-size="23" fill="#9ece6a">0 warnings; cargo test --all-features passes</text>
+  </g>
+
+  <text x="1040" y="660" font-size="23" fill="#a9b1d6">Representative fixes:</text>
+  <g>
+    <rect x="1040" y="680" width="905" height="300" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="1065" y="730" font-size="21" fill="#c0caf5">uninlined_format_args -> "{threshold:.6}"</text>
+    <text x="1065" y="775" font-size="21" fill="#c0caf5">implicit_saturating_sub -> num_stars.saturating_sub(20)</text>
+    <text x="1065" y="820" font-size="21" fill="#c0caf5">manual_clamp -> .clamp(10.0, 16.0)</text>
+    <text x="1065" y="865" font-size="21" fill="#c0caf5">needless_range_loop -> iter().enumerate()</text>
+    <text x="1065" y="910" font-size="21" fill="#c0caf5">single_match -> if let Ok(brightness)</text>
+    <text x="1065" y="955" font-size="21" fill="#e0af68">too_many_arguments: allowed on create_sensor_plot</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Lint fixes only, no behaviour change; examples and tests are not otherwise refactored. cargo test in ci.yml is unchanged.</text>
+</svg>

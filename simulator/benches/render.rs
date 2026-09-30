@@ -42,12 +42,9 @@ fn make_test_stars(count: usize, satellite: &SatelliteConfig) -> Vec<StarInFrame
                 x,
                 y,
                 spot: SourceFlux {
-                    photons: SpotFlux {
-                        disk: disk.clone(),
-                        flux,
-                    },
+                    photons: SpotFlux { disk, flux },
                     electrons: SpotFlux {
-                        disk: disk.clone(),
+                        disk,
                         flux: flux * 0.8,
                     },
                 },
