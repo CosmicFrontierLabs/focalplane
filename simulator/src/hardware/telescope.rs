@@ -223,7 +223,7 @@ impl TelescopeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use float_cmp::approx_eq;
+    use approx::assert_abs_diff_eq;
     use std::f64::consts::PI;
 
     #[test]
@@ -253,20 +253,18 @@ mod tests {
         // Test the new typed method (uses telescope's corrected_to wavelength)
         let airy_radius = telescope.airy_disk_radius();
         // Note: telescope uses default 550nm corrected_to wavelength
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             airy_radius.as_radians(),
             expected_radius_rad,
             epsilon = 1e-12
-        ));
+        );
 
         // Test conversions work properly
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             airy_radius.as_milliarcseconds(),
             expected_radius_rad * 360.0 * 60.0 * 60.0 * 1000.0 / (PI * 2.0),
             epsilon = 1e-6
-        ));
+        );
     }
 
     #[test]
@@ -281,22 +279,20 @@ mod tests {
         // Test the new typed method
         let plate_scale = telescope.plate_scale();
         let expected_plate_scale_rad_per_m = 1.0 / 4.0; // 1 rad per 4 meters
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             plate_scale.as_radians(),
             expected_plate_scale_rad_per_m,
             epsilon = 1e-12
-        ));
+        );
 
         // Test legacy method - plate scale should be arcsec per mm
         // focal_length = 4m = 4000mm, so plate scale = 1/4000 rad/mm
         let expected_arcsec_per_mm = (1.0 / 4000.0) * 206_264.8;
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             telescope.plate_scale_arcsec_per_mm(),
             expected_arcsec_per_mm,
             epsilon = 1e-3 // More lenient epsilon for floating point precision
-        ));
+        );
     }
 
     #[test]
@@ -311,12 +307,11 @@ mod tests {
         // Calculate expected areas
         let radius = 0.5 / 2.0;
         let expected_area = PI * radius * radius;
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             telescope.clear_aperture_area().as_square_meters(),
             expected_area,
             epsilon = 1e-6
-        ));
+        );
     }
 
     #[test]
@@ -333,10 +328,7 @@ mod tests {
         let area_cm2 = telescope.clear_aperture_area().as_square_centimeters();
 
         // Expected: 1617 cm²
-        assert!(
-            approx_eq!(f64, area_cm2, 1617.0, epsilon = 1.0),
-            "Expected 1617 cm², got {area_cm2:.1} cm²"
-        );
+        assert_abs_diff_eq!(area_cm2, 1617.0, epsilon = 1.0);
     }
 }
 
@@ -554,30 +546,24 @@ mod model_tests {
 
     #[test]
     fn test_concrete_telescope_embodiments() {
-        use float_cmp::approx_eq;
+        use approx::assert_abs_diff_eq;
 
         // Test Officina Stellare Weasel
         let weasel = &*models::OFFICINA_STELLARE_WEASEL;
         assert_eq!(weasel.name, "Officina Stellare Weasel");
         assert_eq!(weasel.aperture.as_meters(), 0.5);
-        assert!(approx_eq!(
-            f64,
-            weasel.focal_length.as_meters(),
-            3.45,
-            epsilon = 1e-6
-        ));
-        assert!(approx_eq!(f64, weasel.f_number(), 6.9, epsilon = 1e-6));
+        assert_abs_diff_eq!(weasel.focal_length.as_meters(), 3.45, epsilon = 1e-6);
+        assert_abs_diff_eq!(weasel.f_number(), 6.9, epsilon = 1e-6);
         assert_eq!(weasel.obscuration_ratio, 0.42);
         // At 600nm, interpolate between 545nm (0.77) and 680nm (0.73)
         // Linear interpolation: 0.77 - (600-545)/(680-545) * (0.77-0.73) ≈ 0.754
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             weasel
                 .quantum_efficiency
                 .at(Wavelength::from_nanometers(600.0)),
             0.754,
             epsilon = 1e-2
-        ));
+        );
         // At 400nm, slightly out of main band but still has some interpolated value
         assert!(
             weasel
@@ -594,13 +580,12 @@ mod model_tests {
         assert_eq!(ls50.f_number(), 10.0);
         assert_eq!(ls50.obscuration_ratio, 0.37);
         // At 600nm, interpolate between 545nm (0.78) and 680nm (0.77) ≈ 0.778
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             ls50.quantum_efficiency
                 .at(Wavelength::from_nanometers(600.0)),
             0.778,
             epsilon = 1e-2
-        ));
+        );
 
         // Test Optech/Lina LS35
         let ls35 = &*models::OPTECH_LINA_LS35;
@@ -614,13 +599,8 @@ mod model_tests {
         let jbt50 = &*models::COSMIC_FRONTIER_JBT_50CM;
         assert_eq!(jbt50.name, "Cosmic Frontier JBT .5m");
         assert_eq!(jbt50.aperture.as_meters(), 0.485);
-        assert!(approx_eq!(
-            f64,
-            jbt50.focal_length.as_meters(),
-            5.987,
-            epsilon = 1e-6
-        ));
-        assert!(approx_eq!(f64, jbt50.f_number(), 12.344, epsilon = 1e-2));
+        assert_abs_diff_eq!(jbt50.focal_length.as_meters(), 5.987, epsilon = 1e-6);
+        assert_abs_diff_eq!(jbt50.f_number(), 12.344, epsilon = 1e-2);
         assert_eq!(jbt50.obscuration_ratio, 0.35); // 35% linear obscuration ratio
         assert_eq!(
             jbt50
@@ -633,26 +613,16 @@ mod model_tests {
         let jbt_max = &*models::COSMIC_FRONTIER_JBT_MAX;
         assert_eq!(jbt_max.name, "Cosmic Frontier JBT MAX");
         assert_eq!(jbt_max.aperture.as_meters(), 0.65);
-        assert!(approx_eq!(
-            f64,
-            jbt_max.focal_length.as_meters(),
-            8.024,
-            epsilon = 1e-6
-        ));
-        assert!(approx_eq!(f64, jbt_max.f_number(), 12.344, epsilon = 1e-2));
+        assert_abs_diff_eq!(jbt_max.focal_length.as_meters(), 8.024, epsilon = 1e-6);
+        assert_abs_diff_eq!(jbt_max.f_number(), 12.344, epsilon = 1e-2);
         assert_eq!(jbt_max.obscuration_ratio, 0.35); // 35% linear obscuration ratio
 
         // Test Cosmic Frontier JBT 1.0m
         let jbt1m = &*models::COSMIC_FRONTIER_JBT_1M;
         assert_eq!(jbt1m.name, "Cosmic Frontier JBT 1.0m");
         assert_eq!(jbt1m.aperture.as_meters(), 1.0);
-        assert!(approx_eq!(
-            f64,
-            jbt1m.focal_length.as_meters(),
-            12.344,
-            epsilon = 1e-6
-        ));
-        assert!(approx_eq!(f64, jbt1m.f_number(), 12.344, epsilon = 1e-2));
+        assert_abs_diff_eq!(jbt1m.focal_length.as_meters(), 12.344, epsilon = 1e-6);
+        assert_abs_diff_eq!(jbt1m.f_number(), 12.344, epsilon = 1e-2);
         assert_eq!(jbt1m.obscuration_ratio, 0.35); // 35% linear obscuration ratio
     }
 }

@@ -3768,7 +3768,6 @@ dependencies = [
  "criterion",
  "csv",
  "env_logger",
- "float-cmp",
  "image",
  "imageproc",
  "indicatif",

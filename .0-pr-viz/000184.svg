@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #184 · tests: use approx instead of float-cmp for float asserts</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">19 float asserts used float-cmp, a production dependency, and failed with no values;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now they use the approx dev-dependency, which prints the given and expected values.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1140" stroke="#3d4666" stroke-width="2" stroke-dasharray="8,8"/>
+
+  <!-- BEFORE: Cargo.toml -->
+  <g>
+    <rect x="55" y="240" width="905" height="200" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="282" font-size="23" fill="#a9b1d6">simulator/Cargo.toml</text>
+    <text x="80" y="327" font-size="23" fill="#c0caf5">[dependencies]</text>
+    <text x="80" y="367" font-size="23" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">float-cmp = "0.9"</text>
+    <text x="80" y="412" font-size="21" fill="#a9b1d6">used only inside #[cfg(test)] modules</text>
+  </g>
+
+  <!-- BEFORE: call sites -->
+  <g>
+    <rect x="55" y="470" width="905" height="270" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="80" y="512" font-size="23" fill="#a9b1d6">hardware/telescope.rs (16), star_math.rs (3)</text>
+    <text x="80" y="562" font-size="22" fill="#7aa2f7" font-family="'DejaVu Sans Mono', monospace">assert!(approx_eq!(</text>
+    <text x="80" y="597" font-size="22" fill="#7aa2f7" font-family="'DejaVu Sans Mono', monospace">    f64, jbt50.f_number(), 12.344,</text>
+    <text x="80" y="632" font-size="22" fill="#7aa2f7" font-family="'DejaVu Sans Mono', monospace">    epsilon = 1e-2));</text>
+    <text x="80" y="690" font-size="21" fill="#a9b1d6">overlay/layout.rs: hand-rolled check</text>
+    <text x="80" y="722" font-size="21" fill="#7aa2f7" font-family="'DejaVu Sans Mono', monospace">assert!((p.rect.centre().1 - 256.0).abs() &lt; 1.0)</text>
+  </g>
+
+  <!-- BEFORE: failure output -->
+  <g>
+    <rect x="55" y="770" width="905" height="150" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="812" font-size="23" fill="#a9b1d6">On failure:</text>
+    <text x="80" y="862" font-size="22" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">assertion failed: approx_eq!(...)</text>
+    <text x="80" y="897" font-size="21" fill="#a9b1d6">no given value, no expected value</text>
+  </g>
+
+  <!-- AFTER: Cargo.toml -->
+  <g>
+    <rect x="1040" y="240" width="905" height="200" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="282" font-size="23" fill="#a9b1d6">simulator/Cargo.toml</text>
+    <text x="1065" y="327" font-size="23" fill="#c0caf5">[dependencies]: float-cmp removed</text>
+    <text x="1065" y="367" font-size="23" fill="#9ece6a">[dev-dependencies] approx = "0.5" (already present)</text>
+    <text x="1065" y="412" font-size="21" fill="#a9b1d6">matches the CLAUDE.md float-assertion rule</text>
+  </g>
+
+  <!-- AFTER: call sites -->
+  <g>
+    <rect x="1040" y="470" width="905" height="270" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="1065" y="512" font-size="23" fill="#a9b1d6">same 19 sites, same epsilons</text>
+    <text x="1065" y="562" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">assert_abs_diff_eq!(</text>
+    <text x="1065" y="597" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">    jbt50.f_number(), 12.344,</text>
+    <text x="1065" y="632" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">    epsilon = 1e-2);</text>
+    <text x="1065" y="690" font-size="21" fill="#a9b1d6">overlay/layout.rs</text>
+    <text x="1065" y="722" font-size="21" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">assert_abs_diff_eq!(p.rect.centre().1, 256.0, epsilon = 1.0)</text>
+  </g>
+
+  <!-- AFTER: failure output -->
+  <g>
+    <rect x="1040" y="770" width="905" height="150" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="812" font-size="23" fill="#a9b1d6">On failure:</text>
+    <text x="1065" y="862" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">left  = 12.36    right = 12.344</text>
+    <text x="1065" y="897" font-size="21" fill="#a9b1d6">the values needed to diagnose the regression</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="950" width="905" height="110" rx="10" fill="#1e202e" stroke="#e0af68" stroke-width="2"/>
+    <text x="1065" y="992" font-size="21" fill="#e0af68">test_obscuration_ratio loses its custom message;</text>
+    <text x="1065" y="1027" font-size="21" fill="#e0af68">the approx output already shows area_cm2 vs 1617.0</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">float-cmp stays in Cargo.lock: cfl-foundations' shared crate depends on it. Tolerances unchanged, no production code touched.</text>
+</svg>
