@@ -5,7 +5,7 @@
 //! It helps characterize sensor noise properties for different configurations.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --release --bin sensor_noise_renderer -- [OPTIONS]
 //! ```
 

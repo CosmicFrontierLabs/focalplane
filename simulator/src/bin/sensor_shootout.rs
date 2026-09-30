@@ -3,7 +3,7 @@
 //! Command-line interface for running sensor imaging experiments using the scene_runner module.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --release --bin sensor_shootout -- [OPTIONS]
 //! ```
 //!

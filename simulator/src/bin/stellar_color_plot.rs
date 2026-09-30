@@ -4,7 +4,7 @@
 //! using human vision models to determine the perceived color of each spectrum.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --bin stellar_color_plot -- [OPTIONS]
 //! ```
 //!
@@ -66,17 +66,6 @@ struct Args {
 /// Contains both the physical blackbody spectrum model and the calculated
 /// human-perceived color for visualization purposes. Used to correlate
 /// stellar temperature with observable color in plots.
-///
-/// # Examples
-///
-/// ```
-/// let info = StellarInfo {
-///     temperature: 5778.0,    // Sun-like star
-///     spectral_class: SpectralClass::G,
-///     spectrum: BlackbodyStellarSpectrum::new(5778.0, 1.0),
-///     color: RGBColor(255, 255, 192),  // Yellowish-white
-/// };
-/// ```
 struct StellarInfo {
     /// Effective temperature in Kelvin (determines spectrum shape)
     temperature: f64,
@@ -101,13 +90,6 @@ struct StellarInfo {
 ///
 /// # Returns
 /// RGBColor value for plotters with components scaled to 0-255
-///
-/// # Examples
-/// ```
-/// let white = rgb_values_to_color(1.0, 1.0, 1.0);
-/// let red = rgb_values_to_color(1.0, 0.0, 0.0);
-/// let dim_blue = rgb_values_to_color(0.0, 0.0, 0.5);
-/// ```
 fn rgb_values_to_color(r: f64, g: f64, b: f64) -> RGBColor {
     RGBColor(
         (r * 255.0).min(255.0) as u8,
@@ -128,18 +110,6 @@ fn rgb_values_to_color(r: f64, g: f64, b: f64) -> RGBColor {
 /// # Returns
 /// Vector of StellarInfo containing spectrum and color information,
 /// sorted by increasing temperature
-///
-/// # Examples
-/// ```
-/// let args = Args {
-///     min_temp: 3000.0,  // Cool M dwarf
-///     max_temp: 40000.0, // Hot O star
-///     n_spectra: 7,      // One per spectral class
-///     // ... other fields
-/// };
-/// let spectra = create_stellar_spectra(&args);
-/// assert_eq!(spectra.len(), 7);
-/// ```
 fn create_stellar_spectra(args: &Args) -> Vec<StellarInfo> {
     // Generate logarithmically spaced temperatures
     let temperatures = generate_temperature_sequence(args.min_temp, args.max_temp, args.n_spectra);
