@@ -2,7 +2,7 @@
 """
 Analyze probability of finding stars of a given magnitude in a frame.
 
-Uses sensor-view-stats CSV output to generate:
+Uses sensor_view_stats CSV output to generate:
 1. Magnitude distribution histogram across all pointings
 2. Cumulative probability plot (P(star brighter than X in frame))
 3. Per-magnitude probability distribution
@@ -14,7 +14,7 @@ import numpy as np
 from pathlib import Path
 
 parser = argparse.ArgumentParser(
-    description='Plot star brightness probability distributions from sensor-view-stats output'
+    description='Plot star brightness probability distributions from sensor_view_stats output'
 )
 parser.add_argument(
     '--input', '-i', type=str,

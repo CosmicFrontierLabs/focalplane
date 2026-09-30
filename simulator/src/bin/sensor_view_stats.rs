@@ -17,7 +17,7 @@
 //!
 //! Usage:
 //! ```
-//! cargo run --bin sensor-view-stats -- [OPTIONS]
+//! cargo run --bin sensor_view_stats -- [OPTIONS]
 //! ```
 //!
 //! See --help for detailed options.
