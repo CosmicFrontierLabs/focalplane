@@ -9,7 +9,7 @@
 //! comparison plot.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --release --bin dc_vs_z -- -t demo50cm -s imx455 -e 45.0
 //! cargo run --release --bin dc_vs_z -- -t demo50cm -s imx455 -e 45.0 --plot
 //! ```

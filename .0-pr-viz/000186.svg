@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #186 · docs: drop uncompiled Rust examples from binary doc comments</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">Doc examples on src/bin items are never compiled, so five had drifted out of date;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now they are removed and the shell Usage blocks are tagged text, not Rust.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1140" stroke="#3d4666" stroke-width="2" stroke-dasharray="8,8"/>
+
+  <!-- BEFORE: rust examples -->
+  <g>
+    <rect x="55" y="240" width="905" height="460" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="282" font-size="23" fill="#a9b1d6">5 "# Examples" blocks on private items</text>
+    <text x="80" y="332" font-size="22" fill="#7aa2f7">sensor_band_sensitivity.rs</text>
+    <text x="110" y="367" font-size="21" fill="#c0caf5">SpectralBand, mean_qe_in_band</text>
+    <text x="80" y="412" font-size="22" fill="#7aa2f7">stellar_color_plot.rs</text>
+    <text x="110" y="447" font-size="21" fill="#c0caf5">StellarInfo, rgb_values_to_color, create_stellar_spectra</text>
+    <text x="80" y="507" font-size="21" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">let args = Args {</text>
+    <text x="80" y="539" font-size="21" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">    min_temp: 3000.0,</text>
+    <text x="80" y="571" font-size="21" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">    // ... other fields</text>
+    <text x="80" y="603" font-size="21" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">};</text>
+    <text x="80" y="660" font-size="21" fill="#a9b1d6">would not compile; nothing ever checks it</text>
+  </g>
+
+  <!-- BEFORE: usage blocks -->
+  <g>
+    <rect x="55" y="730" width="905" height="300" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="80" y="772" font-size="23" fill="#a9b1d6">6 module "Usage:" blocks, untagged fence</text>
+    <text x="80" y="822" font-size="21" fill="#e0af68" font-family="'DejaVu Sans Mono', monospace">//! ```</text>
+    <text x="80" y="854" font-size="21" fill="#e0af68" font-family="'DejaVu Sans Mono', monospace">//! cargo run --release --bin sensor_shootout -- [OPTIONS]</text>
+    <text x="80" y="886" font-size="21" fill="#e0af68" font-family="'DejaVu Sans Mono', monospace">//! ```</text>
+    <text x="80" y="945" font-size="21" fill="#a9b1d6">an untagged fence means Rust: shell text is</text>
+    <text x="80" y="977" font-size="21" fill="#a9b1d6">highlighted as Rust code</text>
+  </g>
+
+  <!-- AFTER: rust examples -->
+  <g>
+    <rect x="1040" y="240" width="905" height="460" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="282" font-size="23" fill="#a9b1d6">Examples sections removed</text>
+    <text x="1065" y="332" font-size="22" fill="#7aa2f7">sensor_band_sensitivity.rs</text>
+    <text x="1095" y="367" font-size="21" fill="#c0caf5">SpectralBand, mean_qe_in_band</text>
+    <text x="1065" y="412" font-size="22" fill="#7aa2f7">stellar_color_plot.rs</text>
+    <text x="1095" y="447" font-size="21" fill="#c0caf5">StellarInfo, rgb_values_to_color, create_stellar_spectra</text>
+    <text x="1065" y="517" font-size="22" fill="#9ece6a">Summary, Arguments and Returns docs kept</text>
+    <text x="1065" y="567" font-size="21" fill="#a9b1d6">no example text left to drift out of date;</text>
+    <text x="1065" y="599" font-size="21" fill="#a9b1d6">matches CLAUDE.md: no doctests, unit tests instead</text>
+  </g>
+
+  <!-- AFTER: usage blocks -->
+  <g>
+    <rect x="1040" y="730" width="905" height="300" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="772" font-size="23" fill="#a9b1d6">same 6 blocks, tagged text</text>
+    <text x="1065" y="822" font-size="21" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">//! ```text</text>
+    <text x="1065" y="854" font-size="21" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">//! cargo run --release --bin sensor_shootout -- [OPTIONS]</text>
+    <text x="1065" y="886" font-size="21" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">//! ```</text>
+    <text x="1065" y="945" font-size="21" fill="#a9b1d6">camera_qe_plot, dc_vs_z, sensor_noise_renderer,</text>
+    <text x="1065" y="977" font-size="21" fill="#a9b1d6">sensor_shootout, sensor-view-stats, stellar_color_plot</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Doc comments only; no code changes. Existing lib rustdoc link warnings (orientation_at, with_period, ...) are not addressed here.</text>
+</svg>

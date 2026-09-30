@@ -94,10 +94,13 @@ Every PR opens on a picture. A PR ships a one-page SVG at
 `.0-pr-viz/<six-digit PR number>.svg` (a before/after diagram grounded in that
 PR's own diff: real module, type, function and test names; a stacked PR draws
 only its delta against its base branch) and its description opens with the
-SHA-pinned image. The `Visual PR attached` check (`meawoppl/visual-pr@v3`)
+SHA-pinned image. The `Visual PR attached` check (`meawoppl/visual-pr@v4`)
 enforces this and, when it fails, prints the complete authoring recipe: the
 spec, the effective palette (the bundled Tokyo-Night default) and the exact
-local validator command (`check_svg.py`). ASCII and Latin-1 glyphs only: write
+local validator command (`check_svg.py`). The check also looks the
+description's permalink up on GitHub: the SHA must be pushed and carry the
+same SVG bytes as the PR head, so re-pin after any push that changes the
+SVG. ASCII and Latin-1 glyphs only: write
 `->`, `<=`, `~`, `...` rather than arrows, operators or ellipsis characters.
 
 Two exemptions, both decided by the base branch rather than the PR:

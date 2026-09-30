@@ -4,7 +4,7 @@
 //! camera models. Output is saved to `plots/camera_qe_curves.png`.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --release --bin camera_qe_plot
 //! ```
 

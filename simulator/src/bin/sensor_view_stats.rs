@@ -16,7 +16,7 @@
 //! 6. Output comprehensive CSV statistics
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --bin sensor_view_stats -- [OPTIONS]
 //! ```
 //!
