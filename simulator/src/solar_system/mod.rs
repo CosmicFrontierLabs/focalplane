@@ -31,7 +31,8 @@ use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::magnitudelib::planetary_magnitude;
 use starfield::planetarylib::subpoint::SubPoint;
 use starfield::planetarylib::{body_constants, PlanetaryConstants};
-use starfield::positions::Position;
+use starfield::positions::illumination::IlluminationGeometry as KernelFreeIllumination;
+use starfield::positions::{sky_basis, Position};
 use starfield::time::Time;
 use starfield::{Equatorial, Loader, StarfieldError};
 use thiserror::Error;
@@ -344,8 +345,8 @@ pub struct IlluminationGeometry {
     /// Body–Sun distance in AU.
     pub heliocentric_distance_au: f64,
     /// Position angle of the bright limb's midpoint on the observer's
-    /// sky, radians east of celestial (ICRF) north. `0` when the Sun
-    /// lies along the line of sight.
+    /// sky, radians east of celestial (ICRF) north, in `[0, 2π)`. `0`
+    /// when the Sun lies along the line of sight.
     pub bright_limb_position_angle: f64,
 }
 
@@ -354,31 +355,14 @@ impl IlluminationGeometry {
     /// observer, the body (at its light-time-corrected epoch) and the
     /// Sun.
     pub fn from_barycentric(observer: Vector3<f64>, body: Vector3<f64>, sun: Vector3<f64>) -> Self {
-        let to_sun = sun - body;
-        let to_observer = observer - body;
-        let heliocentric_distance_au = to_sun.norm();
-        let sun_direction = to_sun / heliocentric_distance_au;
-        let observer_direction = to_observer.normalize();
-        let cos_alpha = sun_direction.dot(&observer_direction).clamp(-1.0, 1.0);
-        let phase_angle = cos_alpha.acos();
-
-        // Sky-plane basis at the body's apparent direction.
-        let line_of_sight = -observer_direction;
-        let (east, north) = sky_basis(&line_of_sight);
-        let sun_in_sky = sun_direction - line_of_sight * sun_direction.dot(&line_of_sight);
-        let bright_limb_position_angle = if sun_in_sky.norm() < 1e-12 {
-            0.0
-        } else {
-            sun_in_sky.dot(&east).atan2(sun_in_sky.dot(&north))
-        };
-
+        let geometry = KernelFreeIllumination::from_barycentric(observer, body, sun);
         Self {
-            phase_angle,
-            illuminated_fraction: 0.5 * (1.0 + cos_alpha),
-            sun_direction,
-            observer_direction,
-            heliocentric_distance_au,
-            bright_limb_position_angle,
+            phase_angle: geometry.phase_angle(),
+            illuminated_fraction: geometry.illuminated_fraction(),
+            sun_direction: geometry.sun_direction(),
+            observer_direction: geometry.observer_direction(),
+            heliocentric_distance_au: geometry.heliocentric_distance(),
+            bright_limb_position_angle: geometry.bright_limb_position_angle(),
         }
     }
 }
@@ -388,26 +372,13 @@ impl IlluminationGeometry {
     /// observer)`; the frame the stamp rasteriser lights the disk in.
     pub fn sun_direction_sky_frame(&self) -> Vector3<f64> {
         let toward_observer = self.observer_direction;
-        let (east, north) = sky_basis(&-toward_observer);
+        let (east, north, _) = sky_basis(&-toward_observer);
         Vector3::new(
             self.sun_direction.dot(&east),
             self.sun_direction.dot(&north),
             self.sun_direction.dot(&toward_observer),
         )
     }
-}
-
-/// Local east and north unit vectors on the sky at a line-of-sight
-/// direction in the ICRF frame.
-fn sky_basis(line_of_sight: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
-    let pole = Vector3::z();
-    let mut east = pole.cross(line_of_sight);
-    if east.norm() < 1e-12 {
-        east = Vector3::x();
-    }
-    let east = east.normalize();
-    let north = line_of_sight.cross(&east).normalize();
-    (east, north)
 }
 
 /// A body as seen from the observer at one epoch.
@@ -871,7 +842,7 @@ impl SolarSystem {
         // with the same sky basis the illumination geometry uses.
         let icrf_to_body_fixed = frame.rotation_at(emission.time());
         let toward_observer = illumination.observer_direction;
-        let (east, north) = sky_basis(&-toward_observer);
+        let (east, north, _) = sky_basis(&-toward_observer);
         let sky_to_icrf = Matrix3::from_columns(&[east, north, toward_observer]);
         let sky_to_body_fixed = icrf_to_body_fixed * sky_to_icrf;
 
