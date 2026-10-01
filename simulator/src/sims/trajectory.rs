@@ -5,9 +5,8 @@ use std::time::Duration;
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 use starfield::catalogs::{StarCatalog, StarData};
-use starfield::coordinates::cartesian::Cartesian3;
 use starfield::framelib::attitude::{attitude_from_pointing, boresight_of};
-use starfield::framelib::inertial::InertialFrame;
+use starfield::framelib::spherical_cap::SphericalCap;
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -370,32 +369,18 @@ impl Trajectory {
 
 /// Compute the FOV envelope for a trajectory: a single (center, diameter_deg) that
 /// encompasses all pointings plus the base instrument FOV.
+///
+/// The centre and pointing span come from the smallest spherical cap holding
+/// every waypoint boresight. Slews between waypoints follow great-circle arcs,
+/// which stay inside that cap while it is smaller than a hemisphere.
 pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, f64) {
     let pointings: Vec<Equatorial> = trajectory
         .waypoints
         .iter()
         .map(|wp| boresight_of(&wp.orientation))
         .collect();
-    let sum = pointings
-        .iter()
-        .fold(Cartesian3::new(0.0, 0.0, 0.0), |acc, p| {
-            acc + p.to_cartesian()
-        });
-    let mean = sum / pointings.len() as f64;
-
-    // A vanishing mean means the pointings span a half-sphere; fall back
-    // to the first waypoint as the centre.
-    let center = if mean.magnitude() < 1e-15 {
-        pointings[0]
-    } else {
-        Equatorial::from_cartesian(mean)
-    };
-    let max_dist = pointings
-        .iter()
-        .map(|p| center.angular_distance(p).to_degrees())
-        .fold(0.0f64, f64::max);
-
-    (center, 2.0 * max_dist + base_fov_deg)
+    let cap = SphericalCap::enclosing(&pointings).expect("a trajectory has at least two waypoints");
+    (cap.centre, cap.diameter().to_degrees() + base_fov_deg)
 }
 
 /// Prefetch all catalog stars that fall inside the given FOV envelope.
