@@ -26,7 +26,7 @@ use starfield::coordinates::cartesian::Cartesian3;
 use starfield::framelib::inertial::InertialFrame;
 use starfield::framelib::Frame;
 use starfield::jplephem::names::{target_id, target_name};
-use starfield::jplephem::{JplephemError, SpiceKernel};
+use starfield::jplephem::{default_satellite_kernel, JplephemError, SpiceKernel};
 use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::magnitudelib::planetary_magnitude;
 use starfield::planetarylib::subpoint::SubPoint;
@@ -644,24 +644,6 @@ impl fmt::Debug for SolarSystem {
 /// satellite.
 pub const TEXT_PCK: &str = "pck00011.tpc";
 
-/// Generic NAIF satellite SPK carrying each system's major moons (from
-/// `generic_kernels/spk/satellites/aa_summaries.txt`, 2026-09): Phobos
-/// and Deimos; the Galileans; Mimas through Iapetus; Ariel through
-/// Miranda (the `ura184` set splits by body group, part 3 has the five
-/// classical moons); Triton (`nep105` holds only Nereid). Each file
-/// also carries its planet barycentre and Earth relative to the
-/// solar-system barycentre.
-pub fn satellite_kernel_for(system_barycenter: BodyId) -> Option<&'static str> {
-    match system_barycenter.0 {
-        4 => Some("mar099.bsp"),
-        5 => Some("jup365.bsp"),
-        6 => Some("sat441.bsp"),
-        7 => Some("ura184_part-3.bsp"),
-        8 => Some("nep097.bsp"),
-        _ => None,
-    }
-}
-
 impl SolarSystem {
     /// Load the default DE440s kernel and the satellite text PCK,
     /// downloading either if absent.
@@ -724,14 +706,14 @@ impl SolarSystem {
     }
 
     /// Load the generic satellite kernel for every system among `bodies`
-    /// that needs one (see [`satellite_kernel_for`]).
+    /// that needs one (see [`default_satellite_kernel`]).
     pub fn with_satellites_for(mut self, bodies: &[BodyId]) -> Result<Self, SolarSystemError> {
         let mut wanted: Vec<&'static str> = Vec::new();
         for body in bodies
             .iter()
             .filter(|b| b.is_satellite() && **b != BodyId::MOON)
         {
-            if let Some(name) = satellite_kernel_for(body.system_barycenter()) {
+            if let Some(name) = default_satellite_kernel(body.system_barycenter().naif_id()) {
                 if !wanted.contains(&name) {
                     wanted.push(name);
                 }
@@ -779,7 +761,8 @@ impl SolarSystem {
             if body.is_satellite() && body != BodyId::MOON {
                 JplephemError::Other(format!(
                     "{e}; merge its satellite SPK ({}) with SolarSystem::with_satellites_for",
-                    satellite_kernel_for(body.system_barycenter()).unwrap_or("unknown")
+                    default_satellite_kernel(body.system_barycenter().naif_id())
+                        .unwrap_or("unknown")
                 ))
                 .into()
             } else {
