@@ -84,5 +84,5 @@
     <text x="1089" y="1046" font-size="22" fill="#565f89">414 lib tests pass with solar-system, 349 without</text>
   </g>
 
-  <text x="55" y="1172" font-size="22" fill="#565f89">Stacked on #182. Not done here: SdssBand vs catalogs::photometry::Band, Gaia cone augmentation and bright-galaxy cone queries, which wait on starfield.</text>
+  <text x="55" y="1172" font-size="22" fill="#565f89">Also: shared_args::parse_ra_dec replaces two "ra,dec" parsers in bins. Stacked on #182; SdssBand and the cone workarounds are left for later.</text>
 </svg>
