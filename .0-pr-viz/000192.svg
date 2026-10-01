@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #192 · Adopt starfield 0.18.1 helpers, drop local copies</text>
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">simulator carried private copies of eleven astronomy routines;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now each calls the starfield 0.18.1 API it was upstreamed into, net -453 lines.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1135" stroke="#3d4666" stroke-width="1.5" stroke-dasharray="2 6"/>
+  <rect x="80" y="245" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="287" font-size="23" fill="#a9b1d6">sims/gaia_dr3.rs: supplement loop + cone test</text>
+  <rect x="1065" y="245" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="287" font-size="23" fill="#9ece6a">Dr3Catalog::augment_missing_in_cone</text>
+  <rect x="80" y="323" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="365" font-size="23" fill="#a9b1d6">bright_galaxies.rs: RA/Dec box padded by 3 deg</text>
+  <rect x="1065" y="323" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="365" font-size="23" fill="#9ece6a">in_cone_extended at TRUNCATION_SB_FRACTION</text>
+  <rect x="80" y="401" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="443" font-size="23" fill="#a9b1d6">sersic_splat.rs: local radius_at_fraction</text>
+  <rect x="1065" y="401" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="443" font-size="23" fill="#9ece6a">SersicProfile::radius_at_sb_fraction</text>
+  <rect x="80" y="479" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="521" font-size="23" fill="#a9b1d6">photometry: Planck/c literals, inline 1.380649e-16</text>
+  <rect x="1065" y="479" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="521" font-size="23" fill="#9ece6a">CGS from constants::{PLANCK, BOLTZMANN, C}</text>
+  <rect x="80" y="557" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="599" font-size="23" fill="#a9b1d6">solar_system: phase/limb maths + sky_basis copy</text>
+  <rect x="1065" y="557" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="599" font-size="23" fill="#9ece6a">positions::illumination + positions::sky_basis</text>
+  <rect x="80" y="635" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="677" font-size="23" fill="#a9b1d6">satellite_kernel_for: 5-row table, no Pluto</text>
+  <rect x="1065" y="635" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="677" font-size="23" fill="#9ece6a">jplephem::default_satellite_kernel (+plu060)</text>
+  <rect x="80" y="713" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="755" font-size="23" fill="#a9b1d6">sims/orientation.rs + jitter triad rebuild</text>
+  <rect x="1065" y="713" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="755" font-size="23" fill="#9ece6a">framelib::attitude::{attitude_from_pointing, ..}</text>
+  <rect x="80" y="791" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="833" font-size="23" fill="#a9b1d6">fov_envelope: mean direction + max separation</text>
+  <rect x="1065" y="791" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="833" font-size="23" fill="#9ece6a">framelib::spherical_cap::SphericalCap::enclosing</text>
+  <rect x="80" y="869" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="911" font-size="23" fill="#a9b1d6">StarProjector: hand-built rotation, NaN at pole</text>
+  <rect x="1065" y="869" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="911" font-size="23" fill="#9ece6a">coordinates::GnomonicProjection</text>
+  <rect x="80" y="947" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="989" font-size="23" fill="#a9b1d6">MinorPlanetCatalog: direct download + parse</text>
+  <rect x="1065" y="947" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="989" font-size="23" fill="#9ece6a">jpl::mpc::MpcorbCatalog via datastore</text>
+  <rect x="80" y="1025" width="860" height="66" fill="#1e202e" stroke="#f7768e" stroke-width="1.5"/>
+  <text x="100" y="1067" font-size="23" fill="#a9b1d6">epoch.rs: own JD/RFC3339 parse, f64 offsets, serde</text>
+  <rect x="1065" y="1025" width="860" height="66" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+  <text x="1085" y="1067" font-size="23" fill="#9ece6a">Time parse, add_seconds, transparent serde</text>
+  <text x="55" y="1172" font-size="22" fill="#565f89">Stacked on #189. Epoch stays as a thin wrapper over Time; bright-limb PA now reported in [0, 2pi); utc_iso rounding is starfield#232.</text>
+</svg>
