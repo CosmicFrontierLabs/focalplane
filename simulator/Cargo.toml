@@ -16,7 +16,7 @@ solar-system = [
     "starfield/solar-spectrum",
     "starfield/planet-maps",
     "starfield/reflectance-library",
-    "starfield/mpc",
+    "starfield/mpc-parallel",
 ]
 
 [dependencies]

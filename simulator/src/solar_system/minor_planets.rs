@@ -10,8 +10,11 @@
 //!
 //! # Method
 //!
+//! - Catalogue: `starfield::jpl::mpc::MpcorbCatalog`, which resolves
+//!   MPCORB.DAT through the starfield datastore and screens out rows
+//!   with no propagatable orbit.
 //! - Orbits: two-body propagation of the MPCORB osculating elements
-//!   (`starfield-mpc` → `starfield::keplerlib`). No planetary
+//!   (`starfield::keplerlib`). No planetary
 //!   perturbations, so positions drift from the true ones by a few
 //!   arcseconds per year on the main belt and faster for near-Earth
 //!   objects at close approach; the MPC refreshes the elements daily and
@@ -34,18 +37,14 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
 
 use nalgebra::Vector3;
 use rayon::prelude::*;
 use starfield::catalogs::StarData;
 use starfield::constants::{C_AUDAY, DAY_S};
-use starfield::data::source_utils::{cache_dir, download_to_file, file_exists_and_not_empty};
-use starfield::jpl::mpc::{parse_mpcorb_line, MpcOrbRecord};
+use starfield::jpl::mpc::{MinorPlanet, MpcorbCatalog};
 use starfield::jplephem_ext::SpiceKernelExt;
-use starfield::keplerlib::KeplerOrbit;
 use starfield::magnitudelib::small_body::apparent_magnitude_with_phase;
-use starfield::time::Timescale;
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -56,198 +55,25 @@ use crate::epoch::Epoch;
 /// reddening of the main belt.
 pub const MINOR_PLANET_B_V: f64 = 0.75;
 
-/// Where the MPC publishes the full catalogue.
-pub const MPCORB_URL: &str = "https://minorplanetcenter.net/iau/MPCORB/MPCORB.DAT";
-
-/// Errors from catalogue loading.
+/// Errors from minor-planet queries.
 #[derive(Debug, Error)]
 pub enum MinorPlanetError {
-    /// Reading the catalogue file.
-    #[error("reading {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    /// Fetching the catalogue from the MPC.
-    #[error("downloading MPCORB.DAT: {0}")]
-    Download(String),
-    /// A catalogue file with no parseable records.
-    #[error("{path} contains no MPCORB records")]
-    Empty { path: PathBuf },
     /// Ephemeris evaluation for the observer or the Sun.
     #[error(transparent)]
     Ephemeris(#[from] SolarSystemError),
 }
 
-/// One MPCORB row reduced to what placing and weighing the body needs.
-#[derive(Clone, Debug)]
-pub struct MinorPlanetElements {
-    /// Packed MPC designation (`00001`, `K14A00A`, …).
-    pub designation: String,
-    /// Human-readable designation (`(1) Ceres`, `2014 AA`).
-    pub name: String,
-    /// Absolute magnitude H, if the catalogue has one.
-    pub h: Option<f64>,
-    /// Slope parameter G, if the catalogue has one.
-    pub g: Option<f64>,
-    /// The osculating orbit, ecliptic elements already rotated to the ICRF.
-    orbit: KeplerOrbit,
-    /// Osculating epoch, TT Julian date.
-    pub epoch_tt: f64,
-    /// The full record for anything else a caller wants (arc, RMS, …).
-    pub record: MpcOrbRecord,
+/// A [`StarData`] id for a catalogue body.
+pub trait MinorPlanetStarId {
+    /// Stable 64-bit id from the packed designation, kept clear of Gaia
+    /// source ids (which are below 2^63).
+    fn star_id(&self) -> u64;
 }
 
-/// An MPCORB catalogue in memory.
-#[derive(Debug)]
-pub struct MinorPlanetCatalog {
-    elements: Vec<MinorPlanetElements>,
-    path: PathBuf,
-    skipped_unusable: usize,
-}
-
-impl MinorPlanetCatalog {
-    /// `~/.cache/starfield/mpcorb/MPCORB.DAT`.
-    pub fn default_path() -> PathBuf {
-        cache_dir().join("mpcorb").join("MPCORB.DAT")
-    }
-
-    /// Load the cached catalogue, downloading it from the MPC first when
-    /// the cache is empty (about 320 MB, 1.5 million rows).
-    pub fn load_default() -> Result<Self, MinorPlanetError> {
-        let path = Self::default_path();
-        if !file_exists_and_not_empty(&path) {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir).map_err(|source| MinorPlanetError::Io {
-                    path: dir.to_path_buf(),
-                    source,
-                })?;
-            }
-            download_to_file(MPCORB_URL, &path, 900)
-                .map_err(|e| MinorPlanetError::Download(e.to_string()))?;
-        }
-        Self::from_file(&path)
-    }
-
-    /// Parse an MPCORB-format file (the full catalogue or any subset).
-    pub fn from_file(path: &Path) -> Result<Self, MinorPlanetError> {
-        let text = std::fs::read_to_string(path).map_err(|source| MinorPlanetError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let ts = Timescale::default();
-        let lines: Vec<&str> = text.lines().collect();
-        let parsed: Vec<Option<MinorPlanetElements>> = lines
-            .par_iter()
-            .filter_map(|line| parse_mpcorb_line(line))
-            .map(|record| MinorPlanetElements::from_record(record, &ts))
-            .collect();
-        let skipped_unusable = parsed.iter().filter(|e| e.is_none()).count();
-        let elements: Vec<MinorPlanetElements> = parsed.into_iter().flatten().collect();
-        if elements.is_empty() {
-            return Err(MinorPlanetError::Empty {
-                path: path.to_path_buf(),
-            });
-        }
-        Ok(Self {
-            elements,
-            path: path.to_path_buf(),
-            skipped_unusable,
-        })
-    }
-
-    /// A catalogue from records already in hand (tests, hand-picked sets).
-    pub fn from_records(records: Vec<MpcOrbRecord>) -> Self {
-        let ts = Timescale::default();
-        let parsed: Vec<Option<MinorPlanetElements>> = records
-            .into_iter()
-            .map(|r| MinorPlanetElements::from_record(r, &ts))
-            .collect();
-        let skipped_unusable = parsed.iter().filter(|e| e.is_none()).count();
-        Self {
-            elements: parsed.into_iter().flatten().collect(),
-            path: PathBuf::from("<records>"),
-            skipped_unusable,
-        }
-    }
-
-    /// Number of bodies with usable elements.
-    pub fn len(&self) -> usize {
-        self.elements.len()
-    }
-
-    /// True when no body has usable elements.
-    pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
-    }
-
-    /// Rows dropped for an unparseable epoch or elements that describe
-    /// no bound orbit.
-    pub fn skipped_unusable(&self) -> usize {
-        self.skipped_unusable
-    }
-
-    /// File the catalogue came from.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// All bodies.
-    pub fn elements(&self) -> &[MinorPlanetElements] {
-        &self.elements
-    }
-
-    /// Look a body up by packed or readable designation (case-insensitive
-    /// on the readable form, so `ceres` finds `(1) Ceres`).
-    pub fn find(&self, designation: &str) -> Option<&MinorPlanetElements> {
-        let lower = designation.trim().to_ascii_lowercase();
-        self.elements.iter().find(|e| {
-            e.designation.eq_ignore_ascii_case(designation.trim())
-                || e.name.to_ascii_lowercase() == lower
-                || e.name.to_ascii_lowercase().ends_with(&format!(") {lower}"))
-        })
-    }
-
-    /// Osculating epochs present, as (earliest, latest) TT Julian dates.
-    pub fn epoch_range_tt(&self) -> Option<(f64, f64)> {
-        let mut it = self.elements.iter().map(|e| e.epoch_tt);
-        let first = it.next()?;
-        Some(it.fold((first, first), |(lo, hi), t| (lo.min(t), hi.max(t))))
-    }
-}
-
-impl MinorPlanetElements {
-    fn from_record(record: MpcOrbRecord, ts: &Timescale) -> Option<Self> {
-        let orbit = record.to_kepler_orbit(ts)?;
-        // Elements that describe no bound orbit (e ≥ 1 with a > 0, a ≤ 0,
-        // NaN fields) give a non-finite state; screen them here so every
-        // stored orbit propagates.
-        if !orbit.is_finite() {
-            return None;
-        }
-        Some(Self {
-            designation: record.designation.clone(),
-            name: record.readable_designation.clone(),
-            h: record.h_magnitude,
-            g: record.g_slope,
-            epoch_tt: orbit.epoch_tt,
-            orbit,
-            record,
-        })
-    }
-
-    /// Heliocentric ICRF position (AU) and velocity (AU/day) at `tt_jd`.
-    fn heliocentric_at(&self, epoch: &Epoch) -> (Vector3<f64>, Vector3<f64>) {
-        let p = self.orbit.at(epoch.time());
-        (p.position, p.velocity)
-    }
-
-    /// Stable 64-bit id for [`StarData`], from the packed designation.
-    pub fn star_id(&self) -> u64 {
+impl MinorPlanetStarId for MinorPlanet {
+    fn star_id(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        self.designation.hash(&mut hasher);
-        // Keep clear of Gaia source ids, which are < 2^63.
+        self.designation().hash(&mut hasher);
         hasher.finish() | (1 << 63)
     }
 }
@@ -307,7 +133,7 @@ impl SolarSystem {
     /// of epochs should keep the catalogue loaded and call this per frame.
     pub fn minor_planets_in_cone(
         &self,
-        catalog: &MinorPlanetCatalog,
+        catalog: &MpcorbCatalog,
         observer: &Observer,
         epoch: &Epoch,
         centre: &Equatorial,
@@ -330,10 +156,10 @@ impl SolarSystem {
         let cos_radius = radius.cos();
 
         let mut sightings: Vec<MinorPlanetSighting> = catalog
-            .elements
+            .bodies()
             .par_iter()
             .filter_map(|body| {
-                let h = body.h?;
+                let h = body.h()?;
                 let sighting = sight(body, h, &frame, epoch);
                 // Cone test on the astrometric direction; the aberration
                 // shift is far smaller than any PSF margin a caller adds.
@@ -351,11 +177,11 @@ impl SolarSystem {
     /// One named body, wherever it is on the sky.
     pub fn minor_planet(
         &self,
-        body: &MinorPlanetElements,
+        body: &MinorPlanet,
         observer: &Observer,
         epoch: &Epoch,
     ) -> Result<Option<MinorPlanetSighting>, MinorPlanetError> {
-        let Some(h) = body.h else {
+        let Some(h) = body.h() else {
             return Ok(None);
         };
         let frame = {
@@ -377,7 +203,7 @@ impl SolarSystem {
 /// Geometric (light-time-corrected) observer→body vector in AU and the
 /// body's heliocentric position at emission.
 fn light_time_corrected(
-    body: &MinorPlanetElements,
+    body: &MinorPlanet,
     frame: &QueryFrame,
     epoch: &Epoch,
 ) -> (Vector3<f64>, Vector3<f64>, f64) {
@@ -386,7 +212,7 @@ fn light_time_corrected(
     let mut rel = Vector3::zeros();
     let mut light_time_days = 0.0;
     for _ in 0..3 {
-        helio = body.heliocentric_at(&emission).0;
+        helio = body.heliocentric_at(emission.time()).position;
         rel = frame.sun_position_au + helio - frame.observer_position_au;
         light_time_days = rel.norm() / C_AUDAY;
         emission = epoch.offset_secs(-light_time_days * DAY_S);
@@ -394,12 +220,7 @@ fn light_time_corrected(
     (rel, helio, light_time_days)
 }
 
-fn sight(
-    body: &MinorPlanetElements,
-    h: f64,
-    frame: &QueryFrame,
-    epoch: &Epoch,
-) -> MinorPlanetSighting {
+fn sight(body: &MinorPlanet, h: f64, frame: &QueryFrame, epoch: &Epoch) -> MinorPlanetSighting {
     let (rel, helio, light_time_days) = light_time_corrected(body, frame, epoch);
     let range_au = rel.norm();
     let geometric = rel / range_au;
@@ -411,7 +232,7 @@ fn sight(
     let to_sun = -helio;
     let to_observer = -rel;
     let phase_angle = to_sun.angle(&to_observer);
-    let g = body.g.unwrap_or(0.15);
+    let g = body.g().unwrap_or(0.15);
     let v_magnitude = apparent_magnitude_with_phase(h, heliocentric_au, range_au, phase_angle, g);
 
     // Sky motion from the geometric direction one hour later; the
@@ -422,8 +243,8 @@ fn sight(
     let sky_motion_arcsec_per_hour = geometric.angle(&rel_later.normalize()).to_degrees() * 3600.0;
 
     MinorPlanetSighting {
-        designation: body.designation.clone(),
-        name: body.name.clone(),
+        designation: body.designation().to_string(),
+        name: body.name().to_string(),
         direction: direction_of(&apparent),
         astrometric_direction: direction_of(&geometric),
         v_magnitude,
@@ -434,7 +255,7 @@ fn sight(
         sky_motion_arcsec_per_hour,
         h,
         g,
-        elements_epoch_tt: body.epoch_tt,
+        elements_epoch_tt: body.epoch_tt(),
     }
 }
 
@@ -443,13 +264,14 @@ mod tests {
     use super::*;
     use crate::solar_system::BodyId;
     use approx::assert_abs_diff_eq;
+    use starfield::jpl::mpc::parse_mpcorb_line;
 
     /// MPCORB row for (1) Ceres, epoch 2026-06-09 (K2669), from the
     /// 2026-09-14 catalogue.
     const CERES: &str = "00001    3.34  0.15 K2669 274.41935   73.29420   80.24863   10.58803  0.0796923  0.21430445   2.7655526  0 MPO980521  7297 126 1801-2026 0.83 M-v 30k Veres      4000      (1) Ceres              20260103";
 
-    fn ceres() -> MinorPlanetCatalog {
-        MinorPlanetCatalog::from_records(vec![parse_mpcorb_line(CERES).unwrap()])
+    fn ceres() -> MpcorbCatalog {
+        MpcorbCatalog::from_records(vec![parse_mpcorb_line(CERES).unwrap()])
     }
 
     #[test]
@@ -457,18 +279,18 @@ mod tests {
         let cat = ceres();
         assert_eq!(cat.len(), 1);
         let body = cat.find("Ceres").unwrap();
-        assert_eq!(body.designation, "00001");
-        assert_eq!(body.h, Some(3.34));
+        assert_eq!(body.designation(), "00001");
+        assert_eq!(body.h(), Some(3.34));
         assert!(cat.find("00001").is_some());
         assert!(cat.find("Vesta").is_none());
         // 2026-06-09 TT.
-        assert_abs_diff_eq!(body.epoch_tt, 2_461_200.5, epsilon = 1e-6);
+        assert_abs_diff_eq!(body.epoch_tt(), 2_461_200.5, epsilon = 1e-6);
     }
 
     #[test]
     fn star_ids_avoid_gaia_range() {
         let cat = ceres();
-        assert!(cat.elements()[0].star_id() >= 1 << 63);
+        assert!(cat.bodies()[0].star_id() >= 1 << 63);
     }
 
     /// Horizons astrometric ICRF positions of Ceres at 2026-09-14 00:00 UTC:
@@ -546,7 +368,7 @@ mod tests {
             .minor_planets_in_cone(&cat, &mars, &epoch, &here, 1.0_f64.to_radians(), 20.0)
             .unwrap();
         assert_eq!(found.len(), 1);
-        let star = found[0].star_data(cat.elements()[0].star_id());
+        let star = found[0].star_data(cat.bodies()[0].star_id());
         assert_abs_diff_eq!(star.magnitude, found[0].v_magnitude);
         let away = Equatorial::from_degrees(89.301_025, 22.170_577);
         assert!(system
