@@ -49,7 +49,7 @@
 //!
 //! `footprint_pixels` returns the radius (in pixels) at which the
 //! Sérsic SB drops to `1e-4 · I_e`, computed via
-//! [`radius_at_fraction`]. This is profile-aware: a de Vaucouleurs
+//! [`SersicProfile::radius_at_sb_fraction`]. This is profile-aware: a de Vaucouleurs
 //! n=4 halo extends out to ~30 θ_eff while an n=1 disk reaches the
 //! same fraction at ~5 θ_eff. The single-multiplier truncation we
 //! used in the throwaway demo (`/tmp/galaxy_demo`) leaves visible
@@ -88,28 +88,15 @@ pub struct SersicSplat {
     footprint_px: i32,
 }
 
-/// Radius (in arcsec along the major axis) at which the Sérsic SB
-/// drops to `frac` of `I_e`. Closed-form inverse of the Sérsic SB
-/// expression: `r = θ_eff · ((-ln(frac)) / b_n + 1)^n`.
-///
-/// Local to the renderer because it's a render-time *truncation
-/// policy* helper, not a catalog primitive — upstream starfield
-/// deliberately doesn't expose it.
-fn radius_at_fraction(profile: &SersicProfile, frac: f64) -> f64 {
-    let bn = profile.b_n();
-    let raw = -(frac.ln()) / bn + 1.0;
-    profile.theta_half_arcsec * raw.powf(profile.n)
-}
-
 /// Truncation fraction (relative to `I_e`) outside which the Sérsic
 /// deposit is set to zero. The corresponding radius is computed
-/// per-profile via [`radius_at_fraction`].
-const TRUNCATION_SB_FRACTION: f64 = 1e-4;
+/// per-profile via [`SersicProfile::radius_at_sb_fraction`].
+pub const TRUNCATION_SB_FRACTION: f64 = 1e-4;
 
 /// Major-axis radius in arcseconds at the renderer's surface-brightness
 /// truncation threshold.
 pub fn truncation_radius_arcsec(profile: &SersicProfile) -> f64 {
-    radius_at_fraction(profile, TRUNCATION_SB_FRACTION)
+    profile.radius_at_sb_fraction(TRUNCATION_SB_FRACTION)
 }
 
 impl SersicSplat {
@@ -203,7 +190,7 @@ mod tests {
     /// For a circular Sérsic, the fraction of total flux enclosed
     /// within radius `R` along the major axis is
     /// `γ(2n, b_n · (R/θ_eff)^(1/n)) / Γ(2n)`. At the truncation
-    /// radius `radius_at_fraction(p, 1e-4)`, this fraction is
+    /// radius `p.radius_at_sb_fraction(1e-4)`, this fraction is
     /// The enclosed fractions exceed 0.99 for n=1 and reach about
     /// 0.97 for n=4, whose wings carry more of the total light.
     #[test]
