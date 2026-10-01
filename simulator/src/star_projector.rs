@@ -6,8 +6,7 @@
 //! applications with proper handling of coordinate system singularities
 //! and field boundary conditions.
 
-use nalgebra::{Matrix3, Vector3};
-use starfield::framelib::inertial::InertialFrame;
+use starfield::coordinates::GnomonicProjection;
 use starfield::Equatorial;
 
 use shared::image_size::PixelShape;
@@ -71,12 +70,8 @@ pub struct StarProjector {
     /// Used for pixel coordinate bounds checking and center offset calculation.
     sensor_size: PixelShape,
 
-    /// 3D rotation matrix for celestial to camera coordinate transformation.
-    ///
-    /// Transforms celestial unit vectors to camera-aligned coordinate system
-    /// where Z-axis points toward field center, Y-axis toward celestial north,
-    /// and X-axis completes the right-handed system.
-    rotation_matrix: Matrix3<f64>,
+    /// Tangent-plane projection about `center`: `+u` east, `+v` north.
+    projection: GnomonicProjection,
 }
 
 impl StarProjector {
@@ -88,10 +83,10 @@ impl StarProjector {
     /// celestial coordinates to detector pixel positions.
     ///
     /// # Mathematical Setup
-    /// The rotation matrix is constructed to establish camera coordinates:
-    /// - **Z-axis**: Points toward field center (optical axis direction)
-    /// - **Y-axis**: Points toward celestial north (or nearest non-degenerate direction)
-    /// - **X-axis**: Completes right-handed system (approximately eastward)
+    /// Uses [`GnomonicProjection`] about the field center, whose plane axes
+    /// are local east (`+u`) and north (`+v`). A center exactly at a
+    /// celestial pole is well defined: north is taken along the meridian
+    /// `ra + 180°`.
     ///
     /// # Arguments
     /// * `center` - Field center in celestial equatorial coordinates
@@ -112,35 +107,11 @@ impl StarProjector {
         sensor_height: usize,
     ) -> Self {
         let sensor_size = PixelShape::with_width_height(sensor_width, sensor_height);
-        // Calculate rotation matrix to transform from celestial to camera coordinates
-        // Camera Z-axis points to center_ra/center_dec
-        // Camera Y-axis points towards celestial north
-        // Camera X-axis completes right-handed system
-
-        let cos_ra = center.ra.cos();
-        let sin_ra = center.ra.sin();
-        let cos_dec = center.dec.cos();
-        let sin_dec = center.dec.sin();
-
-        // Z-axis (pointing to center)
-        let z = Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec);
-
-        // Y-axis (towards celestial north)
-        let north = Vector3::new(0.0, 0.0, 1.0);
-        let east = north.cross(&z).normalize();
-        let y = z.cross(&east).normalize();
-
-        // X-axis (east direction)
-        let x = y.cross(&z).normalize();
-
-        // Build rotation matrix (columns are the new basis vectors)
-        let rotation_matrix = Matrix3::from_columns(&[x, y, z]);
-
         Self {
             center: *center,
             radians_per_pixel,
             sensor_size,
-            rotation_matrix,
+            projection: GnomonicProjection::new(*center),
         }
     }
 
@@ -154,7 +125,8 @@ impl StarProjector {
     /// # Transformation Steps
     /// 1. **Spherical to Cartesian**: Convert (RA, Dec) to unit vector
     /// 2. **Coordinate rotation**: Apply camera alignment transformation
-    /// 3. **Visibility check**: Reject stars behind camera (Z ≤ 0)
+    /// 3. **Visibility check**: Reject stars behind the tangent plane, or
+    ///    within [`GnomonicProjection`]'s horizon tolerance of 90°
     /// 4. **Gnomonic projection**: Project to tangent plane (X/Z, Y/Z)
     /// 5. **Pixel scaling**: Convert angular to pixel coordinates
     ///
@@ -169,20 +141,9 @@ impl StarProjector {
     /// Projects stars without bounds checking. Returns pixel coordinates even
     /// for stars outside detector bounds, useful for field geometry analysis.
     pub fn project_unbounded(&self, equatorial: &Equatorial) -> Option<(f64, f64)> {
-        // Convert equatorial to cartesian unit vector
-        let cartesian = equatorial.to_cartesian().to_vector3();
-
-        // Transform to camera coordinates
-        let camera_coords = self.rotation_matrix.transpose() * cartesian;
-
-        // Check if star is in front of camera (z > 0)
-        if camera_coords.z <= 0.0 {
-            return None;
-        }
-
-        // Apply gnomonic (tangent plane) projection
-        let x_proj = camera_coords.x / camera_coords.z;
-        let y_proj = camera_coords.y / camera_coords.z;
+        // Gnomonic standard coordinates; None behind (or numerically on)
+        // the tangent plane's horizon.
+        let (x_proj, y_proj) = self.projection.project(equatorial)?;
 
         // Convert to pixel coordinates. Camera +X is east and +Y north. An
         // image displayed with row 0 at the top and columns increasing to
@@ -429,6 +390,20 @@ mod tests {
         // Unbounded should succeed, bounded should fail
         assert!(unbounded.is_some());
         assert!(bounded.is_none());
+    }
+
+    #[test]
+    fn test_center_at_pole_projects() {
+        for dec in [std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2] {
+            let center = Equatorial::new(0.3, dec);
+            let projector = StarProjector::new(&center, 1e-4, 100, 100);
+            let (x, y) = projector.project(&center).unwrap();
+            assert_relative_eq!(x, 50.0, epsilon = 1e-9);
+            assert_relative_eq!(y, 50.0, epsilon = 1e-9);
+            let nearby = Equatorial::new(1.0, dec - dec.signum() * 1e-3);
+            let (x, y) = projector.project_unbounded(&nearby).unwrap();
+            assert!(x.is_finite() && y.is_finite());
+        }
     }
 
     #[test]
