@@ -3803,9 +3803,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "starfield"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ee99874e28fe35b3f6163efe6b427032097c7362a2f91936db5cee18e99a599"
+checksum = "708d73c1019c59687617c150271afe4497fe407258cc60ec95140343c7739cff"
 dependencies = [
  "starfield-catalogs",
  "starfield-core",
@@ -3815,9 +3815,9 @@ dependencies = [
 
 [[package]]
 name = "starfield-catalogs"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d665fa6e9c721ca41ed8eb753a47abc893fc2a42d79f0f04be8f99df5912bcc"
+checksum = "eb5ead2f9eda5b5d2dbe1cdd30d33fc8fc7be3dd99aa2fb5ec21bb93395e7721"
 dependencies = [
  "arrow",
  "cdshealpix",
@@ -3837,9 +3837,9 @@ dependencies = [
 
 [[package]]
 name = "starfield-core"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d45864fda4823784051ee1c8920fef757cdeb6e5ca171a5648022694588a702"
+checksum = "a592ead89695e33183e9d62deecf7d6d47af3fc1232ae339ddca56324cfdd080"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -3892,24 +3892,26 @@ dependencies = [
 
 [[package]]
 name = "starfield-jpl"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "407ff913183c75b77d7155999161cccb82e05be50e20635b729b86326db4b990"
+checksum = "5cbbdbe692a3154ce7c64819c9e68cb958779950712d53c1199c0a464965e1cb"
 dependencies = [
  "log",
  "nalgebra",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",
  "starfield-core",
+ "starfield-datastore",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "starfield-surfaces"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be519303c78e66f32bb2eaab9a9fad21d54a305ecaa5d06be4e268525d4c5200"
+checksum = "396d72ec1b5873e9a04538471868a677633bcb4a9ce7b97ebdde67ca12051b24"
 dependencies = [
  "flate2",
  "starfield-core",
