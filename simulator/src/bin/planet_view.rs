@@ -32,6 +32,7 @@ use simulator::solar_system::frame_metadata::{
 use simulator::solar_system::minor_planets::MinorPlanetCatalog;
 use starfield::catalogs::gaia::{Dr3, LazyLoadingCatalog};
 use starfield::catalogs::{StarCatalog, StarData};
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::surfaces::planet_maps::{
     earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention,
 };
@@ -48,7 +49,6 @@ use simulator::image_proc::render::quantize_image;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{SensorModel, TelescopeModel};
-use simulator::sims::orientation::orientation_from_pointing;
 use simulator::solar_system::{
     BodyId, BodyState, Observer, SiteStatus, SiteView, SolarSystem, SurfaceSite,
 };
@@ -672,7 +672,7 @@ fn main() -> Result<(), String> {
     );
     // Geometric centre of each body on the sensor, through the same
     // projector the second pass uses (pixel index = pixel centre).
-    let orientation = orientation_from_pointing(&pointing, 0.0);
+    let orientation = attitude_from_pointing(&pointing, 0.0);
     for (state, _) in &states {
         let probe = StarData::with_position(0, state.direction, 0.0, None);
         match scene
@@ -955,7 +955,7 @@ fn build_overlay(
     satellite: &SatelliteConfig,
 ) -> Overlay {
     let plate_scale = satellite.plate_scale_arcsec_per_pixel();
-    let orientation = orientation_from_pointing(
+    let orientation = attitude_from_pointing(
         &Equatorial::from_degrees(
             metadata.pointing_icrf.ra_deg,
             metadata.pointing_icrf.dec_deg,

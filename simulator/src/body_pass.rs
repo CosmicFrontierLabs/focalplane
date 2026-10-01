@@ -363,11 +363,11 @@ mod tests {
     use crate::image_proc::render::SecondPassBinding;
     use crate::photometry::zodiacal::SolarAngularCoordinates;
     use crate::scene::Scene;
-    use crate::sims::orientation::orientation_from_pointing;
     use crate::solar_system::{IlluminationGeometry, AU_KM};
     use approx::assert_relative_eq;
     use nalgebra::Vector3;
     use shared::units::{Temperature, TemperatureExt};
+    use starfield::framelib::attitude::attitude_from_pointing;
     use starfield::planetarylib::subpoint::SubPoint;
     use std::time::Duration;
 
@@ -451,7 +451,7 @@ mod tests {
         )
         .with_second_pass(SecondPassBinding {
             pass: scene.second_pass.clone().unwrap(),
-            orientation: orientation_from_pointing(&pointing, 0.0),
+            orientation: attitude_from_pointing(&pointing, 0.0),
             epoch: None,
             sensor_idx: 0,
             focal_plane: scene.focal_plane.clone(),

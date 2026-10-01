@@ -24,10 +24,10 @@ use nalgebra::UnitQuaternion;
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
 use starfield::constants::ASEC2RAD;
+use starfield::framelib::attitude::boresight_of;
 
 use crate::hardware::satellite::FocalPlaneConfig;
 use crate::sims::nsa_galaxies::GalaxyInField;
-use crate::sims::orientation::boresight_of;
 use crate::sims::trajectory::TrajectoryError;
 
 type RgbImage = ImageBuffer<Rgb<u8>, Vec<u8>>;
@@ -550,9 +550,9 @@ mod tests {
     use crate::hardware::sensor::models::GSENSE4040BSI;
     use crate::hardware::sensor_array::SensorArray;
     use crate::hardware::telescope::TelescopeConfig;
-    use crate::sims::orientation::orientation_from_pointing;
     use approx::assert_abs_diff_eq;
     use shared::units::{Length, LengthExt, TemperatureExt};
+    use starfield::framelib::attitude::attitude_from_pointing;
     use starfield::Equatorial;
 
     fn tiny_fp() -> FocalPlaneConfig {
@@ -593,7 +593,7 @@ mod tests {
     fn test_render_writes_a_png() {
         let fp = tiny_fp();
         let pointing = Equatorial::from_degrees(10.0, 20.0);
-        let orient = orientation_from_pointing(&pointing, 0.0);
+        let orient = attitude_from_pointing(&pointing, 0.0);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ctx.png");
         let cfg = ContextRenderConfig {
@@ -614,7 +614,7 @@ mod tests {
         // the outline.
         let fp = tiny_fp();
         let pointing = Equatorial::from_degrees(45.0, 30.0);
-        let orient = orientation_from_pointing(&pointing, 0.0);
+        let orient = attitude_from_pointing(&pointing, 0.0);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ctx.png");
         let cfg = ContextRenderConfig {

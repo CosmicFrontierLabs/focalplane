@@ -29,6 +29,7 @@ use log::info;
 use starfield::catalogs::bright_galaxies::{BrightGalaxy, BrightGalaxyCatalog};
 use starfield::catalogs::gaia::Cone;
 use starfield::catalogs::ExtendedSource;
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::Equatorial;
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
@@ -37,7 +38,6 @@ use crate::photometry::photoconversion::{photon_electron_fluxes, SourceFlux};
 use crate::photometry::BlackbodyStellarSpectrum;
 use crate::scene_galaxy::GalaxyInFrame;
 use crate::sims::nsa_galaxies::GalaxyInField;
-use crate::sims::orientation::orientation_from_pointing;
 
 /// B-V proxy used for the blackbody spectrum approximation. 0.85 is a
 /// rough integrated colour for an Sb spiral; ellipticals are ~1.0,
@@ -102,7 +102,7 @@ pub fn load_and_route_bright_galaxies(
         pointing.dec_degrees()
     );
 
-    let orientation = orientation_from_pointing(pointing, 0.0);
+    let orientation = attitude_from_pointing(pointing, 0.0);
     let n_sensors = fp.array.sensor_count();
     let mut per_sensor: Vec<Vec<GalaxyInFrame>> = vec![Vec::new(); n_sensors];
 

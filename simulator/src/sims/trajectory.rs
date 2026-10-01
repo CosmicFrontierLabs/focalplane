@@ -6,6 +6,7 @@ use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 use starfield::catalogs::{StarCatalog, StarData};
 use starfield::coordinates::cartesian::Cartesian3;
+use starfield::framelib::attitude::{attitude_from_pointing, boresight_of};
 use starfield::framelib::inertial::InertialFrame;
 use starfield::Equatorial;
 use thiserror::Error;
@@ -16,7 +17,6 @@ use crate::photometry::photoconversion::SourceFlux;
 use crate::sims::motion_blur::{
     render_motion_trajectory, LightSources, MotionBlurConfig, DEFAULT_MAX_DRIFT_PER_STAMP_PX,
 };
-use crate::sims::orientation::{boresight_of, orientation_from_pointing};
 use crate::star_math::star_data_to_fluxes;
 
 pub use crate::sims::motion_blur::render_one_frame;
@@ -73,7 +73,7 @@ impl Waypoint {
     pub fn from_pointing(time: Duration, pointing: Equatorial) -> Self {
         Self {
             time,
-            orientation: orientation_from_pointing(&pointing, 0.0),
+            orientation: attitude_from_pointing(&pointing, 0.0),
         }
     }
 
@@ -81,7 +81,7 @@ impl Waypoint {
     pub fn from_pointing_and_roll(time: Duration, pointing: Equatorial, roll_rad: f64) -> Self {
         Self {
             time,
-            orientation: orientation_from_pointing(&pointing, roll_rad),
+            orientation: attitude_from_pointing(&pointing, roll_rad),
         }
     }
 }
@@ -555,8 +555,8 @@ pub fn render_trajectory(config: &TrajectoryRenderConfig) -> Result<usize, Traje
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sims::orientation::roll_of;
     use approx::assert_abs_diff_eq;
+    use starfield::framelib::attitude::roll_of;
     use std::time::Duration;
 
     fn make_pointing(ra_deg: f64, dec_deg: f64) -> Equatorial {

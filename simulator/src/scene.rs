@@ -91,6 +91,7 @@ use std::time::Duration;
 
 use shared::units::LengthExt;
 use starfield::catalogs::StarData;
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::Equatorial;
 
 use crate::epoch::Epoch;
@@ -101,7 +102,6 @@ use crate::image_proc::render::{
     SecondPassBinding, StarInFrame,
 };
 use crate::photometry::zodiacal::SolarAngularCoordinates;
-use crate::sims::orientation::orientation_from_pointing;
 
 /// Complete astronomical observation scene for single or multi-sensor focal planes.
 ///
@@ -296,7 +296,7 @@ impl Scene {
             if let Some(pass) = &self.second_pass {
                 renderer = renderer.with_second_pass(SecondPassBinding {
                     pass: Arc::clone(pass),
-                    orientation: orientation_from_pointing(&self.pointing_center, 0.0),
+                    orientation: attitude_from_pointing(&self.pointing_center, 0.0),
                     epoch: self.epoch.clone(),
                     sensor_idx,
                     focal_plane: self.focal_plane.clone(),

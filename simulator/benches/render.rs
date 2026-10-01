@@ -12,9 +12,9 @@ use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::sims::motion_blur::{
     render_one_frame, render_one_frame_roi, LightSources, MotionBlurConfig,
 };
-use simulator::sims::orientation::orientation_from_pointing;
 use simulator::sims::trajectory::{Trajectory, Waypoint};
 use starfield::catalogs::StarData;
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::Equatorial;
 use std::time::Duration;
 
@@ -176,10 +176,10 @@ fn bench_render_one_frame_full_vs_roi(c: &mut Criterion) {
     let center = Equatorial::from_degrees(56.75, 24.12);
     let stars = bench_catalog(center, 200);
     let traj = Trajectory::new(vec![
-        Waypoint::new(Duration::ZERO, orientation_from_pointing(&center, 0.0)),
+        Waypoint::new(Duration::ZERO, attitude_from_pointing(&center, 0.0)),
         Waypoint::new(
             Duration::from_secs(10),
-            orientation_from_pointing(&center, 0.0),
+            attitude_from_pointing(&center, 0.0),
         ),
     ])
     .expect("static trajectory");
