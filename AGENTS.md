@@ -1,5 +1,14 @@
 # CLAUDE.md - Agent Instructions
 
+## Record deferred papercuts
+
+When unrelated work exposes a small annoyance or inconvenience that is not worth
+fixing in the current change, file a concise GitHub issue with the `papercut`
+label. Describe the observed friction and enough context to find it again, but do
+not interrupt the current task to design a solution or investigate it deeply. A
+periodic triage job will review these reports and turn worthwhile items into
+concrete issues, proposed solutions, and follow-up work.
+
 ## Build & Test Commands
 - Build: `cargo build`
 - Test all: `cargo test`
