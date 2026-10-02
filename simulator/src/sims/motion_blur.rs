@@ -1820,9 +1820,7 @@ mod tests {
 
         assert!(
             moving_peak < static_peak,
-            "motion-blurred peak should be below static peak (got moving={} static={})",
-            moving_peak,
-            static_peak
+            "motion-blurred peak should be below static peak (got moving={moving_peak} static={static_peak})"
         );
         // Approximate flux conservation. The 10% tolerance absorbs
         // PSF-truncation differences when the deterministic R2 stamp
@@ -1832,9 +1830,7 @@ mod tests {
         assert!(
             (static_sum - moving_sum).abs() / static_sum.max(1.0) < 0.10,
             "motion-blur should approximately conserve total flux \
-             (static_sum={}, moving_sum={})",
-            static_sum,
-            moving_sum
+             (static_sum={static_sum}, moving_sum={moving_sum})"
         );
         let _ = PI;
     }
@@ -1897,7 +1893,7 @@ mod tests {
             .iter()
             .map(|x| x.abs())
             .fold(0.0_f64, f64::max);
-        assert!(diff < 1e-9, "max |diff| = {}", diff);
+        assert!(diff < 1e-9, "max |diff| = {diff}");
     }
 
     #[test]
@@ -2323,7 +2319,7 @@ mod tests {
         let traj = static_trajectory();
         let cfg = minimal_metadata_cfg(5);
         let (tmp, frames) = render_to_tmp(&fp, &traj, &cfg, &empty_sources());
-        assert!(frames >= 2, "expected at least 2 frames, got {}", frames);
+        assert!(frames >= 2, "expected at least 2 frames, got {frames}");
 
         let sensor_dir = tmp.path().join("sensor_00");
         assert!(sensor_dir.is_dir(), "sensor_00 directory must exist");
@@ -2611,7 +2607,7 @@ mod tests {
     /// PSF wings don't, and σ² collapses to zero).
     fn image_centroid_and_variance(img: &Array2<f64>) -> (f64, f64, f64, f64) {
         let (h, w) = img.dim();
-        let mut corners = vec![
+        let mut corners = [
             img[[0, 0]],
             img[[0, w - 1]],
             img[[h - 1, 0]],
@@ -2755,6 +2751,7 @@ mod tests {
     ///   3. the growth is anisotropic — one image axis absorbs ≥70% of
     ///      the predicted variance, and the other image axis's variance
     ///      stays within 10% of its static value.
+    ///
     /// `axis_label` appears in failure messages so a regression in the
     /// body→image projection convention is easy to read off.
     fn assert_pure_tone_psf_spread(body_axis: nalgebra::Vector3<f64>, axis_label: &str) {

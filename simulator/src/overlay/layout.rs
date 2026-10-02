@@ -270,6 +270,7 @@ pub fn place_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     fn frame() -> LayoutConfig {
         LayoutConfig::for_frame(512.0, 512.0)
@@ -310,7 +311,7 @@ mod tests {
             "label {:?} should be right of the disk",
             p.rect
         );
-        assert!((p.rect.centre().1 - 256.0).abs() < 1.0);
+        assert_abs_diff_eq!(p.rect.centre().1, 256.0, epsilon = 1.0);
         assert!(p.rect.overlap_area_with_disk(256.0, 256.0, 20.0) == 0.0);
     }
 

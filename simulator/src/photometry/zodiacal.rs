@@ -825,9 +825,9 @@ mod tests {
         // Test that regions too close to the sun return finite values or errors
         // At 0° latitude, 0° elongation should be infinity (sun exclusion)
         let coords = SolarAngularCoordinates::new(0.0, 0.0).unwrap();
-        match zodiacal.get_brightness(&coords) {
-            Ok(brightness) => assert!(!brightness.is_finite()),
-            Err(_) => (), // Also acceptable
+        // An error is also acceptable
+        if let Ok(brightness) = zodiacal.get_brightness(&coords) {
+            assert!(!brightness.is_finite());
         }
 
         // At higher latitudes, small elongations should have finite values

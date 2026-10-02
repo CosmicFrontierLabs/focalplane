@@ -1,5 +1,14 @@
 # CLAUDE.md - Agent Instructions
 
+## Record deferred papercuts
+
+When unrelated work exposes a small annoyance or inconvenience that is not worth
+fixing in the current change, file a concise GitHub issue with the `papercut`
+label. Describe the observed friction and enough context to find it again, but do
+not interrupt the current task to design a solution or investigate it deeply. A
+periodic triage job will review these reports and turn worthwhile items into
+concrete issues, proposed solutions, and follow-up work.
+
 ## Build & Test Commands
 - Build: `cargo build`
 - Test all: `cargo test`
@@ -94,10 +103,13 @@ Every PR opens on a picture. A PR ships a one-page SVG at
 `.0-pr-viz/<six-digit PR number>.svg` (a before/after diagram grounded in that
 PR's own diff: real module, type, function and test names; a stacked PR draws
 only its delta against its base branch) and its description opens with the
-SHA-pinned image. The `Visual PR attached` check (`meawoppl/visual-pr@v3`)
+SHA-pinned image. The `Visual PR attached` check (`meawoppl/visual-pr@v4`)
 enforces this and, when it fails, prints the complete authoring recipe: the
 spec, the effective palette (the bundled Tokyo-Night default) and the exact
-local validator command (`check_svg.py`). ASCII and Latin-1 glyphs only: write
+local validator command (`check_svg.py`). The check also looks the
+description's permalink up on GitHub: the SHA must be pushed and carry the
+same SVG bytes as the PR head, so re-pin after any push that changes the
+SVG. ASCII and Latin-1 glyphs only: write
 `->`, `<=`, `~`, `...` rather than arrows, operators or ellipsis characters.
 
 Two exemptions, both decided by the base branch rather than the PR:

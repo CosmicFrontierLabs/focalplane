@@ -26,7 +26,6 @@ ndarray = { version = "0.17", features = [
     "rayon",
 ] } # Multidimensional arrays with parallel computing
 rayon = "1.7" # Parallel computing
-float-cmp = "0.9" # Approximate floating point comparisons
 thiserror = "2.0" # Error handling
 clap = { version = "4.5", features = [
     "derive",
@@ -36,14 +35,13 @@ env_logger = "0.11"           # Environment-based logger
 url = "2.5"                   # URL parsing and manipulation
 nalgebra = { version = "0.32", features = ["serde-serialize"] } # Linear algebra (quaternions for orientation)
 # Foundation crates from cfl-foundations.
-shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1", default-features = false, features = ["frame-writer"] }
-meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1" }
-shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "a8c21ad65798b71901bbe044de7108e9ad5593a1" }
+shared = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4dc30dc60efe0cb21327601895f98d185edbe954", default-features = false, features = ["frame-writer"] }
+meter-math = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4dc30dc60efe0cb21327601895f98d185edbe954" }
+shared-wasm = { git = "https://github.com/CosmicFrontierLabs/cfl-foundations", rev = "4dc30dc60efe0cb21327601895f98d185edbe954" }
 
 rand = "0.9"
 rand_distr = "0.5"
 indicatif = "0.18"
-num_cpus = "1.16"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 csv = "1.3"

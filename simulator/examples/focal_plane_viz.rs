@@ -15,7 +15,7 @@ use std::fs;
 /// Generate a color for a sensor model using a hash of its name
 fn get_sensor_color(sensor_name: &str) -> String {
     // Define a palette of distinct colors
-    let colors = vec![
+    let colors = [
         "#FF6B6B", // Red
         "#4ECDC4", // Teal
         "#45B7D1", // Blue
@@ -129,7 +129,7 @@ fn create_focal_plane_svg(
         ));
 
         // Add sensor label in center
-        let label_font_size = (rect_width.min(rect_height) / 8.0).max(10.0).min(16.0);
+        let label_font_size = (rect_width.min(rect_height) / 8.0).clamp(10.0, 16.0);
         svg.push_str(&format!(
             "  <text x=\"{svg_x}\" y=\"{svg_y}\" font-family=\"monospace\" font-size=\"{label_font_size}\" fill=\"white\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-weight=\"bold\">{sensor_name}</text>\n"
         ));

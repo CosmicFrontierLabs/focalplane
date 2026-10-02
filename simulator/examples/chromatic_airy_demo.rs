@@ -130,6 +130,7 @@ fn analyze_sensor_psf(
 /// # Returns
 ///
 /// Result indicating success or plotting error
+#[allow(clippy::too_many_arguments)]
 fn create_sensor_plot(
     sensor_name: &str,
     sensor_qe: &QuantumEfficiency,
@@ -442,14 +443,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         println!("{}", "-".repeat(70));
 
-        for i in 0..stars.len() {
+        for (i, (_, star_type, _)) in stars.iter().enumerate() {
             let hwk_fwhm = all_results[0].1[i].2;
             let imx_fwhm = all_results[1].1[i].2;
             let diff = (hwk_fwhm - imx_fwhm).abs();
-            println!(
-                "{:<20} {:>15.3} {:>15.3} {:>15.3}",
-                stars[i].1, hwk_fwhm, imx_fwhm, diff
-            );
+            println!("{star_type:<20} {hwk_fwhm:>15.3} {imx_fwhm:>15.3} {diff:>15.3}");
         }
     }
 

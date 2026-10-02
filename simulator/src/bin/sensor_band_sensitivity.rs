@@ -16,16 +16,6 @@ use simulator::photometry::spectrum::Band;
 ///
 /// Represents a continuous wavelength range for photometric analysis,
 /// commonly used in astronomical observations and sensor characterization.
-///
-/// # Examples
-///
-/// ```
-/// let visible_red = SpectralBand {
-///     name: "Visible Red",
-///     lower_nm: 620.0,
-///     upper_nm: 750.0,
-/// };
-/// ```
 struct SpectralBand {
     /// Human-readable name for the spectral band
     name: &'static str,
@@ -47,16 +37,6 @@ struct SpectralBand {
 ///
 /// # Returns
 /// Mean quantum efficiency as a fraction (0.0 to 1.0)
-///
-/// # Examples
-/// ```
-/// use simulator::photometry::{Band, QuantumEfficiency};
-///
-/// let band = Band::from_nm_bounds(400.0, 700.0);  // Visible light
-/// let qe = QuantumEfficiency::new(/* ... */);
-/// let mean_sensitivity = mean_qe_in_band(&qe, &band);
-/// println!("Mean QE: {:.1}%", mean_sensitivity * 100.0);
-/// ```
 fn mean_qe_in_band(qe: &QuantumEfficiency, band: &Band) -> f64 {
     // Sample at 1nm intervals across the band
     let n_samples = (band.upper_nm - band.lower_nm).ceil() as usize;
