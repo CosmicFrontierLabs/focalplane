@@ -21,9 +21,9 @@
 use std::path::PathBuf;
 
 use log::info;
+use starfield::catalogs::gaia::{self, Cone, Dr3, Dr3Catalog, GaiaCatalog, LazyLoadingCatalog};
+use starfield::data::source_utils::cache_dir;
 use starfield::Equatorial;
-use starfield_datasource_utils::cache_dir;
-use starfield_gaia::{Cone, Dr3, Dr3Catalog, GaiaCatalog, LazyLoadingCatalog};
 
 /// Default location of the healpix-sharded DR3 mag-20 excerpt.
 pub fn default_excerpt_dir() -> PathBuf {
@@ -57,7 +57,7 @@ pub fn materialize_cone_augmented(
     // of sky position, which dumps ~15 k stars sky-wide for a typical
     // mag-19 limit; the loop below uses the same parser + entry
     // converter but adds the cone-containment test before each insert.
-    let supplement = starfield_gaia::dr3::supplement::parse_embedded_supplement()?;
+    let supplement = gaia::dr3::supplement::parse_embedded_supplement()?;
     let mut n_added = 0usize;
     for row in &supplement {
         if row.fitted_g_mag > mag_limit {
@@ -66,9 +66,7 @@ pub fn materialize_cone_augmented(
         if !cone.contains_radec_deg(row.ra, row.dec) {
             continue;
         }
-        cat.insert(starfield_gaia::dr3::supplement::supplement_row_to_entry(
-            row,
-        ));
+        cat.insert(gaia::dr3::supplement::supplement_row_to_entry(row));
         n_added += 1;
     }
     info!(

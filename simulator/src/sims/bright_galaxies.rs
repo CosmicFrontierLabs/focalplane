@@ -27,8 +27,8 @@
 //!   (OrbitalCommons/starfield-datasources#54) we'll switch to it.
 
 use log::info;
+use starfield::catalogs::bright_galaxies::{BrightGalaxy, BrightGalaxyCatalog};
 use starfield::Equatorial;
-use starfield_bright_galaxies::{BrightGalaxy, BrightGalaxyCatalog};
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
 use crate::image_proc::sersic_splat::SersicSplat;

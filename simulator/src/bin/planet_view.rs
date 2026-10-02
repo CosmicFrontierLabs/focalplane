@@ -30,12 +30,13 @@ use simulator::solar_system::frame_metadata::{
     StarsModel,
 };
 use simulator::solar_system::minor_planets::MinorPlanetCatalog;
+use starfield::catalogs::gaia::{Dr3, LazyLoadingCatalog};
 use starfield::catalogs::{StarCatalog, StarData};
+use starfield::surfaces::planet_maps::{
+    earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention,
+};
+use starfield::surfaces::reflectance_library::ReflectanceLibrary;
 use starfield::Equatorial;
-use starfield_gaia::{Dr3, LazyLoadingCatalog};
-
-use starfield_planet_maps::{earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention};
-use starfield_reflectance_library::ReflectanceLibrary;
 
 use simulator::atmosphere::RayleighAtmosphere;
 use simulator::bodies::brdf::{Brdf, Hapke, Lambert, UnitGeometricAlbedo};

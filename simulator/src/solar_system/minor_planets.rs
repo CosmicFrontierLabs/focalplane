@@ -40,11 +40,12 @@ use nalgebra::Vector3;
 use rayon::prelude::*;
 use starfield::catalogs::StarData;
 use starfield::constants::C_AUDAY;
+use starfield::data::source_utils::{cache_dir, download_to_file, file_exists_and_not_empty};
+use starfield::jpl::mpc::{parse_mpcorb_line, MpcOrbRecord};
 use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::keplerlib::KeplerOrbit;
 use starfield::time::Timescale;
 use starfield::Equatorial;
-use starfield_mpc::{parse_mpcorb_line, MpcOrbRecord};
 use thiserror::Error;
 
 use super::{Observer, SolarSystem, SolarSystemError, SECONDS_PER_DAY};
@@ -108,23 +109,21 @@ pub struct MinorPlanetCatalog {
 impl MinorPlanetCatalog {
     /// `~/.cache/starfield/mpcorb/MPCORB.DAT`.
     pub fn default_path() -> PathBuf {
-        starfield_datasource_utils::cache_dir()
-            .join("mpcorb")
-            .join("MPCORB.DAT")
+        cache_dir().join("mpcorb").join("MPCORB.DAT")
     }
 
     /// Load the cached catalogue, downloading it from the MPC first when
     /// the cache is empty (about 320 MB, 1.5 million rows).
     pub fn load_default() -> Result<Self, MinorPlanetError> {
         let path = Self::default_path();
-        if !starfield_datasource_utils::file_exists_and_not_empty(&path) {
+        if !file_exists_and_not_empty(&path) {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir).map_err(|source| MinorPlanetError::Io {
                     path: dir.to_path_buf(),
                     source,
                 })?;
             }
-            starfield_datasource_utils::download_to_file(MPCORB_URL, &path, 900)
+            download_to_file(MPCORB_URL, &path, 900)
                 .map_err(|e| MinorPlanetError::Download(e.to_string()))?;
         }
         Self::from_file(&path)

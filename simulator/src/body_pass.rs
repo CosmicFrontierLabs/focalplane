@@ -544,10 +544,10 @@ mod tests {
                 SceneBody::new(
                     BodyId::EARTH,
                     Arc::new(crate::bodies::surface::TexturedSurfaceModel::new(
-                        Arc::new(starfield_planet_maps::earth_tier().unwrap()),
+                        Arc::new(starfield::surfaces::planet_maps::earth_tier().unwrap()),
                         Arc::new(Lambert { albedo: 1.0 }),
                         Arc::new(
-                            starfield_reflectance_library::ReflectanceLibrary::load_embedded()
+                            starfield::surfaces::reflectance_library::ReflectanceLibrary::load_embedded()
                                 .unwrap(),
                         ),
                         "Earth MCD12C1 0.25°",

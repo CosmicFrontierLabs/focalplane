@@ -1,7 +1,7 @@
 //! NASA-Sloan Atlas (NSA) → flat [`Galaxy`] catalog routing.
 //!
 //! Loads an NSA FITS file (default location: `~/.cache/starfield/nsa/nsa_v0_1_2.fits`,
-//! downloaded on demand via `starfield_nsa::download_nsa()` if absent),
+//! downloaded on demand via `nsa::download_nsa()` if absent),
 //! filters to the field of view around a pointing, builds per-galaxy
 //! Sérsic profiles + SDSS-spectrum flux objects, and returns them as
 //! a flat `Vec<Galaxy>`. Per-sensor projection (with halo padding for
@@ -27,10 +27,10 @@
 use std::path::{Path, PathBuf};
 
 use log::info;
+use starfield::catalogs::nsa::{self, NsaCatalog, NsaEntry};
 use starfield::catalogs::{SersicProfile, StarCatalog};
+use starfield::data::source_utils::cache_dir;
 use starfield::Equatorial;
-use starfield_datasource_utils::cache_dir;
-use starfield_nsa::{NsaCatalog, NsaEntry};
 
 use crate::hardware::satellite::FocalPlaneConfig;
 use crate::image_proc::sersic_splat::truncation_radius_arcsec;
@@ -178,7 +178,7 @@ pub fn load_galaxies_in_fov(
         path.to_path_buf()
     } else {
         info!("NSA FITS missing at {}; downloading...", path.display());
-        starfield_nsa::download_nsa()?
+        nsa::download_nsa()?
     };
     let cat = NsaCatalog::from_fits_file(&path)?;
     let cos_dec0 = pointing.dec_degrees().to_radians().cos();
@@ -242,7 +242,7 @@ pub fn load_and_route_nsa_galaxies(
         path.to_path_buf()
     } else {
         info!("NSA FITS missing at {}; downloading...", path.display());
-        starfield_nsa::download_nsa()?
+        nsa::download_nsa()?
     };
     let cat = NsaCatalog::from_fits_file(&path)?;
     info!(

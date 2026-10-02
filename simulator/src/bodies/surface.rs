@@ -45,8 +45,8 @@ use std::sync::Arc;
 
 use nalgebra::Vector3;
 use shared::units::{LengthExt, Wavelength};
-use starfield_planet_maps::SurfaceSampler;
-use starfield_reflectance_library::{Endmember, ReflectanceLibrary};
+use starfield::surfaces::planet_maps::SurfaceSampler;
+use starfield::surfaces::reflectance_library::{Endmember, ReflectanceLibrary};
 use thiserror::Error;
 
 use crate::bodies::brdf::Brdf;
@@ -360,7 +360,7 @@ mod tests {
     use crate::bodies::brdf::Lambert;
     use crate::hardware::sensor::create_flat_qe;
     use approx::{assert_abs_diff_eq, assert_relative_eq};
-    use starfield_planet_maps::earth_tier;
+    use starfield::surfaces::planet_maps::earth_tier;
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
     fn point(body_fixed: Vector3<f64>) -> SurfacePoint {
@@ -502,7 +502,9 @@ mod tests {
     fn disk_mean_tiers_reproduce_their_geometric_albedo_in_the_sensor_band() {
         use crate::bodies::brdf::{Hapke, UnitGeometricAlbedo};
         use crate::hardware::sensor::models::IMX455;
-        use starfield_planet_maps::{mars_tier, moon_tier, AbundanceTier, AlbedoConvention};
+        use starfield::surfaces::planet_maps::{
+            mars_tier, moon_tier, AbundanceTier, AlbedoConvention,
+        };
 
         let solar = TsisSolarSpectrum::load().unwrap();
         let qe = &IMX455.quantum_efficiency;
@@ -641,7 +643,7 @@ mod tests {
     #[test]
     fn unit_lambert_understates_a_disk_mean_tier() {
         use crate::bodies::brdf::UnitGeometricAlbedo;
-        use starfield_planet_maps::mars_tier;
+        use starfield::surfaces::planet_maps::mars_tier;
 
         let solar = TsisSolarSpectrum::load().unwrap();
         let qe = create_flat_qe(0.5);
