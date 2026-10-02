@@ -1,0 +1,3 @@
+# Visual PR diagrams are per-PR illustrations, not source: collapse them in
+# review diffs and keep them out of language statistics and changed-line counts.
+.0-pr-viz/*.svg linguist-generated
