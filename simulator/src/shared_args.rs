@@ -158,6 +158,7 @@ use clap::{Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use starfield::catalogs::minimal_catalog::{MinimalCatalog, MinimalStar};
+use starfield::Equatorial;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -207,6 +208,31 @@ pub fn parse_coordinates(s: &str) -> Result<SolarAngularCoordinates, String> {
 
     SolarAngularCoordinates::new(elongation, latitude)
         .map_err(|e| format!("Invalid coordinates: {e}"))
+}
+
+/// Parse a sky pointing given as `"ra,dec"` in degrees.
+///
+/// Whitespace around either component is trimmed. RA must lie in
+/// `[0, 360)` and Dec in `[-90, 90]`.
+pub fn parse_ra_dec(s: &str) -> Result<Equatorial, String> {
+    let (ra, dec) = s
+        .split_once(',')
+        .ok_or("Coordinates must be in format 'ra,dec' (degrees)")?;
+    let ra = ra
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "Invalid RA value".to_string())?;
+    let dec = dec
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "Invalid Dec value".to_string())?;
+    if !(0.0..360.0).contains(&ra) {
+        return Err("RA must be in range [0, 360) degrees".to_string());
+    }
+    if !(-90.0..=90.0).contains(&dec) {
+        return Err("Dec must be in range [-90, 90] degrees".to_string());
+    }
+    Ok(Equatorial::from_degrees(ra, dec))
 }
 
 /// Parse f-number string in format "f/X" or "f/X.Y"
@@ -691,6 +717,29 @@ impl SharedSimulationArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn parse_ra_dec_accepts_trimmed_degrees() {
+        let eq = parse_ra_dec(" 83.82 , -5.39 ").unwrap();
+        assert_abs_diff_eq!(eq.ra_degrees(), 83.82, epsilon = 1e-12);
+        assert_abs_diff_eq!(eq.dec_degrees(), -5.39, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn parse_ra_dec_rejects_malformed_and_out_of_range() {
+        for bad in [
+            "83.82",
+            "83.82,-5.39,1",
+            "x,0",
+            "0,y",
+            "360,0",
+            "-1,0",
+            "0,90.5",
+        ] {
+            assert!(parse_ra_dec(bad).is_err(), "{bad} should not parse");
+        }
+    }
     use crate::photometry::zodiacal::{ELONG_OF_MIN, LAT_OF_MIN};
     use starfield::catalogs::StarPosition;
 

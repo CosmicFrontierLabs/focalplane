@@ -5,6 +5,8 @@ use std::time::Duration;
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
 use starfield::catalogs::{StarCatalog, StarData};
+use starfield::coordinates::cartesian::Cartesian3;
+use starfield::framelib::inertial::InertialFrame;
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -366,73 +368,31 @@ impl Trajectory {
     }
 }
 
-/// Convert Equatorial (ra, dec in radians) to unit 3D vector.
-fn equatorial_to_xyz(eq: &Equatorial) -> [f64; 3] {
-    let cos_dec = eq.dec.cos();
-    [cos_dec * eq.ra.cos(), cos_dec * eq.ra.sin(), eq.dec.sin()]
-}
-
-/// Convert unit 3D vector back to Equatorial.
-fn xyz_to_equatorial(xyz: [f64; 3]) -> Equatorial {
-    let [x, y, z] = xyz;
-    let ra = y.atan2(x);
-    let dec = z.atan2((x * x + y * y).sqrt());
-    // Normalize RA to [0, 2pi)
-    let ra = if ra < 0.0 {
-        ra + 2.0 * std::f64::consts::PI
-    } else {
-        ra
-    };
-    Equatorial::new(ra, dec)
-}
-
-/// Angular distance in degrees between two Equatorial pointings (haversine).
-fn angular_distance_deg(a: &Equatorial, b: &Equatorial) -> f64 {
-    let va = equatorial_to_xyz(a);
-    let vb = equatorial_to_xyz(b);
-    let dot = (va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2]).clamp(-1.0, 1.0);
-    dot.acos().to_degrees()
-}
-
 /// Compute the FOV envelope for a trajectory: a single (center, diameter_deg) that
 /// encompasses all pointings plus the base instrument FOV.
 pub fn fov_envelope(trajectory: &Trajectory, base_fov_deg: f64) -> (Equatorial, f64) {
-    // Average unit vectors to find centroid
-    let mut cx = 0.0;
-    let mut cy = 0.0;
-    let mut cz = 0.0;
-    let n = trajectory.waypoints.len() as f64;
     let pointings: Vec<Equatorial> = trajectory
         .waypoints
         .iter()
         .map(|wp| boresight_of(&wp.orientation))
         .collect();
-    for p in &pointings {
-        let [x, y, z] = equatorial_to_xyz(p);
-        cx += x;
-        cy += y;
-        cz += z;
-    }
-    cx /= n;
-    cy /= n;
-    cz /= n;
+    let sum = pointings
+        .iter()
+        .fold(Cartesian3::new(0.0, 0.0, 0.0), |acc, p| {
+            acc + p.to_cartesian()
+        });
+    let mean = sum / pointings.len() as f64;
 
-    // Normalize
-    let mag = (cx * cx + cy * cy + cz * cz).sqrt();
-    if mag < 1e-15 {
-        // Degenerate: pointings span a half-sphere. Use first waypoint as center.
-        let center = pointings[0];
-        let max_dist = pointings
-            .iter()
-            .map(|p| angular_distance_deg(&center, p))
-            .fold(0.0f64, f64::max);
-        return (center, 2.0 * max_dist + base_fov_deg);
-    }
-
-    let center = xyz_to_equatorial([cx / mag, cy / mag, cz / mag]);
+    // A vanishing mean means the pointings span a half-sphere; fall back
+    // to the first waypoint as the centre.
+    let center = if mean.magnitude() < 1e-15 {
+        pointings[0]
+    } else {
+        Equatorial::from_cartesian(mean)
+    };
     let max_dist = pointings
         .iter()
-        .map(|p| angular_distance_deg(&center, p))
+        .map(|p| center.angular_distance(p).to_degrees())
         .fold(0.0f64, f64::max);
 
     (center, 2.0 * max_dist + base_fov_deg)
@@ -764,23 +724,8 @@ mod tests {
         assert_abs_diff_eq!(center.ra_degrees(), 15.0, epsilon = 1.0);
         assert!(center.dec_degrees().abs() < 1.0);
 
-        // Diameter should cover the 10 degree span plus the base FOV
-        assert!(diameter >= 10.0 + base_fov);
-    }
-
-    #[test]
-    fn test_angular_distance() {
-        let a = make_pointing(0.0, 0.0);
-        let b = make_pointing(90.0, 0.0);
-        let dist = angular_distance_deg(&a, &b);
-        assert_abs_diff_eq!(dist, 90.0, epsilon = 0.01);
-    }
-
-    #[test]
-    fn test_angular_distance_same_point() {
-        let a = make_pointing(45.0, 30.0);
-        let dist = angular_distance_deg(&a, &a);
-        assert_abs_diff_eq!(dist, 0.0, epsilon = 1e-10);
+        // Diameter covers the 10 degree span plus the base FOV
+        assert_abs_diff_eq!(diameter, 10.0 + base_fov, epsilon = 1e-9);
     }
 
     #[test]
@@ -1027,7 +972,7 @@ mod tests {
         // used by `stars_in_field`.
         let tol_deg = 1e-9;
         for star in &prefetched {
-            let dist = angular_distance_deg(&center, &star.position);
+            let dist = center.angular_distance(&star.position).to_degrees();
             assert!(
                 dist <= half_angle_deg + tol_deg,
                 "star {} at ({:.6}°, {:.6}°) is {:.6}° from centre, exceeds half-angle {:.6}°",

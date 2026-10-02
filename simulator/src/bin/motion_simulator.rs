@@ -3,7 +3,7 @@ use log::{info, warn};
 use rayon::prelude::*;
 use simulator::hardware::satellite::FocalPlaneConfig;
 use simulator::hardware::sensor_array::{SensorArray, SPENCER_ARRAY_PLAN};
-use simulator::shared_args::{DurationArg, SensorModel, SharedSimulationArgs};
+use simulator::shared_args::{parse_ra_dec, DurationArg, SensorModel, SharedSimulationArgs};
 use simulator::sims::context_render::{render_context_frame, ContextRenderConfig};
 use simulator::sims::jitter::build_pink_trajectory;
 use simulator::sims::motion_blur::LightSources;
@@ -322,29 +322,6 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
         return Err("width and height must be > 0".into());
     }
     Ok((width, height))
-}
-
-/// Parse coordinates string in format "ra,dec" (degrees)
-fn parse_ra_dec(s: &str) -> Result<Equatorial, String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        return Err("Coordinates must be in format 'ra,dec' (degrees)".to_string());
-    }
-    let ra = parts[0]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid RA value".to_string())?;
-    let dec = parts[1]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid Dec value".to_string())?;
-    if !(0.0..360.0).contains(&ra) {
-        return Err("RA must be in range [0, 360) degrees".to_string());
-    }
-    if !(-90.0..=90.0).contains(&dec) {
-        return Err("Dec must be in range [-90, 90] degrees".to_string());
-    }
-    Ok(Equatorial::from_degrees(ra, dec))
 }
 
 #[derive(Parser, Debug)]

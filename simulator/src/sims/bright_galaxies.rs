@@ -28,6 +28,7 @@
 
 use log::info;
 use starfield::catalogs::bright_galaxies::{BrightGalaxy, BrightGalaxyCatalog};
+use starfield::catalogs::ExtendedSource;
 use starfield::Equatorial;
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
@@ -114,11 +115,10 @@ pub fn load_and_route_bright_galaxies(
                 Some(p) => p,
                 None => continue,
             };
-            let profile =
-                match <BrightGalaxy as starfield::catalogs::ExtendedSource>::sersic_profile(entry) {
-                    Some(p) => p,
-                    None => continue,
-                };
+            let profile = match entry.sersic_profile() {
+                Some(p) => p,
+                None => continue,
+            };
             let spectrum =
                 BlackbodyStellarSpectrum::from_gaia_bv_magnitude(DEFAULT_BV, entry.mag_v as f64);
             let flux: SourceFlux = photon_electron_fluxes(&reference_disk, &spectrum, qe);
@@ -176,13 +176,14 @@ pub fn load_bright_galaxies_in_fov(
             let ddec = g.dec_deg - pointing.dec_degrees();
             dra.abs() < half_box_deg && ddec.abs() < half_box_deg
         })
-        .map(|g| GalaxyInField {
-            position: Equatorial::from_degrees(g.ra_deg, g.dec_deg),
-            theta_half_arcsec: g.radius_sersic_arcsec as f64,
-            // Bright-galaxies stores ellipticity = 1 - b/a; flip back
-            // for the renderer's axis_ratio convention.
-            axis_ratio: 1.0 - g.ellipticity_sersic as f64,
-            position_angle_deg: g.pa_sersic_deg as f64,
+        .filter_map(|g| {
+            let profile = g.sersic_profile()?;
+            Some(GalaxyInField {
+                position: Equatorial::from_degrees(g.ra_deg, g.dec_deg),
+                theta_half_arcsec: profile.theta_half_arcsec,
+                axis_ratio: profile.axis_ratio,
+                position_angle_deg: profile.position_angle_deg,
+            })
         })
         .collect();
     info!(

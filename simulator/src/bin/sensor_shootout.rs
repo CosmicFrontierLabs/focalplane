@@ -19,7 +19,7 @@ use shared::image_proc::detection::StarFinder;
 use shared::range_arg::RangeArg;
 use simulator::hardware::sensor::models as sensor_models;
 use simulator::hardware::SatelliteConfig;
-use simulator::shared_args::SharedSimulationArgs;
+use simulator::shared_args::{parse_ra_dec, SharedSimulationArgs};
 use simulator::sims::scene_runner::{
     run_experiment, CsvWriter, ExperimentCommonArgs, ExperimentParams, ExperimentResult,
 };
@@ -42,32 +42,6 @@ fn cpu_count() -> usize {
 /// Default filename for experiment results CSV
 /// Will be appended with timestamp in format: experiment_log_YYYYMMDD_HHMMSS.csv
 const DEFAULT_CSV_FILENAME: &str = "experiment_log_YYYYMMDD_HHMMSS.csv";
-
-/// Parse coordinates string in format "ra,dec" (degrees)
-fn parse_ra_dec_coordinates(s: &str) -> Result<Equatorial, String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        return Err("Coordinates must be in format 'ra,dec' (degrees)".to_string());
-    }
-
-    let ra = parts[0]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid RA value".to_string())?;
-    let dec = parts[1]
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| "Invalid Dec value".to_string())?;
-
-    if !(0.0..360.0).contains(&ra) {
-        return Err("RA must be in range [0, 360) degrees".to_string());
-    }
-    if !(-90.0..=90.0).contains(&dec) {
-        return Err("Dec must be in range [-90, 90] degrees".to_string());
-    }
-
-    Ok(Equatorial::from_degrees(ra, dec))
-}
 
 /// Command line arguments for telescope view simulation
 #[derive(Parser, Debug)]
@@ -102,7 +76,7 @@ struct Args {
 
     #[arg(
         long,
-        value_parser = parse_ra_dec_coordinates,
+        value_parser = parse_ra_dec,
         help = "Fixed RA,Dec coordinates for debugging (format: 'ra,dec' in degrees)",
         long_help = "Run simulation at a single fixed sky position instead of random \
             sampling. Useful for debugging or comparing sensors at a known location. \

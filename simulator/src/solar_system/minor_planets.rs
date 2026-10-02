@@ -39,16 +39,17 @@ use std::path::{Path, PathBuf};
 use nalgebra::Vector3;
 use rayon::prelude::*;
 use starfield::catalogs::StarData;
-use starfield::constants::C_AUDAY;
+use starfield::constants::{C_AUDAY, DAY_S};
 use starfield::data::source_utils::{cache_dir, download_to_file, file_exists_and_not_empty};
 use starfield::jpl::mpc::{parse_mpcorb_line, MpcOrbRecord};
 use starfield::jplephem_ext::SpiceKernelExt;
 use starfield::keplerlib::KeplerOrbit;
+use starfield::magnitudelib::small_body::apparent_magnitude_with_phase;
 use starfield::time::Timescale;
 use starfield::Equatorial;
 use thiserror::Error;
 
-use super::{Observer, SolarSystem, SolarSystemError, SECONDS_PER_DAY};
+use super::{direction_of, unit_vector, Observer, SolarSystem, SolarSystemError};
 use crate::epoch::Epoch;
 
 /// Colour assigned to every minor planet: the Sun's B−V plus the mean
@@ -289,17 +290,6 @@ impl MinorPlanetSighting {
     }
 }
 
-fn to_equatorial(v: &Vector3<f64>) -> Equatorial {
-    let ra = v.y.atan2(v.x).rem_euclid(std::f64::consts::TAU);
-    let dec = (v.z / v.norm()).clamp(-1.0, 1.0).asin();
-    Equatorial::new(ra, dec)
-}
-
-fn unit_vector(direction: &Equatorial) -> Vector3<f64> {
-    let (ra, dec) = (direction.ra, direction.dec);
-    Vector3::new(dec.cos() * ra.cos(), dec.cos() * ra.sin(), dec.sin())
-}
-
 /// Barycentric state of the observer and the Sun at one epoch, the two
 /// things every body in a query shares.
 struct QueryFrame {
@@ -399,7 +389,7 @@ fn light_time_corrected(
         helio = body.heliocentric_at(&emission).0;
         rel = frame.sun_position_au + helio - frame.observer_position_au;
         light_time_days = rel.norm() / C_AUDAY;
-        emission = epoch.offset_secs(-light_time_days * SECONDS_PER_DAY);
+        emission = epoch.offset_secs(-light_time_days * DAY_S);
     }
     (rel, helio, light_time_days)
 }
@@ -422,7 +412,7 @@ fn sight(
     let to_observer = -rel;
     let phase_angle = to_sun.angle(&to_observer);
     let g = body.g.unwrap_or(0.15);
-    let v_magnitude = hg_apparent_magnitude(h, g, heliocentric_au, range_au, phase_angle);
+    let v_magnitude = apparent_magnitude_with_phase(h, heliocentric_au, range_au, phase_angle, g);
 
     // Sky motion from the geometric direction one hour later; the
     // observer is held fixed, so this is motion relative to the stars as
@@ -434,26 +424,18 @@ fn sight(
     MinorPlanetSighting {
         designation: body.designation.clone(),
         name: body.name.clone(),
-        direction: to_equatorial(&apparent),
-        astrometric_direction: to_equatorial(&geometric),
+        direction: direction_of(&apparent),
+        astrometric_direction: direction_of(&geometric),
         v_magnitude,
         heliocentric_au,
         range_au,
-        light_time_s: light_time_days * SECONDS_PER_DAY,
+        light_time_s: light_time_days * DAY_S,
         phase_angle,
         sky_motion_arcsec_per_hour,
         h,
         g,
         elements_epoch_tt: body.epoch_tt,
     }
-}
-
-/// IAU H-G apparent magnitude (Bowell et al. 1989).
-pub fn hg_apparent_magnitude(h: f64, g: f64, r_au: f64, delta_au: f64, phase_angle: f64) -> f64 {
-    let tan_half = (phase_angle / 2.0).tan();
-    let phi1 = (-3.332 * tan_half.powf(0.631)).exp();
-    let phi2 = (-1.862 * tan_half.powf(1.218)).exp();
-    h + 5.0 * (r_au * delta_au).log10() - 2.5 * ((1.0 - g) * phi1 + g * phi2).log10()
 }
 
 #[cfg(test)]
@@ -468,15 +450,6 @@ mod tests {
 
     fn ceres() -> MinorPlanetCatalog {
         MinorPlanetCatalog::from_records(vec![parse_mpcorb_line(CERES).unwrap()])
-    }
-
-    /// JPL Horizons, Ceres from the geocentre at 2026-09-14 00:00 UTC:
-    /// APmag 8.825 with r = 2.686777 AU, Δ = 2.857616 AU, phase 20.614°.
-    #[test]
-    fn hg_magnitude_matches_horizons_for_ceres() {
-        let v = hg_apparent_magnitude(3.34, 0.15, 2.686_777, 2.857_616, 20.614_f64.to_radians());
-        eprintln!("residual ceres_v_from_earth={v:.3} horizons=8.825");
-        assert_abs_diff_eq!(v, 8.825, epsilon = 0.1);
     }
 
     #[test]

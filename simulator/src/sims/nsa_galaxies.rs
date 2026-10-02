@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use log::info;
 use starfield::catalogs::nsa::{self, NsaCatalog, NsaEntry};
-use starfield::catalogs::{SersicProfile, StarCatalog};
+use starfield::catalogs::{ExtendedSource, SersicProfile, StarCatalog};
 use starfield::data::source_utils::cache_dir;
 use starfield::Equatorial;
 
@@ -66,19 +66,6 @@ pub fn is_well_fit(entry: &NsaEntry, min_n: f64, max_n: f64, max_theta_eff: f64)
         && ba > 0.05
         && ba <= 1.0
         && phi.is_finite()
-}
-
-/// Build a `SersicProfile` from an `NsaEntry`'s structural fields.
-/// **Mirrors the eventual `impl ExtendedSource for NsaEntry`**
-/// (starfield-datasources #38) — when that lands upstream, this
-/// function collapses to `entry.sersic_profile().unwrap()`.
-fn nsa_to_sersic_profile(entry: &NsaEntry) -> SersicProfile {
-    SersicProfile {
-        theta_half_arcsec: entry.sersic_th50 as f64,
-        n: entry.sersic_n as f64,
-        axis_ratio: entry.sersic_ba as f64,
-        position_angle_deg: entry.sersic_phi as f64,
-    }
 }
 
 /// Build an `SDSSSpectrum` from an `NsaEntry`'s 5-band Sérsic-fit
@@ -192,9 +179,9 @@ pub fn load_galaxies_in_fov(
         })
         .filter(|e| is_well_fit(e, config.min_n, config.max_n, config.max_theta_eff))
         .filter(|e| {
-            let profile = nsa_to_sersic_profile(e);
             let position = Equatorial::from_degrees(e.ra, e.dec);
-            profile_overlaps_fov(&profile, &position, pointing, fov_radius_deg)
+            e.sersic_profile()
+                .is_some_and(|p| profile_overlaps_fov(&p, &position, pointing, fov_radius_deg))
         })
         .map(|e| GalaxyInField {
             position: Equatorial::from_degrees(e.ra, e.dec),
@@ -265,9 +252,9 @@ pub fn load_and_route_nsa_galaxies(
         })
         .filter(|e| is_well_fit(e, config.min_n, config.max_n, config.max_theta_eff))
         .filter(|e| {
-            let profile = nsa_to_sersic_profile(e);
             let position = Equatorial::from_degrees(e.ra, e.dec);
-            profile_overlaps_fov(&profile, &position, pointing, fov_radius_deg)
+            e.sersic_profile()
+                .is_some_and(|p| profile_overlaps_fov(&p, &position, pointing, fov_radius_deg))
         })
         .collect();
     info!(
@@ -295,7 +282,9 @@ pub fn load_and_route_nsa_galaxies(
         .iter()
         .map(|entry| {
             let position = Equatorial::from_degrees(entry.ra, entry.dec);
-            let profile = nsa_to_sersic_profile(entry);
+            let profile = entry
+                .sersic_profile()
+                .expect("in_field holds only entries with a Sérsic profile");
             let spectrum = nsa_to_sdss_spectrum(entry);
             let flux: SourceFlux = photon_electron_fluxes(&reference_disk, &spectrum, qe);
             Galaxy {
