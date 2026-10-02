@@ -21,23 +21,23 @@
 //! - **In-cone filter is centre + extent.** Several entries (M31,
 //!   LMC, M33, …) span degrees on the sky, so a cone whose centre
 //!   sits outside the galaxy can still have its outer envelope reach
-//!   in. We use a generous `fov_pad_deg` here (default 3°) so the
-//!   centre-only test still catches them; once
-//!   `BrightGalaxyCatalog::in_cone_extended` lands upstream
-//!   (OrbitalCommons/starfield-datasources#54) we'll switch to it.
+//!   in. `BrightGalaxyCatalog::in_cone_extended` admits a galaxy when
+//!   its envelope, truncated at the renderer's surface-brightness
+//!   fraction, overlaps the field.
 
 use log::info;
 use starfield::catalogs::bright_galaxies::{BrightGalaxy, BrightGalaxyCatalog};
+use starfield::catalogs::gaia::Cone;
 use starfield::catalogs::ExtendedSource;
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::Equatorial;
 
 use crate::hardware::satellite::{FocalPlaneConfig, FocalPlaneProjector};
-use crate::image_proc::sersic_splat::SersicSplat;
+use crate::image_proc::sersic_splat::{SersicSplat, TRUNCATION_SB_FRACTION};
 use crate::photometry::photoconversion::{photon_electron_fluxes, SourceFlux};
 use crate::photometry::BlackbodyStellarSpectrum;
 use crate::scene_galaxy::GalaxyInFrame;
 use crate::sims::nsa_galaxies::GalaxyInField;
-use crate::sims::orientation::orientation_from_pointing;
 
 /// B-V proxy used for the blackbody spectrum approximation. 0.85 is a
 /// rough integrated colour for an Sb spiral; ellipticals are ~1.0,
@@ -48,17 +48,37 @@ const DEFAULT_BV: f64 = 0.85;
 /// Configuration for the bright-galaxies loader.
 #[derive(Debug, Clone)]
 pub struct BrightGalaxyLoaderConfig {
-    /// Pad the field-of-view filter by this many degrees so the
-    /// centre-only `in_cone` test still catches galaxies whose outer
-    /// envelope reaches into the cone (M31's truncated envelope
-    /// extends ~2–3° from the centre at typical truncation budgets).
-    pub fov_pad_deg: f64,
+    /// Surface-brightness fraction of `I_e` at which each galaxy's
+    /// envelope is truncated for the field-of-view overlap test.
+    /// Defaults to the renderer's own truncation, so every galaxy whose
+    /// rendered footprint can reach the field is admitted.
+    pub sb_fraction: f64,
 }
 
 impl Default for BrightGalaxyLoaderConfig {
     fn default() -> Self {
-        Self { fov_pad_deg: 3.0 }
+        Self {
+            sb_fraction: TRUNCATION_SB_FRACTION,
+        }
     }
+}
+
+/// Galaxies whose truncated envelope overlaps the `fov_radius_deg` cone
+/// about `pointing`, in catalog-name order.
+fn galaxies_in_field<'a>(
+    cat: &'a BrightGalaxyCatalog,
+    pointing: &Equatorial,
+    fov_radius_deg: f64,
+    config: &BrightGalaxyLoaderConfig,
+) -> Vec<&'a BrightGalaxy> {
+    let cone = Cone::from_degrees(
+        pointing.ra_degrees(),
+        pointing.dec_degrees(),
+        fov_radius_deg,
+    );
+    let mut in_field = cat.in_cone_extended(&cone, config.sb_fraction);
+    in_field.sort_by(|a, b| a.name.cmp(&b.name));
+    in_field
 }
 
 /// Load the embedded supplement, filter to the FOV around `pointing`,
@@ -73,25 +93,16 @@ pub fn load_and_route_bright_galaxies(
     let cat = BrightGalaxyCatalog::load_embedded()?;
     info!("Bright-galaxies supplement loaded: {} entries", cat.len());
 
-    let cos_dec0 = pointing.dec_degrees().to_radians().cos();
-    let half_box_deg = fov_radius_deg + config.fov_pad_deg;
-    let in_field: Vec<&BrightGalaxy> = cat
-        .iter()
-        .filter(|g| {
-            let dra = (g.ra_deg - pointing.ra_degrees()) * cos_dec0;
-            let ddec = g.dec_deg - pointing.dec_degrees();
-            dra.abs() < half_box_deg && ddec.abs() < half_box_deg
-        })
-        .collect();
+    let in_field = galaxies_in_field(&cat, pointing, fov_radius_deg, config);
     info!(
-        "{} bright galaxies in {:.2}° box around ({:.4}, {:.4})",
+        "{} bright galaxies reach the {:.2}° cone around ({:.4}, {:.4})",
         in_field.len(),
-        half_box_deg * 2.0,
+        fov_radius_deg,
         pointing.ra_degrees(),
         pointing.dec_degrees()
     );
 
-    let orientation = orientation_from_pointing(pointing, 0.0);
+    let orientation = attitude_from_pointing(pointing, 0.0);
     let n_sensors = fp.array.sensor_count();
     let mut per_sensor: Vec<Vec<GalaxyInFrame>> = vec![Vec::new(); n_sensors];
 
@@ -167,15 +178,8 @@ pub fn load_bright_galaxies_in_fov(
     config: &BrightGalaxyLoaderConfig,
 ) -> Result<Vec<GalaxyInField>, Box<dyn std::error::Error>> {
     let cat = BrightGalaxyCatalog::load_embedded()?;
-    let cos_dec0 = pointing.dec_degrees().to_radians().cos();
-    let half_box_deg = fov_radius_deg + config.fov_pad_deg;
-    let out: Vec<GalaxyInField> = cat
-        .iter()
-        .filter(|g| {
-            let dra = (g.ra_deg - pointing.ra_degrees()) * cos_dec0;
-            let ddec = g.dec_deg - pointing.dec_degrees();
-            dra.abs() < half_box_deg && ddec.abs() < half_box_deg
-        })
+    let out: Vec<GalaxyInField> = galaxies_in_field(&cat, pointing, fov_radius_deg, config)
+        .into_iter()
         .filter_map(|g| {
             let profile = g.sersic_profile()?;
             Some(GalaxyInField {
@@ -187,9 +191,9 @@ pub fn load_bright_galaxies_in_fov(
         })
         .collect();
     info!(
-        "{} bright galaxies for context overlay in {:.2}° box around ({:.4}, {:.4})",
+        "{} bright galaxies for context overlay reach the {:.2}° cone around ({:.4}, {:.4})",
         out.len(),
-        half_box_deg * 2.0,
+        fov_radius_deg,
         pointing.ra_degrees(),
         pointing.dec_degrees()
     );
@@ -204,6 +208,28 @@ mod tests {
     fn hash_name_is_stable_for_catalog_ids() {
         assert_eq!(hash_name("M31"), 0x1d0f_2419_b444_9500);
         assert_ne!(hash_name("M31"), hash_name("M33"));
+    }
+
+    #[test]
+    fn field_admits_galaxies_by_envelope_not_centre() {
+        let cat = BrightGalaxyCatalog::load_embedded().unwrap();
+        let m31 = cat.get("M31").unwrap();
+        let reach_deg = m31
+            .sersic_profile()
+            .unwrap()
+            .radius_at_sb_fraction(TRUNCATION_SB_FRACTION)
+            / 3600.0;
+        let config = BrightGalaxyLoaderConfig::default();
+        let names = |dec_offset_deg: f64| -> Vec<String> {
+            let pointing = Equatorial::from_degrees(m31.ra_deg, m31.dec_deg + dec_offset_deg);
+            galaxies_in_field(&cat, &pointing, 0.1, &config)
+                .into_iter()
+                .map(|g| g.name.clone())
+                .collect()
+        };
+        // Centre outside the 0.1 deg field, envelope inside it.
+        assert!(names(0.5 * reach_deg).contains(&"M31".to_string()));
+        assert!(!names(reach_deg + 1.0).contains(&"M31".to_string()));
     }
 
     #[test]

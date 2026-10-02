@@ -8,26 +8,25 @@
 //! command line, offsetting by a trajectory duration, and serialising
 //! into `metadata.json`.
 //!
-//! Epochs serialise as `{ "jd_tdb": <f64>, "utc": "<iso>" }`; only
-//! `jd_tdb` is read back. A Julian date in `f64` resolves to about
-//! 0.1 ms, far finer than any light-time or aberration term the
-//! renderer evaluates.
+//! Parsing, offsets and serialisation use starfield's own `Time`
+//! support. Epochs serialise in starfield's lossless form, which carries
+//! the split Julian day exactly plus informational `jd_tdb` and `utc`
+//! fields; on input, that form, a bare `{ "jd_tdb": ... }` map (as older
+//! `metadata.json` files hold) or a time string are all accepted.
 
 use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::de::{self, Deserializer, MapAccess, Visitor};
-use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
-use starfield::constants::DAY_S;
 use starfield::time::{Time, Timescale};
 use thiserror::Error;
 
 /// Errors from parsing an [`Epoch`] out of user input.
 #[derive(Debug, Error)]
 pub enum EpochError {
-    /// The string was neither RFC 3339 nor a `JD <number>` literal.
+    /// The string was neither an ISO 8601 UTC instant nor a Julian date
+    /// literal.
     #[error(
         "cannot parse epoch {input:?}: expected RFC 3339 (2027-06-01T00:00:00Z) or 'JD 2461558.5'"
     )]
@@ -38,7 +37,8 @@ pub enum EpochError {
 }
 
 /// An absolute instant, carried as a starfield [`Time`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Epoch {
     time: Time,
 }
@@ -59,21 +59,26 @@ impl Epoch {
         }
     }
 
-    /// Parse either an RFC 3339 UTC string (`2027-06-01T00:00:00Z`) or
-    /// a Julian date literal prefixed with `JD` (`JD 2461558.5`, read as
-    /// TDB).
+    /// Parse an ISO 8601 / RFC 3339 UTC instant (`2027-06-01T00:00:00Z`)
+    /// or a Julian date literal (`JD 2461558.5 TDB`; with no timescale,
+    /// `JD 2461558.5` is read as TDB). See `starfield::time` for the full
+    /// grammar, including leap-second validation of `23:59:60`.
     pub fn parse(input: &str) -> Result<Self, EpochError> {
+        let ts = Timescale::default();
         let trimmed = input.trim();
-        if let Some(rest) = trimmed
-            .strip_prefix("JD")
-            .or_else(|| trimmed.strip_prefix("jd"))
-        {
-            if let Ok(jd) = rest.trim().parse::<f64>() {
-                return Ok(Self::from_jd_tdb(jd));
-            }
-        }
-        DateTime::parse_from_rfc3339(trimmed)
-            .map(|dt| Self::from_utc(dt.with_timezone(&Utc)))
+        ts.parse(trimmed)
+            .or_else(|err| {
+                let is_bare_jd = trimmed
+                    .get(..2)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("jd"))
+                    && trimmed[2..].trim().parse::<f64>().is_ok();
+                if is_bare_jd {
+                    ts.parse(&format!("{trimmed} TDB"))
+                } else {
+                    Err(err)
+                }
+            })
+            .map(|time| Self { time })
             .map_err(|_| EpochError::Unparseable {
                 input: input.to_string(),
             })
@@ -94,16 +99,16 @@ impl Epoch {
         self.offset_secs(offset.as_secs_f64())
     }
 
-    /// This epoch shifted by a signed number of seconds.
+    /// This epoch shifted by a signed number of SI seconds.
     pub fn offset_secs(&self, seconds: f64) -> Self {
         Self {
-            time: self.time.clone() + seconds / DAY_S,
+            time: self.time.add_seconds(seconds),
         }
     }
 
-    /// Signed seconds from `self` to `other`.
+    /// Signed SI seconds (elapsed TT) from `self` to `other`.
     pub fn seconds_until(&self, other: &Epoch) -> f64 {
-        (other.jd_tdb() - self.jd_tdb()) * DAY_S
+        other.time.seconds_since(&self.time)
     }
 
     /// UTC calendar string rounded to the millisecond, or the TDB Julian
@@ -127,50 +132,11 @@ impl fmt::Display for Epoch {
     }
 }
 
-impl Serialize for Epoch {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("Epoch", 2)?;
-        state.serialize_field("jd_tdb", &self.jd_tdb())?;
-        state.serialize_field("utc", &self.utc_string())?;
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for Epoch {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct EpochVisitor;
-
-        impl<'de> Visitor<'de> for EpochVisitor {
-            type Value = Epoch;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an object with a numeric jd_tdb field")
-            }
-
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Epoch, M::Error> {
-                let mut jd_tdb: Option<f64> = None;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "jd_tdb" => jd_tdb = Some(map.next_value()?),
-                        _ => {
-                            let _ignored: de::IgnoredAny = map.next_value()?;
-                        }
-                    }
-                }
-                jd_tdb
-                    .map(Epoch::from_jd_tdb)
-                    .ok_or_else(|| de::Error::missing_field("jd_tdb"))
-            }
-        }
-
-        deserializer.deserialize_struct("Epoch", &["jd_tdb", "utc"], EpochVisitor)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+    use starfield::constants::DAY_S;
 
     /// J2000.0 is 2000-01-01T12:00:00 TT, JD 2451545.0 TT; TDB differs
     /// from TT by under 2 ms.
@@ -221,7 +187,22 @@ mod tests {
         assert!(json.contains("jd_tdb"));
         assert!(json.contains("utc"));
         let back: Epoch = serde_json::from_str(&json).unwrap();
-        assert_abs_diff_eq!(back.jd_tdb(), epoch.jd_tdb(), epsilon = 1e-9);
+        assert_eq!(back.jd_tdb().to_bits(), epoch.jd_tdb().to_bits());
+    }
+
+    #[test]
+    fn older_metadata_with_only_jd_tdb_still_loads() {
+        let back: Epoch =
+            serde_json::from_str(r#"{"jd_tdb": 2461558.5, "utc": "2027-06-01T23:58:50.816Z"}"#)
+                .unwrap();
+        assert_abs_diff_eq!(back.jd_tdb(), 2_461_558.5, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn explicit_timescale_literals_parse() {
+        let tt = Epoch::parse("JD 2451545.0 TT").unwrap();
+        assert_abs_diff_eq!(tt.time().tt(), 2_451_545.0, epsilon = 1e-12);
+        assert!(Epoch::parse("2027-06-01T23:59:60Z").is_err());
     }
 
     #[test]

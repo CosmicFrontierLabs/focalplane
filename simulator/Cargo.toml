@@ -16,11 +16,11 @@ solar-system = [
     "starfield/solar-spectrum",
     "starfield/planet-maps",
     "starfield/reflectance-library",
-    "starfield/mpc",
+    "starfield/mpc-parallel",
 ]
 
 [dependencies]
-starfield = { version = "0.18", features = ["photometry", "gaia", "nsa", "bright-galaxies"] }
+starfield = { version = "0.18.1", features = ["photometry", "gaia", "nsa", "bright-galaxies"] }
 image = "0.25" # Image processing
 ndarray = { version = "0.17", features = [
     "rayon",

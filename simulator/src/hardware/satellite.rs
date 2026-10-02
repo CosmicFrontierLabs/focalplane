@@ -1,10 +1,10 @@
 use nalgebra::UnitQuaternion;
 use serde::{Deserialize, Serialize};
+use starfield::framelib::attitude::{boresight_of, roll_of};
 use starfield::{catalogs::StarData, Equatorial};
 
 use super::{sensor::SensorConfig, sensor_array::SensorArray, telescope::TelescopeConfig};
 use crate::photometry::QuantumEfficiency;
-use crate::sims::orientation::{boresight_of, roll_of};
 use crate::star_projector::StarProjector;
 use shared::image_proc::airy::PixelScaledAiryDisk;
 use shared::units::{Angle, AngleExt, Length, LengthExt, Temperature};
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_sky_to_mm_roundtrips_boresight() {
-        use crate::sims::orientation::orientation_from_pointing;
+        use starfield::framelib::attitude::attitude_from_pointing;
 
         let telescope = TelescopeConfig::new(
             "Test Scope",
@@ -836,7 +836,7 @@ mod tests {
         );
 
         let pointing = Equatorial::from_degrees(45.0, 30.0);
-        let orientation = orientation_from_pointing(&pointing, 0.0);
+        let orientation = attitude_from_pointing(&pointing, 0.0);
 
         let (x_mm, y_mm) = fp.sky_to_mm(&pointing, &orientation).unwrap();
         assert_relative_eq!(x_mm, 0.0, epsilon = 1e-9);

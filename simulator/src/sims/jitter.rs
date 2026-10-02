@@ -19,12 +19,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use nalgebra::{Matrix3, UnitQuaternion, Vector3};
+use nalgebra::{UnitQuaternion, Vector3};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use realfft::num_complex::Complex;
 use realfft::RealFftPlanner;
 use serde::{Deserialize, Serialize};
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::Equatorial;
 use thiserror::Error;
 
@@ -310,16 +311,10 @@ struct LosPsdCsvRow {
 /// appears as a rotation about body +X in the perturbation step of
 /// [`build_trajectory_from_los_psd`].
 pub fn nominal_body_to_world(ra_deg: f64, dec_deg: f64, roll_deg: f64) -> UnitQuaternion<f64> {
-    let ra = ra_deg.to_radians();
-    let dec = dec_deg.to_radians();
-    let (sin_ra, cos_ra) = ra.sin_cos();
-    let (sin_dec, cos_dec) = dec.sin_cos();
-    let east = Vector3::new(-sin_ra, cos_ra, 0.0);
-    let north = Vector3::new(-sin_dec * cos_ra, -sin_dec * sin_ra, cos_dec);
-    let bore = Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec);
-    let base = UnitQuaternion::from_matrix(&Matrix3::from_columns(&[east, north, bore]));
-    let twist = UnitQuaternion::from_scaled_axis(Vector3::new(0.0, 0.0, roll_deg.to_radians()));
-    base * twist
+    attitude_from_pointing(
+        &Equatorial::from_degrees(ra_deg, dec_deg),
+        roll_deg.to_radians(),
+    )
 }
 
 /// Linear interpolation of `(xs, ys)` at `x`, with zero extrapolation
@@ -641,7 +636,7 @@ mod tests {
     /// linear start→end ramp.
     #[test]
     fn build_pink_trajectory_interpolates_roll() {
-        use crate::sims::orientation::roll_of;
+        use starfield::framelib::attitude::roll_of;
 
         let pointing = Equatorial::from_degrees(80.0, 35.0);
         let traj = build_pink_trajectory(pointing, 2.0, 64, 3, Duration::from_secs(20), 10.0, 30.0)

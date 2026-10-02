@@ -29,9 +29,11 @@ use simulator::solar_system::frame_metadata::{
     MinorPlanetRecord, MinorPlanetsModel, Models, Outputs, Pointing, Radiometry, SiteRecord,
     StarsModel,
 };
-use simulator::solar_system::minor_planets::MinorPlanetCatalog;
+use simulator::solar_system::minor_planets::MinorPlanetStarId;
 use starfield::catalogs::gaia::{Dr3, LazyLoadingCatalog};
 use starfield::catalogs::{StarCatalog, StarData};
+use starfield::framelib::attitude::attitude_from_pointing;
+use starfield::jpl::mpc::MpcorbCatalog;
 use starfield::surfaces::planet_maps::{
     earth_tier, mars_tier, moon_tier, AbundanceTier, AlbedoConvention,
 };
@@ -48,7 +50,6 @@ use simulator::image_proc::render::quantize_image;
 use simulator::photometry::zodiacal::SolarAngularCoordinates;
 use simulator::scene::Scene;
 use simulator::shared_args::{SensorModel, TelescopeModel};
-use simulator::sims::orientation::orientation_from_pointing;
 use simulator::solar_system::{
     BodyId, BodyState, Observer, SiteStatus, SiteView, SolarSystem, SurfaceSite,
 };
@@ -465,6 +466,13 @@ fn save_preview(
     rgb.save(path).map_err(|e| e.to_string())
 }
 
+/// Where a loaded catalogue was read from, for logs and the run record.
+fn catalog_file(catalog: &MpcorbCatalog) -> String {
+    catalog
+        .path()
+        .map_or_else(|| "<records>".to_string(), |p| p.display().to_string())
+}
+
 fn main() -> Result<(), String> {
     env_logger::init();
     let args = Args::parse();
@@ -594,8 +602,8 @@ fn main() -> Result<(), String> {
     // photometry, PSF and occultation by the resolved bodies.
     let (minor_planet_catalog, minor_planet_sightings) = if args.minor_planets {
         let catalog = match &args.mpcorb {
-            Some(path) => MinorPlanetCatalog::from_file(path),
-            None => MinorPlanetCatalog::load_default(),
+            Some(path) => MpcorbCatalog::from_file(path),
+            None => MpcorbCatalog::load_default(),
         }
         .map_err(|e| e.to_string())?;
         let sightings = system
@@ -614,7 +622,7 @@ fn main() -> Result<(), String> {
             catalog.len(),
             half_diag_deg,
             args.minor_planet_mag_limit,
-            catalog.path().display()
+            catalog_file(&catalog)
         );
         for s in &sightings {
             println!(
@@ -672,7 +680,7 @@ fn main() -> Result<(), String> {
     );
     // Geometric centre of each body on the sensor, through the same
     // projector the second pass uses (pixel index = pixel centre).
-    let orientation = orientation_from_pointing(&pointing, 0.0);
+    let orientation = attitude_from_pointing(&pointing, 0.0);
     for (state, _) in &states {
         let probe = StarData::with_position(0, state.direction, 0.0, None);
         match scene
@@ -795,8 +803,8 @@ fn main() -> Result<(), String> {
     let minor_planets_model = minor_planet_catalog
         .as_ref()
         .map(|catalog| MinorPlanetsModel {
-            catalog: "MPC MPCORB via starfield-mpc".to_string(),
-            catalog_file: catalog.path().display().to_string(),
+            catalog: "MPC MPCORB via starfield::jpl::mpc".to_string(),
+            catalog_file: catalog_file(catalog),
             catalog_bodies: catalog.len(),
             elements_epoch_tt_jd_range: catalog.epoch_range_tt(),
             mag_limit_v: args.minor_planet_mag_limit,
@@ -955,7 +963,7 @@ fn build_overlay(
     satellite: &SatelliteConfig,
 ) -> Overlay {
     let plate_scale = satellite.plate_scale_arcsec_per_pixel();
-    let orientation = orientation_from_pointing(
+    let orientation = attitude_from_pointing(
         &Equatorial::from_degrees(
             metadata.pointing_icrf.ra_deg,
             metadata.pointing_icrf.dec_deg,

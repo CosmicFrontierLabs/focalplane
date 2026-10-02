@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use nalgebra::UnitQuaternion;
 use ndarray::{Array2, Zip};
+use starfield::framelib::attitude::attitude_from_pointing;
 use starfield::{catalogs::StarData, Equatorial};
 
 use crate::epoch::Epoch;
@@ -14,7 +15,6 @@ use crate::{
     },
     image_proc::deposit::{render_sources, FrameSource},
     photometry::{photoconversion::SourceFlux, zodiacal::SolarAngularCoordinates, ZodiacalLight},
-    sims::orientation::orientation_from_pointing,
     star_math::star_data_to_fluxes,
 };
 use meter_math::Locatable2d;
@@ -527,7 +527,7 @@ pub fn project_stars_to_focal_plane(
     focal_plane: &FocalPlaneConfig,
     padding_mm: f64,
 ) -> Vec<StarInFocalPlane> {
-    let orientation = orientation_from_pointing(center, 0.0);
+    let orientation = attitude_from_pointing(center, 0.0);
     project_stars_to_focal_plane_oriented(stars, &orientation, focal_plane, padding_mm)
 }
 
@@ -1331,7 +1331,7 @@ mod tests {
         let legacy = project_stars_to_focal_plane(&refs, &pointing, &fp, padding_mm);
         let oriented = project_stars_to_focal_plane_oriented(
             &refs,
-            &orientation_from_pointing(&pointing, 0.0),
+            &attitude_from_pointing(&pointing, 0.0),
             &fp,
             padding_mm,
         );
@@ -1379,7 +1379,7 @@ mod tests {
 
         let unrolled = project_stars_to_focal_plane_oriented(
             &refs,
-            &orientation_from_pointing(&pointing, 0.0),
+            &attitude_from_pointing(&pointing, 0.0),
             &fp,
             padding_mm,
         );
@@ -1391,7 +1391,7 @@ mod tests {
         // Roll by +pi/2 -> right-hand rule about +Z sends (x, 0) to (0, x).
         let rolled = project_stars_to_focal_plane_oriented(
             &refs,
-            &orientation_from_pointing(&pointing, std::f64::consts::FRAC_PI_2),
+            &attitude_from_pointing(&pointing, std::f64::consts::FRAC_PI_2),
             &fp,
             padding_mm,
         );
@@ -1430,7 +1430,7 @@ mod tests {
             ),
             b_v: Some(0.6),
         };
-        let orientation = orientation_from_pointing(&pointing, 0.3);
+        let orientation = attitude_from_pointing(&pointing, 0.3);
         let padding_mm = 3.0;
 
         assert_eq!(fp.sensor_count(), 1);

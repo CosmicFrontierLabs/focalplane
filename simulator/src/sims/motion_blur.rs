@@ -44,6 +44,7 @@ use shared::image_proc::detection::AABB;
 use shared::image_proc::noise::{apply_gaussian_read_noise, apply_poisson_photon_noise};
 use shared::units::{AngleExt, LengthExt, TemperatureExt};
 use starfield::catalogs::StarData;
+use starfield::framelib::attitude::{boresight_of, roll_of};
 use starfield::Equatorial;
 
 use crate::epoch::Epoch;
@@ -59,7 +60,6 @@ use crate::scene_galaxy::{project_galaxies_to_sensors, Galaxy, GalaxyInFrame};
 use crate::sims::motion_blur_metadata::{
     sensor_dir_name, sensor_relative_png_path, FrameMeta, RenderMetadata,
 };
-use crate::sims::orientation::{boresight_of, roll_of};
 use crate::sims::quasi_random;
 use crate::sims::trajectory::{Trajectory, TrajectoryError};
 use crate::star_math::star_data_to_fluxes;
@@ -1464,11 +1464,11 @@ mod tests {
     use crate::hardware::sensor::models::GSENSE4040BSI;
     use crate::hardware::sensor_array::SensorArray;
     use crate::hardware::telescope::TelescopeConfig;
-    use crate::sims::orientation::orientation_from_pointing;
     use crate::sims::trajectory::Waypoint;
     use approx::{assert_abs_diff_eq, assert_relative_eq};
     use nalgebra::UnitQuaternion;
     use shared::units::{Length, LengthExt, Temperature, TemperatureExt};
+    use starfield::framelib::attitude::attitude_from_pointing;
     use std::f64::consts::PI;
 
     fn tiny_fp() -> FocalPlaneConfig {
@@ -1648,8 +1648,8 @@ mod tests {
         let eq = Equatorial::from_degrees(45.0, 30.0);
         // Two identical orientations => zero drift.
         Trajectory::new(vec![
-            Waypoint::new(Duration::ZERO, orientation_from_pointing(&eq, 0.0)),
-            Waypoint::new(Duration::from_secs(10), orientation_from_pointing(&eq, 0.0)),
+            Waypoint::new(Duration::ZERO, attitude_from_pointing(&eq, 0.0)),
+            Waypoint::new(Duration::from_secs(10), attitude_from_pointing(&eq, 0.0)),
         ])
         .unwrap()
     }
@@ -1880,7 +1880,7 @@ mod tests {
         let airy_pix = first_sat.airy_disk_pixel_space();
         let padding_mm = airy_pix.first_zero() * 2.0 * pixel_size_mm;
         let flux = star_data_to_fluxes(&star, &first_sat);
-        let q = orientation_from_pointing(&pointing, 0.0);
+        let q = attitude_from_pointing(&pointing, 0.0);
         let (px, py) = fp.project_to_sensor(&star, &q, 0, padding_mm).unwrap();
         let total = flux
             .electrons
@@ -1906,11 +1906,8 @@ mod tests {
         let pointing = Equatorial::from_degrees(45.0, 30.0);
         let drift = Equatorial::from_degrees(45.0 + 0.001, 30.0); // ~3.6"
         let traj = Trajectory::new(vec![
-            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
-            Waypoint::new(
-                Duration::from_secs(10),
-                orientation_from_pointing(&drift, 0.0),
-            ),
+            Waypoint::new(Duration::ZERO, attitude_from_pointing(&pointing, 0.0)),
+            Waypoint::new(Duration::from_secs(10), attitude_from_pointing(&drift, 0.0)),
         ])
         .unwrap();
         let stars: Vec<StarData> = (0..4)
@@ -1953,11 +1950,8 @@ mod tests {
         let pointing = Equatorial::from_degrees(45.0, 30.0);
         let drift = Equatorial::from_degrees(45.0 + 0.01, 30.0); // ~36"
         let traj = Trajectory::new(vec![
-            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
-            Waypoint::new(
-                Duration::from_secs(10),
-                orientation_from_pointing(&drift, 0.0),
-            ),
+            Waypoint::new(Duration::ZERO, attitude_from_pointing(&pointing, 0.0)),
+            Waypoint::new(Duration::from_secs(10), attitude_from_pointing(&drift, 0.0)),
         ])
         .unwrap();
         let stars = vec![StarData {
@@ -2003,11 +1997,8 @@ mod tests {
         let pointing = Equatorial::from_degrees(45.0, 30.0);
         let drift = Equatorial::from_degrees(45.0 + 0.001, 30.0); // ~3.6"
         let traj = Trajectory::new(vec![
-            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
-            Waypoint::new(
-                Duration::from_secs(10),
-                orientation_from_pointing(&drift, 0.0),
-            ),
+            Waypoint::new(Duration::ZERO, attitude_from_pointing(&pointing, 0.0)),
+            Waypoint::new(Duration::from_secs(10), attitude_from_pointing(&drift, 0.0)),
         ])
         .unwrap();
         let stars: Vec<StarData> = (0..3)
@@ -2510,7 +2501,7 @@ mod tests {
         // when re-evaluated through `roll_of`. Implementation-agnostic with
         // respect to nalgebra's on-disk array layout — we read fields off
         // the deserialized `UnitQuaternion` rather than indexing positions.
-        use crate::sims::orientation::orientation_from_pointing;
+        use starfield::framelib::attitude::attitude_from_pointing;
 
         let pointing = Equatorial::from_degrees(45.0, 30.0);
         let roll = 0.7_f64; // radians
@@ -2530,7 +2521,7 @@ mod tests {
         let meta: crate::sims::motion_blur_metadata::RenderMetadata =
             serde_json::from_str(&raw).unwrap();
 
-        let q_expected = orientation_from_pointing(&pointing, roll);
+        let q_expected = attitude_from_pointing(&pointing, roll);
         let wp0 = &meta.trajectory.waypoints()[0];
         assert_abs_diff_eq!(wp0.orientation.w, q_expected.w, epsilon = 1e-12);
         assert_abs_diff_eq!(wp0.orientation.i, q_expected.i, epsilon = 1e-12);
@@ -2664,7 +2655,7 @@ mod tests {
     ) -> Trajectory {
         let cycles = (freq_hz * duration.as_secs_f64()).ceil() as usize;
         let n_waypoints = (cycles * 64).max(256);
-        let q_base = orientation_from_pointing(&pointing, 0.0);
+        let q_base = attitude_from_pointing(&pointing, 0.0);
         let dt = duration.as_secs_f64();
         let waypoints: Vec<Waypoint> = (0..=n_waypoints)
             .map(|i| {
@@ -2787,8 +2778,8 @@ mod tests {
 
         let traj_end = exposure + Duration::from_millis(50);
         let static_traj = Trajectory::new(vec![
-            Waypoint::new(Duration::ZERO, orientation_from_pointing(&pointing, 0.0)),
-            Waypoint::new(traj_end, orientation_from_pointing(&pointing, 0.0)),
+            Waypoint::new(Duration::ZERO, attitude_from_pointing(&pointing, 0.0)),
+            Waypoint::new(traj_end, attitude_from_pointing(&pointing, 0.0)),
         ])
         .unwrap();
         let tone_traj =

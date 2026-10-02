@@ -48,6 +48,7 @@
 
 use std::time::Duration;
 
+use starfield::constants;
 use thiserror::Error;
 
 use super::QuantumEfficiency;
@@ -73,14 +74,21 @@ impl CGS {
     /// Units: 1e-23 erg s⁻¹ cm⁻² Hz⁻¹
     pub const JANSKY_IN_CGS: f64 = 1e-23;
 
-    /// Planck's constant
-    /// Units: 6.62607015e-27 erg⋅s (erg-seconds in CGS)
-    pub const PLANCK_CONSTANT: f64 = 6.62607015e-27;
+    /// Planck's constant, exact SI value converted to CGS
+    /// Units: erg⋅s (6.62607015e-27)
+    pub const PLANCK_CONSTANT: f64 = constants::PLANCK_CONSTANT * ERG_PER_JOULE;
 
-    /// Speed of light in vacuum
-    /// Units: 2.99792458e10 cm/s (centimeters per second in CGS)
-    pub const SPEED_OF_LIGHT: f64 = 2.99792458e10;
+    /// Boltzmann constant, exact SI value converted to CGS
+    /// Units: erg/K (1.380649e-16)
+    pub const BOLTZMANN_CONSTANT: f64 = constants::BOLTZMANN_CONSTANT * ERG_PER_JOULE;
+
+    /// Speed of light in vacuum, exact SI value converted to CGS
+    /// Units: cm/s (2.99792458e10)
+    pub const SPEED_OF_LIGHT: f64 = constants::C * CM_PER_M;
 }
+
+const ERG_PER_JOULE: f64 = 1e7;
+const CM_PER_M: f64 = 100.0;
 
 /// Errors that can occur with spectrum operations
 #[derive(Debug, Error)]

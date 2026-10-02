@@ -338,7 +338,7 @@ impl BlackbodyStellarSpectrum {
         // Calculate spectral radiance using Planck's law
         let numerator = 2.0 * CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT * CGS::SPEED_OF_LIGHT;
         let exponent = (CGS::PLANCK_CONSTANT * CGS::SPEED_OF_LIGHT)
-            / (wavelength_cm * 1.380649e-16 * self.temperature); // Boltzmann constant in erg/K
+            / (wavelength_cm * CGS::BOLTZMANN_CONSTANT * self.temperature);
         let denominator = wavelength_cm.powi(5) * (exponent.exp() - 1.0);
 
         numerator / denominator
