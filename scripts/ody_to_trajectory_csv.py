@@ -11,7 +11,7 @@ columns `time_s, qw, qx, qy, qz`.
 Usage:
   uv run --with pandas --with numpy --with scipy \
     scripts/ody_to_trajectory_csv.py \
-    --input Run0001_20260224205907_2999.csv \
+    --input local_data/Run0001_20260224205907_2999.csv \
     --output trajectory.csv \
     --ra 213.39 --dec -55.86 --roll 0.0 \
     --start-time 1000 --end-time 2000

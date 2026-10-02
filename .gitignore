@@ -22,6 +22,12 @@ testout/
 **/.claude/settings.local.json
 .worktrees/
 
+# Local input data (telemetry, PSDs) that must not be committed
+local_data/
+
+# Default sensor_shootout results log, written to the working directory
+experiment_log_*.csv
+
 # Where I keep star catalogs
 cats/
 .vscode/
