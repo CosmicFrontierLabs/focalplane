@@ -127,15 +127,13 @@ mod tests {
         // Mean includes dark current offset, so just check it's finite and reasonable
         assert!(
             mean.is_finite() && mean.abs() < 100.0,
-            "Mean should be finite and reasonable, got {}",
-            mean
+            "Mean should be finite and reasonable, got {mean}"
         );
 
         // Standard deviation should be positive and reasonable for sensor noise
         assert!(
             std_dev > 0.5 && std_dev < 50.0,
-            "Std dev should be reasonable, got {}",
-            std_dev
+            "Std dev should be reasonable, got {std_dev}"
         );
     }
 
@@ -164,9 +162,7 @@ mod tests {
         // Warm sensor should have higher variance due to dark current
         assert!(
             warm_variance > cold_variance,
-            "Warm sensor variance ({}) should exceed cold sensor variance ({})",
-            warm_variance,
-            cold_variance
+            "Warm sensor variance ({warm_variance}) should exceed cold sensor variance ({cold_variance})"
         );
     }
 
@@ -193,9 +189,7 @@ mod tests {
         // Longer exposure should accumulate more dark current noise
         assert!(
             long_variance > short_variance,
-            "Long exposure variance ({}) should exceed short exposure variance ({})",
-            long_variance,
-            short_variance
+            "Long exposure variance ({long_variance}) should exceed short exposure variance ({short_variance})"
         );
     }
 }

@@ -47,7 +47,7 @@ fn main() {
 
     // Calculate Otsu's threshold
     let threshold = otsu_threshold(&smoothed.view());
-    println!("Otsu's threshold: {:.6}", threshold);
+    println!("Otsu's threshold: {threshold:.6}");
 
     // Detect stars using our new centroid-based detection
     let stars = detect_stars(&smoothed.view(), Some(threshold));
@@ -76,13 +76,13 @@ fn main() {
     // Calculate metrics for detection (using the number of valid stars)
     let num_stars = stars.iter().filter(|s| s.is_valid()).count();
     let true_positives = num_stars.min(20); // 20 is our original count of added stars
-    let false_positives = if num_stars > 20 { num_stars - 20 } else { 0 };
-    let false_negatives = if 20 > num_stars { 20 - num_stars } else { 0 };
+    let false_positives = num_stars.saturating_sub(20);
+    let false_negatives = 20_usize.saturating_sub(num_stars);
 
     println!("\nDetection metrics:");
-    println!("True positives: {}", true_positives);
-    println!("False positives: {}", false_positives);
-    println!("False negatives: {}", false_negatives);
+    println!("True positives: {true_positives}");
+    println!("False positives: {false_positives}");
+    println!("False negatives: {false_negatives}");
 
     let precision = if true_positives + false_positives > 0 {
         true_positives as f64 / (true_positives + false_positives) as f64
@@ -96,8 +96,8 @@ fn main() {
         0.0
     };
 
-    println!("Precision: {:.2}", precision);
-    println!("Recall: {:.2}", recall);
+    println!("Precision: {precision:.2}");
+    println!("Recall: {recall:.2}");
 
     let f1 = if precision + recall > 0.0 {
         2.0 * precision * recall / (precision + recall)
@@ -105,7 +105,7 @@ fn main() {
         0.0
     };
 
-    println!("F1 score: {:.2}", f1);
+    println!("F1 score: {f1:.2}");
 }
 
 /// Create a simulated star field with gaussian stars

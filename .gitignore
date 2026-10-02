@@ -18,26 +18,15 @@ target/
 
 # Project specific
 test_output/
-histogram_output.txt
+testout/
 **/.claude/settings.local.json
-ext_ref/
+.worktrees/
 
-# WASM frontend build outputs
-test-bench-frontend/dist/
-test-bench-frontend/.trunk/
-
-# Were I keep star catalogs
+# Where I keep star catalogs
 cats/
 .vscode/
 experiment_output*/
 plots/
-fgs_output/
-
-# Manim animation output
-docs/presentation_scripts/media/
-
-# Display calibration assets
-display_assets/
 
 # Python
 __pycache__/
@@ -47,8 +36,6 @@ __pycache__/
 .Python
 *.egg-info/
 .pytest_cache/
-remote-test-results/
-exp_logs/gyro_parsed.csv
 
 # Local planning / scratch design docs (never committed)
 planning/

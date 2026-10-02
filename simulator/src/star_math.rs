@@ -263,8 +263,7 @@ pub fn star_data_to_fluxes(star_data: &StarData, satellite: &SatelliteConfig) ->
 mod tests {
     use super::*;
     use crate::units::{LengthExt, Temperature, TemperatureExt, Wavelength};
-    use approx::assert_relative_eq;
-    use float_cmp::approx_eq;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
 
     use crate::hardware::sensor::models as sensor_models;
     use crate::hardware::telescope::models as telescope_models;
@@ -288,12 +287,7 @@ mod tests {
 
         let calculated = field_diameter(&telescope, &sensor);
 
-        assert!(approx_eq!(
-            f64,
-            calculated.as_degrees(),
-            expected_angle_deg,
-            epsilon = 1e-6
-        ));
+        assert_abs_diff_eq!(calculated.as_degrees(), expected_angle_deg, epsilon = 1e-6);
     }
 
     #[test]
@@ -311,12 +305,7 @@ mod tests {
 
         let calculated = pixel_scale(&telescope, &sensor);
 
-        assert!(approx_eq!(
-            f64,
-            calculated.as_arcseconds(),
-            expected_scale,
-            epsilon = 1e-6
-        ));
+        assert_abs_diff_eq!(calculated.as_arcseconds(), expected_scale, epsilon = 1e-6);
     }
 
     #[test]
@@ -353,12 +342,11 @@ mod tests {
         println!(
             "Small telescope electrons: {elec_small}, Large telescope electrons: {elec_large}"
         );
-        assert!(approx_eq!(
-            f64,
+        assert_abs_diff_eq!(
             elec_large / elec_small,
             expected_ratio,
             epsilon = 0.01 // Allow 1% tolerance for QE differences
-        ));
+        );
     }
 
     #[test]

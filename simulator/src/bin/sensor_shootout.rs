@@ -3,7 +3,7 @@
 //! Command-line interface for running sensor imaging experiments using the scene_runner module.
 //!
 //! Usage:
-//! ```
+//! ```text
 //! cargo run --release --bin sensor_shootout -- [OPTIONS]
 //! ```
 //!
@@ -31,7 +31,13 @@ use starfield::framelib::random::RandomEquatorial;
 use starfield::Equatorial;
 use std::path::Path;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 use std::time::{Duration, Instant};
+
+/// Logical CPUs available to this process, or 1 if the OS won't say.
+fn cpu_count() -> usize {
+    available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
 
 /// Default filename for experiment results CSV
 /// Will be appended with timestamp in format: experiment_log_YYYYMMDD_HHMMSS.csv
@@ -365,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Initialize frame writer if saving images
-    let num_workers = num_cpus::get().max(2);
+    let num_workers = cpu_count().max(2);
     let buffer_size = num_workers * 4;
     info!("Initializing frame writer with {num_workers} workers");
     let frame_writer = FrameWriterHandle::new(num_workers, buffer_size)?;
@@ -510,7 +516,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Parallel speedup: {speedup:.2}x");
         info!(
             "Effective CPU utilization: {:.1}%",
-            speedup * 100.0 / num_cpus::get() as f64
+            speedup * 100.0 / cpu_count() as f64
         );
     }
     info!("======================================================");
