@@ -241,9 +241,8 @@ mod tests {
     /// **INVARIANTS §2 lock for galaxies**: depositing the same
     /// galaxy via the static path (`render_sources` → into a buffer)
     /// and via the motion-blur path (`SensorAccumulator::splat_galaxy`)
-    /// must produce byte-identical buffers. After PR 3 both routes
-    /// hit `splat_deposit`; this test fires only if a future PR forks
-    /// them.
+    /// must produce byte-identical buffers. Both routes hit
+    /// `splat_deposit`; this test fires only if a change forks them.
     #[test]
     fn galaxy_static_and_motion_paths_are_byte_equal() {
         let g = fixture_galaxy(40.0, 35.5, 1234.5);
