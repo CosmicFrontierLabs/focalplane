@@ -4,17 +4,15 @@
 //!
 //! Both renderer paths — the static [`super::render::add_stars_to_image`]
 //! and the motion-blur per-stamp deposit in
-//! [`crate::sims::motion_blur::SensorAccumulator`] — used to carry
-//! independent copies of the same bounding-box-loop and the same
-//! per-pixel PSF call. This module collapses both into a single generic
-//! [`splat_deposit`] helper plus a [`render_sources`] convenience that
-//! iterates a source list.
+//! [`crate::sims::motion_blur::SensorAccumulator`] — deposit through the
+//! single generic [`splat_deposit`] helper, with [`render_sources`] as a
+//! convenience that iterates a source list.
 //!
 //! # Single-Poisson invariant
 //!
 //! Implementors must never sample noise inside `pixel_flux` — the
 //! shot-noise sampling runs once at the end of the frame on the
-//! combined mean-electron image. See `planning/INVARIANTS.md` §1 for
+//! accumulated mean-electron image. See `docs/invariants.md` §1 for
 //! the architectural contract; this trait surface is what locks the
 //! contract at the source-deposit level.
 
@@ -29,7 +27,7 @@ use shared::units::Area;
 ///
 /// PSF-convolved point sources implement this via Simpson's-rule
 /// integration of an Airy disk (see the blanket impl below). Extended
-/// sources (Sérsic galaxies in the upcoming PR 3) implement it via
+/// sources ([`super::sersic_splat::SersicSplat`] galaxies) implement it via
 /// direct surface-brightness evaluation × pixel area.
 ///
 /// # Determinism
@@ -45,7 +43,7 @@ use shared::units::Area;
 /// skipped. Implementors choose the threshold:
 ///
 /// - PSF stars: `2 × first_zero` of the Airy disk (~99.99…% capture)
-/// - Sérsic galaxies (PR 3): radius at which SB drops to `1e-4 · I_e`
+/// - Sérsic galaxies: radius at which SB drops to `1e-4 · I_e`
 pub trait MeanFluxDeposit {
     /// Half-width of the bounding box in pixels for the per-pixel loop.
     fn footprint_pixels(&self) -> i32;
@@ -64,7 +62,7 @@ pub trait MeanFluxDeposit {
 /// loop monomorphises (no vtable cost in the hot path).
 ///
 /// Stars implement this with `Deposit = PixelScaledAiryDisk`. Galaxies
-/// (PR 3) implement it with `Deposit = SersicSplat`. Adding a new
+/// implement it with `Deposit = SersicSplat`. Adding a new
 /// source kind (satellite trails, asteroids) means implementing this
 /// trait + adding one `render_sources` call to each renderer.
 pub trait FrameSource {
@@ -82,7 +80,7 @@ pub trait FrameSource {
     fn total_electrons(&self, dt: Duration, aperture: Area) -> f64;
 
     /// The spatial deposit (Airy disk for stars; SersicSplat for
-    /// galaxies in PR 3).
+    /// galaxies).
     fn deposit(&self) -> &Self::Deposit;
 }
 
@@ -264,9 +262,8 @@ mod tests {
     /// (`add_stars_to_image`'s inner per-star deposit) and the
     /// motion-blur per-stamp entry (`SensorAccumulator::splat_psf`) must
     /// produce **byte-identical** buffers when given the same source +
-    /// total_flux at the same position. After the PR 2 refactor both
-    /// route through `splat_deposit`, so this test fires only if a
-    /// future PR adds a fork that diverges them.
+    /// total_flux at the same position. Both route through
+    /// `splat_deposit`, so this test fires only if a change forks them.
     ///
     /// The test exercises a sub-pixel offset and a non-integer
     /// `total_flux` so any rounding-order divergence between the two
