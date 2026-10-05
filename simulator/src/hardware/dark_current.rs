@@ -168,18 +168,16 @@ impl DarkCurrentEstimator {
     /// Returns the number of degrees Celsius required for dark current to double.
     /// This is a characteristic property of the sensor that helps understand
     /// its thermal behavior.
-    pub fn calculate_doubling_temperature(&self) -> f64 {
-        // Pick two reference temperatures well within our range
+    ///
+    /// The doubling interval is measured between 0°C and 10°C, so it fails
+    /// with the interpolation error when the estimator's table does not
+    /// cover that range.
+    pub fn calculate_doubling_temperature(&self) -> Result<f64, InterpError> {
         let temp1 = 0.0;
         let temp2 = 10.0;
 
-        // Get dark currents at these temperatures (should always succeed for these temps)
-        let dc1 = self
-            .estimate_at_temperature(Temperature::from_celsius(temp1))
-            .unwrap_or(1.0);
-        let dc2 = self
-            .estimate_at_temperature(Temperature::from_celsius(temp2))
-            .unwrap_or(2.0);
+        let dc1 = self.estimate_at_temperature(Temperature::from_celsius(temp1))?;
+        let dc2 = self.estimate_at_temperature(Temperature::from_celsius(temp2))?;
 
         // Calculate doubling temperature
         // dc2 = dc1 * 2^(delta_T / doubling_T)
@@ -187,7 +185,7 @@ impl DarkCurrentEstimator {
         // doubling_T = delta_T / log2(dc2/dc1)
         let temp_diff = temp2 - temp1;
         let ratio = dc2 / dc1;
-        temp_diff / ratio.log2()
+        Ok(temp_diff / ratio.log2())
     }
 }
 
@@ -388,6 +386,23 @@ mod tests {
             .estimate_at_temperature(Temperature::from_celsius(10.0))
             .expect("Temperature should be in range");
         assert!(mid_value > 0.1 && mid_value < 1.0);
+    }
+
+    #[test]
+    fn test_doubling_temperature_matches_reference_rule() {
+        let estimator =
+            DarkCurrentEstimator::from_reference_point(0.1, Temperature::from_celsius(20.0));
+        let doubling = estimator
+            .calculate_doubling_temperature()
+            .expect("default table covers 0-10°C");
+        assert_relative_eq!(doubling, 8.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_doubling_temperature_errors_when_curve_misses_range() {
+        // Curve starts at 20°C, so neither 0°C nor 10°C can be interpolated.
+        let estimator = DarkCurrentEstimator::from_curve(vec![20.0, 30.0], vec![1.0, 4.0]);
+        assert!(estimator.calculate_doubling_temperature().is_err());
     }
 
     #[test]

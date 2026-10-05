@@ -79,10 +79,12 @@ fn plot_dark_current_curves() -> Result<(), Box<dyn std::error::Error>> {
                     });
 
                 let annotation_temp = 10.0;
-                if let Ok(dark_current) = sensor
-                    .dark_current_estimator
-                    .estimate_at_temperature(Temperature::from_celsius(annotation_temp))
-                {
+                if let (Ok(doubling_temp), Ok(dark_current)) = (
+                    doubling_temp,
+                    sensor
+                        .dark_current_estimator
+                        .estimate_at_temperature(Temperature::from_celsius(annotation_temp)),
+                ) {
                     let annotation_text = format!("{doubling_temp:.1}°C/2×");
                     chart.draw_series(std::iter::once(Text::new(
                         annotation_text,
