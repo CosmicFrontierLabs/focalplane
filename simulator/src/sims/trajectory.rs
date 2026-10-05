@@ -182,7 +182,7 @@ impl Trajectory {
     /// `period` must be at least the trajectory's span
     /// (`end_time() - start_time()`). Any excess
     /// (`period - span`) becomes the implicit wrap segment over which
-    /// [`orientation_at`] SLERPs from the last waypoint back to the
+    /// [`Self::orientation_at`] SLERPs from the last waypoint back to the
     /// first. Setting `period` exactly equal to the span produces a
     /// zero-length wrap and is only appropriate when the first and last
     /// waypoint orientations already agree.
@@ -203,7 +203,7 @@ impl Trajectory {
     /// `self.with_period(self.duration() + (waypoints[1].time - waypoints[0].time))`,
     /// which guarantees the wrap segment is non-degenerate and visually
     /// matches the local sampling cadence at the seam. The looping
-    /// semantics live entirely inside [`orientation_at`] — no
+    /// semantics live entirely inside [`Self::orientation_at`] — no
     /// post-processed smoothing or pre-baked extra waypoints are
     /// introduced.
     pub fn looped(self) -> Self {
@@ -216,7 +216,7 @@ impl Trajectory {
     /// Interpolate the spacecraft orientation at a given time using
     /// quaternion SLERP between bracketing waypoints.
     ///
-    /// If [`with_period`] / [`looped`] has been called, `t` is taken
+    /// If [`Self::with_period`] / [`Self::looped`] has been called, `t` is taken
     /// modulo the period; out-of-range times are then never an error.
     /// When the wrapped time falls in the implicit wrap segment between
     /// the last stored waypoint and `start_time() + period`, the result

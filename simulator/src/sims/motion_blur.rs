@@ -144,7 +144,7 @@ impl SubsampleSchedule {
     /// excursion (both in radians). Stamp count is
     /// `ceil(total_drift_rad / (max_drift_per_stamp_px * pixel_scale_rad))`,
     /// minimum 1. Envelope padding stores `peak_excursion_rad` directly
-    /// for later mm conversion in [`envelope_prefilter`].
+    /// for later mm conversion in `envelope_prefilter`.
     pub fn from_drift_budget(
         frame_start: Duration,
         exposure: Duration,
