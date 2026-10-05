@@ -39,10 +39,6 @@ fn cpu_count() -> usize {
     available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
-/// Default filename for experiment results CSV
-/// Will be appended with timestamp in format: experiment_log_YYYYMMDD_HHMMSS.csv
-const DEFAULT_CSV_FILENAME: &str = "experiment_log_YYYYMMDD_HHMMSS.csv";
-
 /// Command line arguments for telescope view simulation
 #[derive(Parser, Debug)]
 #[command(
@@ -99,15 +95,15 @@ struct Args {
 
     #[arg(
         long,
-        default_value = DEFAULT_CSV_FILENAME,
         help = "CSV file for experiment results",
-        long_help = "Path to CSV file for logging experiment results. If using the \
-            default filename, a timestamp is automatically inserted. Each row contains: \
+        long_help = "Path to CSV file for logging experiment results. Defaults to \
+            experiment_log_YYYYMMDD_HHMMSS.csv inside the timestamped output directory, \
+            alongside the run's images. Each row contains: \
             experiment number, sensor name, RA/Dec, exposure, stars detected, \
             catalog matches, ICP error, read noise, dark current, and timing. \
             File is written incrementally during execution."
     )]
-    output_csv: String,
+    output_csv: Option<String>,
 
     #[arg(
         long,
@@ -340,12 +336,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add timestamp to output directory
     let output_dir_with_timestamp = format!("{}_{}", args.output_dir, timestamp);
 
-    // Add timestamp to CSV filename only if default is being used (no override specified)
-    let output_csv_path = if args.output_csv == DEFAULT_CSV_FILENAME {
-        format!("experiment_log_{timestamp}.csv")
-    } else {
-        args.output_csv.clone()
-    };
+    // Results log lives with the run's images unless overridden
+    let output_csv_path = args.output_csv.clone().unwrap_or_else(|| {
+        Path::new(&output_dir_with_timestamp)
+            .join(format!("experiment_log_{timestamp}.csv"))
+            .to_string_lossy()
+            .into_owned()
+    });
 
     // Ensure the output directory exists
     let output_path = Path::new(&output_dir_with_timestamp);
