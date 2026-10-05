@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #196 · docs: publish renderer invariants and point code at them</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">Renderer code cited "INVARIANTS §1-5" in a gitignored file nobody else had;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now docs/invariants.md states each one against today's code and names its tests.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1140" stroke="#3d4666" stroke-width="2" stroke-dasharray="8,8"/>
+
+  <g>
+    <rect x="55" y="240" width="905" height="260" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="80" y="282" font-size="23" fill="#a9b1d6">Code comments citing the invariants</text>
+    <text x="80" y="327" font-size="21" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">image_proc/deposit.rs, compose.rs, render.rs,</text>
+    <text x="80" y="360" font-size="21" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">sersic_splat.rs, scene.rs, scene_galaxy.rs,</text>
+    <text x="80" y="393" font-size="21" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">sims/motion_blur.rs</text>
+    <text x="80" y="450" font-size="21" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">-> planning/INVARIANTS.md   (gitignored)</text>
+  </g>
+
+  <g>
+    <rect x="55" y="530" width="905" height="300" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="572" font-size="23" fill="#a9b1d6">The local file itself</text>
+    <text x="80" y="617" font-size="21" fill="#f7768e">written as a plan: "Locking test (PR 3)", "after PR 2"</text>
+    <text x="80" y="652" font-size="21" fill="#f7768e">pinned line numbers, e.g. motion_blur.rs:466</text>
+    <text x="80" y="687" font-size="21" fill="#f7768e">§1 rationale: two Poisson draws "overcount variance"</text>
+    <text x="80" y="740" font-size="21" fill="#a9b1d6">deposit.rs docs: "Sersic galaxies in the upcoming PR 3",</text>
+    <text x="80" y="772" font-size="21" fill="#a9b1d6">test docs: "After the PR 2 refactor..."</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="240" width="905" height="260" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="282" font-size="23" fill="#a9b1d6">Same comments, resolvable</text>
+    <text x="1065" y="327" font-size="21" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">-> docs/invariants.md   (tracked)</text>
+    <text x="1065" y="372" font-size="21" fill="#c0caf5">§1 shot noise sampled once, on means, after deposits</text>
+    <text x="1065" y="404" font-size="21" fill="#c0caf5">§2 static == motion byte-for-byte via splat_deposit</text>
+    <text x="1065" y="436" font-size="21" fill="#c0caf5">§3 flux conservation within truncation budget</text>
+    <text x="1065" y="468" font-size="21" fill="#c0caf5">§4 per-source chromatic PSF  §5 seeded reproducibility</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="530" width="905" height="300" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="572" font-size="23" fill="#a9b1d6">Each invariant names its pinning tests (12, all exist)</text>
+    <text x="1065" y="617" font-size="20" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">static_and_splat_psf_paths_are_byte_equal</text>
+    <text x="1065" y="650" font-size="20" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">galaxy_static_and_motion_paths_are_byte_equal</text>
+    <text x="1065" y="683" font-size="20" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">variance_equals_mean_poisson_identity</text>
+    <text x="1065" y="716" font-size="20" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">test_render_one_frame_is_deterministic ...</text>
+    <text x="1065" y="772" font-size="21" fill="#c0caf5">§1 corrected: independent draws sum to a valid Poisson;</text>
+    <text x="1065" y="804" font-size="21" fill="#c0caf5">the hazards are N*Poisson(lambda/N) and shared streams</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="860" width="905" height="150" rx="10" fill="#1e202e" stroke="#e0af68" stroke-width="2"/>
+    <text x="1065" y="902" font-size="21" fill="#e0af68">Found while writing it: render_with_options seeds the star</text>
+    <text x="1065" y="934" font-size="21" fill="#e0af68">Poisson draw and generate_sensor_noise with the same rng_seed.</text>
+    <text x="1065" y="966" font-size="21" fill="#e0af68">Filed as papercut #195; documented, not fixed here.</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Docs and doc comments only; no behaviour change. planning/INVARIANTS.md stays local and can be deleted once this lands.</text>
+</svg>
