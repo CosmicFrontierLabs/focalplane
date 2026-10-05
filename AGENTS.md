@@ -14,16 +14,21 @@ concrete issues, proposed solutions, and follow-up work.
 - Test all: `cargo test`
 - Test single: `cargo test test_name`
 - Test module: `cargo test --package simulator --lib module::submodule`
-- Lint: `cargo clippy -- -W clippy::all`
+- Test solar-system code: `cargo test --features solar-system`
+- Lint: `cargo clippy --all-targets --all-features -- -D warnings`
 - Format: `cargo fmt`
 - Benchmark: `cargo bench`
-- Doc check: `cargo doc --no-deps`
+- Doc check: `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`
 
 ## CI Pre-Push Checklist
+These mirror the CI jobs; a branch that passes them locally passes CI's
+format, lint, test and docs checks.
 ```bash
-cargo fmt
-cargo clippy -- -W clippy::all
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+cargo test --features solar-system
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 ```
 
 ## Git Hooks Setup
@@ -75,7 +80,7 @@ scripts/install-hooks.sh
 - **Performance**: Prefer vectorized operations. Profile computation-heavy code.
 - **Testing**: NEVER special case testing in production algorithms. Tests should validate real algorithm behavior, not special-cased shortcuts. Do NOT use doctests - write proper unit tests in test modules instead.
 - **Performance Testing**: NEVER assert timing/speed in unit tests. CI environments vary widely in performance (threading, load, virtualization). Tests should report timing metrics for visibility but only assert correctness. If performance benchmarks are needed, create dedicated benchmark binaries that run in controlled environments.
-- **Float assertions**: Use `approx::assert_abs_diff_eq!(a, b, epsilon = eps)` (or `assert_relative_eq!` for relative comparisons) for float equality in tests; avoid hand-rolled `(a - b).abs() < eps`. The approx forms print both values and the actual delta on failure and are consistent with the rest of the codebase.
+- **Float assertions**: Use `approx::assert_abs_diff_eq!(a, b, epsilon = eps)` (or `assert_relative_eq!` for relative comparisons) for float equality in tests; avoid hand-rolled `(a - b).abs() < eps`. The approx forms print both the given and expected values on failure and are consistent with the rest of the codebase.
 - **Space context**: Avoid terrestrial telescope conventions (elevation/azimuth, horizon coordinates) - use generic pointing directions, celestial coordinates, or instrument-relative axes.
 
 ## Git Commits
