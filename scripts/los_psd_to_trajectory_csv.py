@@ -64,7 +64,7 @@ Usage
 -----
     uv run --with numpy --with pandas --with scipy \\
       scripts/los_psd_to_trajectory_csv.py \\
-      --input los_psd_at_2000rpm.csv \\
+      --input local_data/los_psd_at_2000rpm.csv \\
       --output trajectory_los_2000rpm_100s.csv \\
       --duration 100.0 --fs 2000.0 \\
       --ra 213.39 --dec -55.86 --roll 0.0 \\
