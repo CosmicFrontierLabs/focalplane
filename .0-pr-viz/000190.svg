@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1200"
+     font-family="'Segoe UI', 'Noto Sans', 'DejaVu Sans', ui-sans-serif, system-ui, sans-serif">
+  <rect x="0" y="0" width="2000" height="1200" fill="#16161e"/>
+
+  <text x="55" y="52" font-size="24" letter-spacing="1" fill="#565f89">PR #190 · docs: add dither sampling note; keep local inputs out of git</text>
+
+  <text x="55" y="100" font-size="34" fill="#e6e9f5">The dither-sampling note and 8 MB of flight telemetry sat loose in the repo root;</text>
+  <text x="55" y="140" font-size="34" fill="#e6e9f5">now the note lives in docs/ and local inputs go in a gitignored local_data/.</text>
+  <line x1="55" y1="165" x2="1945" y2="165" stroke="#3d4666" stroke-width="1"/>
+
+  <text x="55" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#f7768e">BEFORE</text>
+  <text x="1040" y="212" font-size="22" font-weight="700" letter-spacing="4" fill="#9ece6a">AFTER</text>
+  <line x1="1000" y1="190" x2="1000" y2="1140" stroke="#3d4666" stroke-width="2" stroke-dasharray="8,8"/>
+
+  <g>
+    <rect x="55" y="240" width="905" height="400" rx="10" fill="#1e202e" stroke="#f7768e" stroke-width="2"/>
+    <text x="80" y="282" font-size="23" fill="#a9b1d6">repo root, untracked (git status noise)</text>
+    <text x="80" y="332" font-size="22" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">dither_sampling.md</text>
+    <text x="80" y="372" font-size="22" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">Run0001_20260224205907_2999.csv  7.8M</text>
+    <text x="80" y="412" font-size="22" fill="#f7768e" font-family="'DejaVu Sans Mono', monospace">los_psd_at_2000rpm.csv</text>
+    <text x="80" y="452" font-size="22" fill="#e0af68" font-family="'DejaVu Sans Mono', monospace">experiment_log_20260416_133825.csv</text>
+    <text x="80" y="492" font-size="22" fill="#e0af68" font-family="'DejaVu Sans Mono', monospace">trajectory_los_2000rpm_{5,30,100}s.csv</text>
+    <text x="80" y="552" font-size="21" fill="#a9b1d6">one git add away from committing ODY telemetry;</text>
+    <text x="80" y="584" font-size="21" fill="#a9b1d6">script usage examples assume these sit in the root</text>
+  </g>
+
+  <g>
+    <rect x="1040" y="240" width="905" height="400" rx="10" fill="#1e202e" stroke="#9ece6a" stroke-width="2"/>
+    <text x="1065" y="282" font-size="23" fill="#a9b1d6">tracked changes</text>
+    <text x="1065" y="332" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">+ docs/dither-sampling.md</text>
+    <text x="1065" y="372" font-size="22" fill="#9ece6a" font-family="'DejaVu Sans Mono', monospace">.gitignore: local_data/, experiment_log_*.csv</text>
+    <text x="1065" y="412" font-size="22" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">ody_to_trajectory_csv.py usage:</text>
+    <text x="1065" y="447" font-size="22" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">  --input local_data/Run0001_...csv</text>
+    <text x="1065" y="487" font-size="22" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">los_psd_to_trajectory_csv.py usage:</text>
+    <text x="1065" y="522" font-size="22" fill="#c0caf5" font-family="'DejaVu Sans Mono', monospace">  --input local_data/los_psd_at_2000rpm.csv</text>
+    <text x="1065" y="584" font-size="21" fill="#a9b1d6">regenerable trajectories and logs deleted locally</text>
+  </g>
+
+  <text x="55" y="690" font-size="23" fill="#a9b1d6">What the note argues (n = 16 dithers in one pixel):</text>
+  <rect x="55" y="710" width="250" height="250" fill="#16161e" stroke="#3d4666" stroke-width="2"/>
+    <circle cx="138.8" cy="753.3" r="6" fill="#f7768e"/>
+    <circle cx="215.3" cy="735.0" r="6" fill="#f7768e"/>
+    <circle cx="188.4" cy="803.6" r="6" fill="#f7768e"/>
+    <circle cx="76.6" cy="836.7" r="6" fill="#f7768e"/>
+    <circle cx="71.8" cy="819.5" r="6" fill="#f7768e"/>
+    <circle cx="79.3" cy="739.2" r="6" fill="#f7768e"/>
+    <circle cx="162.3" cy="911.5" r="6" fill="#f7768e"/>
+    <circle cx="92.0" cy="770.2" r="6" fill="#f7768e"/>
+    <circle cx="209.8" cy="939.8" r="6" fill="#f7768e"/>
+    <circle cx="198.0" cy="810.8" r="6" fill="#f7768e"/>
+    <circle cx="291.4" cy="728.9" r="6" fill="#f7768e"/>
+    <circle cx="263.9" cy="785.8" r="6" fill="#f7768e"/>
+    <circle cx="96.8" cy="745.6" r="6" fill="#f7768e"/>
+    <circle cx="135.2" cy="909.0" r="6" fill="#f7768e"/>
+    <circle cx="105.3" cy="854.1" r="6" fill="#f7768e"/>
+    <circle cx="212.5" cy="805.1" r="6" fill="#f7768e"/>
+  <rect x="380" y="710" width="250" height="250" fill="#16161e" stroke="#3d4666" stroke-width="2"/>
+    <circle cx="417.2" cy="747.2" r="6" fill="#e0af68"/>
+    <circle cx="417.2" cy="805.8" r="6" fill="#e0af68"/>
+    <circle cx="417.2" cy="864.2" r="6" fill="#e0af68"/>
+    <circle cx="417.2" cy="922.8" r="6" fill="#e0af68"/>
+    <circle cx="475.8" cy="747.2" r="6" fill="#e0af68"/>
+    <circle cx="475.8" cy="805.8" r="6" fill="#e0af68"/>
+    <circle cx="475.8" cy="864.2" r="6" fill="#e0af68"/>
+    <circle cx="475.8" cy="922.8" r="6" fill="#e0af68"/>
+    <circle cx="534.2" cy="747.2" r="6" fill="#e0af68"/>
+    <circle cx="534.2" cy="805.8" r="6" fill="#e0af68"/>
+    <circle cx="534.2" cy="864.2" r="6" fill="#e0af68"/>
+    <circle cx="534.2" cy="922.8" r="6" fill="#e0af68"/>
+    <circle cx="592.8" cy="747.2" r="6" fill="#e0af68"/>
+    <circle cx="592.8" cy="805.8" r="6" fill="#e0af68"/>
+    <circle cx="592.8" cy="864.2" r="6" fill="#e0af68"/>
+    <circle cx="592.8" cy="922.8" r="6" fill="#e0af68"/>
+  <text x="55" y="995" font-size="21" fill="#f7768e">uniform random: clumps, 1/sqrt(n)</text>
+  <text x="380" y="995" font-size="21" fill="#e0af68">n x n lattice: harmonic</text>
+  <text x="380" y="1025" font-size="21" fill="#e0af68">aliasing spikes</text>
+
+  <text x="1040" y="690" font-size="23" fill="#a9b1d6">Recommended default (docs/dither-sampling.md):</text>
+  <rect x="1040" y="710" width="250" height="250" fill="#16161e" stroke="#3d4666" stroke-width="2"/>
+    <circle cx="1107.6" cy="734.3" r="6" fill="#9ece6a"/>
+    <circle cx="1050.3" cy="867.7" r="6" fill="#9ece6a"/>
+    <circle cx="1226.9" cy="767.0" r="6" fill="#9ece6a"/>
+    <circle cx="1169.6" cy="900.4" r="6" fill="#9ece6a"/>
+    <circle cx="1112.2" cy="799.7" r="6" fill="#9ece6a"/>
+    <circle cx="1054.8" cy="933.1" r="6" fill="#9ece6a"/>
+    <circle cx="1231.5" cy="832.4" r="6" fill="#9ece6a"/>
+    <circle cx="1174.1" cy="731.7" r="6" fill="#9ece6a"/>
+    <circle cx="1116.8" cy="865.1" r="6" fill="#9ece6a"/>
+    <circle cx="1059.4" cy="764.4" r="6" fill="#9ece6a"/>
+    <circle cx="1236.1" cy="897.8" r="6" fill="#9ece6a"/>
+    <circle cx="1178.7" cy="797.1" r="6" fill="#9ece6a"/>
+    <circle cx="1121.3" cy="930.5" r="6" fill="#9ece6a"/>
+    <circle cx="1064.0" cy="829.8" r="6" fill="#9ece6a"/>
+    <circle cx="1240.6" cy="729.1" r="6" fill="#9ece6a"/>
+    <circle cx="1183.3" cy="862.5" r="6" fill="#9ece6a"/>
+  <text x="1040" y="995" font-size="21" fill="#9ece6a">R2 sequence: low discrepancy, log(n)/n</text>
+  <g>
+    <rect x="1330" y="710" width="615" height="250" rx="10" fill="#1e202e" stroke="#3d4666" stroke-width="2"/>
+    <text x="1355" y="752" font-size="21" fill="#c0caf5">Quick decision guide</text>
+    <text x="1355" y="792" font-size="21" fill="#a9b1d6">any n, nested subsets: R2</text>
+    <text x="1355" y="827" font-size="21" fill="#a9b1d6">steep power law: Poisson-disk</text>
+    <text x="1355" y="862" font-size="21" fill="#a9b1d6">n in {2, 4}: half-integer offsets</text>
+    <text x="1355" y="897" font-size="21" fill="#a9b1d6">forgiving small n: jittered rotated grid</text>
+    <text x="1355" y="932" font-size="21" fill="#a9b1d6">extent: +/-0.5 px or ~lambda/D</text>
+  </g>
+
+  <text x="55" y="1172" font-size="22" fill="#565f89">Docs and ignore rules only; no code changes (sims/quasi_random.rs is untouched). Data files are moved locally, never committed.</text>
+</svg>
